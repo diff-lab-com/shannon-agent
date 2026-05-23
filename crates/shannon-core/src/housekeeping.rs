@@ -171,8 +171,8 @@ impl HousekeepingTask for TempFileCleanupTask {
         let mut removed = 0usize;
         let mut errors = 0usize;
 
-        let entries = std::fs::read_dir(&tmp_dir)
-            .map_err(|e| format!("Failed to read tmp dir: {e}"))?;
+        let entries =
+            std::fs::read_dir(&tmp_dir).map_err(|e| format!("Failed to read tmp dir: {e}"))?;
 
         for entry in entries {
             let entry = match entry {
@@ -290,18 +290,16 @@ impl HousekeepingTask for OldSessionPruneTask {
                     if modified < cutoff {
                         let path = entry.path();
                         if path.extension().and_then(|e| e.to_str()) == Some("json")
-                            && std::fs::remove_file(&path).is_ok() {
-                                removed += 1;
-                            }
+                            && std::fs::remove_file(&path).is_ok()
+                        {
+                            removed += 1;
+                        }
                     }
                 }
             }
         }
 
-        Ok((
-            format!("Pruned {removed} old sessions"),
-            Some(removed),
-        ))
+        Ok((format!("Pruned {removed} old sessions"), Some(removed)))
     }
 }
 
@@ -330,8 +328,8 @@ impl HousekeepingTask for LogRotationTask {
         const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
         let mut rotated = 0usize;
 
-        let entries = std::fs::read_dir(&logs_dir)
-            .map_err(|e| format!("Failed to read logs dir: {e}"))?;
+        let entries =
+            std::fs::read_dir(&logs_dir).map_err(|e| format!("Failed to read logs dir: {e}"))?;
 
         for entry in entries {
             let entry = match entry {
@@ -344,8 +342,10 @@ impl HousekeepingTask for LogRotationTask {
                 if metadata.len() > MAX_LOG_SIZE && metadata.is_file() {
                     // "Rotate" by renaming to .old.
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        let archive_path =
-                            path.parent().unwrap_or(&logs_dir).join(format!("{stem}.old"));
+                        let archive_path = path
+                            .parent()
+                            .unwrap_or(&logs_dir)
+                            .join(format!("{stem}.old"));
                         if std::fs::rename(&path, &archive_path).is_ok() {
                             rotated += 1;
                         }
@@ -354,10 +354,7 @@ impl HousekeepingTask for LogRotationTask {
             }
         }
 
-        Ok((
-            format!("Rotated {rotated} log files"),
-            Some(rotated),
-        ))
+        Ok((format!("Rotated {rotated} log files"), Some(rotated)))
     }
 }
 
@@ -385,7 +382,9 @@ impl Housekeeper {
     /// Uses `~/.shannon/` as the base directory by default.
     pub fn new(config: HousekeepingConfig) -> Result<Self, HousekeepingError> {
         let base_dir = dirs::home_dir()
-            .ok_or_else(|| HousekeepingError::ConfigError("Cannot determine home directory".into()))?
+            .ok_or_else(|| {
+                HousekeepingError::ConfigError("Cannot determine home directory".into())
+            })?
             .join(".shannon");
 
         std::fs::create_dir_all(&base_dir).map_err(|e| HousekeepingError::Io {
@@ -447,22 +446,10 @@ impl Housekeeper {
     /// Resolve the interval for a task, using config overrides if available.
     fn resolve_interval(&self, name: &str, default: Duration) -> Duration {
         match name {
-            "temp_file_cleanup" => self
-                .config
-                .temp_cleanup_interval
-                .unwrap_or(default),
-            "cache_refresh" => self
-                .config
-                .cache_refresh_interval
-                .unwrap_or(default),
-            "old_session_prune" => self
-                .config
-                .session_prune_interval
-                .unwrap_or(default),
-            "log_rotation" => self
-                .config
-                .log_rotation_interval
-                .unwrap_or(default),
+            "temp_file_cleanup" => self.config.temp_cleanup_interval.unwrap_or(default),
+            "cache_refresh" => self.config.cache_refresh_interval.unwrap_or(default),
+            "old_session_prune" => self.config.session_prune_interval.unwrap_or(default),
+            "log_rotation" => self.config.log_rotation_interval.unwrap_or(default),
             _ => self
                 .config
                 .custom_intervals
@@ -484,8 +471,8 @@ impl Housekeeper {
             None => Ok(true), // Never run, should run now.
             Some(last) => {
                 let elapsed = Utc::now().signed_duration_since(last);
-                let interval_chrono = chrono::Duration::from_std(entry.interval)
-                    .unwrap_or(chrono::Duration::zero());
+                let interval_chrono =
+                    chrono::Duration::from_std(entry.interval).unwrap_or(chrono::Duration::zero());
                 Ok(elapsed >= interval_chrono)
             }
         }
@@ -650,10 +637,9 @@ mod tests {
     #[test]
     fn test_config_custom_intervals() {
         let mut config = HousekeepingConfig::default();
-        config.custom_intervals.insert(
-            "custom_task".to_string(),
-            3600,
-        );
+        config
+            .custom_intervals
+            .insert("custom_task".to_string(), 3600);
         assert_eq!(config.custom_intervals.get("custom_task"), Some(&3600));
     }
 
@@ -768,7 +754,8 @@ mod tests {
     #[test]
     fn test_housekeeper_creation() {
         let dir = temp_dir();
-        let keeper = Housekeeper::with_base_dir(dir.clone(), HousekeepingConfig::default()).unwrap();
+        let keeper =
+            Housekeeper::with_base_dir(dir.clone(), HousekeepingConfig::default()).unwrap();
         assert_eq!(keeper.task_count(), 0);
         assert!(dir.exists());
     }
@@ -786,9 +773,15 @@ mod tests {
 
         struct CustomTask;
         impl HousekeepingTask for CustomTask {
-            fn name(&self) -> &str { "custom" }
-            fn description(&self) -> &str { "A custom task" }
-            fn default_interval(&self) -> Duration { Duration::from_secs(60) }
+            fn name(&self) -> &str {
+                "custom"
+            }
+            fn description(&self) -> &str {
+                "A custom task"
+            }
+            fn default_interval(&self) -> Duration {
+                Duration::from_secs(60)
+            }
             fn execute(&self, _base_dir: &Path) -> Result<(String, Option<usize>), String> {
                 Ok(("Custom done".into(), Some(1)))
             }

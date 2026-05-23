@@ -26,10 +26,7 @@ pub enum BillingError {
     Invalid(String),
 
     #[error("Budget exceeded: {current_cost:.4} > {limit:.4}")]
-    BudgetExceeded {
-        current_cost: f64,
-        limit: f64,
-    },
+    BudgetExceeded { current_cost: f64, limit: f64 },
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -236,7 +233,10 @@ impl BillingManager {
     /// Record a single usage event.
     ///
     /// Returns a `BudgetAlert` if the budget threshold is exceeded.
-    pub fn record_usage(&mut self, record: UsageRecord) -> Result<Option<BudgetAlert>, BillingError> {
+    pub fn record_usage(
+        &mut self,
+        record: UsageRecord,
+    ) -> Result<Option<BudgetAlert>, BillingError> {
         // Check budget before recording
         let alert = self.check_budget(&record)?;
 
@@ -262,7 +262,8 @@ impl BillingManager {
                 chrono::NaiveTime::from_num_seconds_from_midnight_opt(0, 0)
                     .unwrap_or(chrono::NaiveTime::MIN)
             }),
-        ).and_utc();
+        )
+        .and_utc();
         let end = now;
         self.summarize_period(start, end)
     }
@@ -318,7 +319,8 @@ impl BillingManager {
                 chrono::NaiveTime::from_num_seconds_from_midnight_opt(0, 0)
                     .unwrap_or(chrono::NaiveTime::MIN)
             }),
-        ).and_utc();
+        )
+        .and_utc();
 
         let mut daily: HashMap<String, DailyUsage> = HashMap::new();
 
@@ -505,7 +507,11 @@ fn days_in_current_month(now: DateTime<Utc>) -> u32 {
     // Get the last day of the current month by going to the first day of next month and subtracting 1
     let year = now.year();
     let month = now.month() + 1;
-    let (next_year, next_month) = if month > 12 { (year + 1, 1) } else { (year, month) };
+    let (next_year, next_month) = if month > 12 {
+        (year + 1, 1)
+    } else {
+        (year, month)
+    };
 
     // Use chrono's NaiveDate to compute days in month
     chrono::NaiveDate::from_ymd_opt(next_year, next_month, 1)
@@ -545,9 +551,12 @@ mod tests {
     #[test]
     fn test_total_cost() {
         let mut mgr = BillingManager::new();
-        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005)).unwrap();
-        mgr.record_usage(make_record("claude-sonnet", 200, 100, 0.01)).unwrap();
-        mgr.record_usage(make_record("claude-opus", 50, 25, 0.015)).unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005))
+            .unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 200, 100, 0.01))
+            .unwrap();
+        mgr.record_usage(make_record("claude-opus", 50, 25, 0.015))
+            .unwrap();
 
         let total = mgr.total_cost();
         assert!((total - 0.03).abs() < f64::EPSILON);
@@ -556,9 +565,12 @@ mod tests {
     #[test]
     fn test_period_summary() {
         let mut mgr = BillingManager::new();
-        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005)).unwrap();
-        mgr.record_usage(make_record("claude-sonnet", 200, 100, 0.01)).unwrap();
-        mgr.record_usage(make_record("claude-opus", 50, 25, 0.015)).unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005))
+            .unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 200, 100, 0.01))
+            .unwrap();
+        mgr.record_usage(make_record("claude-opus", 50, 25, 0.015))
+            .unwrap();
 
         let summary = mgr.get_period_summary();
         assert!((summary.total_cost - 0.03).abs() < f64::EPSILON);
@@ -569,9 +581,12 @@ mod tests {
     #[test]
     fn test_model_breakdown() {
         let mut mgr = BillingManager::new();
-        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005)).unwrap();
-        mgr.record_usage(make_record("claude-sonnet", 200, 100, 0.01)).unwrap();
-        mgr.record_usage(make_record("claude-opus", 50, 25, 0.015)).unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005))
+            .unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 200, 100, 0.01))
+            .unwrap();
+        mgr.record_usage(make_record("claude-opus", 50, 25, 0.015))
+            .unwrap();
 
         let breakdown = mgr.get_model_breakdown();
         assert_eq!(breakdown.len(), 2);
@@ -582,8 +597,10 @@ mod tests {
     #[test]
     fn test_daily_totals() {
         let mut mgr = BillingManager::new();
-        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005)).unwrap();
-        mgr.record_usage(make_record("claude-sonnet", 200, 100, 0.01)).unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005))
+            .unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 200, 100, 0.01))
+            .unwrap();
 
         let daily = mgr.get_daily_totals();
         assert!(!daily.is_empty());
@@ -597,7 +614,8 @@ mod tests {
     #[test]
     fn test_estimate_monthly_cost() {
         let mut mgr = BillingManager::new();
-        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005)).unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.005))
+            .unwrap();
 
         let estimate = mgr.estimate_monthly_cost();
         // Should extrapolate to a full month
@@ -623,8 +641,11 @@ mod tests {
         let config = BillingConfig::with_budget(1.0);
         let mut mgr = BillingManager::with_config(config);
 
-        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.50)).unwrap();
-        let alert = mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.60)).unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 100, 50, 0.50))
+            .unwrap();
+        let alert = mgr
+            .record_usage(make_record("claude-sonnet", 100, 50, 0.60))
+            .unwrap();
 
         assert!(alert.is_some());
         let alert = alert.unwrap();
@@ -651,7 +672,8 @@ mod tests {
         let config = BillingConfig::with_budget(1.0);
         let mut mgr = BillingManager::with_config(config);
 
-        mgr.record_usage(make_record("claude-sonnet", 100, 50, 5.0)).unwrap();
+        mgr.record_usage(make_record("claude-sonnet", 100, 50, 5.0))
+            .unwrap();
         assert!(!mgr.get_alerts().is_empty());
 
         mgr.clear_alerts();
@@ -667,9 +689,12 @@ mod tests {
     #[test]
     fn test_custom_period_summary() {
         let mut mgr = BillingManager::new();
-        mgr.record_usage(make_record_at("claude-sonnet", 100, 50, 0.005, 1)).unwrap();
-        mgr.record_usage(make_record_at("claude-sonnet", 200, 100, 0.01, 2)).unwrap();
-        mgr.record_usage(make_record_at("claude-sonnet", 50, 25, 0.003, 30)).unwrap();
+        mgr.record_usage(make_record_at("claude-sonnet", 100, 50, 0.005, 1))
+            .unwrap();
+        mgr.record_usage(make_record_at("claude-sonnet", 200, 100, 0.01, 2))
+            .unwrap();
+        mgr.record_usage(make_record_at("claude-sonnet", 50, 25, 0.003, 30))
+            .unwrap();
 
         let now = Utc::now();
         let week_ago = now - Duration::days(7);

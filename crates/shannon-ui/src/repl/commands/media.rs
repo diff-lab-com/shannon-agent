@@ -1,8 +1,8 @@
 //! Media command handlers: image paste, URL fetch, clipboard, browse, copy/paste.
 
-use crate::{widgets::ChatRole, Result};
-use rust_i18n::t;
 use super::super::Repl;
+use crate::{Result, widgets::ChatRole};
+use rust_i18n::t;
 
 /// Handle Ctrl+V — paste image from system clipboard.
 pub fn handle_image_paste_from_input(repl: &mut Repl) -> Result<()> {
@@ -61,8 +61,10 @@ pub(crate) fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<(
             let _ = std::fs::remove_file(&tmp_path); // cleanup
 
             if bytes.len() < 10 {
-                repl.chat.add_message(ChatRole::System,
-                    "Clipboard does not contain a valid image.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Clipboard does not contain a valid image.".to_string(),
+                );
                 return Ok(());
             }
 
@@ -70,7 +72,8 @@ pub(crate) fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<(
             let engine = match repl.query_engine.as_mut() {
                 Some(e) => e,
                 None => {
-                    repl.chat.add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
+                    repl.chat
+                        .add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
                     return Ok(());
                 }
             };
@@ -84,20 +87,34 @@ pub(crate) fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<(
             engine.add_user_message_blocks(blocks);
             // Generate inline image preview from clipboard bytes
             let preview_config = crate::terminal_image::ImageRenderConfig::default();
-            let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config, &repl.state.theme);
+            let preview_lines = crate::terminal_image::render_image_bytes(
+                &bytes,
+                &preview_config,
+                &repl.state.theme,
+            );
             repl.chat.add_message_with_image(
                 ChatRole::User,
                 "[Image pasted from clipboard]".to_string(),
                 preview_lines,
             );
-            repl.chat.add_message(ChatRole::System, t!("commands.image.clipboard_sent").to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                t!("commands.image.clipboard_sent").to_string(),
+            );
 
-            super::super::query::handle_query(repl, "Please analyze the image I just shared from my clipboard.", &mut None)?;
+            super::super::query::handle_query(
+                repl,
+                "Please analyze the image I just shared from my clipboard.",
+                &mut None,
+            )?;
         }
         _ => {
-            repl.chat.add_message(ChatRole::System,
+            repl.chat.add_message(
+                ChatRole::System,
                 "Failed to read image from clipboard.\n\
-                 Install xclip (X11) or wl-clipboard (Wayland) for Linux, or pngpaste for macOS.".to_string());
+                 Install xclip (X11) or wl-clipboard (Wayland) for Linux, or pngpaste for macOS."
+                    .to_string(),
+            );
         }
     }
     Ok(())
@@ -112,14 +129,18 @@ pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
     let (url, prompt) = if input.starts_with("http://") || input.starts_with("https://") {
         let mut parts = input.splitn(2, ' ');
         let url = parts.next().unwrap_or("").to_string();
-        let prompt = parts.next().map(|p| p.trim().to_string())
+        let prompt = parts
+            .next()
+            .map(|p| p.trim().to_string())
             .unwrap_or_else(|| "Describe this image.".to_string());
         (url, prompt)
     } else {
         // Input starts after "url " prefix
         let mut parts = input.splitn(2, ' ');
         let url = parts.next().unwrap_or("").to_string();
-        let prompt = parts.next().map(|p| p.trim().to_string())
+        let prompt = parts
+            .next()
+            .map(|p| p.trim().to_string())
             .unwrap_or_else(|| "Describe this image.".to_string());
         (url, prompt)
     };
@@ -130,7 +151,8 @@ pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
         return Ok(());
     }
 
-    repl.chat.add_message(ChatRole::System, format!("Fetching image from {url}..."));
+    repl.chat
+        .add_message(ChatRole::System, format!("Fetching image from {url}..."));
 
     // Fetch the image using the async runtime
     let fetch_result = repl.runtime.block_on(async {
@@ -140,7 +162,8 @@ pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
                     return Err(format!("HTTP {}", resp.status()));
                 }
                 // Detect media type from Content-Type header
-                let media_type = resp.headers()
+                let media_type = resp
+                    .headers()
                     .get("content-type")
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("")
@@ -171,15 +194,18 @@ pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
     match fetch_result {
         Ok((bytes, media_type)) => {
             if bytes.len() < 10 {
-                repl.chat.add_message(ChatRole::System,
-                    "Response does not contain valid image data.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Response does not contain valid image data.".to_string(),
+                );
                 return Ok(());
             }
 
             let engine = match repl.query_engine.as_mut() {
                 Some(e) => e,
                 None => {
-                    repl.chat.add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
+                    repl.chat
+                        .add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
                     return Ok(());
                 }
             };
@@ -196,18 +222,26 @@ pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
 
             // Generate inline image preview
             let preview_config = crate::terminal_image::ImageRenderConfig::default();
-            let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config, &repl.state.theme);
+            let preview_lines = crate::terminal_image::render_image_bytes(
+                &bytes,
+                &preview_config,
+                &repl.state.theme,
+            );
             repl.chat.add_message_with_image(
                 ChatRole::User,
                 format!("[Image from URL: {url}]"),
                 preview_lines,
             );
 
-            super::super::query::handle_query(repl, "Please analyze the image I just shared from the URL.", &mut None)?;
+            super::super::query::handle_query(
+                repl,
+                "Please analyze the image I just shared from the URL.",
+                &mut None,
+            )?;
         }
         Err(e) => {
-            repl.chat.add_message(ChatRole::System,
-                format!("Failed to fetch image: {e}"));
+            repl.chat
+                .add_message(ChatRole::System, format!("Failed to fetch image: {e}"));
         }
     }
 
@@ -246,14 +280,23 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
         if let Some(end) = rest.find('"') {
             let path = &rest[..end];
             let prompt = rest[end + 1..].trim();
-            (path.to_string(), if prompt.is_empty() { "Describe this image.".to_string() } else { prompt.to_string() })
+            (
+                path.to_string(),
+                if prompt.is_empty() {
+                    "Describe this image.".to_string()
+                } else {
+                    prompt.to_string()
+                },
+            )
         } else {
             (input.to_string(), "Describe this image.".to_string())
         }
     } else {
         let mut parts = input.splitn(2, ' ');
         let path = parts.next().unwrap_or("").to_string();
-        let prompt = parts.next().map(|p| p.trim().to_string())
+        let prompt = parts
+            .next()
+            .map(|p| p.trim().to_string())
             .unwrap_or_else(|| "Describe this image.".to_string());
         (path, prompt)
     };
@@ -271,7 +314,8 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
 
     let file_path = std::path::Path::new(&expanded_path);
     if !file_path.exists() {
-        repl.chat.add_message(ChatRole::System, format!("File not found: {path}"));
+        repl.chat
+            .add_message(ChatRole::System, format!("File not found: {path}"));
         return Ok(());
     }
 
@@ -284,7 +328,13 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     // Detect media type from extension
-    let media_type = match file_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase().as_str() {
+    let media_type = match file_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -292,8 +342,12 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
         "bmp" => "image/bmp",
         "svg" => "image/svg+xml",
         _ => {
-            repl.chat.add_message(ChatRole::System,
-                format!("Unsupported image format: {path}. Supported: PNG, JPG, GIF, WebP, BMP, SVG"));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Unsupported image format: {path}. Supported: PNG, JPG, GIF, WebP, BMP, SVG"
+                ),
+            );
             return Ok(());
         }
     };
@@ -301,7 +355,8 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     let engine = match repl.query_engine.as_mut() {
         Some(e) => e,
         None => {
-            repl.chat.add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
+            repl.chat
+                .add_message(ChatRole::System, t!("commands.image.no_engine").to_string());
             return Ok(());
         }
     };
@@ -317,16 +372,27 @@ pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     engine.add_user_message_blocks(blocks);
     // Generate inline image preview
     let preview_config = crate::terminal_image::ImageRenderConfig::default();
-    let preview_lines = crate::terminal_image::render_image_bytes(&bytes, &preview_config, &repl.state.theme);
+    let preview_lines =
+        crate::terminal_image::render_image_bytes(&bytes, &preview_config, &repl.state.theme);
     repl.chat.add_message_with_image(
         ChatRole::User,
         format!("[Image attached: {}]", file_path.display()),
         preview_lines,
     );
-    repl.chat.add_message(ChatRole::System, t!("commands.image.image_sent").to_string());
+    repl.chat.add_message(
+        ChatRole::System,
+        t!("commands.image.image_sent").to_string(),
+    );
 
     // Trigger query processing
-    super::super::query::handle_query(repl, &format!("Please analyze the image I just shared: {}", file_path.display()), &mut None)?;
+    super::super::query::handle_query(
+        repl,
+        &format!(
+            "Please analyze the image I just shared: {}",
+            file_path.display()
+        ),
+        &mut None,
+    )?;
     Ok(())
 }
 
@@ -349,7 +415,10 @@ pub(crate) fn handle_browse(repl: &mut Repl, args: &str) -> Result<()> {
 
 pub(crate) fn copy_nth_response(repl: &mut Repl, n: usize) -> Option<String> {
     if n == 0 {
-        repl.chat.add_message(ChatRole::System, "Invalid index. Use /copy 1 for the latest response.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Invalid index. Use /copy 1 for the latest response.".to_string(),
+        );
         return None;
     }
     let mut responses: Vec<String> = Vec::new();
@@ -360,7 +429,12 @@ pub(crate) fn copy_nth_response(repl: &mut Repl, n: usize) -> Option<String> {
     }
     let total = responses.len();
     if n > total {
-        repl.chat.add_message(ChatRole::System, format!("Only {total} assistant response(s) in this session. Use /copy 1 for the latest."));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Only {total} assistant response(s) in this session. Use /copy 1 for the latest."
+            ),
+        );
         return None;
     }
     Some(responses[total - n].clone())
@@ -370,25 +444,29 @@ pub(crate) fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
     let trimmed = args.trim();
 
     // Determine what to copy
-    let content = if trimmed.is_empty() || trimmed == "last" || trimmed == "response" || trimmed == "1" {
-        match copy_nth_response(repl, 1) {
-            Some(c) => c,
-            None => return Ok(()),
-        }
-    } else if trimmed.starts_with(|c: char| c.is_ascii_digit()) && !trimmed.contains(' ') {
-        let n: usize = trimmed.parse().unwrap_or(1);
-        match copy_nth_response(repl, n) {
-            Some(c) => c,
-            None => return Ok(()),
-        }
-    } else if trimmed == "status" {
-        repl.state.status.clone()
-    } else {
-        trimmed.to_string()
-    };
+    let content =
+        if trimmed.is_empty() || trimmed == "last" || trimmed == "response" || trimmed == "1" {
+            match copy_nth_response(repl, 1) {
+                Some(c) => c,
+                None => return Ok(()),
+            }
+        } else if trimmed.starts_with(|c: char| c.is_ascii_digit()) && !trimmed.contains(' ') {
+            let n: usize = trimmed.parse().unwrap_or(1);
+            match copy_nth_response(repl, n) {
+                Some(c) => c,
+                None => return Ok(()),
+            }
+        } else if trimmed == "status" {
+            repl.state.status.clone()
+        } else {
+            trimmed.to_string()
+        };
 
     if content.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Nothing to copy (empty content).".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Nothing to copy (empty content).".to_string(),
+        );
         return Ok(());
     }
 
@@ -397,17 +475,24 @@ pub(crate) fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
     if success {
         let preview = if unicode_width::UnicodeWidthStr::width(content.as_str()) > 60 {
             let mut len = 0;
-            let truncated: String = content.chars()
+            let truncated: String = content
+                .chars()
                 .take_while(|c| {
                     let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                    if len + cw > 57 { false } else { len += cw; true }
+                    if len + cw > 57 {
+                        false
+                    } else {
+                        len += cw;
+                        true
+                    }
                 })
                 .collect();
             format!("{truncated}...")
         } else {
             content.clone()
         };
-        repl.chat.add_message(ChatRole::System, format!("Copied to clipboard: {preview}"));
+        repl.chat
+            .add_message(ChatRole::System, format!("Copied to clipboard: {preview}"));
     } else {
         // Fallback: write to temp file
         let tmp = std::env::temp_dir().join("shannon-clipboard.txt");
@@ -415,7 +500,10 @@ pub(crate) fn handle_copy(repl: &mut Repl, args: &str) -> Result<()> {
             repl.chat.add_message(ChatRole::System,
                 format!("Clipboard unavailable. Content saved to: {}\nInstall xclip or xsel for clipboard support.", tmp.display()));
         } else {
-            repl.chat.add_message(ChatRole::System, "Failed to copy: no clipboard tool available.".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Failed to copy: no clipboard tool available.".to_string(),
+            );
         }
     }
     Ok(())
@@ -426,10 +514,14 @@ pub(crate) fn handle_paste(repl: &mut Repl) -> Result<()> {
     match content {
         Some(text) if !text.is_empty() => {
             repl.prompt.insert_text(&text);
-            repl.chat.add_message(ChatRole::System, format!("Pasted {} chars into prompt.", text.len()));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Pasted {} chars into prompt.", text.len()),
+            );
         }
         Some(_) => {
-            repl.chat.add_message(ChatRole::System, "Clipboard is empty.".to_string());
+            repl.chat
+                .add_message(ChatRole::System, "Clipboard is empty.".to_string());
         }
         None => {
             // Fallback: try temp file
@@ -437,11 +529,17 @@ pub(crate) fn handle_paste(repl: &mut Repl) -> Result<()> {
             if tmp.exists() {
                 if let Ok(text) = std::fs::read_to_string(&tmp) {
                     repl.prompt.insert_text(&text);
-                    repl.chat.add_message(ChatRole::System, format!("Pasted {} chars from temp file.", text.len()));
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Pasted {} chars from temp file.", text.len()),
+                    );
                 }
             } else {
-                repl.chat.add_message(ChatRole::System,
-                    "Clipboard unavailable. Install xclip or xsel for clipboard support.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Clipboard unavailable. Install xclip or xsel for clipboard support."
+                        .to_string(),
+                );
             }
         }
     }

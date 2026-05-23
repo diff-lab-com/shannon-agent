@@ -22,11 +22,10 @@
 use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shannon_mcp::{
-    ListResourcesInput, ListResourcesOutput,
-    ReadResourceInput, ReadResourceOutput,
-    McpResourceManager,
+    ListResourcesInput, ListResourcesOutput, McpResourceManager, ReadResourceInput,
+    ReadResourceOutput,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -88,18 +87,14 @@ impl Tool for ListMcpResourcesTool {
         let list_input: ListResourcesInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid list resources input: {e}")))?;
 
-        let filter_desc = list_input
-            .server_name
-            .as_deref()
-            .unwrap_or("all servers");
+        let filter_desc = list_input.server_name.as_deref().unwrap_or("all servers");
 
         debug!(filter = filter_desc, "Listing MCP resources");
 
-        let output: ListResourcesOutput = self
-            .manager
-            .list_resources(list_input)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to list resources: {e}")))?;
+        let output: ListResourcesOutput =
+            self.manager.list_resources(list_input).await.map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to list resources: {e}"))
+            })?;
 
         let resource_count = output.resources.len();
         let server_names: Vec<&str> = output
@@ -113,10 +108,7 @@ impl Tool for ListMcpResourcesTool {
         let mut metadata = HashMap::new();
         metadata.insert("count".to_string(), json!(resource_count));
         metadata.insert("servers".to_string(), json!(server_names));
-        metadata.insert(
-            "resources".to_string(),
-            json!(output.resources),
-        );
+        metadata.insert("resources".to_string(), json!(output.resources));
 
         Ok(ToolOutput {
             content: format!(
@@ -128,7 +120,9 @@ impl Tool for ListMcpResourcesTool {
             metadata,
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +231,9 @@ impl Tool for ReadMcpResourceTool {
             metadata,
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -322,7 +318,9 @@ impl Tool for ListPromptsTool {
             metadata,
         })
     }
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +397,11 @@ impl Tool for GetPromptTool {
 
         let result = self
             .pool
-            .get_prompt(&tool_input.server_name, &tool_input.prompt_name, tool_input.arguments)
+            .get_prompt(
+                &tool_input.server_name,
+                &tool_input.prompt_name,
+                tool_input.arguments,
+            )
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to get prompt: {e}")))?;
 
@@ -408,8 +410,8 @@ impl Tool for GetPromptTool {
         metadata.insert("prompt_name".to_string(), json!(tool_input.prompt_name));
         metadata.insert("result".to_string(), result.clone());
 
-        let content_str = serde_json::to_string_pretty(&result)
-            .unwrap_or_else(|_| result.to_string());
+        let content_str =
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
 
         Ok(ToolOutput {
             content: content_str,
@@ -417,7 +419,9 @@ impl Tool for GetPromptTool {
             metadata,
         })
     }
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -485,8 +489,8 @@ impl Tool for McpToolSearchTool {
 
         match self.pool.get_deferred_schema(tool_name) {
             Some(schema) => {
-                let schema_str = serde_json::to_string_pretty(&schema)
-                    .unwrap_or_else(|_| schema.to_string());
+                let schema_str =
+                    serde_json::to_string_pretty(&schema).unwrap_or_else(|_| schema.to_string());
                 Ok(ToolOutput::success(schema_str))
             }
             None => {
@@ -529,8 +533,8 @@ impl Tool for McpToolSearchTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shannon_mcp::{McpResourceClient, ResourceContent, ContentBlock};
     use shannon_mcp::protocol::Resource as ProtocolResource;
+    use shannon_mcp::{ContentBlock, McpResourceClient, ResourceContent};
 
     /// A mock client that implements the McpResourceClient trait.
     struct MockClient {
@@ -644,10 +648,7 @@ mod tests {
         let manager = Arc::new(McpResourceManager::new());
         let tool = ListMcpResourcesTool::new(manager);
 
-        let result = tool
-            .execute(json!({}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({})).await.unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("0 resource"));
@@ -656,15 +657,12 @@ mod tests {
     #[tokio::test]
     async fn test_list_tool_execute_with_clients() {
         let manager = Arc::new(McpResourceManager::new());
-        let client = MockClient::new("srv1", true, true)
-            .with_resource("file:///a", "A", "Resource A");
+        let client =
+            MockClient::new("srv1", true, true).with_resource("file:///a", "A", "Resource A");
         manager.register(Arc::new(client)).await;
 
         let tool = ListMcpResourcesTool::new(manager);
-        let result = tool
-            .execute(json!({}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({})).await.unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("1 resource"));
@@ -673,8 +671,8 @@ mod tests {
     #[tokio::test]
     async fn test_list_tool_execute_filtered() {
         let manager = Arc::new(McpResourceManager::new());
-        let client = MockClient::new("srv1", true, true)
-            .with_resource("file:///a", "A", "Resource A");
+        let client =
+            MockClient::new("srv1", true, true).with_resource("file:///a", "A", "Resource A");
         manager.register(Arc::new(client)).await;
 
         let tool = ListMcpResourcesTool::new(manager);
@@ -692,9 +690,7 @@ mod tests {
         let manager = Arc::new(McpResourceManager::new());
         let tool = ListMcpResourcesTool::new(manager);
 
-        let result = tool
-            .execute(json!({ "server_name": "nonexistent" }))
-            .await;
+        let result = tool.execute(json!({ "server_name": "nonexistent" })).await;
 
         assert!(result.is_err());
     }
@@ -702,8 +698,8 @@ mod tests {
     #[tokio::test]
     async fn test_read_tool_execute() {
         let manager = Arc::new(McpResourceManager::new());
-        let client = MockClient::new("srv1", true, true)
-            .with_resource("file:///a", "A", "Resource A");
+        let client =
+            MockClient::new("srv1", true, true).with_resource("file:///a", "A", "Resource A");
         manager.register(Arc::new(client)).await;
 
         let tool = ReadMcpResourceTool::new(manager);

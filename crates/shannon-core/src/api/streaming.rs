@@ -5,7 +5,10 @@
 //! Supports automatic reconnection using `Last-Event-ID` when the
 //! connection drops mid-stream.
 
-use futures::{Stream, StreamExt, task::{Context, Poll}};
+use futures::{
+    Stream, StreamExt,
+    task::{Context, Poll},
+};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
@@ -83,7 +86,11 @@ impl SseStream {
     /// Takes ownership of the response and consumes its byte stream.
     /// The `last_event_id` tracker is shared so callers can read the
     /// latest ID for reconnection.
-    pub fn new(response: reqwest::Response, provider: LlmProvider, last_event_id: LastEventId) -> Self {
+    pub fn new(
+        response: reqwest::Response,
+        provider: LlmProvider,
+        last_event_id: LastEventId,
+    ) -> Self {
         let byte_stream = response.bytes_stream();
         // Convert Bytes to Vec<u8> to avoid direct dependency on bytes crate
         let mapped = Box::pin(byte_stream.map(|result| result.map(|b| b.to_vec())));
@@ -108,12 +115,14 @@ impl SseStream {
             self.buffer = self.buffer[newline_pos + 1..].to_string();
 
             // For Ollama NDJSON: validate JSON completeness before parsing
-            if matches!(self.provider, LlmProvider::Ollama) && line.trim_start().starts_with('{')
-                && !looks_like_complete_json(&line) {
-                    // Incomplete JSON — put back and wait for more data
-                    self.buffer = format!("{}\n{}", line, self.buffer);
-                    break;
-                }
+            if matches!(self.provider, LlmProvider::Ollama)
+                && line.trim_start().starts_with('{')
+                && !looks_like_complete_json(&line)
+            {
+                // Incomplete JSON — put back and wait for more data
+                self.buffer = format!("{}\n{}", line, self.buffer);
+                break;
+            }
 
             let events = self.parse_sse_line(&line);
             self.pending_events.extend(events);
@@ -166,13 +175,12 @@ impl SseStream {
 impl Stream for SseStream {
     type Item = Result<StreamEvent, ApiError>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Return any pending events first
         if !self.pending_events.is_empty() {
-            return Poll::Ready(Some(self.pending_events.pop_front().expect("checked non-empty")));
+            return Poll::Ready(Some(
+                self.pending_events.pop_front().expect("checked non-empty"),
+            ));
         }
 
         if self.done {
@@ -188,7 +196,9 @@ impl Stream for SseStream {
                     self.drain_buffer();
 
                     if !self.pending_events.is_empty() {
-                        return Poll::Ready(Some(self.pending_events.pop_front().expect("checked non-empty")));
+                        return Poll::Ready(Some(
+                            self.pending_events.pop_front().expect("checked non-empty"),
+                        ));
                     }
                     // No complete events yet — continue reading
                 }
@@ -204,7 +214,9 @@ impl Stream for SseStream {
                         self.pending_events.extend(events);
                         if !self.pending_events.is_empty() {
                             self.done = true;
-                            return Poll::Ready(Some(self.pending_events.pop_front().expect("checked non-empty")));
+                            return Poll::Ready(Some(
+                                self.pending_events.pop_front().expect("checked non-empty"),
+                            ));
                         }
                     }
                     self.done = true;
@@ -222,7 +234,10 @@ impl Stream for SseStream {
 ///
 /// Properly handles SSE events that span HTTP chunk boundaries
 /// by buffering partial lines until complete.
-pub fn sse_stream_from_response(response: reqwest::Response, provider: LlmProvider) -> MessageStream {
+pub fn sse_stream_from_response(
+    response: reqwest::Response,
+    provider: LlmProvider,
+) -> MessageStream {
     let last_event_id = Arc::new(Mutex::new(None));
     let sse = SseStream::new(response, provider, last_event_id);
     Box::pin(sse)
@@ -282,10 +297,7 @@ struct ResumableSseStream {
 impl Stream for ResumableSseStream {
     type Item = Result<StreamEvent, ApiError>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // If we're in reconnection state, check if the reconnect completed
         if self.reconnecting {
             if let Some(ref mut rx) = self.pending_reconnect {
@@ -326,10 +338,13 @@ impl Stream for ResumableSseStream {
                 let is_reconnectable = matches!(
                     &e,
                     ApiError::HttpError(_)
-                    | ApiError::Timeout
-                    | ApiError::StreamEndedUnexpectedly
-                    | ApiError::RateLimitExceeded { .. }
-                    | ApiError::ApiError { status: 500..=599, .. }
+                        | ApiError::Timeout
+                        | ApiError::StreamEndedUnexpectedly
+                        | ApiError::RateLimitExceeded { .. }
+                        | ApiError::ApiError {
+                            status: 500..=599,
+                            ..
+                        }
                 );
                 if !is_reconnectable || self.reconnects_remaining == 0 {
                     Poll::Ready(Some(Err(e)))
@@ -357,11 +372,19 @@ impl ResumableSseStream {
     /// Initiate an asynchronous reconnection using the tracked last event ID.
     fn start_reconnect(&mut self, cx: &mut Context<'_>) {
         self.reconnects_remaining -= 1;
-        let eid = self.last_event_id.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let eid = self
+            .last_event_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         // Exponential backoff: 1s, 2s, 4s, 8s, ...
         let attempts_used = self.initial_reconnects - self.reconnects_remaining;
-        let backoff_secs = if attempts_used == 0 { 1 } else { 1u64 << (attempts_used - 1).min(4) };
+        let backoff_secs = if attempts_used == 0 {
+            1
+        } else {
+            1u64 << (attempts_used - 1).min(4)
+        };
 
         tracing::info!(
             "Stream dropped unexpectedly. Reconnecting in {backoff_secs}s ({} attempts left, last_event_id={:?})",
@@ -401,7 +424,10 @@ mod tests {
     use crate::api::types::{ContentDelta, StreamEvent};
 
     /// Helper to parse SSE lines into events
-    fn parse_sse_lines(lines: &[&str], provider: LlmProvider) -> Vec<Result<StreamEvent, crate::api::error::ApiError>> {
+    fn parse_sse_lines(
+        lines: &[&str],
+        provider: LlmProvider,
+    ) -> Vec<Result<StreamEvent, crate::api::error::ApiError>> {
         let mut events = Vec::new();
         let mut state = OpenaiStreamState::new();
 
@@ -411,7 +437,10 @@ mod tests {
                 continue;
             }
 
-            let json_str = if let Some(s) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+            let json_str = if let Some(s) = line
+                .strip_prefix("data: ")
+                .or_else(|| line.strip_prefix("data:"))
+            {
                 s.trim()
             } else if matches!(provider, LlmProvider::Ollama) && line.starts_with('{') {
                 // Ollama returns NDJSON without "data:" prefix
@@ -424,7 +453,8 @@ mod tests {
                 events.push(Ok(StreamEvent::MessageStop));
                 continue;
             }
-            let mut result_events = crate::api::adapter::normalize_sse_event(json_str, &provider, &mut state);
+            let mut result_events =
+                crate::api::adapter::normalize_sse_event(json_str, &provider, &mut state);
             events.append(&mut result_events);
         }
         events
@@ -456,7 +486,12 @@ mod tests {
         assert_eq!(events.len(), 1);
         match &events[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "Hello".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -464,13 +499,11 @@ mod tests {
 
     #[test]
     fn test_anthropic_message_stop() {
-        let lines = vec![
-            "data: [DONE]",
-        ];
+        let lines = vec!["data: [DONE]"];
         let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
         assert_eq!(events.len(), 1);
         match &events[0] {
-            Ok(StreamEvent::MessageStop) => {},
+            Ok(StreamEvent::MessageStop) => {}
             other => panic!("Expected MessageStop, got {other:?}"),
         }
     }
@@ -490,7 +523,12 @@ mod tests {
         // First event should be text delta
         match &events[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "Hello".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -550,18 +588,16 @@ mod tests {
 
         // First event should be ContentBlockStart
         match &events[0] {
-            Ok(StreamEvent::ContentBlockStart { .. }) => {},
+            Ok(StreamEvent::ContentBlockStart { .. }) => {}
             other => panic!("Expected ContentBlockStart, got {other:?}"),
         }
 
         // Second event should be ContentBlockDelta with arguments
         match &events[1] {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                match delta {
-                    ContentDelta::InputJsonDelta { .. } => {},
-                    _ => panic!("Expected InputJsonDelta, got {delta:?}"),
-                }
-            }
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
+                ContentDelta::InputJsonDelta { .. } => {}
+                _ => panic!("Expected InputJsonDelta, got {delta:?}"),
+            },
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
@@ -581,7 +617,12 @@ mod tests {
         // First two should be text deltas
         match &events[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "Hello".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -608,12 +649,12 @@ mod tests {
         assert_eq!(events.len(), 2);
 
         match &events[0] {
-            Ok(StreamEvent::ContentBlockStart { .. }) => {},
+            Ok(StreamEvent::ContentBlockStart { .. }) => {}
             other => panic!("Expected ContentBlockStart, got {other:?}"),
         }
 
         match &events[1] {
-            Ok(StreamEvent::ContentBlockStop { .. }) => {},
+            Ok(StreamEvent::ContentBlockStop { .. }) => {}
             other => panic!("Expected ContentBlockStop, got {other:?}"),
         }
     }
@@ -632,14 +673,24 @@ mod tests {
         // First two should be text deltas
         match &events[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello!".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "Hello!".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
 
         match &events[1] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: " How can I help?".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: " How can I help?".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -659,11 +710,7 @@ mod tests {
 
     #[test]
     fn test_sse_comments_ignored() {
-        let lines = vec![
-            ": this is a comment",
-            "",
-            "data: {\"type\":\"ping\"}",
-        ];
+        let lines = vec![": this is a comment", "", "data: {\"type\":\"ping\"}"];
         let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
         // Should only have the ping event, comments and empty lines ignored
         assert_eq!(events.len(), 1);
@@ -685,9 +732,7 @@ mod tests {
 
     #[test]
     fn test_openai_empty_choices() {
-        let lines = vec![
-            r#"data: {"choices":[]}"#,
-        ];
+        let lines = vec![r#"data: {"choices":[]}"#];
         let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
         // Should return empty, not error
         assert!(events.is_empty());
@@ -695,9 +740,7 @@ mod tests {
 
     #[test]
     fn test_ollama_empty_content() {
-        let lines = vec![
-            r#"data: {"message":{"content":""}}"#,
-        ];
+        let lines = vec![r#"data: {"message":{"content":""}}"#];
         let events = parse_sse_lines(&lines, LlmProvider::Ollama);
         // Empty content should be skipped
         assert!(events.is_empty());
@@ -705,9 +748,7 @@ mod tests {
 
     #[test]
     fn test_invalid_json_returns_error() {
-        let lines = vec![
-            "data: {invalid json}",
-        ];
+        let lines = vec!["data: {invalid json}"];
         let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
         assert_eq!(events.len(), 1);
         assert!(events[0].is_err());
@@ -790,11 +831,19 @@ mod tests {
         ];
         let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
         // Should get: MessageStart, ContentBlockStart, ContentBlockDelta, MessageDelta, ContentBlockStop, MessageStop
-        assert!(events.len() >= 4, "Expected at least 4 events, got {}", events.len());
+        assert!(
+            events.len() >= 4,
+            "Expected at least 4 events, got {}",
+            events.len()
+        );
 
         // Verify the events are all Ok
         for (i, e) in events.iter().enumerate() {
-            assert!(e.is_ok(), "Event {i} should be Ok, got Err: {:?}", e.as_ref().err());
+            assert!(
+                e.is_ok(),
+                "Event {i} should be Ok, got Err: {:?}",
+                e.as_ref().err()
+            );
         }
     }
 
@@ -817,16 +866,19 @@ mod tests {
         ];
         let events = parse_sse_lines(&lines, LlmProvider::Anthropic);
 
-        let text_deltas: Vec<_> = events.iter().filter_map(|e| match e {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                if let ContentDelta::TextDelta { text } = delta {
-                    Some(text.clone())
-                } else {
-                    None
+        let text_deltas: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                    if let ContentDelta::TextDelta { text } = delta {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
                 }
-            }
-            _ => None,
-        }).collect();
+                _ => None,
+            })
+            .collect();
 
         assert!(
             text_deltas.iter().any(|t| t.contains("search")),
@@ -835,7 +887,11 @@ mod tests {
 
         // Verify all events parsed successfully
         for (i, e) in events.iter().enumerate() {
-            assert!(e.is_ok(), "Event {i} should be Ok, got: {:?}", e.as_ref().err());
+            assert!(
+                e.is_ok(),
+                "Event {i} should be Ok, got: {:?}",
+                e.as_ref().err()
+            );
         }
     }
 
@@ -852,13 +908,20 @@ mod tests {
         ];
         let events = parse_sse_lines(&lines, LlmProvider::OpenAI);
         // The empty delta and role-only delta should not produce content events
-        let text_events: Vec<_> = events.iter().filter_map(|e| match e {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => Some(delta.clone()),
-            _ => None,
-        }).collect();
+        let text_events: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockDelta { delta, .. }) => Some(delta.clone()),
+                _ => None,
+            })
+            .collect();
 
         // Only the third chunk with "content":"Hello" should produce a text delta
-        assert_eq!(text_events.len(), 1, "Expected exactly 1 text delta from 3 chunks");
+        assert_eq!(
+            text_events.len(),
+            1,
+            "Expected exactly 1 text delta from 3 chunks"
+        );
         match &text_events[0] {
             ContentDelta::TextDelta { text } => assert_eq!(text, "Hello"),
             other => panic!("Expected TextDelta, got {other:?}"),
@@ -875,16 +938,19 @@ mod tests {
             r#"data: {"done":true,"total_duration":123456789}"#,
         ];
         let events = parse_sse_lines(&lines, LlmProvider::Ollama);
-        let text_deltas: Vec<_> = events.iter().filter_map(|e| match e {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                if let ContentDelta::TextDelta { text } = delta {
-                    Some(text.as_str())
-                } else {
-                    None
+        let text_deltas: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                    if let ContentDelta::TextDelta { text } = delta {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
                 }
-            }
-            _ => None,
-        }).collect();
+                _ => None,
+            })
+            .collect();
 
         assert_eq!(text_deltas, vec!["Hi", " there"]);
         // done:true should not produce a content event
@@ -908,16 +974,19 @@ mod tests {
         assert_eq!(err_count, 1, "Should have 1 error from malformed JSON");
 
         // Verify the valid events' content
-        let texts: Vec<String> = events.iter().filter_map(|e| match e {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                if let ContentDelta::TextDelta { text } = delta {
-                    Some(text.clone())
-                } else {
-                    None
+        let texts: Vec<String> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
+                    if let ContentDelta::TextDelta { text } = delta {
+                        Some(text.clone())
+                    } else {
+                        None
+                    }
                 }
-            }
-            _ => None,
-        }).collect();
+                _ => None,
+            })
+            .collect();
         assert_eq!(texts, vec!["good", "recovered"]);
     }
 

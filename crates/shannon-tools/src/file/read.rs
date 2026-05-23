@@ -1,6 +1,6 @@
 //! Read tool implementation
 
-use crate::{ToolOutput, ToolError};
+use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -106,7 +106,8 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
     if metadata.len() > MAX_FILE_SIZE {
         return Err(ToolError::ExecutionFailed(format!(
             "File too large: {} bytes (max {} bytes). Use offset/limit to read portions.",
-            metadata.len(), MAX_FILE_SIZE
+            metadata.len(),
+            MAX_FILE_SIZE
         )));
     }
 
@@ -137,8 +138,9 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
                 size,
             };
 
-            let json_output = serde_json::to_string_pretty(&image_output)
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize image data: {e}")))?;
+            let json_output = serde_json::to_string_pretty(&image_output).map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to serialize image data: {e}"))
+            })?;
 
             return Ok(ToolOutput {
                 content: json_output,
@@ -252,7 +254,10 @@ mod tests {
     #[test]
     fn test_detect_media_type_unknown() {
         assert_eq!(detect_media_type("file.txt"), "application/octet-stream");
-        assert_eq!(detect_media_type("no_extension"), "application/octet-stream");
+        assert_eq!(
+            detect_media_type("no_extension"),
+            "application/octet-stream"
+        );
     }
 
     #[test]

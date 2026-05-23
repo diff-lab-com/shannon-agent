@@ -119,7 +119,11 @@ impl ExtractionResult {
     }
 
     /// Create a result indicating successful extraction.
-    pub fn success(memories_saved: Vec<PathBuf>, messages_processed: usize, duration_ms: u64) -> Self {
+    pub fn success(
+        memories_saved: Vec<PathBuf>,
+        messages_processed: usize,
+        duration_ms: u64,
+    ) -> Self {
         Self {
             memories_saved,
             messages_processed,
@@ -415,8 +419,7 @@ impl MemoryExtractor {
         start: &std::time::Instant,
     ) -> Result<ExtractionResult, ExtractionError> {
         // Build prompt (for documentation / future LLM integration)
-        let _prompt =
-            self.build_extraction_prompt(visible_count, existing_memories);
+        let _prompt = self.build_extraction_prompt(visible_count, existing_memories);
 
         // Get recent messages for context
         let recent_messages = self.get_recent_messages(messages, self.max_turns);
@@ -429,7 +432,9 @@ impl MemoryExtractor {
             if let Some(last) = messages.last() {
                 self.set_cursor(&last.id);
             }
-            return Ok(ExtractionResult::skipped("no memories extracted from recent messages"));
+            return Ok(ExtractionResult::skipped(
+                "no memories extracted from recent messages",
+            ));
         }
 
         // Convert extracted memories to MemoryEntry and persist
@@ -476,13 +481,18 @@ impl MemoryExtractor {
         let mut prompt = String::new();
 
         prompt.push_str("You are a memory extraction assistant. Analyze the recent conversation ");
-        prompt.push_str("and extract important information that should be remembered for future sessions.\n\n");
+        prompt.push_str(
+            "and extract important information that should be remembered for future sessions.\n\n",
+        );
 
         prompt.push_str(&format!("## Messages to analyze: {message_count}\n\n"));
 
         prompt.push_str("## Memory Categories\n\n");
         for cat in &categories {
-            prompt.push_str(&format!("### {}\n{}\nExamples:\n", cat.name, cat.description));
+            prompt.push_str(&format!(
+                "### {}\n{}\nExamples:\n",
+                cat.name, cat.description
+            ));
             for ex in &cat.examples {
                 prompt.push_str(&format!("- \"{ex}\"\n"));
             }
@@ -500,9 +510,15 @@ impl MemoryExtractor {
         }
 
         prompt.push_str("## Instructions\n\n");
-        prompt.push_str("1. Extract ONLY information that is likely to be useful in future conversations.\n");
-        prompt.push_str("2. Do NOT extract information that is already in the existing memories list.\n");
-        prompt.push_str("3. Be concise -- each memory should be a single sentence or short paragraph.\n");
+        prompt.push_str(
+            "1. Extract ONLY information that is likely to be useful in future conversations.\n",
+        );
+        prompt.push_str(
+            "2. Do NOT extract information that is already in the existing memories list.\n",
+        );
+        prompt.push_str(
+            "3. Be concise -- each memory should be a single sentence or short paragraph.\n",
+        );
         prompt.push_str("4. Assign a confidence score between 0.5 and 1.0.\n");
         prompt.push_str("5. Output as a JSON array of objects with fields: category, content, tags, confidence.\n");
 
@@ -545,7 +561,11 @@ impl MemoryExtractor {
     /// Count the number of visible messages since the given cursor.
     ///
     /// A "visible" message is one that is from the user or assistant (not system).
-    pub fn count_visible_messages(&self, messages: &[MessageSummary], since: Option<&str>) -> usize {
+    pub fn count_visible_messages(
+        &self,
+        messages: &[MessageSummary],
+        since: Option<&str>,
+    ) -> usize {
         let start_idx = if let Some(cursor) = since {
             messages
                 .iter()
@@ -707,10 +727,7 @@ impl MemoryExtractor {
 
     /// Check whether an extraction is currently running.
     pub fn is_in_progress(&self) -> bool {
-        self.in_progress
-            .lock()
-            .map(|g| *g)
-            .unwrap_or(false)
+        self.in_progress.lock().map(|g| *g).unwrap_or(false)
     }
 }
 
@@ -723,9 +740,9 @@ fn deduplicate_extracted(memories: Vec<ExtractedMemory>) -> Vec<ExtractedMemory>
     let mut unique: Vec<ExtractedMemory> = Vec::new();
 
     for mem in memories {
-        let is_dup = unique.iter().any(|existing| {
-            jaccard_similarity(&existing.content, &mem.content) > 0.8
-        });
+        let is_dup = unique
+            .iter()
+            .any(|existing| jaccard_similarity(&existing.content, &mem.content) > 0.8);
         if !is_dup {
             unique.push(mem);
         }
@@ -802,10 +819,9 @@ impl LlmMemoryExtractor {
             }
         }
 
-        let visible_count = self.inner.count_visible_messages(
-            messages,
-            self.inner.last_extraction_cursor.as_deref(),
-        );
+        let visible_count = self
+            .inner
+            .count_visible_messages(messages, self.inner.last_extraction_cursor.as_deref());
 
         if visible_count < self.inner.min_messages_between_extractions {
             return Ok(ExtractionResult::skipped(&format!(
@@ -816,7 +832,11 @@ impl LlmMemoryExtractor {
 
         // Set in-progress
         {
-            let mut guard = self.inner.in_progress.lock().map_err(|_| ExtractionError::AlreadyInProgress)?;
+            let mut guard = self
+                .inner
+                .in_progress
+                .lock()
+                .map_err(|_| ExtractionError::AlreadyInProgress)?;
             *guard = true;
         }
 
@@ -825,7 +845,11 @@ impl LlmMemoryExtractor {
 
         // Release in-progress
         {
-            let mut guard = self.inner.in_progress.lock().map_err(|_| ExtractionError::AlreadyInProgress)?;
+            let mut guard = self
+                .inner
+                .in_progress
+                .lock()
+                .map_err(|_| ExtractionError::AlreadyInProgress)?;
             *guard = false;
         }
 
@@ -844,7 +868,9 @@ impl LlmMemoryExtractor {
             Ok(memories) => memories,
             Err(_) => {
                 // Fallback to pattern-based extraction
-                let recent = self.inner.get_recent_messages(messages, self.inner.max_turns);
+                let recent = self
+                    .inner
+                    .get_recent_messages(messages, self.inner.max_turns);
                 self.inner.pattern_extract_from_messages(&recent)
             }
         };
@@ -853,7 +879,9 @@ impl LlmMemoryExtractor {
             if let Some(last) = messages.last() {
                 self.inner.set_cursor(&last.id);
             }
-            return Ok(ExtractionResult::skipped("no memories extracted from recent messages"));
+            return Ok(ExtractionResult::skipped(
+                "no memories extracted from recent messages",
+            ));
         }
 
         let mut saved_paths = Vec::new();
@@ -876,7 +904,11 @@ impl LlmMemoryExtractor {
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;
-        Ok(ExtractionResult::success(saved_paths, visible_count, duration_ms))
+        Ok(ExtractionResult::success(
+            saved_paths,
+            visible_count,
+            duration_ms,
+        ))
     }
 
     /// Call the LLM to extract memories from recent messages.
@@ -885,15 +917,18 @@ impl LlmMemoryExtractor {
         messages: &[MessageSummary],
         existing_memories: &[MemoryEntry],
     ) -> Result<Vec<ExtractedMemory>, ExtractionError> {
-        let visible_count = self.inner.count_visible_messages(
-            messages,
-            self.inner.last_extraction_cursor.as_deref(),
-        );
+        let visible_count = self
+            .inner
+            .count_visible_messages(messages, self.inner.last_extraction_cursor.as_deref());
 
-        let prompt = self.inner.build_extraction_prompt(visible_count, existing_memories);
+        let prompt = self
+            .inner
+            .build_extraction_prompt(visible_count, existing_memories);
 
         // Build the conversation messages for the LLM
-        let recent = self.inner.get_recent_messages(messages, self.inner.max_turns);
+        let recent = self
+            .inner
+            .get_recent_messages(messages, self.inner.max_turns);
         let mut conversation_text = String::new();
         for msg in &recent {
             conversation_text.push_str(&format!("[{}] {}\n", msg.role, msg.content));
@@ -961,7 +996,11 @@ fn parse_llm_extraction_output(text: &str) -> Result<Vec<ExtractedMemory>, Extra
 
     let json_str = match (json_start, json_end) {
         (Some(s), Some(e)) if e > s => &cleaned[s..=e],
-        _ => return Err(ExtractionError::ParseError("no JSON array found in LLM output".into())),
+        _ => {
+            return Err(ExtractionError::ParseError(
+                "no JSON array found in LLM output".into(),
+            ));
+        }
     };
 
     let parsed: Vec<ExtractedMemory> = serde_json::from_str(json_str).map_err(|e| {
@@ -998,7 +1037,10 @@ mod tests {
         let config = ExtractionConfig::default();
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: ExtractionConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.min_messages_between_extractions, config.min_messages_between_extractions);
+        assert_eq!(
+            deserialized.min_messages_between_extractions,
+            config.min_messages_between_extractions
+        );
         assert_eq!(deserialized.max_turns, config.max_turns);
     }
 
@@ -1010,17 +1052,16 @@ mod tests {
     fn test_extraction_result_skipped() {
         let result = ExtractionResult::skipped("not enough messages");
         assert!(!result.was_extracted());
-        assert_eq!(result.skipped_reason, Some("not enough messages".to_string()));
+        assert_eq!(
+            result.skipped_reason,
+            Some("not enough messages".to_string())
+        );
         assert!(result.memories_saved.is_empty());
     }
 
     #[test]
     fn test_extraction_result_success() {
-        let result = ExtractionResult::success(
-            vec![PathBuf::from("/tmp/mem.json")],
-            15,
-            42,
-        );
+        let result = ExtractionResult::success(vec![PathBuf::from("/tmp/mem.json")], 15, 42);
         assert!(result.was_extracted());
         assert!(result.skipped_reason.is_none());
         assert_eq!(result.memories_saved.len(), 1);
@@ -1053,11 +1094,8 @@ mod tests {
 
     #[test]
     fn test_extraction_category_examples() {
-        let cat = ExtractionCategory::new(
-            "Test",
-            "A test category",
-            vec!["example 1", "example 2"],
-        );
+        let cat =
+            ExtractionCategory::new("Test", "A test category", vec!["example 1", "example 2"]);
         assert_eq!(cat.examples.len(), 2);
         assert_eq!(cat.examples[0], "example 1");
     }
@@ -1145,7 +1183,10 @@ mod tests {
             .collect();
 
         // Add a message that looks like a memory write
-        messages.push(MessageSummary::new("assistant", "Memory written successfully."));
+        messages.push(MessageSummary::new(
+            "assistant",
+            "Memory written successfully.",
+        ));
 
         // should_extract should return false because memory write detected
         assert!(!extractor.should_extract(&messages));
@@ -1251,9 +1292,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let extractor = make_extractor(&temp_dir, 3);
 
-        let existing = vec![
-            MemoryEntry::new("proj", MemoryCategory::Preference, "Use tabs"),
-        ];
+        let existing = vec![MemoryEntry::new(
+            "proj",
+            MemoryCategory::Preference,
+            "Use tabs",
+        )];
 
         let prompt = extractor.build_extraction_prompt(10, &existing);
         assert!(prompt.contains("Use tabs"));

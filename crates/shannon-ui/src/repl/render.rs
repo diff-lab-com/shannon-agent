@@ -1,20 +1,16 @@
 //! REPL frame rendering and dialog display
 
-use crate::{
-    Result,
-    theme::Theme,
-};
-use rust_i18n::t;
+use crate::{Result, theme::Theme};
 use ratatui::backend::CrosstermBackend;
 use ratatui::{
-    Terminal,
+    Frame, Terminal,
     layout::{Alignment, Rect},
+    prelude::Widget,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame,
-    prelude::Widget,
 };
+use rust_i18n::t;
 use std::io;
 
 use super::Repl;
@@ -31,11 +27,18 @@ pub fn render_queue_indicator(f: &mut Frame, state: &ReplState, toast_visible: b
         let items: Vec<(usize, &String)> = if queue_len <= max_show {
             state.queued_messages.iter().enumerate().collect()
         } else {
-            state.queued_messages[queue_len - max_show..].iter().enumerate().map(|(i, s)| (i + overflow_count, s)).collect()
+            state.queued_messages[queue_len - max_show..]
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i + overflow_count, s))
+                .collect()
         };
         let lines_count = items.len() + if overflow_count > 0 { 1 } else { 0 };
         let base_y_offset = if toast_visible { 4 } else { 5 };
-        let base_y = f.area().bottom().saturating_sub(base_y_offset + lines_count as u16);
+        let base_y = f
+            .area()
+            .bottom()
+            .saturating_sub(base_y_offset + lines_count as u16);
         if overflow_count > 0 {
             let summary = format!(" … and {overflow_count} more");
             let summary_text: String = summary.chars().take(avail_width).collect();
@@ -46,7 +49,11 @@ pub fn render_queue_indicator(f: &mut Frame, state: &ReplState, toast_visible: b
                 height: 1,
             };
             f.render_widget(
-                Paragraph::new(summary_text).style(ratatui::style::Style::default().fg(state.theme.muted).bg(state.theme.context_bar_bg)),
+                Paragraph::new(summary_text).style(
+                    ratatui::style::Style::default()
+                        .fg(state.theme.muted)
+                        .bg(state.theme.context_bar_bg),
+                ),
                 area,
             );
         }
@@ -56,7 +63,9 @@ pub fn render_queue_indicator(f: &mut Frame, state: &ReplState, toast_visible: b
             let msg_avail = avail_width.saturating_sub(label_w);
             let preview = if msg.len() > msg_avail {
                 let mut cut = msg_avail.saturating_sub(3);
-                while cut > 0 && !msg.is_char_boundary(cut) { cut -= 1; }
+                while cut > 0 && !msg.is_char_boundary(cut) {
+                    cut -= 1;
+                }
                 format!("{}…", &msg[..cut])
             } else {
                 msg.to_string()
@@ -71,7 +80,11 @@ pub fn render_queue_indicator(f: &mut Frame, state: &ReplState, toast_visible: b
                 height: 1,
             };
             f.render_widget(
-                Paragraph::new(line_text).style(ratatui::style::Style::default().fg(state.theme.accent).bg(state.theme.context_bar_bg)),
+                Paragraph::new(line_text).style(
+                    ratatui::style::Style::default()
+                        .fg(state.theme.accent)
+                        .bg(state.theme.context_bar_bg),
+                ),
                 area,
             );
         }
@@ -82,18 +95,27 @@ pub fn render_queue_indicator(f: &mut Frame, state: &ReplState, toast_visible: b
         let hint_width = unicode_width::UnicodeWidthStr::width(hint) as u16;
         let x = f.area().x + 2;
         let w = hint_width.min(f.area().width.saturating_sub(4));
-        let hint_area = ratatui::layout::Rect { x, y, width: w, height: 1 };
+        let hint_area = ratatui::layout::Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        };
         let hint_text: String = hint.chars().take(w as usize).collect();
-        let hint_paragraph = Paragraph::new(hint_text)
-            .style(ratatui::style::Style::default()
+        let hint_paragraph = Paragraph::new(hint_text).style(
+            ratatui::style::Style::default()
                 .fg(state.theme.muted)
-                .bg(state.theme.context_bar_bg));
+                .bg(state.theme.context_bar_bg),
+        );
         f.render_widget(hint_paragraph, hint_area);
     }
 }
 
 /// Draw the main REPL frame, dispatching to the appropriate overlay.
-pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &mut Repl) -> Result<()> {
+pub fn draw_frame(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    repl: &mut Repl,
+) -> Result<()> {
     // Safety net: if streaming_active is stale (stuck for >5 min without a stream),
     // force-reset to avoid permanent streaming indicator
     if repl.state.streaming_active {
@@ -131,7 +153,9 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
     // Sync terminal window title with current state (OSC 0)
     {
-        let model_short = state.model.as_ref()
+        let model_short = state
+            .model
+            .as_ref()
             .map(|m| m.split('/').next_back().unwrap_or(m))
             .unwrap_or("shannon");
         crate::a11y::set_enabled(state.accessibility_mode);
@@ -159,18 +183,26 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         };
 
         // Compute search matches if chat search is active
-        let (search_query, search_matches, search_focused_idx) = if state.chat_search_active || !state.chat_search_query.is_empty() {
-            let matches = chat.find_search_matches(&state.chat_search_query);
-            let focused = if matches.is_empty() { None } else { Some(state.chat_search_match_index.min(matches.len() - 1)) };
-            (Some(state.chat_search_query.as_str()), matches, focused)
-        } else {
-            (None, Vec::new(), None)
-        };
+        let (search_query, search_matches, search_focused_idx) =
+            if state.chat_search_active || !state.chat_search_query.is_empty() {
+                let matches = chat.find_search_matches(&state.chat_search_query);
+                let focused = if matches.is_empty() {
+                    None
+                } else {
+                    Some(state.chat_search_match_index.min(matches.len() - 1))
+                };
+                (Some(state.chat_search_query.as_str()), matches, focused)
+            } else {
+                (None, Vec::new(), None)
+            };
 
         // Render base layout (always)
         let ctx_window = Some(state.context_window as u64);
         let render_ctx = crate::widgets::RenderContext {
-            chat, prompt, theme: &state.theme, status: display_status,
+            chat,
+            prompt,
+            theme: &state.theme,
+            status: display_status,
             model: state.model.as_deref(),
             tokens_used: Some(state.tokens_used),
             max_tokens: ctx_window,
@@ -180,7 +212,10 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             cached_tokens: Some(state.cache_read_tokens + state.cache_creation_tokens),
             cache_read_tokens: Some(state.cache_read_tokens),
             cache_creation_tokens: Some(state.cache_creation_tokens),
-            diag_counts: Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count())),
+            diag_counts: Some((
+                state.diagnostic_store.error_count(),
+                state.diagnostic_store.warning_count(),
+            )),
             rate_limit: state.rate_limit_5h,
             turn_count: sidebar_ref.map(|si| si.turn_count),
             memory_rss_kb: sidebar_ref.map(|si| si.memory_rss_kb),
@@ -215,7 +250,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             let popup_height = 15u16.min(f.area().height.saturating_sub(5));
             let popup_width = (f.area().width as f32 * 0.6).min(60.0) as u16;
             let popup_x = f.area().width.saturating_sub(popup_width) / 2;
-            let popup_y = f.area().height.saturating_sub(popup_height).saturating_sub(3);
+            let popup_y = f
+                .area()
+                .height
+                .saturating_sub(popup_height)
+                .saturating_sub(3);
             let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
             // Clear the popup area first
             f.render_widget(ratatui::widgets::Clear, popup_area);
@@ -224,7 +263,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             let popup_height = 15u16.min(f.area().height.saturating_sub(5));
             let popup_width = (f.area().width as f32 * 0.6).min(60.0) as u16;
             let popup_x = f.area().width.saturating_sub(popup_width) / 2;
-            let popup_y = f.area().height.saturating_sub(popup_height).saturating_sub(3);
+            let popup_y = f
+                .area()
+                .height
+                .saturating_sub(popup_height)
+                .saturating_sub(3);
             let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
             f.render_widget(ratatui::widgets::Clear, popup_area);
             selector.render(f, popup_area, &state.theme);
@@ -251,7 +294,14 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Overlay diff viewer if active
         if let Some(viewer) = state.diff_viewer.as_ref() {
             if state.diff_interactive && !state.interactive_hunks.is_empty() {
-                viewer.render_interactive(f, f.area(), diff_data, &state.theme, &state.interactive_hunks, state.interactive_selected);
+                viewer.render_interactive(
+                    f,
+                    f.area(),
+                    diff_data,
+                    &state.theme,
+                    &state.interactive_hunks,
+                    state.interactive_selected,
+                );
             } else {
                 viewer.render(f, f.area(), diff_data, &state.theme);
             }
@@ -268,7 +318,9 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             let theme = &state.theme;
             let inner = format!(" {msg} ");
             let inner_w = unicode_width::UnicodeWidthStr::width(inner.as_str()) as u16;
-            let total_w = inner_w.saturating_add(2).min(f.area().width.saturating_sub(2));
+            let total_w = inner_w
+                .saturating_add(2)
+                .min(f.area().width.saturating_sub(2));
             let y = f.area().bottom().saturating_sub(6);
             let x = f.area().x + 1;
 
@@ -276,13 +328,28 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             let top = format!("╭{}╮", "─".repeat(total_w.saturating_sub(2) as usize));
             f.render_widget(
                 Paragraph::new(top).style(ratatui::style::Style::default().fg(theme.accent)),
-                ratatui::layout::Rect { x, y, width: total_w, height: 1 },
+                ratatui::layout::Rect {
+                    x,
+                    y,
+                    width: total_w,
+                    height: 1,
+                },
             );
             // Content line with side borders
-            let content_area = ratatui::layout::Rect { x, y: y + 1, width: total_w, height: 1 };
+            let content_area = ratatui::layout::Rect {
+                x,
+                y: y + 1,
+                width: total_w,
+                height: 1,
+            };
             let content_line = ratatui::text::Line::from(vec![
                 ratatui::text::Span::styled("│", ratatui::style::Style::default().fg(theme.accent)),
-                ratatui::text::Span::styled(inner.clone(), ratatui::style::Style::default().fg(theme.text).bg(theme.accent)),
+                ratatui::text::Span::styled(
+                    inner.clone(),
+                    ratatui::style::Style::default()
+                        .fg(theme.text)
+                        .bg(theme.accent),
+                ),
                 ratatui::text::Span::styled("│", ratatui::style::Style::default().fg(theme.accent)),
             ]);
             f.render_widget(Paragraph::new(content_line), content_area);
@@ -290,7 +357,12 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             let bottom = format!("╰{}╯", "─".repeat(total_w.saturating_sub(2) as usize));
             f.render_widget(
                 Paragraph::new(bottom).style(ratatui::style::Style::default().fg(theme.accent)),
-                ratatui::layout::Rect { x, y: y + 2, width: total_w, height: 1 },
+                ratatui::layout::Rect {
+                    x,
+                    y: y + 2,
+                    width: total_w,
+                    height: 1,
+                },
             );
         }
 
@@ -298,13 +370,18 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         {
             let theme = &state.theme;
             let now = std::time::Instant::now();
-            let fresh: Vec<_> = state.pending_notifications.iter()
+            let fresh: Vec<_> = state
+                .pending_notifications
+                .iter()
                 .filter(|(_, t)| now.duration_since(*t).as_secs() < 8)
                 .collect();
             let count = fresh.len().min(3);
             if count > 0 {
                 let max_w = (f.area().width as usize).saturating_sub(6);
-                let base_y = f.area().bottom().saturating_sub(6 + if toast_visible { 3 } else { 0 });
+                let base_y = f
+                    .area()
+                    .bottom()
+                    .saturating_sub(6 + if toast_visible { 3 } else { 0 });
                 for (i, (msg, _)) in fresh.iter().rev().take(count).enumerate() {
                     let display: String = {
                         let msg_width = unicode_width::UnicodeWidthStr::width(msg.as_str());
@@ -313,7 +390,9 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                             let mut len = 0;
                             for c in msg.chars() {
                                 let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
-                                if len + cw + 3 > max_w { break; }
+                                if len + cw + 3 > max_w {
+                                    break;
+                                }
                                 s.push(c);
                                 len += cw;
                             }
@@ -323,8 +402,14 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                         }
                     };
                     let line = ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(" ℹ ", ratatui::style::Style::default().fg(theme.muted)),
-                        ratatui::text::Span::styled(display, ratatui::style::Style::default().fg(theme.text_dim)),
+                        ratatui::text::Span::styled(
+                            " ℹ ",
+                            ratatui::style::Style::default().fg(theme.muted),
+                        ),
+                        ratatui::text::Span::styled(
+                            display,
+                            ratatui::style::Style::default().fg(theme.text_dim),
+                        ),
                     ]);
                     let y = base_y.saturating_sub((count - i) as u16);
                     f.render_widget(
@@ -345,7 +430,9 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // "Scroll to bottom" indicator when user scrolled up away from latest content
         if !state.auto_follow && !state.show_key_hints && chat.message_count() > 1 {
-            let new_count = chat.message_count().saturating_sub(state.messages_at_scroll_pause);
+            let new_count = chat
+                .message_count()
+                .saturating_sub(state.messages_at_scroll_pause);
             let indicator = if new_count > 0 {
                 format!(" ↓ {new_count} new · End = jump to latest ")
             } else {
@@ -355,11 +442,18 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
             let ix = f.area().x + f.area().width.saturating_sub(indicator_width + 2);
             let iy = f.area().y + 2;
             let iw = indicator_width.min(f.area().width.saturating_sub(4));
-            let indicator_area = ratatui::layout::Rect { x: ix, y: iy, width: iw, height: 1 };
-            let indicator_paragraph = Paragraph::new(indicator.chars().take(iw as usize).collect::<String>())
-                .style(ratatui::style::Style::default()
-                    .fg(state.theme.text)
-                    .bg(state.theme.accent));
+            let indicator_area = ratatui::layout::Rect {
+                x: ix,
+                y: iy,
+                width: iw,
+                height: 1,
+            };
+            let indicator_paragraph =
+                Paragraph::new(indicator.chars().take(iw as usize).collect::<String>()).style(
+                    ratatui::style::Style::default()
+                        .fg(state.theme.text)
+                        .bg(state.theme.accent),
+                );
             f.render_widget(indicator_paragraph, indicator_area);
         }
 
@@ -397,7 +491,13 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
 
         // Overlay completion suggestions popup above the prompt
         if !state.completion_suggestions.is_empty() {
-            render_completion_suggestions(f, f.area(), &state.completion_suggestions, state.completion_suggestion_index, &state.theme);
+            render_completion_suggestions(
+                f,
+                f.area(),
+                &state.completion_suggestions,
+                state.completion_suggestion_index,
+                &state.theme,
+            );
         }
 
         // Overlay pager when active
@@ -429,7 +529,10 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
         // Overlay agents panel when visible
         if state.agents_panel_visible {
             crate::widgets::agents_panel::render_agents_panel(
-                f, f.area(), &state.active_agents, &state.theme,
+                f,
+                f.area(),
+                &state.active_agents,
+                &state.theme,
             );
         }
 
@@ -461,8 +564,11 @@ pub fn draw_frame(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, repl: &
                 width,
                 height: 1,
             };
-            let ind = Paragraph::new(indicator)
-                .style(ratatui::style::Style::default().fg(state.theme.primary).add_modifier(Modifier::BOLD));
+            let ind = Paragraph::new(indicator).style(
+                ratatui::style::Style::default()
+                    .fg(state.theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            );
             f.render_widget(ind, indicator_area);
         }
 
@@ -514,7 +620,11 @@ pub fn render_permission_dialog(
     theme: &Theme,
 ) {
     // Calculate dialog area (centered) — taller if diff preview present
-    let base_height: u16 = if dialog.diff_preview.is_some() { 30 } else { 20 };
+    let base_height: u16 = if dialog.diff_preview.is_some() {
+        30
+    } else {
+        20
+    };
     let dialog_width = 70.min(area.width.saturating_sub(4));
     let dialog_height = base_height.min(area.height.saturating_sub(4));
 
@@ -550,17 +660,31 @@ pub fn render_permission_dialog(
 
     let mut content_lines = vec![
         Line::from(vec![
-            Span::styled(risk_indicator, Style::default().fg(risk_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                risk_indicator,
+                Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
+            ),
             Span::from(" Permission Request"),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled(format!("{}: ", t!("ui.perm_tool")), Style::default().fg(theme.muted)),
-            Span::styled(&dialog.tool_name, Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{}: ", t!("ui.perm_tool")),
+                Style::default().fg(theme.muted),
+            ),
+            Span::styled(
+                &dialog.tool_name,
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled(format!("{}: ", t!("ui.perm_description")), Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{}: ", t!("ui.perm_description")),
+                Style::default().fg(theme.muted),
+            ),
             Span::styled(&dialog.description, Style::default().fg(theme.text)),
         ]),
         Line::from(""),
@@ -569,8 +693,16 @@ pub fn render_permission_dialog(
     // Show diff preview for file edit/write, raw input for other tools
     if let Some(ref diff) = dialog.diff_preview {
         content_lines.push(Line::from(vec![
-            Span::styled("-- Diff Preview ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
-            Span::styled("--------------------------", Style::default().fg(theme.text_dim)),
+            Span::styled(
+                "-- Diff Preview ",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "--------------------------",
+                Style::default().fg(theme.text_dim),
+            ),
         ]));
         let diff_lines: Vec<&str> = diff.lines().collect();
         let lang = crate::widgets::detect_diff_language(diff);
@@ -592,20 +724,31 @@ pub fn render_permission_dialog(
             } else {
                 None
             };
-            let spans = crate::widgets::highlight_diff_line(line, lang.as_deref(), color, word_color);
+            let spans =
+                crate::widgets::highlight_diff_line(line, lang.as_deref(), color, word_color);
             content_lines.push(Line::from(spans));
         }
         if diff_lines.len() > MAX_DIFF_PREVIEW_LINES {
             content_lines.push(Line::from(Span::styled(
-                format!("... ({} more lines)", diff_lines.len().saturating_sub(MAX_DIFF_PREVIEW_LINES)),
+                format!(
+                    "... ({} more lines)",
+                    diff_lines.len().saturating_sub(MAX_DIFF_PREVIEW_LINES)
+                ),
                 Style::default().fg(theme.text_dim),
             )));
         }
     } else {
-        content_lines.push(Line::from(Span::styled(t!("ui.prompt_input_label").to_string(), Style::default().fg(theme.muted))));
-        let json = serde_json::to_string_pretty(&dialog.tool_input).unwrap_or_else(|_| "(invalid)".to_string());
+        content_lines.push(Line::from(Span::styled(
+            t!("ui.prompt_input_label").to_string(),
+            Style::default().fg(theme.muted),
+        )));
+        let json = serde_json::to_string_pretty(&dialog.tool_input)
+            .unwrap_or_else(|_| "(invalid)".to_string());
         for line in json.lines().take(8) {
-            content_lines.push(Line::from(Span::styled(line.to_string(), Style::default().fg(theme.text_dim))));
+            content_lines.push(Line::from(Span::styled(
+                line.to_string(),
+                Style::default().fg(theme.text_dim),
+            )));
         }
         let total_lines = json.lines().count();
         if total_lines > 8 {
@@ -620,7 +763,10 @@ pub fn render_permission_dialog(
     if !dialog.risk_reason.is_empty() {
         content_lines.push(Line::from(""));
         content_lines.push(Line::from(vec![
-            Span::styled(format!("{}: ", t!("ui.perm_why")), Style::default().fg(theme.muted)),
+            Span::styled(
+                format!("{}: ", t!("ui.perm_why")),
+                Style::default().fg(theme.muted),
+            ),
             Span::styled(&dialog.risk_reason, Style::default().fg(theme.text_dim)),
         ]));
     }
@@ -629,13 +775,25 @@ pub fn render_permission_dialog(
     content_lines.push(Line::from(""));
     content_lines.push(Line::from(vec![
         Span::styled("[Enter] ", Style::default().fg(theme.success)),
-        Span::styled(format!("{}    ", t!("ui.permission_allow_once")), Style::default().fg(theme.text)),
+        Span::styled(
+            format!("{}    ", t!("ui.permission_allow_once")),
+            Style::default().fg(theme.text),
+        ),
         Span::styled("[A] ", Style::default().fg(theme.primary)),
-        Span::styled(format!("{}  ", t!("ui.permission_always_allow")), Style::default().fg(theme.text)),
+        Span::styled(
+            format!("{}  ", t!("ui.permission_always_allow")),
+            Style::default().fg(theme.text),
+        ),
         Span::styled("[E] ", Style::default().fg(theme.warning)),
-        Span::styled(format!("{}  ", t!("ui.permission_edit_run")), Style::default().fg(theme.text)),
+        Span::styled(
+            format!("{}  ", t!("ui.permission_edit_run")),
+            Style::default().fg(theme.text),
+        ),
         Span::styled("[Esc] ", Style::default().fg(theme.error)),
-        Span::styled(t!("ui.permission_deny").to_string(), Style::default().fg(theme.text)),
+        Span::styled(
+            t!("ui.permission_deny").to_string(),
+            Style::default().fg(theme.text),
+        ),
     ]));
 
     let paragraph = Paragraph::new(content_lines)
@@ -694,7 +852,10 @@ pub(crate) fn render_completion_suggestions(
             if i == selected_index {
                 Line::from(Span::styled(
                     format!("▸ {text}"),
-                    Style::default().fg(theme.primary).bg(theme.context_bar_bg).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.primary)
+                        .bg(theme.context_bar_bg)
+                        .add_modifier(Modifier::BOLD),
                 ))
             } else {
                 Line::from(Span::styled(
@@ -705,17 +866,18 @@ pub(crate) fn render_completion_suggestions(
         })
         .collect();
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.text_dim))
-                .border_type(ratatui::widgets::BorderType::Rounded)
-                .title(Span::styled(
-                    " Completions ",
-                    Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
-                )),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.text_dim))
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .title(Span::styled(
+                " Completions ",
+                Style::default()
+                    .fg(theme.secondary)
+                    .add_modifier(Modifier::BOLD),
+            )),
+    );
 
     frame.render_widget(paragraph, popup_area);
 }
@@ -767,9 +929,17 @@ fn render_history_search_overlay(
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" Ctrl+R ", Style::default().fg(theme.context_bar_bg).bg(theme.accent)),
+            Span::styled(
+                " Ctrl+R ",
+                Style::default().fg(theme.context_bar_bg).bg(theme.accent),
+            ),
             Span::styled(" reverse-i-search  ", Style::default().fg(theme.text_dim)),
-            Span::styled(&*query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &*query_display,
+                Style::default()
+                    .fg(query_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("▌", Style::default().fg(theme.accent)),
             Span::styled(match_info, Style::default().fg(theme.text_dim)),
         ]),
@@ -784,13 +954,12 @@ fn render_history_search_overlay(
         ]),
     ];
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.accent))
-                .border_type(ratatui::widgets::BorderType::Rounded),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.accent))
+            .border_type(ratatui::widgets::BorderType::Rounded),
+    );
 
     frame.render_widget(paragraph, bar_area);
 }
@@ -819,12 +988,31 @@ fn render_pager_overlay(
     // Header bar with message count
     let msg_count = chat.message_count();
     let header = Paragraph::new(Line::from(vec![
-        Span::styled(" TRANSCRIPT ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("({msg_count} messages) "), Style::default().fg(theme.text_dim)),
-        Span::styled("─ j/k: scroll  g/G: top/bottom  /: search  q/Esc: close ", Style::default().fg(theme.text_dim)),
+        Span::styled(
+            " TRANSCRIPT ",
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("({msg_count} messages) "),
+            Style::default().fg(theme.text_dim),
+        ),
+        Span::styled(
+            "─ j/k: scroll  g/G: top/bottom  /: search  q/Esc: close ",
+            Style::default().fg(theme.text_dim),
+        ),
     ]))
     .style(Style::default().bg(theme.context_bar_bg));
-    frame.render_widget(header, Rect { x: area.x, y: area.y, width: area.width, height: 1 });
+    frame.render_widget(
+        header,
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        },
+    );
 
     // Render chat widget content in the pager area
     chat.render_full(frame, content_area, theme, pager_scroll);
@@ -836,7 +1024,15 @@ fn render_pager_overlay(
     )))
     .style(Style::default().bg(theme.context_bar_bg));
     let footer_y = area.y + area.height.saturating_sub(1);
-    frame.render_widget(footer, Rect { x: area.x, y: footer_y, width: area.width, height: 1 });
+    frame.render_widget(
+        footer,
+        Rect {
+            x: area.x,
+            y: footer_y,
+            width: area.width,
+            height: 1,
+        },
+    );
 }
 
 /// Truncate a string to fit within a visual width, appending "…" if truncated.
@@ -846,10 +1042,16 @@ fn truncate_visual(s: &str, max_len: usize) -> String {
         s.to_string()
     } else if max_len > 1 {
         let mut len = 0;
-        let truncated: String = s.chars()
+        let truncated: String = s
+            .chars()
             .take_while(|c| {
                 let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                if len + cw > max_len - 1 { false } else { len += cw; true }
+                if len + cw > max_len - 1 {
+                    false
+                } else {
+                    len += cw;
+                    true
+                }
             })
             .collect();
         format!("{truncated}…")
@@ -880,18 +1082,35 @@ fn render_plan_overlay(
 
     // Count numbered steps for the title
     let all_lines: Vec<&str> = plan.content.lines().collect();
-    let step_count = all_lines.iter().filter(|l| l.starts_with("## ") || (l.starts_with(|c: char| c.is_ascii_digit()) && l.contains('.'))).count();
-    let step_label = if step_count > 0 { format!(" ({step_count} steps)") } else { String::new() };
+    let step_count = all_lines
+        .iter()
+        .filter(|l| {
+            l.starts_with("## ") || (l.starts_with(|c: char| c.is_ascii_digit()) && l.contains('.'))
+        })
+        .count();
+    let step_label = if step_count > 0 {
+        format!(" ({step_count} steps)")
+    } else {
+        String::new()
+    };
 
     let inner_width = dialog_width.saturating_sub(2) as usize;
     let mut content_lines = vec![
         Line::from(vec![
             Span::styled(" Goal: ", Style::default().fg(theme.muted)),
-            Span::styled(truncate_visual(&plan.description, inner_width.saturating_sub(8)), Style::default().fg(theme.text)),
+            Span::styled(
+                truncate_visual(&plan.description, inner_width.saturating_sub(8)),
+                Style::default().fg(theme.text),
+            ),
         ]),
         Line::from(""),
         Line::from(Span::styled(
-            format!("{} Steps {}{}", "─".repeat(3), "─".repeat(inner_width.saturating_sub(12)), step_label),
+            format!(
+                "{} Steps {}{}",
+                "─".repeat(3),
+                "─".repeat(inner_width.saturating_sub(12)),
+                step_label
+            ),
             Style::default().fg(theme.text_dim),
         )),
     ];
@@ -909,19 +1128,37 @@ fn render_plan_overlay(
             step_num += 1;
             let label = line.trim_start_matches("## ").trim();
             Line::from(vec![
-                Span::styled(format!(" {step_num}. "), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
-                Span::styled(label.to_string(), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" {step_num}. "),
+                    Style::default()
+                        .fg(theme.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    label.to_string(),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ])
         } else if line.starts_with("- ") {
             Line::from(vec![
                 Span::styled("    ", Style::default().fg(theme.text_dim)),
                 Span::styled("• ", Style::default().fg(theme.muted)),
-                Span::styled(line.strip_prefix("- ").unwrap_or(line).to_string(), Style::default().fg(theme.text)),
+                Span::styled(
+                    line.strip_prefix("- ").unwrap_or(line).to_string(),
+                    Style::default().fg(theme.text),
+                ),
             ])
         } else if line.starts_with(|c: char| c.is_ascii_digit()) && line.contains('.') {
             step_num += 1;
             Line::from(vec![
-                Span::styled(format!(" {step_num}. "), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!(" {step_num}. "),
+                    Style::default()
+                        .fg(theme.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(line.to_string(), Style::default().fg(theme.text)),
             ])
         } else if line.is_empty() {
@@ -938,13 +1175,21 @@ fn render_plan_overlay(
     // Apply scroll offset
     let total = step_lines.len();
     let scroll = plan.scroll_offset.min(total.saturating_sub(available_body));
-    let visible: Vec<Line> = step_lines.into_iter().skip(scroll).take(available_body).collect();
+    let visible: Vec<Line> = step_lines
+        .into_iter()
+        .skip(scroll)
+        .take(available_body)
+        .collect();
     content_lines.extend(visible);
 
     // Scroll indicator
     let remaining_content = total.saturating_sub(scroll + available_body);
     if remaining_content > 0 || scroll > 0 {
-        let pos_info = format!(" line {}-{} of {total} ", scroll + 1, (scroll + available_body).min(total));
+        let pos_info = format!(
+            " line {}-{} of {total} ",
+            scroll + 1,
+            (scroll + available_body).min(total)
+        );
         content_lines.push(Line::from(Span::styled(
             format!("  j/k: scroll {pos_info}"),
             Style::default().fg(theme.muted),
@@ -955,11 +1200,20 @@ fn render_plan_overlay(
 
     content_lines.push(Line::from(vec![
         Span::styled("[Enter] ", Style::default().fg(theme.success)),
-        Span::styled(format!("{}    ", t!("ui.plan_approve")), Style::default().fg(theme.text)),
+        Span::styled(
+            format!("{}    ", t!("ui.plan_approve")),
+            Style::default().fg(theme.text),
+        ),
         Span::styled("[Esc] ", Style::default().fg(theme.warning)),
-        Span::styled(format!("{}    ", t!("ui.plan_reject")), Style::default().fg(theme.text)),
+        Span::styled(
+            format!("{}    ", t!("ui.plan_reject")),
+            Style::default().fg(theme.text),
+        ),
         Span::styled("[P] ", Style::default().fg(theme.muted)),
-        Span::styled(t!("ui.plan_dismiss").to_string(), Style::default().fg(theme.text)),
+        Span::styled(
+            t!("ui.plan_dismiss").to_string(),
+            Style::default().fg(theme.text),
+        ),
     ]));
 
     let title = format!(" Plan Awaiting Review{step_label} ");
@@ -971,7 +1225,9 @@ fn render_plan_overlay(
                 .border_type(ratatui::widgets::BorderType::Rounded)
                 .title(Span::styled(
                     title,
-                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
                 )),
         )
         .wrap(Wrap { trim: true });
@@ -980,11 +1236,7 @@ fn render_plan_overlay(
 }
 
 /// Render first-run onboarding overlay showing essential keybindings and tips.
-fn render_onboarding_overlay(
-    frame: &mut ratatui::Frame,
-    area: Rect,
-    theme: &Theme,
-) {
+fn render_onboarding_overlay(frame: &mut ratatui::Frame, area: Rect, theme: &Theme) {
     let dialog_width = 60.min(area.width.saturating_sub(4));
     let dialog_height = 40.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(dialog_width)) / 2;
@@ -998,7 +1250,9 @@ fn render_onboarding_overlay(
 
     frame.render_widget(Clear, dialog_area);
 
-    let accent_style = Style::default().fg(theme.accent).add_modifier(Modifier::BOLD);
+    let accent_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
     let text_style = Style::default().fg(theme.text);
 
     let sep_width = dialog_width as usize - 4;
@@ -1032,51 +1286,116 @@ fn render_onboarding_overlay(
         Line::from(""),
         Line::from(Span::styled(
             " \u{2328} Keybindings",
-            Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.secondary)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             format!(" {}", "─".repeat(sep_width)),
             Style::default().fg(theme.border_dim),
         )),
-        Line::from(vec![Span::styled("  Enter           ", accent_style), Span::styled("Send message", text_style)]),
-        Line::from(vec![Span::styled("  Ctrl+E          ", accent_style), Span::styled("Open external editor", text_style)]),
-        Line::from(vec![Span::styled("  Ctrl+F          ", accent_style), Span::styled("Toggle focus mode", text_style)]),
-        Line::from(vec![Span::styled("  F11             ", accent_style), Span::styled("Toggle fullscreen", text_style)]),
-        Line::from(vec![Span::styled("  Ctrl+H          ", accent_style), Span::styled("Search chat messages", text_style)]),
-        Line::from(vec![Span::styled("  Ctrl+G          ", accent_style), Span::styled("Transcript pager (j/k scroll)", text_style)]),
-        Line::from(vec![Span::styled("  Ctrl+R          ", accent_style), Span::styled("Search command history", text_style)]),
-        Line::from(vec![Span::styled("  Ctrl+X          ", accent_style), Span::styled("Leader key prefix", text_style)]),
-        Line::from(vec![Span::styled("  Tab             ", accent_style), Span::styled("Autocomplete suggestions", text_style)]),
-        Line::from(vec![Span::styled("  Esc             ", accent_style), Span::styled("Cancel / close dialog", text_style)]),
+        Line::from(vec![
+            Span::styled("  Enter           ", accent_style),
+            Span::styled("Send message", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+E          ", accent_style),
+            Span::styled("Open external editor", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+F          ", accent_style),
+            Span::styled("Toggle focus mode", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  F11             ", accent_style),
+            Span::styled("Toggle fullscreen", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+H          ", accent_style),
+            Span::styled("Search chat messages", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+G          ", accent_style),
+            Span::styled("Transcript pager (j/k scroll)", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+R          ", accent_style),
+            Span::styled("Search command history", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl+X          ", accent_style),
+            Span::styled("Leader key prefix", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Tab             ", accent_style),
+            Span::styled("Autocomplete suggestions", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Esc             ", accent_style),
+            Span::styled("Cancel / close dialog", text_style),
+        ]),
         Line::from(""),
         Line::from(Span::styled(
             " \u{2318} Commands",
-            Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.secondary)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             format!(" {}", "─".repeat(sep_width)),
             Style::default().fg(theme.border_dim),
         )),
-        Line::from(vec![Span::styled("  /help           ", accent_style), Span::styled("Show all commands", text_style)]),
-        Line::from(vec![Span::styled("  /model          ", accent_style), Span::styled("Switch AI model", text_style)]),
-        Line::from(vec![Span::styled("  /config         ", accent_style), Span::styled("Edit configuration", text_style)]),
-        Line::from(vec![Span::styled("  /vim            ", accent_style), Span::styled("Toggle vim mode", text_style)]),
-        Line::from(vec![Span::styled("  /sessions       ", accent_style), Span::styled("List saved sessions", text_style)]),
+        Line::from(vec![
+            Span::styled("  /help           ", accent_style),
+            Span::styled("Show all commands", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  /model          ", accent_style),
+            Span::styled("Switch AI model", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  /config         ", accent_style),
+            Span::styled("Edit configuration", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  /vim            ", accent_style),
+            Span::styled("Toggle vim mode", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  /sessions       ", accent_style),
+            Span::styled("List saved sessions", text_style),
+        ]),
         Line::from(""),
         Line::from(Span::styled(
             " \u{2728} Tips",
-            Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.secondary)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             format!(" {}", "─".repeat(sep_width)),
             Style::default().fg(theme.border_dim),
         )),
-        Line::from(vec![Span::styled("  Shift+Drag      ", accent_style), Span::styled("Select & copy text", text_style)]),
-        Line::from(vec![Span::styled("  F8              ", accent_style), Span::styled("Toggle mouse scroll/selection", text_style)]),
-        Line::from(vec![Span::styled("  !command        ", accent_style), Span::styled("Run shell command inline", text_style)]),
+        Line::from(vec![
+            Span::styled("  Shift+Drag      ", accent_style),
+            Span::styled("Select & copy text", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  F8              ", accent_style),
+            Span::styled("Toggle mouse scroll/selection", text_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  !command        ", accent_style),
+            Span::styled("Run shell command inline", text_style),
+        ]),
         Line::from(""),
         Line::from(vec![
-            Span::styled(" \u{25B6} [Enter] ", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " \u{25B6} [Enter] ",
+                Style::default()
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("Get started", Style::default().fg(theme.text)),
         ]),
     ];
@@ -1139,9 +1458,17 @@ fn render_chat_search_overlay(
 
     let lines = vec![
         Line::from(vec![
-            Span::styled(" Ctrl+H ", Style::default().fg(theme.context_bar_bg).bg(theme.primary)),
+            Span::styled(
+                " Ctrl+H ",
+                Style::default().fg(theme.context_bar_bg).bg(theme.primary),
+            ),
             Span::styled(" chat-search  ", Style::default().fg(theme.text_dim)),
-            Span::styled(&*query_display, Style::default().fg(query_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &*query_display,
+                Style::default()
+                    .fg(query_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("▌", Style::default().fg(theme.primary)),
         ]),
         Line::from(vec![
@@ -1154,13 +1481,12 @@ fn render_chat_search_overlay(
         ]),
     ];
 
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.primary))
-                .border_type(ratatui::widgets::BorderType::Rounded),
-        );
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.primary))
+            .border_type(ratatui::widgets::BorderType::Rounded),
+    );
 
     frame.render_widget(paragraph, bar_area);
 }

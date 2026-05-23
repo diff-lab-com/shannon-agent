@@ -85,7 +85,10 @@ impl ToolChainTest {
 
     /// Get the expected tool sequence.
     pub fn expected_tools(&self) -> Vec<(&str, &Value)> {
-        self.steps.iter().map(|s| (s.tool.as_str(), &s.input)).collect()
+        self.steps
+            .iter()
+            .map(|s| (s.tool.as_str(), &s.input))
+            .collect()
     }
 
     /// Get the mock results for each step.
@@ -204,9 +207,7 @@ mod tests {
             .respond_with("contents");
 
         let bash_input = json!({"command": "ls"});
-        let actual = vec![
-            ("Bash", &bash_input, "file1.rs", false),
-        ];
+        let actual = vec![("Bash", &bash_input, "file1.rs", false)];
         let result = chain.verify_against(&actual);
         assert!(!result.passed);
         assert!(result.errors[0].contains("expected tool 'Read'"));
@@ -221,9 +222,7 @@ mod tests {
             .respond_with("ok");
 
         let read_input = json!({"path": "a.rs"});
-        let actual: Vec<(&str, &Value, &str, bool)> = vec![
-            ("Read", &read_input, "ok", false),
-        ];
+        let actual: Vec<(&str, &Value, &str, bool)> = vec![("Read", &read_input, "ok", false)];
         let result = chain.verify_against(&actual);
         assert!(!result.passed);
         assert!(result.errors.iter().any(|e| e.contains("Missing")));
@@ -353,10 +352,7 @@ mod tests {
 
         let e1 = json!({"path": "a.rs"});
         let r1 = json!({"path": "a.rs"});
-        let actual = vec![
-            ("Edit", &e1, "ok", false),
-            ("Read", &r1, "contents", false),
-        ];
+        let actual = vec![("Edit", &e1, "ok", false), ("Read", &r1, "contents", false)];
         let result = chain.verify_against(&actual);
         assert!(!result.passed);
         assert!(result.errors[0].contains("expected tool 'Read', got 'Edit'"));

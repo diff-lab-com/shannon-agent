@@ -44,7 +44,9 @@ mod updater_tests {
         let status = rt.block_on(updater.force_check());
         // Should get a valid status (not panic)
         match status {
-            UpdateStatus::UpToDate { .. } | UpdateStatus::UpdateAvailable { .. } | UpdateStatus::CheckFailed { .. } => {}
+            UpdateStatus::UpToDate { .. }
+            | UpdateStatus::UpdateAvailable { .. }
+            | UpdateStatus::CheckFailed { .. } => {}
         }
     }
 
@@ -81,22 +83,55 @@ mod updater_tests {
     fn test_version_comparison_comprehensive() {
         use std::cmp::Ordering;
 
-        assert_eq!(AutoUpdater::compare_versions("1.0.0", "2.0.0"), Ordering::Less);
-        assert_eq!(AutoUpdater::compare_versions("3.0.0", "2.0.0"), Ordering::Greater);
-        assert_eq!(AutoUpdater::compare_versions("1.1.0", "1.2.0"), Ordering::Less);
-        assert_eq!(AutoUpdater::compare_versions("1.5.0", "1.3.0"), Ordering::Greater);
-        assert_eq!(AutoUpdater::compare_versions("1.0.1", "1.0.2"), Ordering::Less);
-        assert_eq!(AutoUpdater::compare_versions("1.0.9", "1.0.3"), Ordering::Greater);
-        assert_eq!(AutoUpdater::compare_versions("1.2.3", "1.2.3"), Ordering::Equal);
-        assert_eq!(AutoUpdater::compare_versions("v0.1.0", "v0.2.0"), Ordering::Less);
-        assert_eq!(AutoUpdater::compare_versions("1.0.0", "v1.0.0"), Ordering::Equal);
-        assert_eq!(AutoUpdater::compare_versions("1.0.0-alpha", "1.0.0-beta"), Ordering::Equal);
+        assert_eq!(
+            AutoUpdater::compare_versions("1.0.0", "2.0.0"),
+            Ordering::Less
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("3.0.0", "2.0.0"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("1.1.0", "1.2.0"),
+            Ordering::Less
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("1.5.0", "1.3.0"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("1.0.1", "1.0.2"),
+            Ordering::Less
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("1.0.9", "1.0.3"),
+            Ordering::Greater
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("1.2.3", "1.2.3"),
+            Ordering::Equal
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("v0.1.0", "v0.2.0"),
+            Ordering::Less
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("1.0.0", "v1.0.0"),
+            Ordering::Equal
+        );
+        assert_eq!(
+            AutoUpdater::compare_versions("1.0.0-alpha", "1.0.0-beta"),
+            Ordering::Equal
+        );
     }
 
     #[test]
     fn test_version_parsing_edge_cases() {
         assert_eq!(AutoUpdater::parse_version("0.0.0"), Some((0, 0, 0)));
-        assert_eq!(AutoUpdater::parse_version("999.999.999"), Some((999, 999, 999)));
+        assert_eq!(
+            AutoUpdater::parse_version("999.999.999"),
+            Some((999, 999, 999))
+        );
         assert_eq!(AutoUpdater::parse_version(""), None);
         assert_eq!(AutoUpdater::parse_version("1"), None);
         assert_eq!(AutoUpdater::parse_version("1.2"), None);
@@ -142,13 +177,19 @@ mod updater_tests {
 
     #[test]
     fn test_format_update_message_no_update() {
-        assert!(AutoUpdater::format_update_message(&UpdateStatus::UpToDate {
-            current: "1.0.0".to_string(),
-        }).is_none());
+        assert!(
+            AutoUpdater::format_update_message(&UpdateStatus::UpToDate {
+                current: "1.0.0".to_string(),
+            })
+            .is_none()
+        );
 
-        assert!(AutoUpdater::format_update_message(&UpdateStatus::CheckFailed {
-            error: "network error".to_string(),
-        }).is_none());
+        assert!(
+            AutoUpdater::format_update_message(&UpdateStatus::CheckFailed {
+                error: "network error".to_string(),
+            })
+            .is_none()
+        );
     }
 
     // -- Config serialization round-trip ------------------------------------
@@ -175,18 +216,22 @@ mod updater_tests {
 // ============================================================================
 
 mod oauth_tests {
-    use shannon_core::oauth::{OAuthService, OAuthClient, OAuthToken, OAuthError, TokenEncryption};
+    use shannon_core::oauth::{OAuthClient, OAuthError, OAuthService, OAuthToken, TokenEncryption};
 
     const KEY: &str = "test-integration-key";
 
     fn service_with_github() -> OAuthService {
         let mut svc = OAuthService::new(KEY);
         svc.register_client(
-            "github", "GitHub", "gh_id", "gh_secret",
+            "github",
+            "GitHub",
+            "gh_id",
+            "gh_secret",
             "https://github.com/login/oauth/authorize",
             "https://github.com/login/oauth/access_token",
             "http://localhost:8080/callback",
-        ).unwrap();
+        )
+        .unwrap();
         svc
     }
 
@@ -195,11 +240,15 @@ mod oauth_tests {
     #[test]
     fn test_builder_minimal_required_fields() {
         let client = OAuthClient::builder()
-            .id("test").name("Test").client_id("cid").client_secret("csec")
+            .id("test")
+            .name("Test")
+            .client_id("cid")
+            .client_secret("csec")
             .auth_url("https://auth.example.com/authorize")
             .token_url("https://auth.example.com/token")
             .redirect_url("http://localhost/cb")
-            .build().unwrap();
+            .build()
+            .unwrap();
         assert_eq!(client.id, "test");
         assert!(client.scopes.is_empty());
     }
@@ -207,12 +256,16 @@ mod oauth_tests {
     #[test]
     fn test_builder_with_scopes() {
         let client = OAuthClient::builder()
-            .id("gitlab").name("GitLab").client_id("gl_id").client_secret("gl_sec")
+            .id("gitlab")
+            .name("GitLab")
+            .client_id("gl_id")
+            .client_secret("gl_sec")
             .auth_url("https://gitlab.com/oauth/authorize")
             .token_url("https://gitlab.com/oauth/token")
             .redirect_url("http://localhost/gl")
             .scopes(vec!["read_user".to_string(), "api".to_string()])
-            .build().unwrap();
+            .build()
+            .unwrap();
         assert_eq!(client.scopes.len(), 2);
     }
 
@@ -240,10 +293,16 @@ mod oauth_tests {
     fn test_register_client_struct_via_builder() {
         let mut svc = OAuthService::new(KEY);
         let client = OAuthClient::builder()
-            .id("custom").name("Custom Provider").client_id("cp_id").client_secret("cp_secret")
-            .auth_url("https://custom.auth/authorize").token_url("https://custom.auth/token")
-            .redirect_url("http://localhost/custom").scopes(vec!["read".to_string()])
-            .build().unwrap();
+            .id("custom")
+            .name("Custom Provider")
+            .client_id("cp_id")
+            .client_secret("cp_secret")
+            .auth_url("https://custom.auth/authorize")
+            .token_url("https://custom.auth/token")
+            .redirect_url("http://localhost/custom")
+            .scopes(vec!["read".to_string()])
+            .build()
+            .unwrap();
 
         svc.register_client_struct(client).unwrap();
         assert_eq!(svc.client_count(), 1);
@@ -372,13 +431,17 @@ mod oauth_tests {
         let result = svc.register_client(
             "github", "Dup", "x", "y", "http://a", "http://b", "http://c",
         );
-        assert!(matches!(result.unwrap_err(), OAuthError::ClientAlreadyExists(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            OAuthError::ClientAlreadyExists(_)
+        ));
     }
 
     #[test]
     fn test_remove_client_cascades_to_token() {
         let mut svc = service_with_github();
-        svc.store_token("github", OAuthToken::new("tok", "read", 3600)).unwrap();
+        svc.store_token("github", OAuthToken::new("tok", "read", 3600))
+            .unwrap();
         assert_eq!(svc.token_count(), 1);
         svc.remove_client("github").unwrap();
         assert_eq!(svc.client_count(), 0);
@@ -390,7 +453,10 @@ mod oauth_tests {
         let mut svc = OAuthService::new(KEY);
         assert!(svc.get_client("ghost").is_err());
         assert!(svc.remove_client("ghost").is_err());
-        assert!(svc.store_token("ghost", OAuthToken::new("t", "r", 60)).is_err());
+        assert!(
+            svc.store_token("ghost", OAuthToken::new("t", "r", 60))
+                .is_err()
+        );
         assert!(svc.get_token("ghost").is_err());
     }
 
@@ -399,11 +465,16 @@ mod oauth_tests {
     #[test]
     fn test_oauth_client_json_roundtrip() {
         let client = OAuthClient::builder()
-            .id("test").name("Test").client_id("cid").client_secret("csec")
-            .auth_url("https://a.com/auth").token_url("https://a.com/token")
+            .id("test")
+            .name("Test")
+            .client_id("cid")
+            .client_secret("csec")
+            .auth_url("https://a.com/auth")
+            .token_url("https://a.com/token")
             .redirect_url("http://localhost/cb")
             .scopes(vec!["read".to_string(), "write".to_string()])
-            .build().unwrap();
+            .build()
+            .unwrap();
         let json = serde_json::to_string_pretty(&client).unwrap();
         let parsed: OAuthClient = serde_json::from_str(&json).unwrap();
         assert_eq!(client, parsed);
@@ -426,11 +497,13 @@ mod oauth_tests {
 // ============================================================================
 
 mod tool_registry_tests {
-    use shannon_core::tools::{ToolRegistry, Tool, ToolOutput, ToolResult};
     use async_trait::async_trait;
     use serde_json::json;
+    use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
 
-    struct DummyTool { name: String }
+    struct DummyTool {
+        name: String,
+    }
 
     #[async_trait]
     impl Tool for DummyTool {
@@ -441,8 +514,12 @@ mod tool_registry_tests {
                 metadata: Default::default(),
             })
         }
-        fn name(&self) -> &str { &self.name }
-        fn description(&self) -> &str { "dummy tool for testing" }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "dummy tool for testing"
+        }
         fn input_schema(&self) -> serde_json::Value {
             json!({"type": "object", "properties": {}})
         }
@@ -451,7 +528,9 @@ mod tool_registry_tests {
     #[test]
     fn test_register_and_lookup() {
         let registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "foo".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool { name: "foo".into() }))
+            .unwrap();
         let tool = registry.get("foo").unwrap();
         assert_eq!(tool.name(), "foo");
     }
@@ -459,7 +538,9 @@ mod tool_registry_tests {
     #[test]
     fn test_register_duplicate_rejected() {
         let registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "dup".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool { name: "dup".into() }))
+            .unwrap();
         let result = registry.register(Box::new(DummyTool { name: "dup".into() }));
         assert!(result.is_err());
     }
@@ -473,8 +554,12 @@ mod tool_registry_tests {
     #[test]
     fn test_list_registered_tools() {
         let registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "a".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "b".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool { name: "a".into() }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool { name: "b".into() }))
+            .unwrap();
 
         let tools = registry.list_tools_info();
         assert_eq!(tools.len(), 2);
@@ -486,7 +571,11 @@ mod tool_registry_tests {
     #[tokio::test]
     async fn test_execute_tool_through_registry() {
         let registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "echo".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "echo".into(),
+            }))
+            .unwrap();
         let tool = registry.get("echo").unwrap();
         let result = tool.execute(json!({})).await.unwrap();
         assert_eq!(result.content, "executed echo");
@@ -527,7 +616,7 @@ mod config_tests {
 // ============================================================================
 
 mod permissions_tests {
-    use shannon_core::permissions::{PermissionManager, PermissionLevel};
+    use shannon_core::permissions::{PermissionLevel, PermissionManager};
 
     #[test]
     fn test_permission_manager_creation() {
@@ -555,8 +644,8 @@ mod permissions_tests {
 // ============================================================================
 
 mod state_extra_tests {
-    use shannon_core::state::StateManager;
     use shannon_core::api::{Message, MessageContent};
+    use shannon_core::state::StateManager;
     use uuid::Uuid;
 
     fn make_mgr() -> (StateManager, tempfile::TempDir) {

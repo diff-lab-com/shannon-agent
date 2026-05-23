@@ -71,14 +71,17 @@ pub enum SandboxError {
 /// `tracing::warn` but **never block execution** — callers that need to
 /// enforce a policy should layer their own gating on top.
 const SHELL_AUDIT_PATTERNS: &[(&str, &str)] = &[
-    ("rm -rf /",            "recursive delete of root filesystem"),
-    ("rm -rf /*",           "recursive delete of all top-level files"),
-    ("mkfs.",               "filesystem format command"),
-    ("dd if=",              "raw disk copy (potential disk destruction)"),
-    (":(){ :|:& };:",       "fork bomb"),
-    ("> /dev/sd",           "direct write to block device"),
-    ("chmod -R 777 /",      "open permissions on root filesystem"),
-    ("chmod -r 777 /",      "open permissions on root filesystem (lowercase flag)"),
+    ("rm -rf /", "recursive delete of root filesystem"),
+    ("rm -rf /*", "recursive delete of all top-level files"),
+    ("mkfs.", "filesystem format command"),
+    ("dd if=", "raw disk copy (potential disk destruction)"),
+    (":(){ :|:& };:", "fork bomb"),
+    ("> /dev/sd", "direct write to block device"),
+    ("chmod -R 777 /", "open permissions on root filesystem"),
+    (
+        "chmod -r 777 /",
+        "open permissions on root filesystem (lowercase flag)",
+    ),
 ];
 
 /// Log a warning if the command contains potentially dangerous patterns.
@@ -126,7 +129,6 @@ pub enum NetworkAccess {
     #[serde(skip)]
     AllowList(Vec<String>),
 }
-
 
 /// Configuration for sandboxed command execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,9 +230,8 @@ pub struct BwrapSandbox {
 impl BwrapSandbox {
     /// Create a new bwrap sandbox provider.
     pub fn new() -> Result<Self, SandboxError> {
-        let bwrap_path = which_bwrap().ok_or_else(|| {
-            SandboxError::BinaryNotFound("bwrap".to_string())
-        })?;
+        let bwrap_path =
+            which_bwrap().ok_or_else(|| SandboxError::BinaryNotFound("bwrap".to_string()))?;
         Ok(Self { bwrap_path })
     }
 
@@ -254,7 +255,9 @@ fn which_bwrap() -> Option<PathBuf> {
         .ok()
         .and_then(|o| {
             if o.status.success() {
-                String::from_utf8(o.stdout).ok().map(|s| PathBuf::from(s.trim()))
+                String::from_utf8(o.stdout)
+                    .ok()
+                    .map(|s| PathBuf::from(s.trim()))
             } else {
                 None
             }
@@ -350,18 +353,31 @@ impl SandboxProvider for BwrapSandbox {
         }
 
         let bwrap = self.bwrap_path.to_string_lossy();
-        let args_str = args.iter().map(|a| shell_escape(a)).collect::<Vec<_>>().join(" ");
+        let args_str = args
+            .iter()
+            .map(|a| shell_escape(a))
+            .collect::<Vec<_>>()
+            .join(" ");
         let env_exports: String = config
             .env_vars
             .iter()
-            .filter_map(|v| std::env::var(v).ok().map(|val| format!("export {v}={}", shell_escape(&val))))
+            .filter_map(|v| {
+                std::env::var(v)
+                    .ok()
+                    .map(|val| format!("export {v}={}", shell_escape(&val)))
+            })
             .collect::<Vec<_>>()
             .join("; ");
 
         let cd = format!("cd {}", shell_escape(&project));
         let full = format!("{env_exports}; {cd}; {command}");
 
-        Ok(format!("{} {} -- sh -c {}", bwrap, args_str, shell_escape(&full)))
+        Ok(format!(
+            "{} {} -- sh -c {}",
+            bwrap,
+            args_str,
+            shell_escape(&full)
+        ))
     }
 
     fn name(&self) -> &str {
@@ -385,14 +401,18 @@ impl SeatbeltSandbox {
         if !path.exists() {
             return Err(SandboxError::BinaryNotFound("sandbox-exec".to_string()));
         }
-        Ok(Self { sandbox_exec_path: path })
+        Ok(Self {
+            sandbox_exec_path: path,
+        })
     }
 
     /// Try to discover sandbox-exec.
     pub fn try_new() -> Option<Self> {
         let path = PathBuf::from("/usr/bin/sandbox-exec");
         if path.exists() {
-            Some(Self { sandbox_exec_path: path })
+            Some(Self {
+                sandbox_exec_path: path,
+            })
         } else {
             None
         }
@@ -471,7 +491,11 @@ impl SandboxProvider for SeatbeltSandbox {
         let env_exports: String = config
             .env_vars
             .iter()
-            .filter_map(|v| std::env::var(v).ok().map(|val| format!("export {v}={}", shell_escape(&val))))
+            .filter_map(|v| {
+                std::env::var(v)
+                    .ok()
+                    .map(|val| format!("export {v}={}", shell_escape(&val)))
+            })
             .collect::<Vec<_>>()
             .join("; ");
 
@@ -713,11 +737,7 @@ impl SandboxProvider for DockerSandbox {
         // Timeout handled inside the container via the timeout command (below)
 
         // Container name for tracking
-        let container_name = format!(
-            "{}-{}",
-            self.config.container_prefix,
-            std::process::id()
-        );
+        let container_name = format!("{}-{}", self.config.container_prefix, std::process::id());
         args.push("--name".to_string());
         args.push(container_name);
 
@@ -738,7 +758,13 @@ impl SandboxProvider for DockerSandbox {
         args.push("-c".to_string());
         args.push(final_cmd);
 
-        Ok(format!("docker {}", args.iter().map(|a| shell_escape(a)).collect::<Vec<_>>().join(" ")))
+        Ok(format!(
+            "docker {}",
+            args.iter()
+                .map(|a| shell_escape(a))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ))
     }
 
     fn name(&self) -> &str {
@@ -887,7 +913,11 @@ impl SandboxExecutor {
             project_dir = %config.project_dir.display(),
             "SandboxExecutor created"
         );
-        Self { config, sandbox_type, docker_config: None }
+        Self {
+            config,
+            sandbox_type,
+            docker_config: None,
+        }
     }
 
     /// Create a new executor with Docker sandbox backend.
@@ -962,9 +992,7 @@ impl SandboxExecutor {
             SandboxType::Bubblewrap => self.wrap_command_bwrap(command),
             SandboxType::Seatbelt => self.wrap_command_seatbelt(command),
             SandboxType::None => {
-                tracing::warn!(
-                    "No sandbox backend available; command will run unsandboxed"
-                );
+                tracing::warn!("No sandbox backend available; command will run unsandboxed");
                 Ok(())
             }
         }
@@ -996,7 +1024,12 @@ impl SandboxExecutor {
         let working_dir = command.get_current_dir().map(|p| p.to_path_buf());
         let env_pairs: Vec<(String, Option<String>)> = command
             .get_envs()
-            .map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().to_string(),
+                    v.map(|v| v.to_string_lossy().to_string()),
+                )
+            })
             .collect();
 
         *command = std::process::Command::new("sh");
@@ -1004,8 +1037,12 @@ impl SandboxExecutor {
 
         for (key, val) in &env_pairs {
             match val {
-                Some(v) => { command.env(key, v); }
-                None => { command.env_remove(key); }
+                Some(v) => {
+                    command.env(key, v);
+                }
+                None => {
+                    command.env_remove(key);
+                }
             }
         }
         if let Some(dir) = working_dir {
@@ -1019,9 +1056,8 @@ impl SandboxExecutor {
     // -- Linux (bwrap) implementation ------------------------------------
 
     fn wrap_command_bwrap(&self, command: &mut std::process::Command) -> Result<(), SandboxError> {
-        let bwrap = BwrapSandbox::try_new().ok_or_else(|| {
-            SandboxError::BinaryNotFound("bwrap".to_string())
-        })?;
+        let bwrap = BwrapSandbox::try_new()
+            .ok_or_else(|| SandboxError::BinaryNotFound("bwrap".to_string()))?;
 
         // Collect the original program and args.
         let original_program = command.get_program().to_string_lossy().to_string();
@@ -1066,22 +1102,14 @@ impl SandboxExecutor {
 
         // Project directory as read-write.
         let project = self.config.project_dir.to_string_lossy().to_string();
-        args.extend_from_slice(&[
-            "--bind".to_string(),
-            project.clone(),
-            project.clone(),
-        ]);
+        args.extend_from_slice(&["--bind".to_string(), project.clone(), project.clone()]);
 
         // Deny writes to .git/ inside the project.
         let git_dir = self.config.project_dir.join(".git");
         if git_dir.exists() {
             let git_str = git_dir.to_string_lossy().to_string();
             // Mount .git/ as read-only to prevent writes.
-            args.extend_from_slice(&[
-                "--ro-bind".to_string(),
-                git_str.clone(),
-                git_str,
-            ]);
+            args.extend_from_slice(&["--ro-bind".to_string(), git_str.clone(), git_str]);
         }
 
         // Additional read-only mounts from config.
@@ -1106,11 +1134,7 @@ impl SandboxExecutor {
         // Pass through requested environment variables.
         for var in &self.config.env_vars {
             if let Ok(val) = std::env::var(var) {
-                args.extend_from_slice(&[
-                    "--setenv".to_string(),
-                    var.clone(),
-                    val,
-                ]);
+                args.extend_from_slice(&["--setenv".to_string(), var.clone(), val]);
             }
         }
 
@@ -1125,7 +1149,12 @@ impl SandboxExecutor {
         // We collect env/cwd from the original command, then overwrite it.
         let env_pairs: Vec<(String, Option<String>)> = command
             .get_envs()
-            .map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().to_string(),
+                    v.map(|v| v.to_string_lossy().to_string()),
+                )
+            })
             .collect();
         let working_dir = command.get_current_dir().map(|p| p.to_path_buf());
 
@@ -1135,8 +1164,12 @@ impl SandboxExecutor {
         // Restore environment and working directory.
         for (key, val) in &env_pairs {
             match val {
-                Some(v) => { command.env(key, v); }
-                None => { command.env_remove(key); }
+                Some(v) => {
+                    command.env(key, v);
+                }
+                None => {
+                    command.env_remove(key);
+                }
             }
         }
         if let Some(dir) = working_dir {
@@ -1148,10 +1181,12 @@ impl SandboxExecutor {
 
     // -- macOS (Seatbelt) implementation ---------------------------------
 
-    fn wrap_command_seatbelt(&self, command: &mut std::process::Command) -> Result<(), SandboxError> {
-        let seatbelt = SeatbeltSandbox::try_new().ok_or_else(|| {
-            SandboxError::BinaryNotFound("sandbox-exec".to_string())
-        })?;
+    fn wrap_command_seatbelt(
+        &self,
+        command: &mut std::process::Command,
+    ) -> Result<(), SandboxError> {
+        let seatbelt = SeatbeltSandbox::try_new()
+            .ok_or_else(|| SandboxError::BinaryNotFound("sandbox-exec".to_string()))?;
 
         // Collect the original program and args.
         let original_program = command.get_program().to_string_lossy().to_string();
@@ -1167,7 +1202,12 @@ impl SandboxExecutor {
         let working_dir = command.get_current_dir().map(|p| p.to_path_buf());
         let env_pairs: Vec<(String, Option<String>)> = command
             .get_envs()
-            .map(|(k, v)| (k.to_string_lossy().to_string(), v.map(|v| v.to_string_lossy().to_string())))
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().to_string(),
+                    v.map(|v| v.to_string_lossy().to_string()),
+                )
+            })
             .collect();
 
         // Rebuild as: sandbox-exec -p "<profile>" -- <original_program> [args...]
@@ -1180,8 +1220,12 @@ impl SandboxExecutor {
         // Restore environment and working directory.
         for (key, val) in &env_pairs {
             match val {
-                Some(v) => { command.env(key, v); }
-                None => { command.env_remove(key); }
+                Some(v) => {
+                    command.env(key, v);
+                }
+                None => {
+                    command.env_remove(key);
+                }
             }
         }
         if let Some(dir) = working_dir {
@@ -1239,7 +1283,9 @@ fn shell_escape(s: &str) -> String {
         return "''".to_string();
     }
     // If it only contains safe characters, no quoting needed
-    let safe = s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':'));
+    let safe = s
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':'));
     if safe {
         return s.to_string();
     }
@@ -1269,7 +1315,8 @@ pub fn is_protected_path(path: &Path) -> bool {
         }
         // Absolute path that contains the protected dir as a component
         // (e.g. "/home/user/project/.git/HEAD" contains "/.git/")
-        if path_str.contains(&format!("/{trimmed}/")) || path_str.ends_with(&format!("/{trimmed}")) {
+        if path_str.contains(&format!("/{trimmed}/")) || path_str.ends_with(&format!("/{trimmed}"))
+        {
             return true;
         }
     }
@@ -1311,10 +1358,7 @@ pub fn check_write_allowed_with_extras(path: &Path, extras: &[String]) -> Result
 /// user-specified extras.  Deduplicates entries so that `.git` only
 /// appears once even if the user also lists it.
 pub fn build_protected_paths(user_extras: &[String]) -> Vec<String> {
-    let mut paths: Vec<String> = vec![
-        ".git".to_string(),
-        ".shannon".to_string(),
-    ];
+    let mut paths: Vec<String> = vec![".git".to_string(), ".shannon".to_string()];
 
     for extra in user_extras {
         let normalized = extra.trim_end_matches('/').to_string();
@@ -1334,9 +1378,7 @@ pub fn check_command_protected_paths(command: &str, extras: &[String]) -> Vec<St
     let protected = build_protected_paths(extras);
 
     // Detect destructive git operations.
-    if command.contains("git push")
-        && (command.contains("--force") || command.contains("-f "))
-    {
+    if command.contains("git push") && (command.contains("--force") || command.contains("-f ")) {
         warnings.push("git push --force detected: this rewrites remote history".to_string());
     }
 
@@ -1355,7 +1397,9 @@ pub fn check_command_protected_paths(command: &str, extras: &[String]) -> Vec<St
         for p in &protected {
             let trimmed = p.trim_end_matches('/');
             if command.contains(trimmed) {
-                warnings.push(format!("Shell redirect targets protected directory: {trimmed}"));
+                warnings.push(format!(
+                    "Shell redirect targets protected directory: {trimmed}"
+                ));
             }
         }
     }
@@ -1477,23 +1521,23 @@ impl SandboxProfile {
         // Extract base command (first word)
         let base_cmd = command.split_whitespace().next().unwrap_or(command);
 
-        self.allowed_commands.iter().any(|allowed| {
-            allowed == base_cmd || command.starts_with(&format!("{allowed} "))
-        })
+        self.allowed_commands
+            .iter()
+            .any(|allowed| allowed == base_cmd || command.starts_with(&format!("{allowed} ")))
     }
 
     /// Check if a path is allowed for read access.
     pub fn is_path_allowed(&self, path: &Path) -> bool {
-        self.allowed_paths.iter().any(|allowed| {
-            path.starts_with(allowed) || path == allowed
-        })
+        self.allowed_paths
+            .iter()
+            .any(|allowed| path.starts_with(allowed) || path == allowed)
     }
 
     /// Check if a path is allowed for write access.
     pub fn is_path_writable(&self, path: &Path) -> bool {
-        self.writable_paths.iter().any(|allowed| {
-            path.starts_with(allowed) || path == allowed
-        })
+        self.writable_paths
+            .iter()
+            .any(|allowed| path.starts_with(allowed) || path == allowed)
     }
 
     /// Convert to SandboxConfig for use with SandboxExecutor.
@@ -1538,34 +1582,30 @@ pub struct LandlockSandbox {
 impl LandlockSandbox {
     /// Create a new Landlock sandbox with the given profile.
     pub fn new(profile: SandboxProfile) -> Result<Self, SandboxError> {
-        use landlock::{Ruleset, AccessFs};
+        use landlock::{AccessFs, Ruleset};
 
         // Build the ruleset based on the profile
         let mut ruleset = Ruleset::new()
-            .handle_access(AccessFs::from_bitflags(
-                Access::from_read(|access| {
-                    // Allow read access to allowed paths
-                    for path in &profile.allowed_paths {
-                        if let Ok(path_str) = path.to_str().ok_or_else(|| {
-                            SandboxError::InvalidConfig("Invalid path in profile".to_string())
-                        }) {
-                            let _ = access.path_add_beneath(path_str, Access::FS_READ);
-                        }
+            .handle_access(AccessFs::from_bitflags(Access::from_read(|access| {
+                // Allow read access to allowed paths
+                for path in &profile.allowed_paths {
+                    if let Ok(path_str) = path.to_str().ok_or_else(|| {
+                        SandboxError::InvalidConfig("Invalid path in profile".to_string())
+                    }) {
+                        let _ = access.path_add_beneath(path_str, Access::FS_READ);
                     }
-                })
-            ))
-            .handle_access(AccessFs::from_bitflags(
-                Access::from_write(|access| {
-                    // Allow write access to writable paths
-                    for path in &profile.writable_paths {
-                        if let Ok(path_str) = path.to_str().ok_or_else(|| {
-                            SandboxError::InvalidConfig("Invalid path in profile".to_string())
-                        }) {
-                            let _ = access.path_add_beneath(path_str, Access::FS_WRITE);
-                        }
+                }
+            })))
+            .handle_access(AccessFs::from_bitflags(Access::from_write(|access| {
+                // Allow write access to writable paths
+                for path in &profile.writable_paths {
+                    if let Ok(path_str) = path.to_str().ok_or_else(|| {
+                        SandboxError::InvalidConfig("Invalid path in profile".to_string())
+                    }) {
+                        let _ = access.path_add_beneath(path_str, Access::FS_WRITE);
                     }
-                })
-            ));
+                }
+            })));
 
         // Try to create the ruleset
         let ruleset = match ruleset.create() {
@@ -1588,9 +1628,9 @@ impl LandlockSandbox {
     /// Apply the Landlock restrictions to the current thread.
     pub fn apply_restrictions(&self) -> Result<(), SandboxError> {
         if let Some(ref ruleset) = self.ruleset {
-            ruleset
-                .restrict()
-                .map_err(|e| SandboxError::ExecutionFailed(format!("Failed to apply Landlock: {e}")))?;
+            ruleset.restrict().map_err(|e| {
+                SandboxError::ExecutionFailed(format!("Failed to apply Landlock: {e}"))
+            })?;
         }
         Ok(())
     }
@@ -1673,15 +1713,16 @@ impl SandboxedCommand {
 
     /// Remove an environment variable.
     pub fn env_remove(&mut self, key: impl AsRef<OsStr>) -> &mut Self {
-        self.envs.push((
-            key.as_ref().to_string_lossy().to_string(),
-            None,
-        ));
+        self.envs
+            .push((key.as_ref().to_string_lossy().to_string(), None));
         self
     }
 
     /// Set environment variables from a map.
-    pub fn envs(&mut self, vars: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>) -> &mut Self {
+    pub fn envs(
+        &mut self,
+        vars: impl IntoIterator<Item = (impl AsRef<OsStr>, impl AsRef<OsStr>)>,
+    ) -> &mut Self {
         for (key, val) in vars {
             self.envs.push((
                 key.as_ref().to_string_lossy().to_string(),
@@ -1815,7 +1856,10 @@ mod tests {
         let st = SandboxExecutor::detect_sandboxer();
         assert!(matches!(
             st,
-            SandboxType::Docker | SandboxType::Bubblewrap | SandboxType::Seatbelt | SandboxType::None
+            SandboxType::Docker
+                | SandboxType::Bubblewrap
+                | SandboxType::Seatbelt
+                | SandboxType::None
         ));
     }
 
@@ -1897,7 +1941,9 @@ mod tests {
             return;
         }
         let config = SandboxConfig::new("/tmp/project").with_network(NetworkAccess::Full);
-        let result = bwrap.wrap_command("curl https://example.com", &config).unwrap();
+        let result = bwrap
+            .wrap_command("curl https://example.com", &config)
+            .unwrap();
         assert!(!result.contains("--unshare-net"));
     }
 
@@ -1955,7 +2001,10 @@ mod tests {
         let executor = SandboxExecutor::new(config);
         assert!(matches!(
             executor.sandbox_type(),
-            SandboxType::Docker | SandboxType::Bubblewrap | SandboxType::Seatbelt | SandboxType::None
+            SandboxType::Docker
+                | SandboxType::Bubblewrap
+                | SandboxType::Seatbelt
+                | SandboxType::None
         ));
         assert_eq!(executor.config().project_dir, PathBuf::from("/tmp/project"));
     }
@@ -2040,7 +2089,10 @@ mod tests {
             "Expected bwrap program, got: {program}"
         );
 
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
         let args_joined = args.join(" ");
         assert!(
             args_joined.contains("--unshare-net"),
@@ -2073,7 +2125,10 @@ mod tests {
         let result = executor.wrap_command(&mut cmd);
         assert!(result.is_ok());
 
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
         let args_joined = args.join(" ");
         assert!(
             !args_joined.contains("--unshare-net"),
@@ -2160,9 +2215,7 @@ mod tests {
         assert!(
             check_write_allowed_with_extras(Path::new("custom_dir/file.txt"), &extras).is_err()
         );
-        assert!(
-            check_write_allowed_with_extras(Path::new("src/main.rs"), &extras).is_ok()
-        );
+        assert!(check_write_allowed_with_extras(Path::new("src/main.rs"), &extras).is_ok());
     }
 
     #[test]
@@ -2190,7 +2243,10 @@ mod tests {
     fn test_build_protected_paths_no_duplicates() {
         let user = vec![".git/".to_string(), ".shannon/".to_string()];
         let paths = build_protected_paths(&user);
-        let git_count = paths.iter().filter(|p| p.trim_end_matches('/') == ".git").count();
+        let git_count = paths
+            .iter()
+            .filter(|p| p.trim_end_matches('/') == ".git")
+            .count();
         assert_eq!(git_count, 1, "Should not duplicate .git entries");
     }
 
@@ -2209,7 +2265,10 @@ mod tests {
     #[test]
     fn test_check_command_protected_paths_normal_command() {
         let warnings = check_command_protected_paths("cargo build", &[]);
-        assert!(warnings.is_empty(), "Normal commands should have no warnings");
+        assert!(
+            warnings.is_empty(),
+            "Normal commands should have no warnings"
+        );
     }
 
     #[test]
@@ -2255,8 +2314,7 @@ mod tests {
 
     #[test]
     fn test_sandbox_profile_allow_write_adds_to_allowed() {
-        let profile = SandboxProfile::new()
-            .allow_write("/tmp");
+        let profile = SandboxProfile::new().allow_write("/tmp");
 
         assert_eq!(profile.allowed_paths.len(), 1);
         assert_eq!(profile.writable_paths.len(), 1);
@@ -2344,9 +2402,7 @@ mod tests {
 
     #[test]
     fn test_sandboxed_command_builder_methods() {
-        let profile = SandboxProfile::new()
-            .allow_command("ls")
-            .allow_path("/tmp");
+        let profile = SandboxProfile::new().allow_command("ls").allow_path("/tmp");
 
         let mut cmd = SandboxedCommand::new(profile, "ls", &["-la"]);
         cmd.current_dir("/tmp")
@@ -2409,7 +2465,9 @@ mod tests {
         let docker = DockerSandbox::new(docker_config);
         let sandbox_config = SandboxConfig::new("/tmp/project").with_network(NetworkAccess::Full);
 
-        let result = docker.wrap_command("curl https://example.com", &sandbox_config).unwrap();
+        let result = docker
+            .wrap_command("curl https://example.com", &sandbox_config)
+            .unwrap();
         assert!(result.contains("docker run"));
         assert!(!result.contains("--network none"));
     }

@@ -128,9 +128,7 @@ impl SessionReplayer {
             return mismatches;
         }
 
-        for (i, (recorded_event, actual_event)) in
-            recorded.iter().zip(actual.iter()).enumerate()
-        {
+        for (i, (recorded_event, actual_event)) in recorded.iter().zip(actual.iter()).enumerate() {
             // Compare by variant name (not exact content, since UUIDs/timestamps differ)
             let recorded_variant = variant_name(recorded_event);
             let actual_variant = variant_name(actual_event);
@@ -155,11 +153,7 @@ impl SessionReplayer {
         let mut vcr = Vcr::new(VcrConfig::replay_with_dir(&dir));
 
         for (turn, request, response) in self.llm_exchanges() {
-            let recording = VcrRecording::new(
-                request,
-                response,
-                vec![format!("turn-{turn}")],
-            );
+            let recording = VcrRecording::new(request, response, vec![format!("turn-{turn}")]);
             vcr.insert_recording(recording);
         }
 
@@ -274,7 +268,10 @@ mod tests {
         let qid = uuid::Uuid::new_v4();
         let actual = vec![
             QueryEvent::Started { query_id: qid },
-            QueryEvent::Text { query_id: qid, content: "other".to_string() },
+            QueryEvent::Text {
+                query_id: qid,
+                content: "other".to_string(),
+            },
             QueryEvent::ToolUseRequest {
                 query_id: qid,
                 tool_use_id: "tu_1".to_string(),
@@ -291,7 +288,10 @@ mod tests {
             QueryEvent::Completed { query_id: qid },
         ];
         let mismatches = replayer.verify_query_events(&actual);
-        assert!(mismatches.is_empty(), "Expected no mismatches: {mismatches:?}");
+        assert!(
+            mismatches.is_empty(),
+            "Expected no mismatches: {mismatches:?}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

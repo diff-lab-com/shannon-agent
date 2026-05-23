@@ -38,8 +38,8 @@ pub struct PooledDiscoveryResult {
 pub fn make_sampling_provider(
     client: std::sync::Arc<shannon_core::api::client::LlmClient>,
 ) -> SamplingProvider {
-    use shannon_core::api::types::{ContentBlock, Message, MessageContent};
     use crate::{CreateMessageRequest, CreateMessageResult, SamplingContent, SamplingMessageRole};
+    use shannon_core::api::types::{ContentBlock, Message, MessageContent};
 
     Arc::new(move |req: CreateMessageRequest| {
         let client = client.clone();
@@ -51,21 +51,27 @@ pub fn make_sampling_provider(
             );
 
             // Convert sampling messages → LLM messages.
-            let messages: Vec<Message> = req.messages.into_iter().map(|msg| {
-                let role = match msg.role {
-                    SamplingMessageRole::User => "user".to_string(),
-                    SamplingMessageRole::Assistant => "assistant".to_string(),
-                };
-                let content = match msg.content {
-                    SamplingContent::Text { text } => MessageContent::Text(text),
-                    SamplingContent::Image { data, mime_type } => {
-                        MessageContent::Blocks(vec![ContentBlock::Image {
-                            source: shannon_core::api::types::ImageSource::base64(mime_type, data),
-                        }])
-                    }
-                };
-                Message { role, content }
-            }).collect();
+            let messages: Vec<Message> = req
+                .messages
+                .into_iter()
+                .map(|msg| {
+                    let role = match msg.role {
+                        SamplingMessageRole::User => "user".to_string(),
+                        SamplingMessageRole::Assistant => "assistant".to_string(),
+                    };
+                    let content = match msg.content {
+                        SamplingContent::Text { text } => MessageContent::Text(text),
+                        SamplingContent::Image { data, mime_type } => {
+                            MessageContent::Blocks(vec![ContentBlock::Image {
+                                source: shannon_core::api::types::ImageSource::base64(
+                                    mime_type, data,
+                                ),
+                            }])
+                        }
+                    };
+                    Message { role, content }
+                })
+                .collect();
 
             let response = client
                 .send_message(messages, None, req.system_prompt)
@@ -96,8 +102,12 @@ pub fn make_sampling_provider(
 /// returns `(ElicitationAction, Option<Value>)` where the value
 /// is the user's structured input on accept.
 pub type UserPromptCallback = Arc<
-    dyn Fn(String, Option<serde_json::Value>) -> Pin<Box<dyn Future<Output = (crate::ElicitationAction, Option<serde_json::Value>)> + Send>>
-        + Send
+    dyn Fn(
+            String,
+            Option<serde_json::Value>,
+        ) -> Pin<
+            Box<dyn Future<Output = (crate::ElicitationAction, Option<serde_json::Value>)> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -111,7 +121,7 @@ pub type UserPromptCallback = Arc<
 pub fn make_elicitation_provider(
     prompt_callback: Option<UserPromptCallback>,
 ) -> ElicitationProvider {
-    use crate::{ElicitationRequest, ElicitationResult, ElicitationAction};
+    use crate::{ElicitationAction, ElicitationRequest, ElicitationResult};
 
     Arc::new(move |req: ElicitationRequest| {
         let callback = prompt_callback.clone();
@@ -258,7 +268,8 @@ pub async fn discover_pooled_remote_tools(
     auth: Option<crate::config::McpAuthConfig>,
 ) -> Result<PooledDiscoveryResult, String> {
     // Start the remote server in the pool (handles initialize handshake)
-    pool.start_remote_server(server_name, url, headers, auth).await?;
+    pool.start_remote_server(server_name, url, headers, auth)
+        .await?;
 
     // Check capabilities before attempting tools/list.
     if !pool.has_tools(server_name).await {

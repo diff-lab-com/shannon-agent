@@ -5,10 +5,10 @@
 //!
 //! Executes commands directly without shell interpolation for improved security.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 /// Whitelist of allowed executables that can be run through the REPL tool.
@@ -17,35 +17,100 @@ use std::collections::HashMap;
 /// AND pass the character validation check.
 const ALLOWED_EXECUTABLES: &[&str] = &[
     // Common development tools
-    "cargo", "rustc", "rustup",
-    "go", "gofmt", "golint",
-    "python", "python3", "pip", "pip3",
-    "node", "npm", "yarn", "pnpm",
-    "java", "javac", "gradle", "maven",
+    "cargo",
+    "rustc",
+    "rustup",
+    "go",
+    "gofmt",
+    "golint",
+    "python",
+    "python3",
+    "pip",
+    "pip3",
+    "node",
+    "npm",
+    "yarn",
+    "pnpm",
+    "java",
+    "javac",
+    "gradle",
+    "maven",
     // Build tools
-    "make", "cmake", "ninja",
-    "gcc", "clang", "cc", "c++",
+    "make",
+    "cmake",
+    "ninja",
+    "gcc",
+    "clang",
+    "cc",
+    "c++",
     // Version control
-    "git", "hg", "svn",
+    "git",
+    "hg",
+    "svn",
     // File operations (safe ones)
-    "ls", "dir", "cd", "pwd",
-    "cat", "head", "tail", "less", "more",
-    "cp", "mv", "mkdir", "touch",
-    "find", "locate", "grep", "egrep", "fgrep",
-    "file", "stat", "du", "df",
+    "ls",
+    "dir",
+    "cd",
+    "pwd",
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "cp",
+    "mv",
+    "mkdir",
+    "touch",
+    "find",
+    "locate",
+    "grep",
+    "egrep",
+    "fgrep",
+    "file",
+    "stat",
+    "du",
+    "df",
     // Text processing
-    "echo", "printf", "sed", "awk", "tr", "cut", "sort", "uniq", "wc",
+    "echo",
+    "printf",
+    "sed",
+    "awk",
+    "tr",
+    "cut",
+    "sort",
+    "uniq",
+    "wc",
     // Compression
-    "tar", "gzip", "gunzip", "zip", "unzip",
+    "tar",
+    "gzip",
+    "gunzip",
+    "zip",
+    "unzip",
     // System info (read-only)
-    "uname", "whoami", "id", "date", "uptime",
-    "ps", "top", "htop",
+    "uname",
+    "whoami",
+    "id",
+    "date",
+    "uptime",
+    "ps",
+    "top",
+    "htop",
     // Network (diagnostic)
-    "ping", "traceroute", "nslookup", "dig", "curl", "wget", "ssh",
+    "ping",
+    "traceroute",
+    "nslookup",
+    "dig",
+    "curl",
+    "wget",
+    "ssh",
     // Docker/container (read-only operations)
-    "docker", "podman",
+    "docker",
+    "podman",
     // Testing
-    "pytest", "jest", "cargo-nextest", "ctest",
+    "pytest",
+    "jest",
+    "cargo-nextest",
+    "ctest",
     //Env
     "env",
 ];
@@ -54,14 +119,28 @@ const ALLOWED_EXECUTABLES: &[&str] = &[
 ///
 /// This serves as an extra safety check for destructive system commands.
 const BLOCKED_EXECUTABLES: &[&str] = &[
-    "rm", "rmdir",
-    "mkfs", "fdisk", "parted",
-    "dd", "shred",
-    "shutdown", "reboot", "poweroff", "halt",
-    "init", "systemctl", "service",
-    "chmod", "chown",
-    "kill", "killall", "pkill",
-    "su", "sudo", "doas",
+    "rm",
+    "rmdir",
+    "mkfs",
+    "fdisk",
+    "parted",
+    "dd",
+    "shred",
+    "shutdown",
+    "reboot",
+    "poweroff",
+    "halt",
+    "init",
+    "systemctl",
+    "service",
+    "chmod",
+    "chown",
+    "kill",
+    "killall",
+    "pkill",
+    "su",
+    "sudo",
+    "doas",
 ];
 
 /// Validates a command string for dangerous shell metacharacters to prevent injection.
@@ -114,9 +193,9 @@ fn validate_executable(executable: &str) -> Result<(), String> {
         executable
     };
 
-    let is_allowed = ALLOWED_EXECUTABLES.iter().any(|allowed| {
-        exe_name == *allowed || executable.ends_with(&format!("/{allowed}"))
-    });
+    let is_allowed = ALLOWED_EXECUTABLES
+        .iter()
+        .any(|allowed| exe_name == *allowed || executable.ends_with(&format!("/{allowed}")));
 
     if !is_allowed {
         return Err(format!(
@@ -132,8 +211,7 @@ fn validate_executable(executable: &str) -> Result<(), String> {
 ///
 /// Splits on whitespace while respecting quoted strings.
 fn parse_command(command: &str) -> Result<(String, Vec<String>), String> {
-    let parts = shell_words::split(command)
-        .map_err(|e| format!("Failed to parse command: {e}"))?;
+    let parts = shell_words::split(command).map_err(|e| format!("Failed to parse command: {e}"))?;
 
     if parts.is_empty() {
         return Err("Empty command".to_string());
@@ -223,16 +301,14 @@ impl Tool for ReplTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid REPL input: {e}")))?;
 
         // Step 1: Validate command doesn't contain dangerous metacharacters
-        validate_command(&repl_input.command)
-            .map_err(ToolError::InvalidInput)?;
+        validate_command(&repl_input.command).map_err(ToolError::InvalidInput)?;
 
         // Step 2: Parse command into executable and arguments
-        let (executable, args) = parse_command(&repl_input.command)
-            .map_err(ToolError::InvalidInput)?;
+        let (executable, args) =
+            parse_command(&repl_input.command).map_err(ToolError::InvalidInput)?;
 
         // Step 3: Validate the executable is allowed
-        validate_executable(&executable)
-            .map_err(ToolError::InvalidInput)?;
+        validate_executable(&executable).map_err(ToolError::InvalidInput)?;
 
         use std::process::Stdio;
         use tokio::process::Command;
@@ -268,9 +344,7 @@ impl Tool for ReplTool {
             content: if success {
                 stdout.clone()
             } else {
-                format!(
-                    "REPL command failed (exit {exit_code}): {stderr}"
-                )
+                format!("REPL command failed (exit {exit_code}): {stderr}")
             },
             is_error: !success,
             metadata: {
@@ -324,7 +398,11 @@ mod tests {
 
         let output = result.unwrap();
         assert!(!output.is_error);
-        assert!(output.content.contains(tmp.path().file_name().unwrap().to_str().unwrap()));
+        assert!(
+            output
+                .content
+                .contains(tmp.path().file_name().unwrap().to_str().unwrap())
+        );
     }
 
     #[tokio::test]
@@ -355,13 +433,22 @@ mod tests {
         });
 
         let result = tool.execute(input).await;
-        assert!(result.is_ok(), "Command execution should succeed structurally");
+        assert!(
+            result.is_ok(),
+            "Command execution should succeed structurally"
+        );
 
         let output = result.unwrap();
         // ls on nonexistent path returns non-zero exit code
-        assert!(output.is_error, "Output should indicate error: {:?}", output.content);
+        assert!(
+            output.is_error,
+            "Output should indicate error: {:?}",
+            output.content
+        );
         // Exit code should be non-zero
-        let exit_code = output.metadata.get("exit_code")
+        let exit_code = output
+            .metadata
+            .get("exit_code")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
         assert_ne!(exit_code, 0, "Exit code should be non-zero: {exit_code}");

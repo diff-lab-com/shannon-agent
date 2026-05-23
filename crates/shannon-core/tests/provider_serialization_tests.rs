@@ -83,7 +83,10 @@ mod provider_serialization_tests {
                         is_error: Some(false),
                     }],
                 ),
-                text_msg("assistant", "The file contains a simple hello world program."),
+                text_msg(
+                    "assistant",
+                    "The file contains a simple hello world program.",
+                ),
             ],
             tools: Some(vec![ToolDefinition {
                 name: "read_file".to_string(),
@@ -175,7 +178,10 @@ mod provider_serialization_tests {
         let val = serialize_request(&req, &LlmProvider::OpenAI);
 
         // OpenAI: system prompt becomes first message
-        assert!(val.get("system").is_none(), "OpenAI should not have top-level system");
+        assert!(
+            val.get("system").is_none(),
+            "OpenAI should not have top-level system"
+        );
         let messages = val["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[0]["content"], "You are a helpful assistant.");
@@ -304,7 +310,12 @@ mod provider_serialization_tests {
         if let Some(sys) = val.get("systemInstruction") {
             let parts = sys["parts"].as_array().unwrap();
             assert!(parts[0]["text"].is_string());
-            assert!(parts[0]["text"].as_str().unwrap().contains("helpful assistant"));
+            assert!(
+                parts[0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("helpful assistant")
+            );
         }
     }
 
@@ -481,7 +492,10 @@ mod provider_serialization_tests {
         ] {
             let val = serialize_request(&req, provider);
             // Should produce valid JSON
-            assert!(val.is_object(), "{provider:?}: should produce a JSON object");
+            assert!(
+                val.is_object(),
+                "{provider:?}: should produce a JSON object"
+            );
         }
     }
 

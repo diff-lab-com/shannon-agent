@@ -62,8 +62,13 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
     }
 
     // Phase 1: Read all files and validate all edits in memory.
-    let mut pending: Vec<(EditOperation, String, String, usize, Vec<ReplacementLocation>)> =
-        Vec::with_capacity(input.edits.len());
+    let mut pending: Vec<(
+        EditOperation,
+        String,
+        String,
+        usize,
+        Vec<ReplacementLocation>,
+    )> = Vec::with_capacity(input.edits.len());
 
     for op in &input.edits {
         let metadata = fs::metadata(&op.file_path).await.map_err(|e| {
@@ -89,17 +94,14 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
             )));
         }
 
-        let content = fs::read_to_string(&op.file_path)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to read {}: {e}", op.file_path))
-            })?;
+        let content = fs::read_to_string(&op.file_path).await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to read {}: {e}", op.file_path))
+        })?;
 
         let (new_content, replacements, locations) =
-            edit::perform_edit(&content, &op.old_string, &op.new_string, op.replace_all)
-                .map_err(|e| {
-                    ToolError::InvalidInput(format!("Edit failed for {}: {e}", op.file_path))
-                })?;
+            edit::perform_edit(&content, &op.old_string, &op.new_string, op.replace_all).map_err(
+                |e| ToolError::InvalidInput(format!("Edit failed for {}: {e}", op.file_path)),
+            )?;
 
         pending.push((op.clone(), content, new_content, replacements, locations));
     }
@@ -111,14 +113,12 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
     let mut diff_parts: Vec<String> = Vec::new();
 
     for (op, old_content, new_content, replacements, locations) in &pending {
-        fs::write(&op.file_path, new_content)
-            .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!(
-                    "Failed to write {}: {e} — earlier edits in this batch were applied",
-                    op.file_path
-                ))
-            })?;
+        fs::write(&op.file_path, new_content).await.map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "Failed to write {}: {e} — earlier edits in this batch were applied",
+                op.file_path
+            ))
+        })?;
 
         total_replacements += replacements;
 
@@ -134,10 +134,8 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
         });
     }
 
-    let unique_files: std::collections::HashSet<&str> = results
-        .iter()
-        .map(|r| r.file_path.as_str())
-        .collect();
+    let unique_files: std::collections::HashSet<&str> =
+        results.iter().map(|r| r.file_path.as_str()).collect();
 
     let mut output_text = format!(
         "Applied {} edits across {} files ({} total replacements)\n",
@@ -152,10 +150,7 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
 
     let mut metadata = HashMap::new();
     metadata.insert("total_replacements".to_string(), json!(total_replacements));
-    metadata.insert(
-        "file_count".to_string(),
-        json!(unique_files.len()),
-    );
+    metadata.insert("file_count".to_string(), json!(unique_files.len()));
     metadata.insert("results".to_string(), json!(results));
 
     Ok(ToolOutput {

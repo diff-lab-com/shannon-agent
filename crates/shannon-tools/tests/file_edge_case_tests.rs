@@ -16,9 +16,9 @@
 use shannon_tools::{
     EditTool, GlobTool, ReadTool, WriteTool,
     file::edit::{self, EditInput},
+    file::glob::{self, GlobInput},
     file::read::{self, ReadInput},
     file::write::{self, WriteInput},
-    file::glob::{self, GlobInput},
 };
 use std::fs;
 use tempfile::TempDir;
@@ -107,8 +107,14 @@ async fn test_edit_crlf_preservation() {
     );
 
     let text_after = String::from_utf8(raw_after).unwrap();
-    assert!(text_after.contains("LINE TWO"), "Replacement text should be present");
-    assert!(text_after.contains("line one"), "Unchanged lines should remain");
+    assert!(
+        text_after.contains("LINE TWO"),
+        "Replacement text should be present"
+    );
+    assert!(
+        text_after.contains("line one"),
+        "Unchanged lines should remain"
+    );
 }
 
 // ============================================================================
@@ -146,7 +152,11 @@ async fn test_edit_bom_handling() {
         preview: false,
     };
     let result = edit::execute(input).await;
-    assert!(result.is_ok(), "Edit on BOM file should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Edit on BOM file should succeed: {:?}",
+        result
+    );
 
     // Verify BOM is still present after edit
     let raw_after = fs::read(&path).unwrap();
@@ -155,7 +165,10 @@ async fn test_edit_bom_handling() {
         "UTF-8 BOM should be preserved after edit"
     );
     let text_after = String::from_utf8(raw_after).unwrap();
-    assert!(text_after.contains("FOO BAR"), "Replacement should be present");
+    assert!(
+        text_after.contains("FOO BAR"),
+        "Replacement should be present"
+    );
 }
 
 // ============================================================================
@@ -291,7 +304,11 @@ async fn test_filename_with_spaces_unicode_emoji() {
         content: "spaced file content".to_string(),
     };
     let result = write::execute(write_input).await;
-    assert!(result.is_ok(), "Write to spaced filename should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Write to spaced filename should succeed: {:?}",
+        result
+    );
 
     // Write unicode and emoji files directly (to test read)
     fs::write(&unicode_path, "unicode content").unwrap();
@@ -367,7 +384,11 @@ async fn test_large_file_read_performance() {
     let result = read::execute(input).await;
     let elapsed = start.elapsed();
 
-    assert!(result.is_ok(), "Reading large file should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Reading large file should succeed: {:?}",
+        result
+    );
     let output = result.unwrap();
     assert!(!output.is_error);
 
@@ -379,7 +400,11 @@ async fn test_large_file_read_performance() {
     );
 
     // Verify line count metadata
-    let lines = output.metadata.get("lines").and_then(|v| v.as_u64()).unwrap();
+    let lines = output
+        .metadata
+        .get("lines")
+        .and_then(|v| v.as_u64())
+        .unwrap();
     assert_eq!(lines, 20_000, "Should report correct line count");
 }
 
@@ -423,10 +448,22 @@ async fn test_concurrent_edit_same_file() {
 
     // Verify all replacements took effect
     let final_content = fs::read_to_string(&path).unwrap();
-    assert!(final_content.contains("alpha replaced"), "First edit should persist");
-    assert!(final_content.contains("beta replaced"), "Second edit should persist");
-    assert!(final_content.contains("gamma replaced"), "Third edit should persist");
-    assert!(!final_content.contains("placeholder"), "No placeholders should remain");
+    assert!(
+        final_content.contains("alpha replaced"),
+        "First edit should persist"
+    );
+    assert!(
+        final_content.contains("beta replaced"),
+        "Second edit should persist"
+    );
+    assert!(
+        final_content.contains("gamma replaced"),
+        "Third edit should persist"
+    );
+    assert!(
+        !final_content.contains("placeholder"),
+        "No placeholders should remain"
+    );
 }
 
 // ============================================================================
@@ -480,14 +517,18 @@ async fn test_edit_read_only_file() {
     );
     let err_msg = result.unwrap_err().to_string();
     assert!(
-        err_msg.contains("Failed to write") || err_msg.contains("Permission denied")
+        err_msg.contains("Failed to write")
+            || err_msg.contains("Permission denied")
             || err_msg.contains("Permission"),
         "Error should indicate write failure: {err_msg}"
     );
 
     // Verify the original content is unchanged
     let content = fs::read_to_string(&path).unwrap();
-    assert_eq!(content, "read-only content\n", "File content should be unchanged");
+    assert_eq!(
+        content, "read-only content\n",
+        "File content should be unchanged"
+    );
 }
 
 // ============================================================================
@@ -506,8 +547,7 @@ async fn test_symlink_read_follows() {
     let link_path = td.path().join("link.txt");
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&real_path, &link_path)
-            .expect("Failed to create symlink");
+        std::os::unix::fs::symlink(&real_path, &link_path).expect("Failed to create symlink");
     }
     #[cfg(windows)]
     {
@@ -609,18 +649,30 @@ async fn test_empty_file_operations() {
         content: String::new(),
     };
     let result = write::execute(write_input).await;
-    assert!(result.is_ok(), "Writing empty file should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Writing empty file should succeed: {:?}",
+        result
+    );
     let output = result.unwrap();
     assert!(!output.is_error);
     assert_eq!(
-        output.metadata.get("bytes").and_then(|v| v.as_u64()).unwrap(),
+        output
+            .metadata
+            .get("bytes")
+            .and_then(|v| v.as_u64())
+            .unwrap(),
         0,
         "Should report 0 bytes written"
     );
 
     // Verify the file exists and is empty
     assert!(path.exists(), "File should exist after write");
-    assert_eq!(fs::read_to_string(&path).unwrap(), "", "File should be empty");
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        "",
+        "File should be empty"
+    );
 
     // --- Read an empty file ---
     let read_input = ReadInput {
@@ -629,14 +681,22 @@ async fn test_empty_file_operations() {
         limit: None,
     };
     let result = read::execute(read_input).await;
-    assert!(result.is_ok(), "Reading empty file should succeed: {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Reading empty file should succeed: {:?}",
+        result
+    );
     let output = result.unwrap();
     assert!(!output.is_error);
     assert!(
         output.content.is_empty(),
         "Content of empty file should be empty string"
     );
-    let lines = output.metadata.get("lines").and_then(|v| v.as_u64()).unwrap();
+    let lines = output
+        .metadata
+        .get("lines")
+        .and_then(|v| v.as_u64())
+        .unwrap();
     assert_eq!(lines, 0, "Empty file should report 0 lines");
 
     // --- Edit on empty file should fail (old_string not found) ---
@@ -665,7 +725,10 @@ async fn test_empty_file_operations() {
         content: "now has content\n".to_string(),
     };
     let result = write::execute(write_input).await;
-    assert!(result.is_ok(), "Writing to previously empty file should succeed");
+    assert!(
+        result.is_ok(),
+        "Writing to previously empty file should succeed"
+    );
 
     let content = fs::read_to_string(&path).unwrap();
     assert_eq!(content, "now has content\n", "File should have new content");

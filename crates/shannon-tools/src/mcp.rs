@@ -6,7 +6,7 @@
 //!
 //! These tools enable interaction with MCP servers for extended capabilities.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -125,15 +125,13 @@ fn get_client_registry() -> McpClientRegistry {
             name: "sequential".to_string(),
             connected: true,
             supports_resources: true,
-            resources: vec![
-                McpResourceInfo {
-                    uri: "sequential://thoughts".to_string(),
-                    name: "Thought Chain".to_string(),
-                    mime_type: Some("application/json".to_string()),
-                    description: Some("Sequential thinking chain".to_string()),
-                    server: "sequential".to_string(),
-                },
-            ],
+            resources: vec![McpResourceInfo {
+                uri: "sequential://thoughts".to_string(),
+                name: "Thought Chain".to_string(),
+                mime_type: Some("application/json".to_string()),
+                description: Some("Sequential thinking chain".to_string()),
+                server: "sequential".to_string(),
+            }],
         },
     );
 
@@ -154,21 +152,25 @@ impl Default for McpResourceTool {
 impl McpResourceTool {
     pub fn new() -> Self {
         Self {
-            description: "Read and list resources from MCP (Model Context Protocol) servers".to_string(),
+            description: "Read and list resources from MCP (Model Context Protocol) servers"
+                .to_string(),
         }
     }
 
     /// Read a specific MCP resource
-    async fn read_resource(&self, input: ReadMcpResourceInput) -> Result<ReadMcpResourceOutput, ToolError> {
+    async fn read_resource(
+        &self,
+        input: ReadMcpResourceInput,
+    ) -> Result<ReadMcpResourceOutput, ToolError> {
         let registry = get_client_registry();
 
-        let client = registry
-            .get(&input.server)
-            .ok_or_else(|| ToolError::InvalidInput(format!(
+        let client = registry.get(&input.server).ok_or_else(|| {
+            ToolError::InvalidInput(format!(
                 "Server '{}' not found. Available servers: {}",
                 input.server,
                 registry.keys().cloned().collect::<Vec<_>>().join(", ")
-            )))?;
+            ))
+        })?;
 
         if !client.connected {
             return Err(ToolError::InvalidInput(format!(
@@ -202,19 +204,22 @@ impl McpResourceTool {
     }
 
     /// List available MCP resources
-    async fn list_resources(&self, input: ListMcpResourcesInput) -> Result<ListMcpResourcesOutput, ToolError> {
+    async fn list_resources(
+        &self,
+        input: ListMcpResourcesInput,
+    ) -> Result<ListMcpResourcesOutput, ToolError> {
         let registry = get_client_registry();
 
         let mut resources = Vec::new();
 
         if let Some(target_server) = input.server {
-            let client = registry
-                .get(&target_server)
-                .ok_or_else(|| ToolError::InvalidInput(format!(
+            let client = registry.get(&target_server).ok_or_else(|| {
+                ToolError::InvalidInput(format!(
                     "Server '{}' not found. Available servers: {}",
                     target_server,
                     registry.keys().cloned().collect::<Vec<_>>().join(", ")
-                )))?;
+                ))
+            })?;
 
             if !client.connected {
                 return Err(ToolError::InvalidInput(format!(
@@ -249,7 +254,9 @@ impl McpResourceTool {
             }
         }
 
-        Ok(ListMcpResourcesOutput { resources: Some(resources) })
+        Ok(ListMcpResourcesOutput {
+            resources: Some(resources),
+        })
     }
 }
 
@@ -332,7 +339,9 @@ impl Tool for McpResourceTool {
             "required": ["operation"]
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -489,7 +498,9 @@ mod tests {
     fn mcp_resource_tool_input_schema() {
         let tool = McpResourceTool::new();
         let schema = tool.input_schema();
-        let ops = schema["properties"]["operation"]["enum"].as_array().unwrap();
+        let ops = schema["properties"]["operation"]["enum"]
+            .as_array()
+            .unwrap();
         assert!(ops.iter().any(|v| v.as_str() == Some("Read")));
         assert!(ops.iter().any(|v| v.as_str() == Some("List")));
     }

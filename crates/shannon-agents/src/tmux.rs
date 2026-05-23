@@ -1,9 +1,9 @@
 //! Tmux integration for displaying agent activity in split panes.
 
+use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::collections::HashMap;
 
 /// Manages tmux split panes for displaying agent output.
 ///
@@ -82,9 +82,13 @@ impl TmuxManager {
             .output();
 
         // Send a header to the pane
-        self.send_to_pane(&pane_id, &format!("--- Agent: {agent_name} ---\n")).await;
+        self.send_to_pane(&pane_id, &format!("--- Agent: {agent_name} ---\n"))
+            .await;
 
-        self.panes.write().await.insert(agent_name.to_string(), pane_id.clone());
+        self.panes
+            .write()
+            .await
+            .insert(agent_name.to_string(), pane_id.clone());
 
         tracing::info!(
             agent = %agent_name,
@@ -136,7 +140,9 @@ impl TmuxManager {
 
     /// List all active agent panes.
     pub async fn active_panes(&self) -> Vec<(String, String)> {
-        self.panes.read().await
+        self.panes
+            .read()
+            .await
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()

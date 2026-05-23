@@ -80,10 +80,7 @@ impl ScheduledRoutine {
         match self.last_fired {
             None => true,
             Some(last) => {
-                let elapsed = Utc::now()
-                    .signed_duration_since(last)
-                    .num_seconds()
-                    .max(0) as u64;
+                let elapsed = Utc::now().signed_duration_since(last).num_seconds().max(0) as u64;
                 let jitter = apply_jitter(self.interval_secs, JITTER_CAP_SECS);
                 elapsed >= self.interval_secs + jitter
             }
@@ -190,7 +187,8 @@ impl RoutineManager {
     /// Load routines from a file.
     pub fn load_from_file(path: &std::path::Path) -> Result<Self, std::io::Error> {
         let content = std::fs::read_to_string(path)?;
-        serde_json::from_str(&content).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        serde_json::from_str(&content)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     /// Get the default storage path.
@@ -271,7 +269,10 @@ mod tests {
     fn test_apply_jitter_small_period() {
         // Very small period should produce 0 jitter
         let jitter = apply_jitter(1, 900);
-        assert!(jitter <= 1, "jitter {jitter} should be 0 or 1 for 1s period");
+        assert!(
+            jitter <= 1,
+            "jitter {jitter} should be 0 or 1 for 1s period"
+        );
     }
 
     #[test]

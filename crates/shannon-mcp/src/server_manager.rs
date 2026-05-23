@@ -9,10 +9,8 @@
 //!   [`crate::process_pool::McpProcessPool`] — zero-overhead after startup.
 //! - **Legacy** (`discover_all_servers`): One-shot process per tool call.
 
-use crate::config::{discover_config, McpServerConfig};
-use crate::process_pool::{
-    discover_pooled_tools, McpProcessPool, PooledMcpToolAdapter,
-};
+use crate::config::{McpServerConfig, discover_config};
+use crate::process_pool::{McpProcessPool, PooledMcpToolAdapter, discover_pooled_tools};
 use shannon_core::{McpToolAdapter, discover_tools};
 use std::collections::HashMap;
 use std::path::Path;
@@ -37,9 +35,7 @@ pub struct PooledMcpDiscoveryResult {
 ///
 /// Starts each server process once, keeps it alive via the pool,
 /// and returns pooled adapters for zero-overhead tool execution.
-pub async fn discover_all_servers_pooled(
-    project_dir: &Path,
-) -> PooledMcpDiscoveryResult {
+pub async fn discover_all_servers_pooled(project_dir: &Path) -> PooledMcpDiscoveryResult {
     let config = match discover_config(project_dir) {
         Ok(c) => c,
         Err(e) => {
@@ -73,15 +69,7 @@ pub async fn discover_all_servers_pooled(
     for (name, server_config) in &config.mcp_servers {
         match server_config {
             McpServerConfig::Stdio { command, args, env } => {
-                match discover_pooled_tools(
-                    pool.clone(),
-                    name,
-                    command,
-                    args,
-                    env,
-                )
-                .await
-                {
+                match discover_pooled_tools(pool.clone(), name, command, args, env).await {
                     Ok(discovered) => {
                         let tool_count = discovered.tools.len();
                         info!(
@@ -102,7 +90,10 @@ pub async fn discover_all_servers_pooled(
                 }
             }
             McpServerConfig::Sse { url, headers, auth } => {
-                match pool.start_remote_server(name, url, headers.clone(), auth.clone()).await {
+                match pool
+                    .start_remote_server(name, url, headers.clone(), auth.clone())
+                    .await
+                {
                     Ok(()) => {
                         // Discover tools from the remote server.
                         match discover_remote_pooled_tools(pool.clone(), name).await {
@@ -136,28 +127,29 @@ pub async fn discover_all_servers_pooled(
                 }
             }
             McpServerConfig::Http { url, headers, auth } => {
-                match pool.start_remote_server(name, url, headers.clone(), auth.clone()).await {
-                    Ok(()) => {
-                        match discover_remote_pooled_tools(pool.clone(), name).await {
-                            Ok(discovered) => {
-                                let tool_count = discovered.tools.len();
-                                info!(
-                                    server = %name,
-                                    tools = tool_count,
-                                    "Remote MCP server tools discovered (HTTP)"
-                                );
-                                servers.push((name.clone(), tool_count));
-                                tools.extend(discovered.tools);
-                            }
-                            Err(e) => {
-                                error!(
-                                    server = %name,
-                                    error = %e,
-                                    "Failed to discover remote MCP server tools (HTTP)"
-                                );
-                            }
+                match pool
+                    .start_remote_server(name, url, headers.clone(), auth.clone())
+                    .await
+                {
+                    Ok(()) => match discover_remote_pooled_tools(pool.clone(), name).await {
+                        Ok(discovered) => {
+                            let tool_count = discovered.tools.len();
+                            info!(
+                                server = %name,
+                                tools = tool_count,
+                                "Remote MCP server tools discovered (HTTP)"
+                            );
+                            servers.push((name.clone(), tool_count));
+                            tools.extend(discovered.tools);
                         }
-                    }
+                        Err(e) => {
+                            error!(
+                                server = %name,
+                                error = %e,
+                                "Failed to discover remote MCP server tools (HTTP)"
+                            );
+                        }
+                    },
                     Err(e) => {
                         error!(
                             server = %name,
@@ -170,27 +162,25 @@ pub async fn discover_all_servers_pooled(
             }
             McpServerConfig::WebSocket { url, auth } => {
                 match pool.start_websocket_server(name, url, auth.clone()).await {
-                    Ok(()) => {
-                        match discover_remote_pooled_tools(pool.clone(), name).await {
-                            Ok(discovered) => {
-                                let tool_count = discovered.tools.len();
-                                info!(
-                                    server = %name,
-                                    tools = tool_count,
-                                    "WebSocket MCP server tools discovered"
-                                );
-                                servers.push((name.clone(), tool_count));
-                                tools.extend(discovered.tools);
-                            }
-                            Err(e) => {
-                                error!(
-                                    server = %name,
-                                    error = %e,
-                                    "Failed to discover WebSocket MCP server tools"
-                                );
-                            }
+                    Ok(()) => match discover_remote_pooled_tools(pool.clone(), name).await {
+                        Ok(discovered) => {
+                            let tool_count = discovered.tools.len();
+                            info!(
+                                server = %name,
+                                tools = tool_count,
+                                "WebSocket MCP server tools discovered"
+                            );
+                            servers.push((name.clone(), tool_count));
+                            tools.extend(discovered.tools);
                         }
-                    }
+                        Err(e) => {
+                            error!(
+                                server = %name,
+                                error = %e,
+                                "Failed to discover WebSocket MCP server tools"
+                            );
+                        }
+                    },
                     Err(e) => {
                         error!(
                             server = %name,
@@ -280,19 +270,28 @@ pub fn discover_all_servers_pooled_nonblocking(
                     discover_pooled_tools(pool.clone(), &server_name, &command, &args, &env).await
                 }
                 McpServerConfig::Sse { url, headers, auth } => {
-                    match pool.start_remote_server(&server_name, &url, headers.clone(), auth).await {
+                    match pool
+                        .start_remote_server(&server_name, &url, headers.clone(), auth)
+                        .await
+                    {
                         Ok(()) => discover_remote_pooled_tools(pool.clone(), &server_name).await,
                         Err(e) => Err(e),
                     }
                 }
                 McpServerConfig::Http { url, headers, auth } => {
-                    match pool.start_remote_server(&server_name, &url, headers.clone(), auth).await {
+                    match pool
+                        .start_remote_server(&server_name, &url, headers.clone(), auth)
+                        .await
+                    {
                         Ok(()) => discover_remote_pooled_tools(pool.clone(), &server_name).await,
                         Err(e) => Err(e),
                     }
                 }
                 McpServerConfig::WebSocket { url, auth } => {
-                    match pool.start_websocket_server(&server_name, &url, auth.clone()).await {
+                    match pool
+                        .start_websocket_server(&server_name, &url, auth.clone())
+                        .await
+                    {
                         Ok(()) => discover_remote_pooled_tools(pool.clone(), &server_name).await,
                         Err(e) => Err(e),
                     }
@@ -341,7 +340,7 @@ async fn discover_remote_pooled_tools(
     pool: Arc<McpProcessPool>,
     server_name: &str,
 ) -> Result<crate::process_pool::PooledDiscoveryResult, String> {
-    use crate::process_pool::{PooledMcpToolAdapter, PooledDiscoveryResult};
+    use crate::process_pool::{PooledDiscoveryResult, PooledMcpToolAdapter};
 
     // Check capabilities before attempting tools/list.
     if !pool.has_tools(server_name).await {
@@ -506,22 +505,11 @@ async fn discover_server_tools(
     config: &McpServerConfig,
 ) -> Result<Vec<McpToolAdapter>, String> {
     match config {
-        McpServerConfig::Stdio {
-            command,
-            args,
-            env,
-        } => {
+        McpServerConfig::Stdio { command, args, env } => {
             let args_owned: Vec<String> = args.clone();
             let env_owned: HashMap<String, String> = env.clone();
 
-            let result = discover_tools(
-                name,
-                command,
-                &args_owned,
-                &env_owned,
-                None,
-            )
-            .await?;
+            let result = discover_tools(name, command, &args_owned, &env_owned, None).await?;
 
             Ok(result.tools)
         }
@@ -568,8 +556,11 @@ mod tests {
         let config = serde_json::json!({
             "mcpServers": {}
         });
-        std::fs::write(temp.path().join(".mcp.json"), serde_json::to_string(&config).unwrap())
-            .unwrap();
+        std::fs::write(
+            temp.path().join(".mcp.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
 
         let result = discover_all_servers(temp.path()).await;
         assert!(result.servers.is_empty());
@@ -600,8 +591,11 @@ mod tests {
     async fn test_discover_all_servers_pooled_empty_config() {
         let temp = tempfile::tempdir().unwrap();
         let config = serde_json::json!({ "mcpServers": {} });
-        std::fs::write(temp.path().join(".mcp.json"), serde_json::to_string(&config).unwrap())
-            .unwrap();
+        std::fs::write(
+            temp.path().join(".mcp.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
 
         let result = discover_all_servers_pooled(temp.path()).await;
         assert!(result.servers.is_empty());

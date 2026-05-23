@@ -147,11 +147,7 @@ pub struct SessionMessage {
 
 impl SessionMessage {
     /// Create a new session message.
-    pub fn new(
-        session_id: &str,
-        direction: MessageDirection,
-        content: serde_json::Value,
-    ) -> Self {
+    pub fn new(session_id: &str, direction: MessageDirection, content: serde_json::Value) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             session_id: session_id.to_string(),
@@ -325,11 +321,7 @@ impl Default for BridgeConfig {
 
 impl BridgeConfig {
     /// Create a new bridge config with custom values.
-    pub fn new(
-        max_sessions: usize,
-        timeout_secs: u64,
-        heartbeat_interval_secs: u64,
-    ) -> Self {
+    pub fn new(max_sessions: usize, timeout_secs: u64, heartbeat_interval_secs: u64) -> Self {
         Self {
             max_sessions,
             timeout_secs,
@@ -419,7 +411,10 @@ impl BridgeService {
         let id = session.id.clone();
         self.message_history.insert(id.clone(), Vec::new());
         self.sessions.insert(id.clone(), session);
-        Ok(self.sessions.get(&id).expect("session was just inserted after capacity check"))
+        Ok(self
+            .sessions
+            .get(&id)
+            .expect("session was just inserted after capacity check"))
     }
 
     /// Get a session by ID.
@@ -744,7 +739,10 @@ mod tests {
         assert_eq!(session.status, BridgeStatus::Disconnected);
 
         session.set_error("connection lost");
-        assert_eq!(session.status, BridgeStatus::Error("connection lost".to_string()));
+        assert_eq!(
+            session.status,
+            BridgeStatus::Error("connection lost".to_string())
+        );
     }
 
     #[test]
@@ -768,7 +766,10 @@ mod tests {
         session.set_metadata("project", "shannon");
 
         assert_eq!(session.get_metadata("user"), Some(&"alice".to_string()));
-        assert_eq!(session.get_metadata("project"), Some(&"shannon".to_string()));
+        assert_eq!(
+            session.get_metadata("project"),
+            Some(&"shannon".to_string())
+        );
         assert_eq!(session.get_metadata("nonexistent"), None);
     }
 
@@ -799,7 +800,9 @@ mod tests {
         let config = BridgeConfig::default();
         let mut service = BridgeService::new(config);
 
-        let session = service.create_session("https://remote.example.com", 8080).unwrap();
+        let session = service
+            .create_session("https://remote.example.com", 8080)
+            .unwrap();
         assert_eq!(session.status, BridgeStatus::Connecting);
         assert_eq!(service.total_count(), 1);
     }
@@ -809,8 +812,12 @@ mod tests {
         let config = BridgeConfig::new(2, 3600, 30);
         let mut service = BridgeService::new(config);
 
-        service.create_session("https://a.example.com", 8080).unwrap();
-        service.create_session("https://b.example.com", 8081).unwrap();
+        service
+            .create_session("https://a.example.com", 8080)
+            .unwrap();
+        service
+            .create_session("https://b.example.com", 8081)
+            .unwrap();
 
         let result = service.create_session("https://c.example.com", 8082);
         assert!(matches!(result, Err(BridgeError::MaxSessionsReached(2))));
@@ -821,15 +828,23 @@ mod tests {
         let config = BridgeConfig::default();
         let mut service = BridgeService::new(config);
 
-        let session = service.create_session("https://remote.example.com", 8080).unwrap();
+        let session = service
+            .create_session("https://remote.example.com", 8080)
+            .unwrap();
         let id = session.id.clone();
 
         service.connect_session(&id).unwrap();
-        assert_eq!(service.get_session(&id).unwrap().status, BridgeStatus::Connected);
+        assert_eq!(
+            service.get_session(&id).unwrap().status,
+            BridgeStatus::Connected
+        );
         assert_eq!(service.active_count(), 1);
 
         service.disconnect_session(&id).unwrap();
-        assert_eq!(service.get_session(&id).unwrap().status, BridgeStatus::Disconnected);
+        assert_eq!(
+            service.get_session(&id).unwrap().status,
+            BridgeStatus::Disconnected
+        );
         assert_eq!(service.active_count(), 0);
     }
 
@@ -838,7 +853,9 @@ mod tests {
         let config = BridgeConfig::default();
         let mut service = BridgeService::new(config);
 
-        let session = service.create_session("https://remote.example.com", 8080).unwrap();
+        let session = service
+            .create_session("https://remote.example.com", 8080)
+            .unwrap();
         let id = session.id.clone();
 
         service.connect_session(&id).unwrap();
@@ -869,7 +886,9 @@ mod tests {
         let config = BridgeConfig::default();
         let mut service = BridgeService::new(config);
 
-        let session = service.create_session("https://remote.example.com", 8080).unwrap();
+        let session = service
+            .create_session("https://remote.example.com", 8080)
+            .unwrap();
         let id = session.id.clone();
 
         let result = service.send_message(&id, serde_json::json!("hello"));
@@ -881,9 +900,21 @@ mod tests {
         let config = BridgeConfig::default();
         let mut service = BridgeService::new(config);
 
-        let s1_id = service.create_session("https://a.example.com", 8080).unwrap().id.clone();
-        let s2_id = service.create_session("https://b.example.com", 8081).unwrap().id.clone();
-        let s3_id = service.create_session("https://c.example.com", 8082).unwrap().id.clone();
+        let s1_id = service
+            .create_session("https://a.example.com", 8080)
+            .unwrap()
+            .id
+            .clone();
+        let s2_id = service
+            .create_session("https://b.example.com", 8081)
+            .unwrap()
+            .id
+            .clone();
+        let s3_id = service
+            .create_session("https://c.example.com", 8082)
+            .unwrap()
+            .id
+            .clone();
 
         service.connect_session(&s1_id).unwrap();
         service.disconnect_session(&s1_id).unwrap();
@@ -902,7 +933,9 @@ mod tests {
         let config = BridgeConfig::default();
         let mut service = BridgeService::new(config);
 
-        let session = service.create_session("https://remote.example.com", 8080).unwrap();
+        let session = service
+            .create_session("https://remote.example.com", 8080)
+            .unwrap();
         let id = session.id.clone();
 
         let removed = service.remove_session(&id).unwrap();

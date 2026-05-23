@@ -5,7 +5,9 @@
 //! This module re-exports the core tool trait and types from `shannon_tool_interface`
 //! and provides the `ToolRegistry` for managing available tools.
 
-pub use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult, ToolInfo, ProgressSender, BoxedProgressSender};
+pub use shannon_tool_interface::{
+    BoxedProgressSender, ProgressSender, Tool, ToolError, ToolInfo, ToolOutput, ToolResult,
+};
 
 use regex::Regex;
 use serde_json::Value;
@@ -78,7 +80,11 @@ impl ToolFilter {
         let has_includes = self.patterns.iter().any(|p| !p.is_exclude);
 
         // Deny patterns take absolute precedence.
-        if self.patterns.iter().any(|p| p.is_exclude && p.regex.is_match(name)) {
+        if self
+            .patterns
+            .iter()
+            .any(|p| p.is_exclude && p.regex.is_match(name))
+        {
             return false;
         }
 
@@ -215,7 +221,8 @@ impl ToolRegistry {
 
     /// Bump the version counter to invalidate schema/defs caches.
     fn invalidate_cache(&self) {
-        self.version.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.version
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Register a new tool
@@ -387,7 +394,10 @@ impl ToolRegistry {
         // Check cache for read-only tools (with TTL expiry)
         if let Some(hash) = input_hash {
             let cache_key = (name.to_string(), hash);
-            if let Some(cached) = Self::recover_lock(self.result_cache.lock()).get(&cache_key).cloned() {
+            if let Some(cached) = Self::recover_lock(self.result_cache.lock())
+                .get(&cache_key)
+                .cloned()
+            {
                 let elapsed = cached.created_at.elapsed().as_secs();
                 if elapsed < self.cache_ttl_secs {
                     return Ok(cached.output);
@@ -415,10 +425,13 @@ impl ToolRegistry {
                         }
                     }
 
-                    cache.insert(cache_key.clone(), CachedToolResult {
-                        output: output.clone(),
-                        created_at: std::time::Instant::now(),
-                    });
+                    cache.insert(
+                        cache_key.clone(),
+                        CachedToolResult {
+                            output: output.clone(),
+                            created_at: std::time::Instant::now(),
+                        },
+                    );
                     Self::recover_lock(self.cache_order.lock()).push_back(cache_key);
                 }
             }
@@ -489,7 +502,9 @@ impl ToolRegistry {
     ///
     /// Returns `false` for unknown tools.
     pub fn is_tool_concurrency_safe(&self, name: &str) -> bool {
-        self.get(name).map(|t| t.is_concurrency_safe()).unwrap_or(false)
+        self.get(name)
+            .map(|t| t.is_concurrency_safe())
+            .unwrap_or(false)
     }
 
     /// Check whether a registered tool may perform destructive operations.
@@ -525,7 +540,8 @@ impl ToolRegistry {
         let mut batches: Vec<ToolBatch> = Vec::new();
         let mut current_parallel: Vec<(String, String, Value)> = Vec::new();
 
-        let flush_parallel = |batches: &mut Vec<ToolBatch>, buf: &mut Vec<(String, String, Value)>| {
+        let flush_parallel = |batches: &mut Vec<ToolBatch>,
+                              buf: &mut Vec<(String, String, Value)>| {
             if !buf.is_empty() {
                 batches.push(ToolBatch::Parallel(std::mem::take(buf)));
             }
@@ -715,7 +731,10 @@ mod tests {
         async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
             // Simulate async work
             tokio::time::sleep(tokio::time::Duration::from_millis(self.delay_ms)).await;
-            Ok(ToolOutput::success(format!("Processed: {}", input["input"].as_str().unwrap_or(""))))
+            Ok(ToolOutput::success(format!(
+                "Processed: {}",
+                input["input"].as_str().unwrap_or("")
+            )))
         }
 
         fn requires_auth(&self) -> bool {
@@ -887,9 +906,7 @@ mod tests {
     async fn test_execute_nonexistent_tool() {
         let registry = ToolRegistry::new();
 
-        let result = registry
-            .execute("nonexistent", serde_json::json!({}))
-            .await;
+        let result = registry.execute("nonexistent", serde_json::json!({})).await;
 
         assert!(matches!(result, Err(ToolError::NotFound(_))));
     }
@@ -906,7 +923,10 @@ mod tests {
 
         // Get tool info
         let tools_info = registry.list_tools_info();
-        let info = tools_info.iter().find(|t| t.name == "metadata_tool").unwrap();
+        let info = tools_info
+            .iter()
+            .find(|t| t.name == "metadata_tool")
+            .unwrap();
 
         assert_eq!(info.name, "metadata_tool");
         assert_eq!(info.description, "A dummy tool for testing");
@@ -917,8 +937,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_tool_registration() {
-        
-
         let registry = std::sync::Arc::new(std::sync::Mutex::new(ToolRegistry::new()));
         let num_threads = 10;
 
@@ -992,7 +1010,10 @@ mod tests {
         assert_eq!(result.content, "Success");
         assert!(!result.is_error);
         assert_eq!(result.metadata.get("execution_time_ms"), Some(&json!(100)));
-        assert_eq!(result.metadata.get("timestamp"), Some(&json!("2024-01-01T00:00:00Z")));
+        assert_eq!(
+            result.metadata.get("timestamp"),
+            Some(&json!("2024-01-01T00:00:00Z"))
+        );
     }
 
     // ── Glob-based allow/deny filter tests ────────────────────────────────
@@ -1000,9 +1021,21 @@ mod tests {
     #[tokio::test]
     async fn test_glob_filter_wildcard() {
         let mut registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "mcp__server__tool1".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "mcp__server__tool2".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "Bash".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "mcp__server__tool1".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "mcp__server__tool2".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "Bash".into(),
+            }))
+            .unwrap();
 
         registry.set_allowed_tools(Some(vec!["mcp__*".into()]));
         let names = registry.list();
@@ -1014,8 +1047,16 @@ mod tests {
     #[tokio::test]
     async fn test_glob_filter_exact_name() {
         let mut registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "Bash".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "Read".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "Bash".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "Read".into(),
+            }))
+            .unwrap();
 
         registry.set_allowed_tools(Some(vec!["Bash".into()]));
         assert!(registry.get("Bash").is_some());
@@ -1025,13 +1066,18 @@ mod tests {
     #[tokio::test]
     async fn test_glob_filter_exclude() {
         let mut registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "mcp__public__tool".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "mcp__internal__secret".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "mcp__public__tool".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "mcp__internal__secret".into(),
+            }))
+            .unwrap();
 
-        registry.set_allowed_tools(Some(vec![
-            "mcp__*".into(),
-            "!mcp__internal__*".into(),
-        ]));
+        registry.set_allowed_tools(Some(vec!["mcp__*".into(), "!mcp__internal__*".into()]));
         let names = registry.list();
         assert_eq!(names.len(), 1);
         assert!(names.contains(&"mcp__public__tool".to_string()));
@@ -1040,9 +1086,21 @@ mod tests {
     #[tokio::test]
     async fn test_glob_filter_question_mark() {
         let mut registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "tool_a".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "tool_b".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "tool_ab".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "tool_a".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "tool_b".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "tool_ab".into(),
+            }))
+            .unwrap();
 
         // ? matches exactly one character
         registry.set_allowed_tools(Some(vec!["tool_?".into()]));
@@ -1055,8 +1113,12 @@ mod tests {
     #[tokio::test]
     async fn test_glob_filter_none_allows_all() {
         let mut registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "a".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "b".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool { name: "a".into() }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool { name: "b".into() }))
+            .unwrap();
 
         registry.set_allowed_tools(None);
         assert_eq!(registry.list().len(), 2);
@@ -1065,8 +1127,16 @@ mod tests {
     #[tokio::test]
     async fn test_glob_filter_only_excludes() {
         let mut registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "mcp__secret".into() })).unwrap();
-        registry.register(Box::new(DummyTool { name: "Bash".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "mcp__secret".into(),
+            }))
+            .unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "Bash".into(),
+            }))
+            .unwrap();
 
         // Only exclude patterns → everything not denied is allowed
         registry.set_allowed_tools(Some(vec!["!mcp__*".into()]));
@@ -1080,8 +1150,16 @@ mod tests {
     #[test]
     fn test_register_deferred_excludes_from_schema() {
         let registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "VisibleTool".into() })).unwrap();
-        registry.register_deferred(Box::new(DummyTool { name: "HiddenTool".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "VisibleTool".into(),
+            }))
+            .unwrap();
+        registry
+            .register_deferred(Box::new(DummyTool {
+                name: "HiddenTool".into(),
+            }))
+            .unwrap();
 
         // Both should be in list() and get()
         assert!(registry.get("VisibleTool").is_some());
@@ -1104,17 +1182,33 @@ mod tests {
     fn test_deferred_count() {
         let registry = ToolRegistry::new();
         assert_eq!(registry.deferred_count(), 0);
-        registry.register_deferred(Box::new(DummyTool { name: "D1".into() })).unwrap();
-        registry.register_deferred(Box::new(DummyTool { name: "D2".into() })).unwrap();
+        registry
+            .register_deferred(Box::new(DummyTool { name: "D1".into() }))
+            .unwrap();
+        registry
+            .register_deferred(Box::new(DummyTool { name: "D2".into() }))
+            .unwrap();
         assert_eq!(registry.deferred_count(), 2);
     }
 
     #[test]
     fn test_search_deferred() {
         let registry = ToolRegistry::new();
-        registry.register(Box::new(DummyTool { name: "NormalTool".into() })).unwrap();
-        registry.register_deferred(Box::new(DummyTool { name: "mcp__db__query_users".into() })).unwrap();
-        registry.register_deferred(Box::new(DummyTool { name: "mcp__db__query_orders".into() })).unwrap();
+        registry
+            .register(Box::new(DummyTool {
+                name: "NormalTool".into(),
+            }))
+            .unwrap();
+        registry
+            .register_deferred(Box::new(DummyTool {
+                name: "mcp__db__query_users".into(),
+            }))
+            .unwrap();
+        registry
+            .register_deferred(Box::new(DummyTool {
+                name: "mcp__db__query_orders".into(),
+            }))
+            .unwrap();
 
         let results = registry.search_deferred("query");
         assert_eq!(results.len(), 2);
@@ -1130,7 +1224,11 @@ mod tests {
 
         // Create 51 tools — should auto-defer
         let batch: Vec<Box<dyn Tool>> = (0..51)
-            .map(|i| Box::new(DummyTool { name: format!("tool_{i}") }) as Box<dyn Tool>)
+            .map(|i| {
+                Box::new(DummyTool {
+                    name: format!("tool_{i}"),
+                }) as Box<dyn Tool>
+            })
             .collect();
 
         let deferred = registry.register_batch(batch).unwrap();
@@ -1151,7 +1249,11 @@ mod tests {
         let registry = ToolRegistry::new();
 
         let batch: Vec<Box<dyn Tool>> = (0..10)
-            .map(|i| Box::new(DummyTool { name: format!("small_{i}") }) as Box<dyn Tool>)
+            .map(|i| {
+                Box::new(DummyTool {
+                    name: format!("small_{i}"),
+                }) as Box<dyn Tool>
+            })
             .collect();
 
         let deferred = registry.register_batch(batch).unwrap();
@@ -1166,7 +1268,11 @@ mod tests {
     #[test]
     fn test_unregister_removes_deferred() {
         let registry = ToolRegistry::new();
-        registry.register_deferred(Box::new(DummyTool { name: "DeferredTool".into() })).unwrap();
+        registry
+            .register_deferred(Box::new(DummyTool {
+                name: "DeferredTool".into(),
+            }))
+            .unwrap();
         assert_eq!(registry.deferred_count(), 1);
 
         registry.unregister("DeferredTool").unwrap();
@@ -1181,8 +1287,12 @@ mod tests {
 
     #[async_trait]
     impl Tool for StreamingEchoTool {
-        fn name(&self) -> &str { "stream_echo" }
-        fn description(&self) -> &str { "streams lines" }
+        fn name(&self) -> &str {
+            "stream_echo"
+        }
+        fn description(&self) -> &str {
+            "streams lines"
+        }
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {"msg": {"type": "string"}}})
         }
@@ -1208,17 +1318,26 @@ mod tests {
         let registry = ToolRegistry::new();
         registry.register(Box::new(StreamingEchoTool)).unwrap();
 
-        struct Collector { lines: std::sync::Mutex<Vec<String>> }
-        impl shannon_tool_interface::ProgressSender for Collector {
-            fn send(&self, line: &str) { self.lines.lock().unwrap().push(line.to_string()); }
+        struct Collector {
+            lines: std::sync::Mutex<Vec<String>>,
         }
-        let sender = std::sync::Arc::new(Collector { lines: std::sync::Mutex::new(Vec::new()) });
+        impl shannon_tool_interface::ProgressSender for Collector {
+            fn send(&self, line: &str) {
+                self.lines.lock().unwrap().push(line.to_string());
+            }
+        }
+        let sender = std::sync::Arc::new(Collector {
+            lines: std::sync::Mutex::new(Vec::new()),
+        });
 
-        let result = registry.execute_streaming(
-            "stream_echo",
-            json!({"msg": "line1\nline2\nline3"}),
-            sender.clone(),
-        ).await.unwrap();
+        let result = registry
+            .execute_streaming(
+                "stream_echo",
+                json!({"msg": "line1\nline2\nline3"}),
+                sender.clone(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(result.content, "line1\nline2\nline3");
         assert!(!result.is_error);
@@ -1229,13 +1348,13 @@ mod tests {
     async fn test_registry_execute_streaming_unknown_tool() {
         let registry = ToolRegistry::new();
         struct NopSender;
-        impl shannon_tool_interface::ProgressSender for NopSender { fn send(&self, _: &str) {} }
+        impl shannon_tool_interface::ProgressSender for NopSender {
+            fn send(&self, _: &str) {}
+        }
 
-        let result = registry.execute_streaming(
-            "nonexistent",
-            json!({}),
-            std::sync::Arc::new(NopSender),
-        ).await;
+        let result = registry
+            .execute_streaming("nonexistent", json!({}), std::sync::Arc::new(NopSender))
+            .await;
         assert!(matches!(result, Err(ToolError::NotFound(_))));
     }
 }

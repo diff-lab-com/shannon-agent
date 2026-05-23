@@ -3,8 +3,8 @@
 //! Implements Normal, Insert, Visual, and Command modes with
 //! common vim keybindings for navigation, editing, and command execution.
 
-use std::collections::HashMap;
 use rust_i18n::t;
+use std::collections::HashMap;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
@@ -121,7 +121,10 @@ pub enum VimAction {
     /// Execute the command currently in the buffer
     ExecuteCommand { command: String },
     /// Scroll the view
-    Scroll { direction: ScrollDirection, count: usize },
+    Scroll {
+        direction: ScrollDirection,
+        count: usize,
+    },
     /// No-op: the key was handled but produces no external action
     Noop,
     /// Quit the application
@@ -145,11 +148,23 @@ pub enum VimAction {
     /// Jump to a mark position
     JumpToMark { mark: char },
     /// Delete a text object (e.g., diw, di")
-    DeleteTextObject { scope: TextObjectScope, object: TextObject, count: usize },
+    DeleteTextObject {
+        scope: TextObjectScope,
+        object: TextObject,
+        count: usize,
+    },
     /// Change a text object (e.g., ciw, ci") — delete and enter insert
-    ChangeTextObject { scope: TextObjectScope, object: TextObject, count: usize },
+    ChangeTextObject {
+        scope: TextObjectScope,
+        object: TextObject,
+        count: usize,
+    },
     /// Yank a text object (e.g., yiw, yi")
-    YankTextObject { scope: TextObjectScope, object: TextObject, count: usize },
+    YankTextObject {
+        scope: TextObjectScope,
+        object: TextObject,
+        count: usize,
+    },
 }
 
 /// Vim key handler state machine
@@ -601,10 +616,22 @@ impl VimHandler {
                                 return match op {
                                     b'c' => {
                                         self.set_mode(VimMode::Insert);
-                                        VimAction::ChangeTextObject { scope, object, count }
+                                        VimAction::ChangeTextObject {
+                                            scope,
+                                            object,
+                                            count,
+                                        }
                                     }
-                                    b'd' => VimAction::DeleteTextObject { scope, object, count },
-                                    b'y' => VimAction::YankTextObject { scope, object, count },
+                                    b'd' => VimAction::DeleteTextObject {
+                                        scope,
+                                        object,
+                                        count,
+                                    },
+                                    b'y' => VimAction::YankTextObject {
+                                        scope,
+                                        object,
+                                        count,
+                                    },
                                     _ => VimAction::None,
                                 };
                             }
@@ -619,30 +646,22 @@ impl VimHandler {
             }
 
             // Arrow keys in normal mode (treated like h/j/k/l)
-            KeyCode::Left => {
-                VimAction::MoveCursor {
-                    direction: Direction::Left,
-                    count: self.parsed_count(),
-                }
-            }
-            KeyCode::Right => {
-                VimAction::MoveCursor {
-                    direction: Direction::Right,
-                    count: self.parsed_count(),
-                }
-            }
-            KeyCode::Up => {
-                VimAction::MoveCursor {
-                    direction: Direction::Up,
-                    count: self.parsed_count(),
-                }
-            }
-            KeyCode::Down => {
-                VimAction::MoveCursor {
-                    direction: Direction::Down,
-                    count: self.parsed_count(),
-                }
-            }
+            KeyCode::Left => VimAction::MoveCursor {
+                direction: Direction::Left,
+                count: self.parsed_count(),
+            },
+            KeyCode::Right => VimAction::MoveCursor {
+                direction: Direction::Right,
+                count: self.parsed_count(),
+            },
+            KeyCode::Up => VimAction::MoveCursor {
+                direction: Direction::Up,
+                count: self.parsed_count(),
+            },
+            KeyCode::Down => VimAction::MoveCursor {
+                direction: Direction::Down,
+                count: self.parsed_count(),
+            },
 
             _ => VimAction::None,
         }
@@ -1618,7 +1637,12 @@ mod tests {
         handler.process_key(char_key('o'));
         let action = handler.process_key(enter_key());
         assert_eq!(handler.mode(), VimMode::Normal);
-        assert_eq!(action, VimAction::SearchBackward { pattern: "fo".to_string() });
+        assert_eq!(
+            action,
+            VimAction::SearchBackward {
+                pattern: "fo".to_string()
+            }
+        );
     }
 
     #[test]
@@ -1629,7 +1653,12 @@ mod tests {
         handler.process_key(char_key('t'));
         handler.process_key(char_key('e'));
         let action = handler.process_key(enter_key());
-        assert_eq!(action, VimAction::SearchForward { pattern: "te".to_string() });
+        assert_eq!(
+            action,
+            VimAction::SearchForward {
+                pattern: "te".to_string()
+            }
+        );
     }
 
     // ── dw / yw sequences ──────────────────────────────────────
@@ -1705,11 +1734,14 @@ mod tests {
         let b = handler.process_key(char_key('i'));
         assert_eq!(b, VimAction::None); // text object prefix, waiting
         let action = handler.process_key(char_key('w'));
-        assert_eq!(action, VimAction::ChangeTextObject {
-            scope: TextObjectScope::Inner,
-            object: TextObject::Word,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::ChangeTextObject {
+                scope: TextObjectScope::Inner,
+                object: TextObject::Word,
+                count: 1,
+            }
+        );
         assert_eq!(handler.mode(), VimMode::Insert);
     }
 
@@ -1719,11 +1751,14 @@ mod tests {
         handler.process_key(char_key('d'));
         handler.process_key(char_key('i'));
         let action = handler.process_key(char_key('w'));
-        assert_eq!(action, VimAction::DeleteTextObject {
-            scope: TextObjectScope::Inner,
-            object: TextObject::Word,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::DeleteTextObject {
+                scope: TextObjectScope::Inner,
+                object: TextObject::Word,
+                count: 1,
+            }
+        );
         assert_eq!(handler.mode(), VimMode::Normal);
     }
 
@@ -1733,11 +1768,14 @@ mod tests {
         handler.process_key(char_key('y'));
         handler.process_key(char_key('i'));
         let action = handler.process_key(char_key('w'));
-        assert_eq!(action, VimAction::YankTextObject {
-            scope: TextObjectScope::Inner,
-            object: TextObject::Word,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::YankTextObject {
+                scope: TextObjectScope::Inner,
+                object: TextObject::Word,
+                count: 1,
+            }
+        );
     }
 
     #[test]
@@ -1746,11 +1784,14 @@ mod tests {
         handler.process_key(char_key('c'));
         handler.process_key(char_key('a'));
         let action = handler.process_key(char_key('w'));
-        assert_eq!(action, VimAction::ChangeTextObject {
-            scope: TextObjectScope::Around,
-            object: TextObject::Word,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::ChangeTextObject {
+                scope: TextObjectScope::Around,
+                object: TextObject::Word,
+                count: 1,
+            }
+        );
         assert_eq!(handler.mode(), VimMode::Insert);
     }
 
@@ -1760,11 +1801,14 @@ mod tests {
         handler.process_key(char_key('c'));
         handler.process_key(char_key('i'));
         let action = handler.process_key(char_key('"'));
-        assert_eq!(action, VimAction::ChangeTextObject {
-            scope: TextObjectScope::Inner,
-            object: TextObject::DoubleQuote,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::ChangeTextObject {
+                scope: TextObjectScope::Inner,
+                object: TextObject::DoubleQuote,
+                count: 1,
+            }
+        );
     }
 
     #[test]
@@ -1773,11 +1817,14 @@ mod tests {
         handler.process_key(char_key('c'));
         handler.process_key(char_key('i'));
         let action = handler.process_key(char_key('('));
-        assert_eq!(action, VimAction::ChangeTextObject {
-            scope: TextObjectScope::Inner,
-            object: TextObject::Paren,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::ChangeTextObject {
+                scope: TextObjectScope::Inner,
+                object: TextObject::Paren,
+                count: 1,
+            }
+        );
     }
 
     #[test]
@@ -1786,11 +1833,14 @@ mod tests {
         handler.process_key(char_key('d'));
         handler.process_key(char_key('a'));
         let action = handler.process_key(char_key('{'));
-        assert_eq!(action, VimAction::DeleteTextObject {
-            scope: TextObjectScope::Around,
-            object: TextObject::Brace,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::DeleteTextObject {
+                scope: TextObjectScope::Around,
+                object: TextObject::Brace,
+                count: 1,
+            }
+        );
     }
 
     #[test]
@@ -1799,11 +1849,14 @@ mod tests {
         handler.process_key(char_key('y'));
         handler.process_key(char_key('i'));
         let action = handler.process_key(char_key('\''));
-        assert_eq!(action, VimAction::YankTextObject {
-            scope: TextObjectScope::Inner,
-            object: TextObject::SingleQuote,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::YankTextObject {
+                scope: TextObjectScope::Inner,
+                object: TextObject::SingleQuote,
+                count: 1,
+            }
+        );
     }
 
     #[test]
@@ -1844,11 +1897,14 @@ mod tests {
         handler.process_key(char_key('d'));
         handler.process_key(char_key('i'));
         let action = handler.process_key(char_key('w'));
-        assert_eq!(action, VimAction::DeleteTextObject {
-            scope: TextObjectScope::Inner,
-            object: TextObject::Word,
-            count: 3,
-        });
+        assert_eq!(
+            action,
+            VimAction::DeleteTextObject {
+                scope: TextObjectScope::Inner,
+                object: TextObject::Word,
+                count: 3,
+            }
+        );
     }
 
     #[test]
@@ -1858,10 +1914,13 @@ mod tests {
         handler.process_key(char_key('i'));
         // Both [ and ] should match bracket
         let action = handler.process_key(char_key(']'));
-        assert_eq!(action, VimAction::DeleteTextObject {
-            scope: TextObjectScope::Inner,
-            object: TextObject::Bracket,
-            count: 1,
-        });
+        assert_eq!(
+            action,
+            VimAction::DeleteTextObject {
+                scope: TextObjectScope::Inner,
+                object: TextObject::Bracket,
+                count: 1,
+            }
+        );
     }
 }

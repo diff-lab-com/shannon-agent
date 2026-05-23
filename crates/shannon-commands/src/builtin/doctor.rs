@@ -3,7 +3,9 @@
 //! Provides both a prompt template (for AI-driven deep diagnostics) and
 //! local structured checks that run without consuming AI tokens.
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Doctor prompt template (used when deep AI analysis is requested)
 const DOCTOR_PROMPT: &str = r##"
@@ -44,7 +46,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[check name]".to_string()),
             when_to_use: Some(
-                "Use to diagnose issues with your Shannon Code installation and environment".to_string(),
+                "Use to diagnose issues with your Shannon Code installation and environment"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
@@ -179,7 +182,9 @@ fn check_api_keys() -> CheckResult {
             name: "API Keys".to_string(),
             status: CheckStatus::Fail,
             message: "No API keys found in environment".to_string(),
-            fix_hint: Some("Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your shell profile".to_string()),
+            fix_hint: Some(
+                "Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your shell profile".to_string(),
+            ),
         }
     }
 }
@@ -261,7 +266,8 @@ pub fn check_config_files() -> CheckResult {
     if !found_configs.is_empty() {
         CheckResult {
             name: "Shannon Config".to_string(),
-            status: CheckStatus::Pass,            message: format!("Found: {}", found_configs.join(", ")),
+            status: CheckStatus::Pass,
+            message: format!("Found: {}", found_configs.join(", ")),
             fix_hint: None,
         }
     } else {
@@ -269,7 +275,9 @@ pub fn check_config_files() -> CheckResult {
             name: "Shannon Config".to_string(),
             status: CheckStatus::Warn,
             message: "No Shannon config files found (using defaults)".to_string(),
-            fix_hint: Some("Create .shannon.toml or ~/.shannon/config.toml for custom settings".to_string()),
+            fix_hint: Some(
+                "Create .shannon.toml or ~/.shannon/config.toml for custom settings".to_string(),
+            ),
         }
     }
 }
@@ -294,7 +302,10 @@ pub fn check_rust_toolchain() -> CheckResult {
     }
 
     // Try to get rustc version
-    if let Ok(output) = std::process::Command::new("rustc").arg("--version").output() {
+    if let Ok(output) = std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+    {
         if output.status.success() {
             let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
             return CheckResult {
@@ -320,9 +331,18 @@ pub fn format_doctor_report(results: &[CheckResult]) -> String {
     report.push_str(&"─".repeat(40));
     report.push('\n');
 
-    let pass_count = results.iter().filter(|r| r.status == CheckStatus::Pass).count();
-    let warn_count = results.iter().filter(|r| r.status == CheckStatus::Warn).count();
-    let fail_count = results.iter().filter(|r| r.status == CheckStatus::Fail).count();
+    let pass_count = results
+        .iter()
+        .filter(|r| r.status == CheckStatus::Pass)
+        .count();
+    let warn_count = results
+        .iter()
+        .filter(|r| r.status == CheckStatus::Warn)
+        .count();
+    let fail_count = results
+        .iter()
+        .filter(|r| r.status == CheckStatus::Fail)
+        .count();
 
     for result in results {
         let indicator = match result.status {
@@ -331,7 +351,10 @@ pub fn format_doctor_report(results: &[CheckResult]) -> String {
             CheckStatus::Fail => "[FAIL]",
             CheckStatus::Skip => "[SKIP]",
         };
-        report.push_str(&format!("{indicator} {}: {}\n", result.name, result.message));
+        report.push_str(&format!(
+            "{indicator} {}: {}\n",
+            result.name, result.message
+        ));
         if let Some(ref hint) = result.fix_hint {
             report.push_str(&format!("      Fix: {hint}\n"));
         }
@@ -429,10 +452,22 @@ mod tests {
 
     #[test]
     fn test_convert_status_all_variants() {
-        assert_eq!(convert_status(&shannon_core::doctor::CheckStatus::Pass), CheckStatus::Pass);
-        assert_eq!(convert_status(&shannon_core::doctor::CheckStatus::Warn), CheckStatus::Warn);
-        assert_eq!(convert_status(&shannon_core::doctor::CheckStatus::Fail), CheckStatus::Fail);
-        assert_eq!(convert_status(&shannon_core::doctor::CheckStatus::Skip), CheckStatus::Skip);
+        assert_eq!(
+            convert_status(&shannon_core::doctor::CheckStatus::Pass),
+            CheckStatus::Pass
+        );
+        assert_eq!(
+            convert_status(&shannon_core::doctor::CheckStatus::Warn),
+            CheckStatus::Warn
+        );
+        assert_eq!(
+            convert_status(&shannon_core::doctor::CheckStatus::Fail),
+            CheckStatus::Fail
+        );
+        assert_eq!(
+            convert_status(&shannon_core::doctor::CheckStatus::Skip),
+            CheckStatus::Skip
+        );
     }
 
     #[test]
@@ -440,10 +475,16 @@ mod tests {
         // Verify core Doctor produces a valid report
         let doctor = shannon_core::doctor::Doctor::new();
         let report = doctor.run_full_diagnostic();
-        assert!(report.is_ok(), "Core Doctor should produce a report without errors");
+        assert!(
+            report.is_ok(),
+            "Core Doctor should produce a report without errors"
+        );
 
         let report = report.unwrap();
-        assert!(!report.checks.is_empty(), "Core Doctor should return at least one check");
+        assert!(
+            !report.checks.is_empty(),
+            "Core Doctor should return at least one check"
+        );
 
         for check in &report.checks {
             assert!(!check.name.is_empty(), "Each check should have a name");
@@ -456,8 +497,14 @@ mod tests {
         let names: Vec<&str> = results.iter().map(|r| r.name.as_str()).collect();
 
         // Shannon-specific checks should always be present
-        assert!(names.contains(&"Rust Toolchain"), "Should include Rust Toolchain check");
-        assert!(names.contains(&"Shannon Config"), "Should include Shannon Config check");
+        assert!(
+            names.contains(&"Rust Toolchain"),
+            "Should include Rust Toolchain check"
+        );
+        assert!(
+            names.contains(&"Shannon Config"),
+            "Should include Shannon Config check"
+        );
     }
 
     #[test]
@@ -477,7 +524,10 @@ mod tests {
         // The fallback check should produce a valid result
         let result = check_api_keys();
         assert_eq!(result.name, "API Keys");
-        assert!(matches!(result.status, CheckStatus::Pass | CheckStatus::Fail));
+        assert!(matches!(
+            result.status,
+            CheckStatus::Pass | CheckStatus::Fail
+        ));
     }
 
     #[test]

@@ -304,18 +304,11 @@ pub struct CompactionStats {
 #[async_trait]
 pub trait Executable: Send + Sync {
     /// Execute the command with given arguments and context
-    async fn execute(
-        &self,
-        args: &str,
-        context: &CommandContext,
-    ) -> CommandResult<ExecutionResult>;
+    async fn execute(&self, args: &str, context: &CommandContext)
+    -> CommandResult<ExecutionResult>;
 
     /// Get the prompt for prompt commands
-    async fn get_prompt(
-        &self,
-        args: &str,
-        context: &CommandContext,
-    ) -> CommandResult<String> {
+    async fn get_prompt(&self, args: &str, context: &CommandContext) -> CommandResult<String> {
         let _ = (args, context);
         Err(CommandError::ExecutionError(
             "get_prompt not implemented for this command".to_string(),
@@ -344,11 +337,7 @@ impl Executable for PluginExecutable {
         Ok(ExecutionResult::Text { value: prompt })
     }
 
-    async fn get_prompt(
-        &self,
-        args: &str,
-        _context: &CommandContext,
-    ) -> CommandResult<String> {
+    async fn get_prompt(&self, args: &str, _context: &CommandContext) -> CommandResult<String> {
         Ok(self.prompt_template.replace("{args}", args))
     }
 }

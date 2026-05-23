@@ -92,7 +92,10 @@ impl LspManager {
         }
 
         // Safe to unwrap because we just inserted it
-        Ok(self.active_clients.get_mut(language).expect("just inserted above"))
+        Ok(self
+            .active_clients
+            .get_mut(language)
+            .expect("just inserted above"))
     }
 
     /// Check if a server is available for the given language
@@ -104,30 +107,22 @@ impl LspManager {
     /// Get installation hint for a language server
     pub fn install_hint(language: &str) -> Option<String> {
         match language.to_lowercase().as_str() {
-            "rust" | "rs" => Some(
-                "Install rust-analyzer: rustup component add rust-analyzer".to_string(),
-            ),
-            "python" | "py" => Some(
-                "Install pylsp: pip install python-lsp-server".to_string(),
-            ),
-            "typescript" | "ts" => Some(
-                "Install: npm install -g typescript-language-server typescript".to_string(),
-            ),
-            "javascript" | "js" => Some(
-                "Install: npm install -g typescript-language-server typescript".to_string(),
-            ),
-            "go" => Some(
-                "Install gopls: go install golang.org/x/tools/gopls@latest".to_string(),
-            ),
-            "c" | "cpp" | "cxx" => Some(
-                "Install clangd: apt install clangd or brew install llvm".to_string(),
-            ),
-            "java" => Some(
-                "Install jdtls: https://github.com/eclipse/eclipse.jdt.ls".to_string(),
-            ),
-            "ruby" => Some(
-                "Install solargraph: gem install solargraph".to_string(),
-            ),
+            "rust" | "rs" => {
+                Some("Install rust-analyzer: rustup component add rust-analyzer".to_string())
+            }
+            "python" | "py" => Some("Install pylsp: pip install python-lsp-server".to_string()),
+            "typescript" | "ts" => {
+                Some("Install: npm install -g typescript-language-server typescript".to_string())
+            }
+            "javascript" | "js" => {
+                Some("Install: npm install -g typescript-language-server typescript".to_string())
+            }
+            "go" => Some("Install gopls: go install golang.org/x/tools/gopls@latest".to_string()),
+            "c" | "cpp" | "cxx" => {
+                Some("Install clangd: apt install clangd or brew install llvm".to_string())
+            }
+            "java" => Some("Install jdtls: https://github.com/eclipse/eclipse.jdt.ls".to_string()),
+            "ruby" => Some("Install solargraph: gem install solargraph".to_string()),
             _ => None,
         }
     }
@@ -223,12 +218,32 @@ mod tests {
     fn lsp_client_error_display() {
         use client::LspClientError;
 
-        assert!(LspClientError::JsonRpcError("bad".into()).to_string().contains("bad"));
-        assert!(LspClientError::ProtocolError("fail".into()).to_string().contains("fail"));
-        assert!(LspClientError::ServerNotFound("rust".into()).to_string().contains("rust"));
+        assert!(
+            LspClientError::JsonRpcError("bad".into())
+                .to_string()
+                .contains("bad")
+        );
+        assert!(
+            LspClientError::ProtocolError("fail".into())
+                .to_string()
+                .contains("fail")
+        );
+        assert!(
+            LspClientError::ServerNotFound("rust".into())
+                .to_string()
+                .contains("rust")
+        );
         assert!(LspClientError::InvalidUri.to_string().contains("URI"));
-        assert!(LspClientError::ServerError("crash".into()).to_string().contains("crash"));
-        assert!(LspClientError::InvalidResponse.to_string().contains("Invalid"));
+        assert!(
+            LspClientError::ServerError("crash".into())
+                .to_string()
+                .contains("crash")
+        );
+        assert!(
+            LspClientError::InvalidResponse
+                .to_string()
+                .contains("Invalid")
+        );
         assert!(LspClientError::Timeout.to_string().contains("timed out"));
     }
 

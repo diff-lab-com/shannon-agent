@@ -2,7 +2,7 @@
 //!
 //! Measures write/read throughput for RecordingEntry items and VCR lookup.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde_json::json;
 
 use shannon_core::recording::RecordingEntry;
@@ -139,15 +139,11 @@ fn bench_recording_read(c: &mut Criterion) {
         let entries = build_recording_entries(count);
         let path = write_jsonl(&entries, dir.path());
 
-        group.bench_with_input(
-            BenchmarkId::new("jsonl_read", count),
-            &path,
-            |b, path| {
-                b.iter(|| {
-                    let _entries: Vec<RecordingEntry> = read_jsonl(path);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("jsonl_read", count), &path, |b, path| {
+            b.iter(|| {
+                let _entries: Vec<RecordingEntry> = read_jsonl(path);
+            });
+        });
 
         let _ = std::fs::remove_file(&path);
     }
@@ -225,9 +221,7 @@ fn bench_vcr_lookup(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("vcr_list_recordings", |b| {
-        b.iter(|| vcr.list_recordings())
-    });
+    c.bench_function("vcr_list_recordings", |b| b.iter(|| vcr.list_recordings()));
 }
 
 criterion_group!(

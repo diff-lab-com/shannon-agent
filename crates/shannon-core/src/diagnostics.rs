@@ -302,12 +302,7 @@ impl DiagnosticTracker {
 
     /// Return the most recent *count* events (newest first).
     pub fn get_recent(&self, count: usize) -> Vec<DiagnosticEvent> {
-        self.events
-            .iter()
-            .rev()
-            .take(count)
-            .cloned()
-            .collect()
+        self.events.iter().rev().take(count).cloned().collect()
     }
 
     /// Return all events matching a given severity level.
@@ -421,10 +416,9 @@ impl DiagnosticTracker {
     ///
     /// Returns an error if no storage path has been set.
     pub fn save(&self) -> std::io::Result<()> {
-        let path = self
-            .storage_path
-            .as_ref()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no storage path set"))?;
+        let path = self.storage_path.as_ref().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no storage path set")
+        })?;
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         if let Some(parent) = path.parent() {
@@ -437,10 +431,9 @@ impl DiagnosticTracker {
     ///
     /// Returns an error if no storage path has been set or the file cannot be read/parsed.
     pub fn load(&mut self) -> std::io::Result<()> {
-        let path = self
-            .storage_path
-            .as_ref()
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no storage path set"))?;
+        let path = self.storage_path.as_ref().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "no storage path set")
+        })?;
         let data = std::fs::read_to_string(path)?;
         let loaded: DiagnosticTracker = serde_json::from_str(&data)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -462,12 +455,15 @@ struct ErrorPatternAccum {
 
 static HEX_RE: once_cell::sync::Lazy<Regex> =
     once_cell::sync::Lazy::new(|| Regex::new(r"0x[0-9a-fA-F]{4,}").expect("hex regex"));
-static UUID_RE: once_cell::sync::Lazy<Regex> =
-    once_cell::sync::Lazy::new(|| Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}").expect("uuid regex"));
+static UUID_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+    Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+        .expect("uuid regex")
+});
 static UNIX_PATH_RE: once_cell::sync::Lazy<Regex> =
     once_cell::sync::Lazy::new(|| Regex::new(r"(?:/[\w._-]+){2,}").expect("unix path regex"));
-static WIN_PATH_RE: once_cell::sync::Lazy<Regex> =
-    once_cell::sync::Lazy::new(|| Regex::new(r"[A-Za-z]:\\(?:[\w._-]+\\?)+").expect("windows path regex"));
+static WIN_PATH_RE: once_cell::sync::Lazy<Regex> = once_cell::sync::Lazy::new(|| {
+    Regex::new(r"[A-Za-z]:\\(?:[\w._-]+\\?)+").expect("windows path regex")
+});
 static LINE_COL_RE: once_cell::sync::Lazy<Regex> =
     once_cell::sync::Lazy::new(|| Regex::new(r":\d{1,5}(:\d{1,5})?").expect("line:col regex"));
 static IDENT_RE: once_cell::sync::Lazy<Regex> =
@@ -496,26 +492,80 @@ fn suggest_fix(pattern: &str) -> Option<String> {
     let lower = pattern.to_lowercase();
 
     let fixes: &[(&str, &str)] = &[
-        ("cannot find module", "Check that the module exists and is listed in your imports or Cargo.toml."),
-        ("file not found", "Verify the file path and ensure the file exists."),
-        ("permission denied", "Check file/directory permissions or run with appropriate privileges."),
-        ("connection refused", "Ensure the target service is running and reachable."),
-        ("connection timed out", "Check network connectivity and firewall settings."),
-        ("network unreachable", "Verify network configuration and DNS settings."),
+        (
+            "cannot find module",
+            "Check that the module exists and is listed in your imports or Cargo.toml.",
+        ),
+        (
+            "file not found",
+            "Verify the file path and ensure the file exists.",
+        ),
+        (
+            "permission denied",
+            "Check file/directory permissions or run with appropriate privileges.",
+        ),
+        (
+            "connection refused",
+            "Ensure the target service is running and reachable.",
+        ),
+        (
+            "connection timed out",
+            "Check network connectivity and firewall settings.",
+        ),
+        (
+            "network unreachable",
+            "Verify network configuration and DNS settings.",
+        ),
         ("disk full", "Free up disk space or increase storage quota."),
-        ("out of memory", "Reduce memory usage or increase available RAM/swap."),
-        ("stack overflow", "Check for infinite recursion in your code."),
-        ("type mismatch", "Verify that types match expected signatures."),
-        ("cannot borrow.*mutably", "Review ownership rules; consider using RefCell or restructuring borrows."),
-        ("timeout", "Increase timeout duration or check if the operation is blocking."),
-        ("authentication failed", "Verify credentials and API key configuration."),
-        ("rate limit", "Reduce request frequency or implement exponential backoff."),
-        ("not found", "Check that the requested resource exists and the identifier is correct."),
-        ("already exists", "Use a different name or remove the existing resource first."),
-        ("invalid argument", "Review the function arguments and expected types."),
-        ("eof", "The stream ended unexpectedly; check for premature closures or truncated data."),
+        (
+            "out of memory",
+            "Reduce memory usage or increase available RAM/swap.",
+        ),
+        (
+            "stack overflow",
+            "Check for infinite recursion in your code.",
+        ),
+        (
+            "type mismatch",
+            "Verify that types match expected signatures.",
+        ),
+        (
+            "cannot borrow.*mutably",
+            "Review ownership rules; consider using RefCell or restructuring borrows.",
+        ),
+        (
+            "timeout",
+            "Increase timeout duration or check if the operation is blocking.",
+        ),
+        (
+            "authentication failed",
+            "Verify credentials and API key configuration.",
+        ),
+        (
+            "rate limit",
+            "Reduce request frequency or implement exponential backoff.",
+        ),
+        (
+            "not found",
+            "Check that the requested resource exists and the identifier is correct.",
+        ),
+        (
+            "already exists",
+            "Use a different name or remove the existing resource first.",
+        ),
+        (
+            "invalid argument",
+            "Review the function arguments and expected types.",
+        ),
+        (
+            "eof",
+            "The stream ended unexpectedly; check for premature closures or truncated data.",
+        ),
         ("utf-8 error", "Ensure input data is valid UTF-8 encoding."),
-        ("serde", "Check that the data structure matches the expected serialization format."),
+        (
+            "serde",
+            "Check that the data structure matches the expected serialization format.",
+        ),
     ];
 
     for (keyword, fix) in fixes {
@@ -540,7 +590,11 @@ mod tests {
 
     #[test]
     fn test_diagnostic_event_new() {
-        let event = DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Runtime, "test error");
+        let event = DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Runtime,
+            "test error",
+        );
         assert!(!event.id.is_empty());
         assert_eq!(event.level, DiagnosticLevel::Error);
         assert_eq!(event.category, DiagnosticCategory::Runtime);
@@ -553,12 +607,16 @@ mod tests {
 
     #[test]
     fn test_diagnostic_event_builder() {
-        let event = DiagnosticEvent::new(DiagnosticLevel::Warning, DiagnosticCategory::Tool, "oops")
-            .with_context("key", Value::String("val".into()))
-            .with_stack_trace("at main.rs:10")
-            .with_location("src/main.rs", 42);
+        let event =
+            DiagnosticEvent::new(DiagnosticLevel::Warning, DiagnosticCategory::Tool, "oops")
+                .with_context("key", Value::String("val".into()))
+                .with_stack_trace("at main.rs:10")
+                .with_location("src/main.rs", 42);
 
-        assert_eq!(event.context.get("key").unwrap(), &Value::String("val".into()));
+        assert_eq!(
+            event.context.get("key").unwrap(),
+            &Value::String("val".into())
+        );
         assert_eq!(event.stack_trace.as_deref(), Some("at main.rs:10"));
         assert_eq!(event.file_path.as_deref(), Some("src/main.rs"));
         assert_eq!(event.line_number, Some(42));
@@ -613,22 +671,46 @@ mod tests {
     #[test]
     fn test_tracker_record_and_len() {
         let mut tracker = DiagnosticTracker::new();
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "first"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "first",
+        ));
         assert_eq!(tracker.len(), 1);
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Tool, "second"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Tool,
+            "second",
+        ));
         assert_eq!(tracker.len(), 2);
     }
 
     #[test]
     fn test_tracker_record_eviction() {
         let mut tracker = DiagnosticTracker::with_capacity(3);
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "a"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "b"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "c"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "a",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "b",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "c",
+        ));
         assert_eq!(tracker.len(), 3);
 
         // Adding a 4th event evicts "a".
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "d"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "d",
+        ));
         assert_eq!(tracker.len(), 3);
         assert_eq!(tracker.get_recent(3)[0].message, "d");
         assert_eq!(tracker.get_recent(3)[2].message, "b");
@@ -637,7 +719,11 @@ mod tests {
     #[test]
     fn test_tracker_clear() {
         let mut tracker = DiagnosticTracker::new();
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Runtime, "x"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Runtime,
+            "x",
+        ));
         tracker.clear();
         assert!(tracker.is_empty());
     }
@@ -677,7 +763,11 @@ mod tests {
     fn test_get_recent() {
         let mut tracker = DiagnosticTracker::new();
         for i in 0..5 {
-            tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, format!("msg_{i}")));
+            tracker.record(DiagnosticEvent::new(
+                DiagnosticLevel::Info,
+                DiagnosticCategory::Runtime,
+                format!("msg_{i}"),
+            ));
         }
         let recent = tracker.get_recent(3);
         assert_eq!(recent.len(), 3);
@@ -689,7 +779,11 @@ mod tests {
     #[test]
     fn test_get_recent_larger_than_buffer() {
         let mut tracker = DiagnosticTracker::new();
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "only"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "only",
+        ));
         let recent = tracker.get_recent(100);
         assert_eq!(recent.len(), 1);
     }
@@ -697,9 +791,21 @@ mod tests {
     #[test]
     fn test_get_by_level() {
         let mut tracker = DiagnosticTracker::new();
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Runtime, "e1"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "i1"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Tool, "e2"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Runtime,
+            "e1",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "i1",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Tool,
+            "e2",
+        ));
 
         let errors = tracker.get_by_level(DiagnosticLevel::Error);
         assert_eq!(errors.len(), 2);
@@ -710,9 +816,21 @@ mod tests {
     #[test]
     fn test_get_by_category() {
         let mut tracker = DiagnosticTracker::new();
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Network, "n1"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Runtime, "r1"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Warning, DiagnosticCategory::Network, "n2"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Network,
+            "n1",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Runtime,
+            "r1",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Network,
+            "n2",
+        ));
 
         let net = tracker.get_by_category(DiagnosticCategory::Network);
         assert_eq!(net.len(), 2);
@@ -723,9 +841,21 @@ mod tests {
     #[test]
     fn test_error_patterns_basic() {
         let mut tracker = DiagnosticTracker::new();
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Runtime, "cannot find module `foo`"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Runtime, "cannot find module `bar`"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "started")); // info ignored
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Runtime,
+            "cannot find module `foo`",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Runtime,
+            "cannot find module `bar`",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "started",
+        )); // info ignored
 
         let patterns = tracker.get_error_patterns();
         assert_eq!(patterns.len(), 1);
@@ -738,10 +868,22 @@ mod tests {
     fn test_error_patterns_different_categories() {
         let mut tracker = DiagnosticTracker::new();
         // Same normalized pattern, same category -> should group
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Network, "connection refused for /home/alice/config"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Network, "connection refused for /home/bob/config"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Network,
+            "connection refused for /home/alice/config",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Network,
+            "connection refused for /home/bob/config",
+        ));
         // Same text but different category -> separate pattern
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::FileSystem, "connection refused"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::FileSystem,
+            "connection refused",
+        ));
 
         let patterns = tracker.get_error_patterns();
         assert_eq!(patterns.len(), 2);
@@ -750,8 +892,16 @@ mod tests {
     #[test]
     fn test_error_patterns_critical_also_counted() {
         let mut tracker = DiagnosticTracker::new();
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Critical, DiagnosticCategory::Runtime, "disk full on /dev/sda1"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Critical, DiagnosticCategory::Runtime, "disk full on /dev/sda2"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Critical,
+            DiagnosticCategory::Runtime,
+            "disk full on /dev/sda1",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Critical,
+            DiagnosticCategory::Runtime,
+            "disk full on /dev/sda2",
+        ));
 
         let patterns = tracker.get_error_patterns();
         assert_eq!(patterns.len(), 1);
@@ -763,16 +913,34 @@ mod tests {
     #[test]
     fn test_summary_basic() {
         let mut tracker = DiagnosticTracker::new();
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Network, "err"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Info, DiagnosticCategory::Runtime, "info"));
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Warning, DiagnosticCategory::Tool, "warn"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Network,
+            "err",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Info,
+            DiagnosticCategory::Runtime,
+            "info",
+        ));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Warning,
+            DiagnosticCategory::Tool,
+            "warn",
+        ));
 
         let summary = tracker.get_summary();
         assert_eq!(summary.total_events, 3);
         assert_eq!(*summary.by_level.get(&DiagnosticLevel::Error).unwrap(), 1);
         assert_eq!(*summary.by_level.get(&DiagnosticLevel::Info).unwrap(), 1);
         assert_eq!(*summary.by_level.get(&DiagnosticLevel::Warning).unwrap(), 1);
-        assert_eq!(*summary.by_category.get(&DiagnosticCategory::Network).unwrap(), 1);
+        assert_eq!(
+            *summary
+                .by_category
+                .get(&DiagnosticCategory::Network)
+                .unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -792,7 +960,11 @@ mod tests {
         let path = dir.path().join("diagnostics.json");
 
         let mut tracker = DiagnosticTracker::new().with_storage_path(path.clone());
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Runtime, "persist me"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Runtime,
+            "persist me",
+        ));
         tracker.save().unwrap();
 
         let mut loaded = DiagnosticTracker::new().with_storage_path(path.clone());
@@ -873,7 +1045,10 @@ mod tests {
     fn test_suggest_fix_cannot_find_module() {
         assert_eq!(
             suggest_fix("cannot find module `foo`"),
-            Some("Check that the module exists and is listed in your imports or Cargo.toml.".to_string())
+            Some(
+                "Check that the module exists and is listed in your imports or Cargo.toml."
+                    .to_string()
+            )
         );
     }
 
@@ -889,7 +1064,9 @@ mod tests {
     fn test_suggest_fix_permission_denied() {
         assert_eq!(
             suggest_fix("Permission denied while opening file"),
-            Some("Check file/directory permissions or run with appropriate privileges.".to_string())
+            Some(
+                "Check file/directory permissions or run with appropriate privileges.".to_string()
+            )
         );
     }
 
@@ -912,9 +1089,13 @@ mod tests {
     fn test_diagnostic_event_serialization_roundtrip() {
         let mut ctx = HashMap::new();
         ctx.insert("key".to_string(), Value::Bool(true));
-        let event = DiagnosticEvent::new(DiagnosticLevel::Critical, DiagnosticCategory::Permission, "denied")
-            .with_context("key", Value::Bool(true))
-            .with_location("/etc/config.toml", 10);
+        let event = DiagnosticEvent::new(
+            DiagnosticLevel::Critical,
+            DiagnosticCategory::Permission,
+            "denied",
+        )
+        .with_context("key", Value::Bool(true))
+        .with_location("/etc/config.toml", 10);
 
         let json = serde_json::to_string(&event).unwrap();
         let restored: DiagnosticEvent = serde_json::from_str(&json).unwrap();
@@ -929,7 +1110,11 @@ mod tests {
     #[test]
     fn test_tracker_serialization_roundtrip() {
         let mut tracker = DiagnosticTracker::with_capacity(5);
-        tracker.record(DiagnosticEvent::new(DiagnosticLevel::Error, DiagnosticCategory::Runtime, "bug"));
+        tracker.record(DiagnosticEvent::new(
+            DiagnosticLevel::Error,
+            DiagnosticCategory::Runtime,
+            "bug",
+        ));
         let json = serde_json::to_string(&tracker).unwrap();
         let restored: DiagnosticTracker = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.len(), 1);

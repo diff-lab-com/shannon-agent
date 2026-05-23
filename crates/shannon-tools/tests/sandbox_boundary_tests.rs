@@ -15,10 +15,10 @@
 
 use serde_json::json;
 use shannon_tools::{
+    Tool, WriteTool,
     file::sandbox::{PathSandbox, SandboxConfig, SandboxError},
     repl_tool::ReplTool,
     system::analyze_command_security,
-    WriteTool, Tool,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -302,7 +302,10 @@ async fn test_resource_limit_enforcement() {
         content: large_content,
     };
     let result = shannon_tools::file::write::execute(write_input).await;
-    assert!(result.is_err(), "Write exceeding size limit should be rejected");
+    assert!(
+        result.is_err(),
+        "Write exceeding size limit should be rejected"
+    );
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("too large") || err.contains("max"),

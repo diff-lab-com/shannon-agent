@@ -33,11 +33,17 @@ fn create_commit_skill() -> SkillResult<Skill> {
         "AI-powered git commit with intelligent message generation".to_string(),
     )
     .alias("ci".to_string())
-    .when_to_use("Use when you want to commit changes with an AI-generated commit message".to_string())
+    .when_to_use(
+        "Use when you want to commit changes with an AI-generated commit message".to_string(),
+    )
     .argument_hint("<optional-commit-message>".to_string())
-    .allowed_tools(vec!["Bash".to_string(), "Read".to_string(), "Edit".to_string()])
+    .allowed_tools(vec![
+        "Bash".to_string(),
+        "Read".to_string(),
+        "Edit".to_string(),
+    ])
     .content(
-r#"# Git Commit
+        r#"# Git Commit
 
 You are an AI git commit assistant. Help the user create a meaningful commit.
 
@@ -89,7 +95,8 @@ git add <files>
 # Amend last commit (if needed)
 git commit --amend
 ```
-"#.to_string()
+"#
+        .to_string(),
     )
     .build())
 }
@@ -99,14 +106,15 @@ fn create_review_pr_skill() -> SkillResult<Skill> {
     Ok(BundledSkillBuilder::new(
         "review-pr".to_string(),
         "Review Pull Request".to_string(),
-        "Analyze and review pull requests for code quality, logic, and potential issues".to_string(),
+        "Analyze and review pull requests for code quality, logic, and potential issues"
+            .to_string(),
     )
     .alias("pr".to_string())
     .when_to_use("Use when reviewing a pull request or code changes".to_string())
     .argument_hint("<pr-url-or-number>".to_string())
     .allowed_tools(vec!["Bash".to_string(), "Read".to_string()])
     .content(
-r#"# Pull Request Review
+        r#"# Pull Request Review
 
 You are a code reviewer. Analyze the pull request thoroughly.
 
@@ -163,7 +171,8 @@ gh pr view ${0} --comments
 # Checkout PR branch
 gh pr checkout ${0}
 ```
-"#.to_string()
+"#
+        .to_string(),
     )
     .build())
 }
@@ -180,7 +189,7 @@ fn create_diff_skill() -> SkillResult<Skill> {
     .argument_hint("<revision>...<revision>".to_string())
     .allowed_tools(vec!["Bash".to_string()])
     .content(
-r#"# Git Diff Viewer
+        r#"# Git Diff Viewer
 
 You are a git diff analyzer. Help the user understand code changes.
 
@@ -245,7 +254,8 @@ When showing diffs, provide:
 - `D` file: Deleted (removed file)
 - `R` file: Renamed (moved file)
 - `C` file: Copied (copied file)
-"#.to_string()
+"#
+        .to_string(),
     )
     .build())
 }
@@ -261,7 +271,7 @@ fn create_status_skill() -> SkillResult<Skill> {
     .when_to_use("Use to check the current state of the repository".to_string())
     .allowed_tools(vec!["Bash".to_string()])
     .content(
-r#"# Git Status Monitor
+        r#"# Git Status Monitor
 
 You are a git status assistant. Provide a clear overview of repository state.
 
@@ -327,7 +337,8 @@ Based on the status, suggest:
 **Behind remote**: "You're N commits behind. Pull updates with: git pull"
 
 **Diverged branches**: "Your branch and 'origin/main' have diverged. Consider: git pull --rebase"
-"#.to_string()
+"#
+        .to_string(),
     )
     .build())
 }
@@ -344,7 +355,7 @@ fn create_help_skill() -> SkillResult<Skill> {
     .when_to_use("Use when you need help with Shannon Code commands or features".to_string())
     .argument_hint("<topic>".to_string())
     .content(
-r#"# Shannon Code Help
+        r#"# Shannon Code Help
 
 You are a helpful assistant for Shannon Code. Provide clear, actionable guidance.
 
@@ -408,7 +419,8 @@ git stash list       # List stashes
 - **Session ID**: ${CLAUDE_SESSION_ID}
 
 What would you like help with?
-"#.to_string()
+"#
+        .to_string(),
     )
     .build())
 }
@@ -434,11 +446,13 @@ impl BundledSkills {
 
     /// Register a bundled skill
     pub fn register(&self, skill: Skill) -> SkillResult<()> {
-        let mut inner = self.inner.write()
-            .map_err(|e| crate::error::SkillError::ExecutionFailed {
-                name: "bundled".to_string(),
-                message: format!("Failed to acquire lock: {e}"),
-            })?;
+        let mut inner =
+            self.inner
+                .write()
+                .map_err(|e| crate::error::SkillError::ExecutionFailed {
+                    name: "bundled".to_string(),
+                    message: format!("Failed to acquire lock: {e}"),
+                })?;
 
         let mut skill = skill;
         skill.source = SkillSource::Bundled;
@@ -448,18 +462,21 @@ impl BundledSkills {
 
     /// Get all bundled skills
     pub fn list(&self) -> Vec<Skill> {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|inner| inner.values().cloned().collect())
             .unwrap_or_default()
     }
 
     /// Clear all bundled skills
     pub fn clear(&self) -> SkillResult<()> {
-        let mut inner = self.inner.write()
-            .map_err(|e| crate::error::SkillError::ExecutionFailed {
-                name: "bundled".to_string(),
-                message: format!("Failed to acquire lock: {e}"),
-            })?;
+        let mut inner =
+            self.inner
+                .write()
+                .map_err(|e| crate::error::SkillError::ExecutionFailed {
+                    name: "bundled".to_string(),
+                    message: format!("Failed to acquire lock: {e}"),
+                })?;
 
         inner.clear();
         Ok(())
@@ -467,9 +484,7 @@ impl BundledSkills {
 
     /// Get the number of bundled skills
     pub fn len(&self) -> usize {
-        self.inner.read()
-            .map(|inner| inner.len())
-            .unwrap_or(0)
+        self.inner.read().map(|inner| inner.len()).unwrap_or(0)
     }
 
     /// Returns `true` if there are no bundled skills.
@@ -633,13 +648,10 @@ mod tests {
     fn test_bundled_skills_registry() {
         let registry = BundledSkills::new();
 
-        let skill = BundledSkillBuilder::new(
-            "test".to_string(),
-            "Test".to_string(),
-            "A test".to_string(),
-        )
-        .content("Content".to_string())
-        .build();
+        let skill =
+            BundledSkillBuilder::new("test".to_string(), "Test".to_string(), "A test".to_string())
+                .content("Content".to_string())
+                .build();
 
         registry.register(skill).unwrap();
         assert_eq!(registry.len(), 1);

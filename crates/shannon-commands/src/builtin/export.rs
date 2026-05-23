@@ -1,6 +1,8 @@
 //! /export command - Export session data to various formats
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 use serde_json::Value as JsonValue;
 
 /// Prompt template for the /export command.
@@ -55,7 +57,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[md|json] [filename]".to_string()),
             when_to_use: Some(
-                "To save your current conversation or session data to a file for later reference".to_string(),
+                "To save your current conversation or session data to a file for later reference"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
@@ -223,7 +226,9 @@ pub fn parse_export_args(args: &str) -> Result<ExportOptions, String> {
                 // Assume it's a filename — reject path traversal
                 if options.filename.is_none() {
                     if t.contains('/') || t.contains('\\') || t.contains("..") {
-                        return Err(format!("Invalid filename (path separators not allowed): {t}"));
+                        return Err(format!(
+                            "Invalid filename (path separators not allowed): {t}"
+                        ));
                     }
                     options.filename = Some(t.to_string());
                 }
@@ -259,10 +264,7 @@ pub fn export_to_markdown(session: &ExportSession, options: &ExportOptions) -> S
             format_timestamp(session.started_at)
         ));
         md.push_str(&format!("- **Model:** {}\n", session.metadata.model));
-        md.push_str(&format!(
-            "- **Tokens:** {}\n",
-            session.metadata.tokens_used
-        ));
+        md.push_str(&format!("- **Tokens:** {}\n", session.metadata.tokens_used));
         md.push_str(&format!(
             "- **Working Directory:** {}\n",
             session.metadata.working_dir
@@ -303,7 +305,12 @@ pub fn export_to_markdown(session: &ExportSession, options: &ExportOptions) -> S
     }
 
     if options.sanitize {
-        md = sanitize_content(&md, &dirs::home_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default());
+        md = sanitize_content(
+            &md,
+            &dirs::home_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        );
     }
 
     md
@@ -351,7 +358,12 @@ pub fn export_to_json(session: &ExportSession, options: &ExportOptions) -> Strin
     let json_str = serde_json::to_string_pretty(&json_obj).unwrap_or_default();
 
     if options.sanitize {
-        sanitize_content(&json_str, &dirs::home_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default())
+        sanitize_content(
+            &json_str,
+            &dirs::home_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        )
     } else {
         json_str
     }
@@ -361,8 +373,7 @@ pub fn export_to_json(session: &ExportSession, options: &ExportOptions) -> Strin
 fn format_timestamp(secs: u64) -> String {
     use chrono::{DateTime, Local, Utc};
 
-    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0)
-        .unwrap_or_default();
+    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0).unwrap_or_default();
     let local: DateTime<Local> = dt.into();
 
     local.format("%Y-%m-%d %H:%M:%S").to_string()
@@ -381,7 +392,10 @@ pub fn sanitize_content(content: &str, home_dir: &str) -> String {
     // Replace common API key patterns
     let patterns = [
         (r"sk-[a-zA-Z0-9]{20,}", "<REDACTED_API_KEY>"),
-        (r"sk-ant-api03-[a-zA-Z0-9\-]{20,}", "<REDACTED_ANTHROPIC_KEY>"),
+        (
+            r"sk-ant-api03-[a-zA-Z0-9\-]{20,}",
+            "<REDACTED_ANTHROPIC_KEY>",
+        ),
         (r"ghp_[a-zA-Z0-9]{36}", "<REDACTED_GITHUB_TOKEN>"),
         (r"gho_[a-zA-Z0-9]{36}", "<REDACTED_GITHUB_OAUTH>"),
         (r"glpat-[a-zA-Z0-9\-]{20,}", "<REDACTED_GITLAB_TOKEN>"),
@@ -418,8 +432,14 @@ mod tests {
 
     #[test]
     fn test_export_format_from_str() {
-        assert_eq!(ExportFormat::parse_format("md"), Some(ExportFormat::Markdown));
-        assert_eq!(ExportFormat::parse_format("markdown"), Some(ExportFormat::Markdown));
+        assert_eq!(
+            ExportFormat::parse_format("md"),
+            Some(ExportFormat::Markdown)
+        );
+        assert_eq!(
+            ExportFormat::parse_format("markdown"),
+            Some(ExportFormat::Markdown)
+        );
         assert_eq!(ExportFormat::parse_format("json"), Some(ExportFormat::Json));
         assert_eq!(ExportFormat::parse_format("invalid"), None);
     }
@@ -511,13 +531,11 @@ mod tests {
         let session = ExportSession {
             title: "Test Session".to_string(),
             started_at: 1_600_000_000,
-            messages: vec![
-                ExportMessage {
-                    role: "user".to_string(),
-                    content: "Hello".to_string(),
-                    timestamp: Some(1_600_000_000),
-                },
-            ],
+            messages: vec![ExportMessage {
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+                timestamp: Some(1_600_000_000),
+            }],
             metadata: SessionMetadata {
                 model: "claude-3".to_string(),
                 tokens_used: 100,

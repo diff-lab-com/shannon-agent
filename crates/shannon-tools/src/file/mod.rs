@@ -10,21 +10,21 @@
 //! security boundaries: path traversal prevention, symlink resolution,
 //! denied system paths, and home directory boundary checks.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
-pub mod read;
-pub mod write;
-pub mod edit;
-pub mod multiedit;
-pub mod glob;
-pub mod sandbox;
-pub mod history;
 pub mod diff_renderer;
+pub mod edit;
+pub mod glob;
+pub mod history;
+pub mod multiedit;
+pub mod read;
+pub mod sandbox;
 pub mod sandbox_adapter;
+pub mod write;
 
 // Re-export sandbox types for external use
 pub use sandbox::{PathSandbox, SandboxConfig, SandboxError};
@@ -119,7 +119,9 @@ impl Tool for ReadTool {
 
         read::execute(input).await
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 /// Write tool implementation
@@ -281,14 +283,18 @@ impl Default for MultiEditTool {
 impl MultiEditTool {
     pub fn new() -> Self {
         Self {
-            description: "Apply multiple file edits atomically — all edits succeed or none are applied".to_string(),
+            description:
+                "Apply multiple file edits atomically — all edits succeed or none are applied"
+                    .to_string(),
             sandbox: PathSandbox::new(),
         }
     }
 
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Apply multiple file edits atomically — all edits succeed or none are applied".to_string(),
+            description:
+                "Apply multiple file edits atomically — all edits succeed or none are applied"
+                    .to_string(),
             sandbox,
         }
     }
@@ -367,7 +373,8 @@ impl Default for GlobTool {
 impl GlobTool {
     pub fn new() -> Self {
         Self {
-            description: "Fast file pattern matching tool that works with any codebase size".to_string(),
+            description: "Fast file pattern matching tool that works with any codebase size"
+                .to_string(),
             sandbox: PathSandbox::new(),
         }
     }
@@ -375,7 +382,8 @@ impl GlobTool {
     /// Create a GlobTool with a custom sandbox configuration.
     pub fn with_sandbox(sandbox: PathSandbox) -> Self {
         Self {
-            description: "Fast file pattern matching tool that works with any codebase size".to_string(),
+            description: "Fast file pattern matching tool that works with any codebase size"
+                .to_string(),
             sandbox,
         }
     }
@@ -415,7 +423,9 @@ impl Tool for GlobTool {
 
         glob::execute(glob_input).await
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

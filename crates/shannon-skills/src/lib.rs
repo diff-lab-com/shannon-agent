@@ -51,33 +51,31 @@
 //! ```
 
 pub mod agent_loader;
+pub mod bundled;
 pub mod definition;
+pub mod discovery;
 pub mod error;
 pub mod executor;
 pub mod frontmatter;
 pub mod loader;
 pub mod registry;
-pub mod bundled;
-pub mod discovery;
-pub mod watcher;
 pub mod template;
+pub mod watcher;
 
 // Re-export commonly used types
-pub use definition::{
-    Skill, SkillContext, SkillId, SkillPermissions, SkillResult, SkillSource,
-};
-pub use error::{SkillError, SkillResult as Result};
-pub use executor::SkillExecutor;
-pub use registry::SkillRegistry;
 pub use agent_loader::{
     AgentColor, AgentDefinition, AgentEffort, AgentIsolation, AgentModel, AgentPermissionMode,
     discover_agent_directories, load_agents_from_directory, parse_agent_definition,
 };
-pub use bundled::{BundledSkills, BundledSkillBuilder, init_bundled_skills};
+pub use bundled::{BundledSkillBuilder, BundledSkills, init_bundled_skills};
+pub use definition::{Skill, SkillContext, SkillId, SkillPermissions, SkillResult, SkillSource};
 pub use discovery::SkillDiscovery;
-pub use watcher::SkillWatcher;
+pub use error::{SkillError, SkillResult as Result};
+pub use executor::SkillExecutor;
 pub use frontmatter::ParsedSkill;
+pub use registry::SkillRegistry;
 pub use template::SkillTemplate;
+pub use watcher::SkillWatcher;
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

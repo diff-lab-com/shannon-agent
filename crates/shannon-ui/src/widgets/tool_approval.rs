@@ -4,11 +4,11 @@ use crate::theme::Theme;
 use crate::tool_format::display_tool_name;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
-    Frame,
 };
 
 /// User's decision on a tool approval request
@@ -35,9 +35,9 @@ impl RiskLevel {
     /// Returns a unicode indicator and the theme color key for this risk level
     fn indicator(&self) -> (&'static str, fn(&Theme) -> ratatui::style::Color) {
         match self {
-            RiskLevel::Low => ("\u{25CF} Low", |t| t.success),     // ● filled circle
+            RiskLevel::Low => ("\u{25CF} Low", |t| t.success), // ● filled circle
             RiskLevel::Medium => ("\u{25D0} Medium", |t| t.warning), // ◐ half circle
-            RiskLevel::High => ("\u{25C6} High", |t| t.error),     // ◆ diamond
+            RiskLevel::High => ("\u{25C6} High", |t| t.error), // ◆ diamond
         }
     }
 }
@@ -190,8 +190,13 @@ impl ToolApprovalWidget {
 
         // Compute centered overlay rect — larger when diff is present
         let overlay_w = (if self.diff_content.is_some() { 80 } else { 60 }).min(area.width);
-        let max_overlay_h = if self.diff_content.is_some() { area.height * 80 / 100 } else { area.height };
-        let overlay_h = (if self.diff_content.is_some() { 24 } else { 12 }).min(max_overlay_h.max(12));
+        let max_overlay_h = if self.diff_content.is_some() {
+            area.height * 80 / 100
+        } else {
+            area.height
+        };
+        let overlay_h =
+            (if self.diff_content.is_some() { 24 } else { 12 }).min(max_overlay_h.max(12));
         let x = area.x + (area.width.saturating_sub(overlay_w)) / 2;
         let y = area.y + (area.height.saturating_sub(overlay_h)) / 2;
         let overlay_area = Rect {
@@ -212,7 +217,9 @@ impl ToolApprovalWidget {
             Span::styled("Risk: ", Style::default().fg(theme.text_dim)),
             Span::styled(
                 risk_text.to_string(),
-                Style::default().fg(risk_color_fn(theme)).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(risk_color_fn(theme))
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
 
@@ -238,7 +245,9 @@ impl ToolApprovalWidget {
                 Span::styled("URL: ", Style::default().fg(theme.text_dim)),
                 Span::styled(
                     domain.clone(),
-                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
             lines.push(Line::from(""));
@@ -267,10 +276,12 @@ impl ToolApprovalWidget {
         // Diff preview (if present)
         if let Some(ref diff) = self.diff_content {
             lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("Diff Preview (j/k to scroll):", Style::default()
-                    .fg(theme.primary).add_modifier(Modifier::BOLD)),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "Diff Preview (j/k to scroll):",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            )]));
 
             let diff_lines: Vec<&str> = diff.lines().collect();
             let available = 8; // max diff lines to show
@@ -288,7 +299,10 @@ impl ToolApprovalWidget {
                 };
                 // Truncate long diff lines to fit
                 let display: String = line.chars().take(content_width).collect();
-                lines.push(Line::from(vec![Span::styled(display, Style::default().fg(color))]));
+                lines.push(Line::from(vec![Span::styled(
+                    display,
+                    Style::default().fg(color),
+                )]));
             }
             if end < diff_lines.len() {
                 lines.push(Line::from(vec![Span::styled(
@@ -301,18 +315,18 @@ impl ToolApprovalWidget {
         lines.push(Line::from(""));
 
         // Options row
-        let options = [
-            ("1", "Allow Once"),
-            ("2", "Allow Session"),
-            ("3", "Deny"),
-        ];
+        let options = [("1", "Allow Once"), ("2", "Allow Session"), ("3", "Deny")];
         let mut option_spans: Vec<Span<'static>> = Vec::new();
         for (i, (key, label)) in options.iter().enumerate() {
             let is_selected = i == self.selected_option;
             let style = if i == 2 {
                 // Deny uses error color
                 Style::default()
-                    .fg(if is_selected { theme.error } else { theme.text_dim })
+                    .fg(if is_selected {
+                        theme.error
+                    } else {
+                        theme.text_dim
+                    })
                     .add_modifier(if is_selected {
                         Modifier::BOLD
                     } else {
@@ -338,16 +352,14 @@ impl ToolApprovalWidget {
 
         // Keyboard hints
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled(
-                if self.diff_content.is_some() {
-                    "1/2/3 select, Enter confirm, j/k scroll diff, Esc deny"
-                } else {
-                    "1/2/3 or \u{2190}/\u{2192} to select, Enter to confirm, Esc to deny"
-                },
-                Style::default().fg(theme.text_dim),
-            ),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            if self.diff_content.is_some() {
+                "1/2/3 select, Enter confirm, j/k scroll diff, Esc deny"
+            } else {
+                "1/2/3 or \u{2190}/\u{2192} to select, Enter to confirm, Esc to deny"
+            },
+            Style::default().fg(theme.text_dim),
+        )]));
 
         // Border color matches risk level for visual cue
         let border_color = risk_color_fn(theme);
@@ -359,7 +371,9 @@ impl ToolApprovalWidget {
                     .border_type(BorderType::Rounded)
                     .title(Span::styled(
                         " Tool Approval Required ",
-                        Style::default().fg(border_color).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(border_color)
+                            .add_modifier(Modifier::BOLD),
                     )),
             )
             .alignment(Alignment::Left)
@@ -424,13 +438,16 @@ mod tests {
     #[test]
     fn test_show_request_sets_active() {
         let mut w = ToolApprovalWidget::new();
-        w.show_request(ToolApprovalRequest {
-            tool_name: "bash".into(),
-            description: "rm -rf /".into(),
-            risk_level: RiskLevel::High,
-            detail: None,
-            domain: None,
-        }, None);
+        w.show_request(
+            ToolApprovalRequest {
+                tool_name: "bash".into(),
+                description: "rm -rf /".into(),
+                risk_level: RiskLevel::High,
+                detail: None,
+                domain: None,
+            },
+            None,
+        );
         assert!(w.request.is_some());
         assert!(w.is_active());
         assert_eq!(w.selected_option, 0);
@@ -439,15 +456,21 @@ mod tests {
     #[test]
     fn test_handle_key_number_selection() {
         let mut w = ToolApprovalWidget::new();
-        w.show_request(ToolApprovalRequest {
-            tool_name: "bash".into(),
-            description: "ls".into(),
-            risk_level: RiskLevel::Low,
-            detail: None,
-            domain: None,
-        }, None);
+        w.show_request(
+            ToolApprovalRequest {
+                tool_name: "bash".into(),
+                description: "ls".into(),
+                risk_level: RiskLevel::Low,
+                detail: None,
+                domain: None,
+            },
+            None,
+        );
 
-        let decision = w.handle_key(KeyEvent::new(KeyCode::Char('1'), crossterm::event::KeyModifiers::NONE));
+        let decision = w.handle_key(KeyEvent::new(
+            KeyCode::Char('1'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
         assert_eq!(decision, Some(ApprovalDecision::AllowOnce));
 
         // After a decision is made the widget is no longer active
@@ -457,36 +480,60 @@ mod tests {
     #[test]
     fn test_handle_key_deny_via_esc() {
         let mut w = ToolApprovalWidget::new();
-        w.show_request(ToolApprovalRequest {
-            tool_name: "bash".into(),
-            description: "ls".into(),
-            risk_level: RiskLevel::Low,
-            detail: None,
-            domain: None,
-        }, None);
+        w.show_request(
+            ToolApprovalRequest {
+                tool_name: "bash".into(),
+                description: "ls".into(),
+                risk_level: RiskLevel::Low,
+                detail: None,
+                domain: None,
+            },
+            None,
+        );
 
-        let decision = w.handle_key(KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE));
+        let decision = w.handle_key(KeyEvent::new(
+            KeyCode::Esc,
+            crossterm::event::KeyModifiers::NONE,
+        ));
         assert_eq!(decision, Some(ApprovalDecision::Deny));
     }
 
     #[test]
     fn test_handle_key_arrows_then_enter() {
         let mut w = ToolApprovalWidget::new();
-        w.show_request(ToolApprovalRequest {
-            tool_name: "write".into(),
-            description: "save file".into(),
-            risk_level: RiskLevel::Medium,
-            detail: None,
-            domain: None,
-        }, None);
+        w.show_request(
+            ToolApprovalRequest {
+                tool_name: "write".into(),
+                description: "save file".into(),
+                risk_level: RiskLevel::Medium,
+                detail: None,
+                domain: None,
+            },
+            None,
+        );
 
         // Move right twice to reach "Deny"
-        assert_eq!(w.handle_key(KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::NONE)), None);
+        assert_eq!(
+            w.handle_key(KeyEvent::new(
+                KeyCode::Right,
+                crossterm::event::KeyModifiers::NONE
+            )),
+            None
+        );
         assert_eq!(w.selected_option, 1);
-        assert_eq!(w.handle_key(KeyEvent::new(KeyCode::Right, crossterm::event::KeyModifiers::NONE)), None);
+        assert_eq!(
+            w.handle_key(KeyEvent::new(
+                KeyCode::Right,
+                crossterm::event::KeyModifiers::NONE
+            )),
+            None
+        );
         assert_eq!(w.selected_option, 2);
 
-        let decision = w.handle_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
+        let decision = w.handle_key(KeyEvent::new(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
         assert_eq!(decision, Some(ApprovalDecision::Deny));
     }
 
@@ -520,13 +567,16 @@ mod tests {
     #[test]
     fn test_dismiss_clears_state() {
         let mut w = ToolApprovalWidget::new();
-        w.show_request(ToolApprovalRequest {
-            tool_name: "bash".into(),
-            description: "ls".into(),
-            risk_level: RiskLevel::Low,
-            detail: None,
-            domain: None,
-        }, None);
+        w.show_request(
+            ToolApprovalRequest {
+                tool_name: "bash".into(),
+                description: "ls".into(),
+                risk_level: RiskLevel::Low,
+                detail: None,
+                domain: None,
+            },
+            None,
+        );
         assert!(w.is_active());
         w.dismiss();
         assert!(!w.is_active());
@@ -557,7 +607,10 @@ mod tests {
     #[test]
     fn test_handle_key_ignored_when_not_active() {
         let mut w = ToolApprovalWidget::new();
-        let result = w.handle_key(KeyEvent::new(KeyCode::Enter, crossterm::event::KeyModifiers::NONE));
+        let result = w.handle_key(KeyEvent::new(
+            KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
         assert_eq!(result, None);
     }
 }

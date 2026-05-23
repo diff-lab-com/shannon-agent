@@ -3,7 +3,9 @@
 //! Covers OAuth2Provider, ApiKeyProvider, token storage, PKCE helpers,
 //! auth error variants, and header injection.
 
-use shannon_mcp::auth::{AuthProvider, ApiKeyProvider, OAuth2Provider, MemoryTokenStorage, TokenStorage, AuthError};
+use shannon_mcp::auth::{
+    ApiKeyProvider, AuthError, AuthProvider, MemoryTokenStorage, OAuth2Provider, TokenStorage,
+};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -72,8 +74,14 @@ async fn test_oauth2_provider_construction() {
     );
 
     // Verify construction doesn't panic and defaults are sensible.
-    assert!(!provider.is_valid().await, "no token set yet, should be invalid");
-    assert!(provider.get_token().await.is_err(), "no token, get_token should fail");
+    assert!(
+        !provider.is_valid().await,
+        "no token set yet, should be invalid"
+    );
+    assert!(
+        provider.get_token().await.is_err(),
+        "no token, get_token should fail"
+    );
 }
 
 #[tokio::test]
@@ -162,7 +170,10 @@ async fn test_oauth2_add_auth_headers_fails_without_token() {
     let mut headers = HashMap::new();
     let result = provider.add_auth_headers(&mut headers).await;
     assert!(result.is_err(), "Should fail because no token is set");
-    assert!(headers.is_empty(), "No headers should be injected without a token");
+    assert!(
+        headers.is_empty(),
+        "No headers should be injected without a token"
+    );
 }
 
 #[tokio::test]
@@ -231,11 +242,17 @@ async fn test_memory_token_storage_save_load_delete() {
 
     // Save and load.
     storage.save_token("key1", "value1").await.unwrap();
-    assert_eq!(storage.load_token("key1").await.unwrap().as_deref(), Some("value1"));
+    assert_eq!(
+        storage.load_token("key1").await.unwrap().as_deref(),
+        Some("value1")
+    );
 
     // Overwrite.
     storage.save_token("key1", "value2").await.unwrap();
-    assert_eq!(storage.load_token("key1").await.unwrap().as_deref(), Some("value2"));
+    assert_eq!(
+        storage.load_token("key1").await.unwrap().as_deref(),
+        Some("value2")
+    );
 
     // Delete.
     storage.delete_token("key1").await.unwrap();

@@ -22,7 +22,9 @@ mod config_precedence_tests {
     /// Remove all SHANNON_* env vars to avoid cross-test contamination.
     fn clear_shannon_env() {
         for var in ENV_VARS {
-            unsafe { std::env::remove_var(var); }
+            unsafe {
+                std::env::remove_var(var);
+            }
         }
     }
 
@@ -166,7 +168,10 @@ temperature = 0.9
         assert_eq!(config.max_tokens, Some(8192));
         assert_eq!(config.temperature, Some(0.9));
         // Global-only field preserved
-        assert_eq!(config.base_url, Some("https://global.example.com".to_string()));
+        assert_eq!(
+            config.base_url,
+            Some("https://global.example.com".to_string())
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -291,7 +296,10 @@ broken content [[[
         assert_eq!(merged.model, Some("cli-model".to_string())); // CLI wins
         assert_eq!(merged.provider, Some("anthropic".to_string())); // from global
         assert_eq!(merged.api_key, Some("env-key".to_string())); // env wins
-        assert_eq!(merged.base_url, Some("https://global.example.com".to_string())); // from global
+        assert_eq!(
+            merged.base_url,
+            Some("https://global.example.com".to_string())
+        ); // from global
         assert_eq!(merged.max_tokens, Some(8192)); // env wins
         assert_eq!(merged.temperature, Some(0.5)); // from global
         assert_eq!(merged.timeout, Some(60)); // from global

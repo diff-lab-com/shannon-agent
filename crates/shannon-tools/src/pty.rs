@@ -5,7 +5,7 @@
 //! - Colored output from programs that check `isatty()`
 //! - Line-buffered output matching user expectations
 
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use shannon_core::sandbox::audit_shell_command;
 use shannon_types::recover_lock;
 use std::io::Read;
@@ -114,7 +114,6 @@ pub fn execute_in_pty(
     });
 
     // Wait for the child process with optional timeout
-    
 
     if let Some(timeout) = timeout_ms {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout);
@@ -139,9 +138,7 @@ pub fn execute_in_pty(
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         let output = recover_lock(output_buf.lock());
                         let stdout = String::from_utf8_lossy(&output).to_string();
-                        return Err(format!(
-                            "Command timed out after {timeout}ms\n{stdout}"
-                        ));
+                        return Err(format!("Command timed out after {timeout}ms\n{stdout}"));
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }

@@ -12,6 +12,7 @@
 //! - Streaming response assembly
 //! - Error recovery and fallback
 
+use async_trait::async_trait;
 use futures::StreamExt;
 use mockito::{Server, ServerGuard};
 use serde_json::json;
@@ -20,14 +21,13 @@ use shannon_core::api::{
     RetryConfig, StreamEvent,
 };
 use shannon_core::permissions::{PermissionChoice, PermissionManager};
+use shannon_core::query_engine::CostTracker;
 use shannon_core::query_engine::{
     QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
 };
 use shannon_core::state::StateManager;
 use shannon_core::streaming_tool_executor::{StreamingToolExecutor, ToolStatus};
 use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolRegistry, ToolResult};
-use shannon_core::query_engine::CostTracker;
-use async_trait::async_trait;
 use uuid::Uuid;
 
 // ============================================================================
@@ -123,7 +123,8 @@ impl RecordableTool {
 #[async_trait]
 impl Tool for RecordableTool {
     async fn execute(&self, _input: serde_json::Value) -> ToolResult<ToolOutput> {
-        self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.call_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let responses = self.responses.lock().unwrap();
         if responses.is_empty() {
             Ok(ToolOutput::success("default response".to_string()))
@@ -131,8 +132,12 @@ impl Tool for RecordableTool {
             Ok(responses[0].clone())
         }
     }
-    fn name(&self) -> &str { &self.name }
-    fn description(&self) -> &str { "recordable test tool" }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        "recordable test tool"
+    }
     fn input_schema(&self) -> serde_json::Value {
         json!({"type": "object", "properties": {}})
     }
@@ -207,7 +212,10 @@ async fn test_e2e_simple_text_query_produces_complete_output() {
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(anthropic_sse_text("msg_simple", "Rust is a systems programming language."))
+        .with_body(anthropic_sse_text(
+            "msg_simple",
+            "Rust is a systems programming language.",
+        ))
         .create();
 
     let client = make_client(&server, LlmProvider::Anthropic);
@@ -286,10 +294,12 @@ async fn test_e2e_tool_execution_pipeline() {
 
     let client = make_client(&server, LlmProvider::Anthropic);
     let registry = ToolRegistry::new();
-    registry.register(Box::new(RecordableTool::new(
-        "bash",
-        ToolOutput::success("total 0\ndrwxr-xr-x 2 user user 64 Jan 1 00:00 .".to_string()),
-    ))).unwrap();
+    registry
+        .register(Box::new(RecordableTool::new(
+            "bash",
+            ToolOutput::success("total 0\ndrwxr-xr-x 2 user user 64 Jan 1 00:00 .".to_string()),
+        )))
+        .unwrap();
 
     let engine = QueryEngine::with_defaults(
         client,
@@ -310,12 +320,17 @@ async fn test_e2e_tool_execution_pipeline() {
     }
 
     // Verify the full pipeline produced the expected event sequence
-    let has_tool_request = events.iter().any(|e| matches!(e, QueryEvent::ToolUseRequest { tool_name, .. } if tool_name == "bash"));
+    let has_tool_request = events
+        .iter()
+        .any(|e| matches!(e, QueryEvent::ToolUseRequest { tool_name, .. } if tool_name == "bash"));
     let has_tool_result = events.iter().any(|e| matches!(e, QueryEvent::ToolUseResult { tool_name, is_error, .. } if tool_name == "bash" && !is_error));
-    let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
+    let has_completed = events
+        .iter()
+        .any(|e| matches!(e, QueryEvent::Completed { .. }));
 
     // Extract final text
-    let final_text: String = events.iter()
+    let final_text: String = events
+        .iter()
         .filter_map(|e| match e {
             QueryEvent::Text { content, .. } => Some(content.as_str()),
             _ => None,
@@ -325,7 +340,10 @@ async fn test_e2e_tool_execution_pipeline() {
     assert!(has_tool_request, "Pipeline should request bash tool");
     assert!(has_tool_result, "Pipeline should produce bash tool result");
     assert!(has_completed, "Pipeline should complete");
-    assert!(final_text.contains("The directory is empty."), "Final output should contain tool-derived response");
+    assert!(
+        final_text.contains("The directory is empty."),
+        "Final output should contain tool-derived response"
+    );
 }
 
 // ============================================================================
@@ -351,7 +369,10 @@ async fn test_e2e_multi_turn_conversation_preserves_context() {
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(anthropic_sse_text("msg_t2", "You told me Rust is your favorite."))
+        .with_body(anthropic_sse_text(
+            "msg_t2",
+            "You told me Rust is your favorite.",
+        ))
         .expect(1)
         .create();
 
@@ -434,7 +455,10 @@ async fn test_e2e_auth_error_produces_failed_event() {
             has_failed = true;
         }
     }
-    assert!(has_failed, "Pipeline should emit Failed event for auth errors");
+    assert!(
+        has_failed,
+        "Pipeline should emit Failed event for auth errors"
+    );
 }
 
 // ============================================================================
@@ -500,11 +524,17 @@ async fn test_streaming_tool_executor_lifecycle() {
     assert!(!tool_id.is_empty(), "Tool ID should be assigned");
 
     // Start the tool (transition to Executing)
-    executor.start_tool(&tool_id).await.expect("start should succeed");
+    executor
+        .start_tool(&tool_id)
+        .await
+        .expect("start should succeed");
 
     // Check status is Executing via tools()
     let tools = executor.tools().await;
-    let tool = tools.iter().find(|t| t.id == tool_id).expect("tool should exist");
+    let tool = tools
+        .iter()
+        .find(|t| t.id == tool_id)
+        .expect("tool should exist");
     assert_eq!(tool.status, ToolStatus::Executing);
 
     // Add progress
@@ -512,13 +542,19 @@ async fn test_streaming_tool_executor_lifecycle() {
 
     // Complete the tool
     executor
-        .complete_tool(&tool_id, ToolOutput::success("file1.txt\nfile2.txt".to_string()))
+        .complete_tool(
+            &tool_id,
+            ToolOutput::success("file1.txt\nfile2.txt".to_string()),
+        )
         .await
         .expect("complete should succeed");
 
     // Check status is Completed
     let tools = executor.tools().await;
-    let tool = tools.iter().find(|t| t.id == tool_id).expect("tool should exist");
+    let tool = tools
+        .iter()
+        .find(|t| t.id == tool_id)
+        .expect("tool should exist");
     assert_eq!(tool.status, ToolStatus::Completed);
 
     // Abort should not panic on completed tool
@@ -530,8 +566,14 @@ async fn test_streaming_tool_executor_lifecycle() {
 async fn test_streaming_tool_executor_multiple_concurrent_tools() {
     let executor = StreamingToolExecutor::new(16);
 
-    let id1 = executor.submit_tool("bash", json!({}), true).await.expect("submit 1");
-    let id2 = executor.submit_tool("read", json!({}), true).await.expect("submit 2");
+    let id1 = executor
+        .submit_tool("bash", json!({}), true)
+        .await
+        .expect("submit 1");
+    let id2 = executor
+        .submit_tool("read", json!({}), true)
+        .await
+        .expect("submit 2");
 
     assert_ne!(id1, id2, "Each tool should get a unique ID");
 
@@ -558,7 +600,10 @@ async fn test_streaming_tool_executor_multiple_concurrent_tools() {
 async fn test_streaming_tool_executor_fail() {
     let executor = StreamingToolExecutor::new(16);
 
-    let tool_id = executor.submit_tool("bash", json!({}), true).await.expect("submit");
+    let tool_id = executor
+        .submit_tool("bash", json!({}), true)
+        .await
+        .expect("submit");
     executor.start_tool(&tool_id).await.expect("start");
     executor
         .fail_tool(&tool_id, "Command not found")
@@ -617,11 +662,17 @@ fn test_cost_tracker_accumulates_across_models() {
 fn test_cost_tracker_pricing_accuracy() {
     // Claude Sonnet: $3/M input, $15/M output
     let cost = CostTracker::calculate_cost("claude-3-5-sonnet-20241022", 1_000_000, 1_000_000);
-    assert!((cost - 18.0).abs() < 0.01, "Sonnet 1M+1M should cost ~$18, got ${cost}");
+    assert!(
+        (cost - 18.0).abs() < 0.01,
+        "Sonnet 1M+1M should cost ~$18, got ${cost}"
+    );
 
     // GPT-4o: $2.5/M input, $10/M output
     let cost = CostTracker::calculate_cost("gpt-4o", 1_000_000, 1_000_000);
-    assert!((cost - 12.5).abs() < 0.01, "GPT-4o 1M+1M should cost ~$12.5, got ${cost}");
+    assert!(
+        (cost - 12.5).abs() < 0.01,
+        "GPT-4o 1M+1M should cost ~$12.5, got ${cost}"
+    );
 
     // Ollama: free
     let cost = CostTracker::calculate_cost("llama3", 1_000_000, 1_000_000);
@@ -637,35 +688,47 @@ async fn test_tool_registry_execution_integration() {
     let registry = ToolRegistry::new();
 
     // Register multiple tools
-    registry.register(Box::new(RecordableTool::new(
-        "read_file",
-        ToolOutput::success("fn main() { println!(\"hello\"); }".to_string()),
-    ))).unwrap();
+    registry
+        .register(Box::new(RecordableTool::new(
+            "read_file",
+            ToolOutput::success("fn main() { println!(\"hello\"); }".to_string()),
+        )))
+        .unwrap();
 
-    registry.register(Box::new(RecordableTool::new(
-        "write_file",
-        ToolOutput::success("File written successfully".to_string()),
-    ))).unwrap();
+    registry
+        .register(Box::new(RecordableTool::new(
+            "write_file",
+            ToolOutput::success("File written successfully".to_string()),
+        )))
+        .unwrap();
 
-    registry.register(Box::new(RecordableTool::new(
-        "bash",
-        ToolOutput::success("Build succeeded".to_string()),
-    ))).unwrap();
+    registry
+        .register(Box::new(RecordableTool::new(
+            "bash",
+            ToolOutput::success("Build succeeded".to_string()),
+        )))
+        .unwrap();
 
     // Verify all registered
     let tools = registry.list_tools_info();
     assert_eq!(tools.len(), 3);
 
     // Execute each tool
-    let read_result = registry.execute("read_file", json!({"path": "main.rs"})).await;
+    let read_result = registry
+        .execute("read_file", json!({"path": "main.rs"}))
+        .await;
     assert!(read_result.is_ok());
     assert!(read_result.unwrap().content.contains("fn main()"));
 
-    let write_result = registry.execute("write_file", json!({"path": "out.rs", "content": "x"})).await;
+    let write_result = registry
+        .execute("write_file", json!({"path": "out.rs", "content": "x"}))
+        .await;
     assert!(write_result.is_ok());
     assert!(write_result.unwrap().content.contains("written"));
 
-    let bash_result = registry.execute("bash", json!({"command": "cargo build"})).await;
+    let bash_result = registry
+        .execute("bash", json!({"command": "cargo build"}))
+        .await;
     assert!(bash_result.is_ok());
     assert!(bash_result.unwrap().content.contains("succeeded"));
 }
@@ -673,16 +736,21 @@ async fn test_tool_registry_execution_integration() {
 #[tokio::test]
 async fn test_tool_registry_duplicate_rejected() {
     let registry = ToolRegistry::new();
-    registry.register(Box::new(RecordableTool::new(
-        "dup",
-        ToolOutput::success("ok".to_string()),
-    ))).unwrap();
+    registry
+        .register(Box::new(RecordableTool::new(
+            "dup",
+            ToolOutput::success("ok".to_string()),
+        )))
+        .unwrap();
 
     let result = registry.register(Box::new(RecordableTool::new(
         "dup",
         ToolOutput::success("ok2".to_string()),
     )));
-    assert!(result.is_err(), "Duplicate tool registration should be rejected");
+    assert!(
+        result.is_err(),
+        "Duplicate tool registration should be rejected"
+    );
 }
 
 #[tokio::test]
@@ -708,11 +776,9 @@ fn test_session_persistence_round_trip() {
         },
         Message {
             role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::Text {
-                    text: "Here's a simple hello world:".to_string(),
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "Here's a simple hello world:".to_string(),
+            }]),
         },
         Message {
             role: "user".to_string(),
@@ -720,11 +786,9 @@ fn test_session_persistence_round_trip() {
         },
         Message {
             role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::Text {
-                    text: "Added Result type handling".to_string(),
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "Added Result type handling".to_string(),
+            }]),
         },
     ];
 
@@ -741,7 +805,9 @@ fn test_session_persistence_round_trip() {
     };
 
     // Save
-    state_mgr.save_session(&session_id, &messages, &metadata).unwrap();
+    state_mgr
+        .save_session(&session_id, &messages, &metadata)
+        .unwrap();
 
     // Load
     let loaded = state_mgr.load_session(&session_id).unwrap();
@@ -767,11 +833,19 @@ struct FailingTool;
 #[async_trait]
 impl Tool for FailingTool {
     async fn execute(&self, _input: serde_json::Value) -> ToolResult<ToolOutput> {
-        Err(ToolError::ExecutionFailed("Permission denied: cannot write to /etc/passwd".to_string()))
+        Err(ToolError::ExecutionFailed(
+            "Permission denied: cannot write to /etc/passwd".to_string(),
+        ))
     }
-    fn name(&self) -> &str { "bash" }
-    fn description(&self) -> &str { "failing tool" }
-    fn input_schema(&self) -> serde_json::Value { json!({}) }
+    fn name(&self) -> &str {
+        "bash"
+    }
+    fn description(&self) -> &str {
+        "failing tool"
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        json!({})
+    }
 }
 
 #[tokio::test]
@@ -847,7 +921,10 @@ async fn test_e2e_tool_error_propagates_as_is_error_result() {
     }
 
     assert!(has_error_result, "Should receive tool result with is_error");
-    assert!(!final_text.is_empty(), "LLM should respond acknowledging the error");
+    assert!(
+        !final_text.is_empty(),
+        "LLM should respond acknowledging the error"
+    );
 }
 
 // ============================================================================
@@ -910,7 +987,9 @@ async fn test_e2e_permission_denied_recovers_gracefully() {
             "msg_danger",
             "bash",
             "toolu_danger",
-            &json!({"command": "rm -rf /"}).to_string().replace('"', "\\\""),
+            &json!({"command": "rm -rf /"})
+                .to_string()
+                .replace('"', "\\\""),
             "",
         ))
         .expect(1)
@@ -921,16 +1000,21 @@ async fn test_e2e_permission_denied_recovers_gracefully() {
         .mock("POST", "/v1/messages")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(anthropic_sse_final_text("msg_recovery", "Understood, I won't delete files."))
+        .with_body(anthropic_sse_final_text(
+            "msg_recovery",
+            "Understood, I won't delete files.",
+        ))
         .expect(1)
         .create();
 
     let client = make_client(&server, LlmProvider::Anthropic);
     let registry = ToolRegistry::new();
-    registry.register(Box::new(RecordableTool::new(
-        "bash",
-        ToolOutput::success("deleted".to_string()),
-    ))).unwrap();
+    registry
+        .register(Box::new(RecordableTool::new(
+            "bash",
+            ToolOutput::success("deleted".to_string()),
+        )))
+        .unwrap();
 
     let engine = QueryEngine::with_defaults(
         client,
@@ -940,7 +1024,8 @@ async fn test_e2e_permission_denied_recovers_gracefully() {
     );
 
     let ctx = make_context("Delete everything");
-    let (perm_tx, mut perm_rx) = tokio::sync::mpsc::unbounded_channel::<shannon_core::query_engine::PermissionRequest>();
+    let (perm_tx, mut perm_rx) =
+        tokio::sync::mpsc::unbounded_channel::<shannon_core::query_engine::PermissionRequest>();
 
     // Spawn task to deny the permission
     let deny_handle = tokio::spawn(async move {
@@ -961,13 +1046,18 @@ async fn test_e2e_permission_denied_recovers_gracefully() {
 
     let _ = deny_handle.await;
 
-    let has_tool_request = events.iter().any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
-    let has_termination = events.iter().any(|e| {
-        matches!(e, QueryEvent::Completed { .. } | QueryEvent::Failed { .. })
-    });
+    let has_tool_request = events
+        .iter()
+        .any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
+    let has_termination = events
+        .iter()
+        .any(|e| matches!(e, QueryEvent::Completed { .. } | QueryEvent::Failed { .. }));
 
     assert!(has_tool_request, "Should have tool request before denial");
-    assert!(has_termination, "Should terminate (Completed or Failed) after denial");
+    assert!(
+        has_termination,
+        "Should terminate (Completed or Failed) after denial"
+    );
 }
 
 // ============================================================================
@@ -1045,7 +1135,10 @@ async fn test_e2e_openai_streaming_assembles_text() {
         content: MessageContent::Text("Guide me".to_string()),
     }];
 
-    let mut stream = client.send_message_stream(messages, None, None).await.unwrap();
+    let mut stream = client
+        .send_message_stream(messages, None, None)
+        .await
+        .unwrap();
     let mut text = String::new();
     while let Some(result) = stream.next().await {
         let event = result.unwrap();
@@ -1073,24 +1166,36 @@ fn test_is_ollama_malformed_message_patterns() {
     assert!(is_ollama_malformed_message("malformed JSON response"));
 
     // GLM-specific pattern
-    assert!(is_ollama_malformed_message("json: cannot unmarshal array into Go value of type string"));
+    assert!(is_ollama_malformed_message(
+        "json: cannot unmarshal array into Go value of type string"
+    ));
 
     // New patterns
-    assert!(is_ollama_malformed_message("invalid json: unexpected character"));
+    assert!(is_ollama_malformed_message(
+        "invalid json: unexpected character"
+    ));
     assert!(is_ollama_malformed_message("parse error: invalid token"));
-    assert!(is_ollama_malformed_message("unexpected token during parsing"));
+    assert!(is_ollama_malformed_message(
+        "unexpected token during parsing"
+    ));
 
     // Case insensitive
     assert!(is_ollama_malformed_message("MALFORMED output"));
-    assert!(is_ollama_malformed_message("JSON: Cannot Unmarshal something"));
+    assert!(is_ollama_malformed_message(
+        "JSON: Cannot Unmarshal something"
+    ));
     assert!(is_ollama_malformed_message("Parse Error at line 5"));
 
     // Unicode normalization (U+2019 → ASCII ')
-    assert!(is_ollama_malformed_message("can\u{2019}t find closing bracket"));
+    assert!(is_ollama_malformed_message(
+        "can\u{2019}t find closing bracket"
+    ));
 
     // GLM variant without "find"
     assert!(is_ollama_malformed_message("can't closing '}' symbol"));
-    assert!(is_ollama_malformed_message("Value looks like object, but can't closing '}' symbol"));
+    assert!(is_ollama_malformed_message(
+        "Value looks like object, but can't closing '}' symbol"
+    ));
 
     // Brace-closing pattern
     assert!(is_ollama_malformed_message("closing '}' not found"));

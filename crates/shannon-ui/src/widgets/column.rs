@@ -4,17 +4,17 @@
 //! Each cell renders independently into its allocated Rect, using `Clear` before
 //! render to prevent stale glyphs.
 
-use super::renderable::{MessageCell, Renderable, SearchParams};
 use super::chat::ChatRole;
+use super::renderable::{MessageCell, Renderable, SearchParams};
 use crate::theme::Theme;
 use crate::tool_format::{display_tool_name, tool_category};
 
-use std::collections::HashMap;
 use parking_lot::Mutex;
 use ratatui::{
     layout::Rect,
     widgets::{Clear, Widget},
 };
+use std::collections::HashMap;
 
 // ── ColumnRenderable ────────────────────────────────────────────────────
 
@@ -85,7 +85,9 @@ impl ColumnRenderable {
         }
 
         let n = self.cells.len();
-        if n == 0 { return; }
+        if n == 0 {
+            return;
+        }
 
         let mut i = 0;
         while i < n {
@@ -106,10 +108,14 @@ impl ColumnRenderable {
             let mut j = i + 1;
             while j < n {
                 let next_msg = &self.cells[j].message;
-                if next_msg.role != ChatRole::Tool { break; }
+                if next_msg.role != ChatRole::Tool {
+                    break;
+                }
                 let next_label = next_msg.tool_name.as_deref().unwrap_or("tool");
                 let next_display = display_tool_name(next_label);
-                if tool_category(&next_display) != cat { break; }
+                if tool_category(&next_display) != cat {
+                    break;
+                }
                 total_dur += next_msg.duration_secs.unwrap_or(0.0);
                 count += 1;
                 j += 1;
@@ -150,13 +156,17 @@ impl ColumnRenderable {
         let mut new_scrolls = HashMap::new();
         let scrolls = std::mem::take(&mut self.cell_scrolls);
         for (k, v) in scrolls {
-            if k > 0 { new_scrolls.insert(k - 1, v); }
+            if k > 0 {
+                new_scrolls.insert(k - 1, v);
+            }
         }
         self.cell_scrolls = new_scrolls;
         let mut alloc = self.cell_allocated.lock();
         let mut new_alloc = HashMap::new();
         for (k, v) in alloc.drain() {
-            if k > 0 { new_alloc.insert(k - 1, v); }
+            if k > 0 {
+                new_alloc.insert(k - 1, v);
+            }
         }
         *alloc = new_alloc;
         Some(cell)
@@ -181,7 +191,10 @@ impl ColumnRenderable {
 
     /// Get the desired height of a cell at the given width.
     pub fn cell_height(&self, index: usize, width: u16) -> u16 {
-        self.cells.get(index).map(|c| c.desired_height(width)).unwrap_or(1)
+        self.cells
+            .get(index)
+            .map(|c| c.desired_height(width))
+            .unwrap_or(1)
     }
 
     /// Set the vertical scroll offset for a specific cell.
@@ -200,7 +213,11 @@ impl ColumnRenderable {
 
     /// Get the last allocated render height for a specific cell.
     pub fn cell_allocated_height(&self, cell_index: usize) -> u16 {
-        self.cell_allocated.lock().get(&cell_index).copied().unwrap_or(0)
+        self.cell_allocated
+            .lock()
+            .get(&cell_index)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Invalidate cached heights for all cells (e.g., after terminal resize).
@@ -230,9 +247,17 @@ impl ColumnRenderable {
     /// `area` — viewport rect
     /// `scroll_offset` — index of the focused message (absolute index in cells)
     /// `start` — first cell index to consider (e.g., committed_count)
-    fn layout(&self, area: Rect, scroll_offset: usize, start: usize, top_align: bool) -> LayoutResult {
+    fn layout(
+        &self,
+        area: Rect,
+        scroll_offset: usize,
+        start: usize,
+        top_align: bool,
+    ) -> LayoutResult {
         if self.cells.is_empty() || area.height == 0 || start >= self.cells.len() {
-            return LayoutResult { visible: Vec::new() };
+            return LayoutResult {
+                visible: Vec::new(),
+            };
         }
 
         let width = area.width;
@@ -288,10 +313,7 @@ impl ColumnRenderable {
             let available = (area.y + area.height).saturating_sub(y);
             let render_h = h.min(available);
             if render_h > 0 {
-                visible.push((
-                    Rect::new(area.x, y, area.width, render_h),
-                    i,
-                ));
+                visible.push((Rect::new(area.x, y, area.width, render_h), i));
             }
             y += h;
         }
@@ -324,14 +346,26 @@ impl ColumnRenderable {
 
         tracing::debug!(
             "ColumnRenderable::render cells={} start={} offset={} area={}x{} visible={}",
-            self.cells.len(), start, scroll_offset, area.width, area.height,
+            self.cells.len(),
+            start,
+            scroll_offset,
+            area.width,
+            area.height,
             layout.visible.len()
         );
         for (rect, idx) in &layout.visible {
-            let desired = self.cells.get(*idx).map(|c| c.desired_height(rect.width)).unwrap_or(0);
+            let desired = self
+                .cells
+                .get(*idx)
+                .map(|c| c.desired_height(rect.width))
+                .unwrap_or(0);
             tracing::debug!(
                 "  cell[{}] y={} h={} desired={} alloc_diff={}",
-                idx, rect.y, rect.height, desired, desired as i32 - rect.height as i32
+                idx,
+                rect.y,
+                rect.height,
+                desired,
+                desired as i32 - rect.height as i32
             );
         }
 
@@ -375,7 +409,8 @@ impl ColumnRenderable {
                     let mut last_content_x: Option<u16> = None;
                     for x in (last_rect.x..last_rect.right()).rev() {
                         if let Some(cell) = buf.cell_mut((x, y)) {
-                            if cell.symbol() != " " && cell.symbol() != "─" && cell.symbol() != "│" {
+                            if cell.symbol() != " " && cell.symbol() != "─" && cell.symbol() != "│"
+                            {
                                 last_content_x = Some(x);
                                 break;
                             }
@@ -443,15 +478,24 @@ mod tests {
     #[test]
     fn test_column_push_and_len() {
         let mut col = ColumnRenderable::new();
-        col.push(MessageCell::new(test_message(ChatRole::User, "Hello"), false));
-        col.push(MessageCell::new(test_message(ChatRole::Assistant, "Hi"), false));
+        col.push(MessageCell::new(
+            test_message(ChatRole::User, "Hello"),
+            false,
+        ));
+        col.push(MessageCell::new(
+            test_message(ChatRole::Assistant, "Hi"),
+            false,
+        ));
         assert_eq!(col.len(), 2);
     }
 
     #[test]
     fn test_column_clear() {
         let mut col = ColumnRenderable::new();
-        col.push(MessageCell::new(test_message(ChatRole::User, "Hello"), false));
+        col.push(MessageCell::new(
+            test_message(ChatRole::User, "Hello"),
+            false,
+        ));
         col.clear();
         assert!(col.is_empty());
     }
@@ -459,41 +503,63 @@ mod tests {
     #[test]
     fn test_column_layout_single_message() {
         let mut col = ColumnRenderable::new();
-        col.push(MessageCell::new(test_message(ChatRole::User, "Hello"), false));
+        col.push(MessageCell::new(
+            test_message(ChatRole::User, "Hello"),
+            false,
+        ));
 
         let area = Rect::new(0, 0, 80, 24);
         let layout = col.layout(area, 0, 0, false);
 
-        assert_eq!(layout.visible.len(), 1, "single message should produce one visible cell");
+        assert_eq!(
+            layout.visible.len(),
+            1,
+            "single message should produce one visible cell"
+        );
         assert_eq!(layout.visible[0].1, 0, "cell index should be 0");
         // Content should be bottom-aligned when it fits within viewport
         let content_h = col.cell_height(0, 80);
-        assert_eq!(layout.visible[0].0.y, area.y + area.height - content_h,
-            "content should be bottom-aligned when shorter than viewport");
+        assert_eq!(
+            layout.visible[0].0.y,
+            area.y + area.height - content_h,
+            "content should be bottom-aligned when shorter than viewport"
+        );
     }
 
     #[test]
     fn test_column_layout_many_messages() {
         let mut col = ColumnRenderable::new();
         for i in 0..50 {
-            col.push(MessageCell::new(test_message(ChatRole::User, format!("Message {i}")), false));
+            col.push(MessageCell::new(
+                test_message(ChatRole::User, format!("Message {i}")),
+                false,
+            ));
         }
 
         let area = Rect::new(0, 0, 80, 24);
         // scroll_offset = 49 means focused on latest message (index 49)
         let layout = col.layout(area, 49, 0, false);
 
-        assert!(layout.visible.len() < 50, "should not render all 50 messages");
+        assert!(
+            layout.visible.len() < 50,
+            "should not render all 50 messages"
+        );
         assert!(!layout.visible.is_empty(), "should render some messages");
         let last_idx = layout.visible.last().map(|(_, idx)| *idx).unwrap_or(0);
-        assert_eq!(last_idx, 49, "last visible cell should be the latest message");
+        assert_eq!(
+            last_idx, 49,
+            "last visible cell should be the latest message"
+        );
     }
 
     #[test]
     fn test_column_layout_scroll_offset() {
         let mut col = ColumnRenderable::new();
         for i in 0..20 {
-            col.push(MessageCell::new(test_message(ChatRole::User, format!("Message {i}")), false));
+            col.push(MessageCell::new(
+                test_message(ChatRole::User, format!("Message {i}")),
+                false,
+            ));
         }
 
         let area = Rect::new(0, 0, 80, 24);
@@ -501,13 +567,19 @@ mod tests {
 
         assert!(!layout.visible.is_empty());
         let indices: Vec<usize> = layout.visible.iter().map(|(_, i)| *i).collect();
-        assert!(indices.contains(&10), "focused message 10 should be visible");
+        assert!(
+            indices.contains(&10),
+            "focused message 10 should be visible"
+        );
     }
 
     #[test]
     fn test_column_total_height() {
         let mut col = ColumnRenderable::new();
-        col.push(MessageCell::new(test_message(ChatRole::User, "Short"), false));
+        col.push(MessageCell::new(
+            test_message(ChatRole::User, "Short"),
+            false,
+        ));
         let h = col.total_height(80);
         assert!(h > 0, "total height should be > 0");
     }
@@ -521,7 +593,10 @@ mod tests {
     #[test]
     fn test_cell_scroll_get_set() {
         let mut col = ColumnRenderable::new();
-        col.push(MessageCell::new(test_message(ChatRole::User, "Hello"), false));
+        col.push(MessageCell::new(
+            test_message(ChatRole::User, "Hello"),
+            false,
+        ));
         assert_eq!(col.cell_scroll(0), 0, "default scroll should be 0");
 
         col.set_cell_scroll(0, 5);
@@ -534,10 +609,17 @@ mod tests {
     #[test]
     fn test_cell_scroll_clears_with_column() {
         let mut col = ColumnRenderable::new();
-        col.push(MessageCell::new(test_message(ChatRole::User, "Hello"), false));
+        col.push(MessageCell::new(
+            test_message(ChatRole::User, "Hello"),
+            false,
+        ));
         col.set_cell_scroll(0, 10);
         col.clear();
-        assert_eq!(col.cell_scroll(0), 0, "scroll should be cleared after column clear");
+        assert_eq!(
+            col.cell_scroll(0),
+            0,
+            "scroll should be cleared after column clear"
+        );
     }
 
     #[test]
@@ -545,7 +627,10 @@ mod tests {
         let mut col = ColumnRenderable::new();
         // Create a message with many lines of content
         let long_content: String = (0..100).map(|i| format!("Line {i}\n")).collect();
-        col.push(MessageCell::new(test_message(ChatRole::User, long_content), false));
+        col.push(MessageCell::new(
+            test_message(ChatRole::User, long_content),
+            false,
+        ));
 
         // Use a very small viewport so the cell overflows
         let area = Rect::new(0, 0, 80, 5);
@@ -554,10 +639,16 @@ mod tests {
         assert_eq!(layout.visible.len(), 1, "should have one visible cell");
         let (cell_rect, _) = layout.visible[0];
         // The allocated height should be clipped to viewport
-        assert_eq!(cell_rect.height, 5, "cell should be clipped to viewport height");
+        assert_eq!(
+            cell_rect.height, 5,
+            "cell should be clipped to viewport height"
+        );
 
         // desired_height should be much larger than allocated
         let desired = col.cells[0].desired_height(80);
-        assert!(desired > 5, "desired height ({desired}) should exceed viewport (5)");
+        assert!(
+            desired > 5,
+            "desired height ({desired}) should exceed viewport (5)"
+        );
     }
 }

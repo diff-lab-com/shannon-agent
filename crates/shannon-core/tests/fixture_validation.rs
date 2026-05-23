@@ -4,9 +4,9 @@
 //! has correct structure (SessionStart/SessionEnd), contiguous turns,
 //! and consistent tool call/event records.
 
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use serde_json::Value;
 
 /// Get the fixtures directory path.
 fn fixtures_dir() -> PathBuf {
@@ -15,9 +15,10 @@ fn fixtures_dir() -> PathBuf {
 
 /// Parse a JSONL fixture file into a vector of JSON values.
 fn parse_fixture(path: &PathBuf) -> Vec<Value> {
-    let content = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("Failed to read {:?}: {}", path, e));
-    content.lines()
+    let content =
+        fs::read_to_string(path).unwrap_or_else(|e| panic!("Failed to read {:?}: {}", path, e));
+    content
+        .lines()
         .filter(|l| !l.trim().is_empty())
         .enumerate()
         .map(|(i, line)| {
@@ -49,24 +50,46 @@ fn validate_fixture(name: &str) {
 
     // Must start with SessionStart
     let first = &entries[0];
-    let first_type = first.get("type").and_then(|t| t.as_str()).unwrap_or("missing");
-    assert_eq!(first_type, "SessionStart",
-        "{}: first entry must be SessionStart, got {}", name, first_type);
+    let first_type = first
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or("missing");
+    assert_eq!(
+        first_type, "SessionStart",
+        "{}: first entry must be SessionStart, got {}",
+        name, first_type
+    );
 
     // Must end with SessionEnd
     let last = entries.last().unwrap();
-    let last_type = last.get("type").and_then(|t| t.as_str()).unwrap_or("missing");
-    assert_eq!(last_type, "SessionEnd",
-        "{}: last entry must be SessionEnd, got {}", name, last_type);
+    let last_type = last
+        .get("type")
+        .and_then(|t| t.as_str())
+        .unwrap_or("missing");
+    assert_eq!(
+        last_type, "SessionEnd",
+        "{}: last entry must be SessionEnd, got {}",
+        name, last_type
+    );
 
     // Session IDs must match
-    let start_id = first.get("session_id").and_then(|s| s.as_str()).unwrap_or("");
-    let end_id = last.get("session_id").and_then(|s| s.as_str()).unwrap_or("");
-    assert_eq!(start_id, end_id,
-        "{}: SessionStart id {} != SessionEnd id {}", name, start_id, end_id);
+    let start_id = first
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    let end_id = last
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    assert_eq!(
+        start_id, end_id,
+        "{}: SessionStart id {} != SessionEnd id {}",
+        name, start_id, end_id
+    );
 
     // Validate turn numbers are contiguous
-    let mut turns: Vec<usize> = entries.iter()
+    let mut turns: Vec<usize> = entries
+        .iter()
         .filter_map(|e| {
             let t = e.get("type").and_then(|t| t.as_str()).unwrap_or("");
             if t == "UserMessage" || t == "LlmRequest" || t == "LlmResponse" {
@@ -82,33 +105,60 @@ fn validate_fixture(name: &str) {
     if !turns.is_empty() {
         assert_eq!(turns[0], 1, "{}: turns should start at 1", name);
         for window in turns.windows(2) {
-            assert_eq!(window[1] - window[0], 1,
-                "{}: turns not contiguous: {:?}", name, turns);
+            assert_eq!(
+                window[1] - window[0],
+                1,
+                "{}: turns not contiguous: {:?}",
+                name,
+                turns
+            );
         }
     }
 
     // Validate total_turns matches
-    let declared_turns = last.get("total_turns").and_then(|t| t.as_u64()).unwrap_or(0) as usize;
+    let declared_turns = last
+        .get("total_turns")
+        .and_then(|t| t.as_u64())
+        .unwrap_or(0) as usize;
     let max_turn = turns.last().copied().unwrap_or(0);
-    assert_eq!(declared_turns, max_turn,
-        "{}: declared {} turns but found max turn {}", name, declared_turns, max_turn);
+    assert_eq!(
+        declared_turns, max_turn,
+        "{}: declared {} turns but found max turn {}",
+        name, declared_turns, max_turn
+    );
 
     // Validate entry types are all recognized
     let valid_types = [
-        "SessionStart", "SessionEnd", "UserMessage",
-        "LlmRequest", "LlmResponse", "QueryEvent", "ToolCall"
+        "SessionStart",
+        "SessionEnd",
+        "UserMessage",
+        "LlmRequest",
+        "LlmResponse",
+        "QueryEvent",
+        "ToolCall",
     ];
     for (i, entry) in entries.iter().enumerate() {
-        let entry_type = entry.get("type").and_then(|t| t.as_str()).unwrap_or("missing");
-        assert!(valid_types.contains(&entry_type),
-            "{}: line {} has unknown type '{}'", name, i + 1, entry_type);
+        let entry_type = entry
+            .get("type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("missing");
+        assert!(
+            valid_types.contains(&entry_type),
+            "{}: line {} has unknown type '{}'",
+            name,
+            i + 1,
+            entry_type
+        );
     }
 }
 
 #[test]
 fn test_all_fixtures_exist() {
     let fixtures = all_fixtures();
-    assert!(!fixtures.is_empty(), "No fixture files found in fixtures/sessions/");
+    assert!(
+        !fixtures.is_empty(),
+        "No fixture files found in fixtures/sessions/"
+    );
     println!("Found {} fixtures", fixtures.len());
 }
 

@@ -33,7 +33,9 @@ pub enum CredentialError {
     #[error("Invalid credential: {0}")]
     Invalid(String),
 
-    #[error("Permission error on credential file: {path} has mode {actual:#o}, expected {expected:#o}")]
+    #[error(
+        "Permission error on credential file: {path} has mode {actual:#o}, expected {expected:#o}"
+    )]
     PermissionError {
         path: String,
         actual: u32,
@@ -207,13 +209,19 @@ impl CredentialManager {
         }
 
         if credential.name.is_empty() {
-            return Err(CredentialError::Invalid("Credential name cannot be empty".into()));
+            return Err(CredentialError::Invalid(
+                "Credential name cannot be empty".into(),
+            ));
         }
         if credential.service.is_empty() {
-            return Err(CredentialError::Invalid("Credential service cannot be empty".into()));
+            return Err(CredentialError::Invalid(
+                "Credential service cannot be empty".into(),
+            ));
         }
 
-        self.store.credentials.insert(credential.service.clone(), credential);
+        self.store
+            .credentials
+            .insert(credential.service.clone(), credential);
         self.dirty = true;
         self.persist()?;
         Ok(())
@@ -222,13 +230,19 @@ impl CredentialManager {
     /// Store a credential, replacing any existing credential for the same service.
     pub fn store_or_update(&mut self, credential: Credential) -> Result<(), CredentialError> {
         if credential.name.is_empty() {
-            return Err(CredentialError::Invalid("Credential name cannot be empty".into()));
+            return Err(CredentialError::Invalid(
+                "Credential name cannot be empty".into(),
+            ));
         }
         if credential.service.is_empty() {
-            return Err(CredentialError::Invalid("Credential service cannot be empty".into()));
+            return Err(CredentialError::Invalid(
+                "Credential service cannot be empty".into(),
+            ));
         }
 
-        self.store.credentials.insert(credential.service.clone(), credential);
+        self.store
+            .credentials
+            .insert(credential.service.clone(), credential);
         self.dirty = true;
         self.persist()?;
         Ok(())
@@ -245,11 +259,9 @@ impl CredentialManager {
 
     /// Delete a credential by service name.
     pub fn delete(&mut self, service: &str) -> Result<Credential, CredentialError> {
-        let credential = self
-            .store
-            .credentials
-            .remove(service)
-            .ok_or_else(|| CredentialError::NotFound(format!("Credential for service '{service}'")))?;
+        let credential = self.store.credentials.remove(service).ok_or_else(|| {
+            CredentialError::NotFound(format!("Credential for service '{service}'"))
+        })?;
 
         // Remove the credential file from disk
         let file_path = self.credential_file_path(service);
@@ -330,7 +342,9 @@ impl CredentialManager {
                 metadata: portable.metadata,
             };
 
-            self.store.credentials.insert(credential.service.clone(), credential);
+            self.store
+                .credentials
+                .insert(credential.service.clone(), credential);
             imported += 1;
         }
 
@@ -386,10 +400,7 @@ impl CredentialManager {
             let meta = fs::metadata(&path).ok();
             let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
             #[cfg(unix)]
-            let permissions = meta
-                .as_ref()
-                .map(|m| m.permissions().mode())
-                .unwrap_or(0);
+            let permissions = meta.as_ref().map(|m| m.permissions().mode()).unwrap_or(0);
             #[cfg(not(unix))]
             let permissions = 0u32;
             (size, permissions)
@@ -560,8 +571,14 @@ mod tests {
 
     impl TestDir {
         fn new() -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("shannon_cred_test_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+            let dir = std::env::temp_dir().join(format!(
+                "shannon_cred_test_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
             fs::create_dir_all(&dir).expect("Failed to create test dir");
             Self(dir)
         }
@@ -670,8 +687,10 @@ mod tests {
         let td = TestDir::new();
         let mut mgr = CredentialManager::with_dir(td.path().to_path_buf()).unwrap();
 
-        mgr.store(Credential::new("Anthropic", "anthropic", "key1")).unwrap();
-        mgr.store(Credential::new("GitHub", "github", "ghp-test")).unwrap();
+        mgr.store(Credential::new("Anthropic", "anthropic", "key1"))
+            .unwrap();
+        mgr.store(Credential::new("GitHub", "github", "ghp-test"))
+            .unwrap();
 
         let list = mgr.list();
         assert_eq!(list.len(), 2);
@@ -694,7 +713,8 @@ mod tests {
         // Store a credential
         {
             let mut mgr = CredentialManager::with_dir(dir.clone()).unwrap();
-            mgr.store(Credential::new("Anthropic", "anthropic", "persist-key")).unwrap();
+            mgr.store(Credential::new("Anthropic", "anthropic", "persist-key"))
+                .unwrap();
         }
 
         // Load it back in a new manager
@@ -711,14 +731,20 @@ mod tests {
         let td = TestDir::new();
         let mut mgr = CredentialManager::with_dir(td.path().to_path_buf()).unwrap();
 
-        mgr.store(Credential::new("Anthropic", "anthropic", "key1")).unwrap();
-        mgr.store(Credential::new("GitHub", "github", "ghp-test")).unwrap();
+        mgr.store(Credential::new("Anthropic", "anthropic", "key1"))
+            .unwrap();
+        mgr.store(Credential::new("GitHub", "github", "ghp-test"))
+            .unwrap();
 
         let bundle = mgr.export_portable().unwrap();
         assert_eq!(bundle.version, 1);
         assert_eq!(bundle.credentials.len(), 2);
 
-        let services: Vec<&str> = bundle.credentials.iter().map(|c| c.service.as_str()).collect();
+        let services: Vec<&str> = bundle
+            .credentials
+            .iter()
+            .map(|c| c.service.as_str())
+            .collect();
         assert!(services.contains(&"anthropic"));
         assert!(services.contains(&"github"));
     }
@@ -753,7 +779,8 @@ mod tests {
         let dir = td.path().to_path_buf();
 
         let mut mgr = CredentialManager::with_dir(dir).unwrap();
-        mgr.store(Credential::new("Anthropic", "anthropic", "original-key")).unwrap();
+        mgr.store(Credential::new("Anthropic", "anthropic", "original-key"))
+            .unwrap();
 
         let mut bundle = PortableCredentialBundle::new();
         bundle.credentials.push(PortableCredential {
@@ -793,7 +820,12 @@ mod tests {
         cred.name = String::new();
         let result = mgr.store(cred);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("name cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("name cannot be empty")
+        );
     }
 
     #[test]
@@ -805,7 +837,12 @@ mod tests {
         cred.service = String::new();
         let result = mgr.store(cred);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("service cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("service cannot be empty")
+        );
     }
 
     #[test]
@@ -824,10 +861,14 @@ mod tests {
         let td = TestDir::new();
         let mut mgr = CredentialManager::with_dir(td.path().to_path_buf()).unwrap();
 
-        mgr.store(Credential::new("Anthropic", "anthropic", "key")).unwrap();
+        mgr.store(Credential::new("Anthropic", "anthropic", "key"))
+            .unwrap();
 
         let file_path = td.path().join("anthropic.json");
-        assert!(file_path.exists(), "Credential file should be created on disk");
+        assert!(
+            file_path.exists(),
+            "Credential file should be created on disk"
+        );
 
         let content = fs::read_to_string(&file_path).unwrap();
         assert!(content.contains("anthropic"));

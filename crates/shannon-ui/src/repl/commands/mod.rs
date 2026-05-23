@@ -14,18 +14,15 @@ mod session;
 mod web;
 
 // Re-export public API
-pub use media::handle_image_paste_from_input;
-pub(crate) use media::{copy_nth_response, copy_to_clipboard};
-pub(crate) use loop_engine::{notify_query_complete, check_loop_iteration, check_ralph_iteration};
 #[allow(unused_imports)]
 pub(crate) use cost::extract_plan_steps;
 #[allow(unused_imports)]
 pub(crate) use git::format_change_bar;
+pub(crate) use loop_engine::{check_loop_iteration, check_ralph_iteration, notify_query_complete};
+pub use media::handle_image_paste_from_input;
+pub(crate) use media::{copy_nth_response, copy_to_clipboard};
 
-use crate::{
-    widgets::ChatRole,
-    Result,
-};
+use crate::{Result, widgets::ChatRole};
 use rust_i18n::t;
 use shannon_types::recover_lock;
 
@@ -35,7 +32,8 @@ use super::Repl;
 /// All user-facing error messages from slash commands should use this helper
 /// for a consistent "Error: <msg>" format.
 pub(crate) fn set_error(repl: &mut Repl, msg: &str) {
-    repl.chat.add_message(ChatRole::System, format!("Error: {msg}"));
+    repl.chat
+        .add_message(ChatRole::System, format!("Error: {msg}"));
 }
 
 /// Expand `[Pasted Text #N X lines]` markers with the actual stored content.
@@ -132,7 +130,9 @@ pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Ter
                         parts.push_str(&stdout);
                     }
                     if !stderr.is_empty() {
-                        if !parts.is_empty() { parts.push('\n'); }
+                        if !parts.is_empty() {
+                            parts.push('\n');
+                        }
                         parts.push_str("[stderr]\n");
                         parts.push_str(&stderr);
                     }
@@ -145,7 +145,8 @@ pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Ter
                 Err(e) => format!("$ {shell_cmd}\nFailed to execute: {e}"),
             };
             let is_error = output.as_ref().map(|o| !o.status.success()).unwrap_or(true);
-            repl.chat.add_tool_message(shell_cmd.to_string(), msg, is_error, Some(start));
+            repl.chat
+                .add_tool_message(shell_cmd.to_string(), msg, is_error, Some(start));
         }
     } else if expanded.starts_with('/') {
         repl.commands_run += 1;
@@ -162,7 +163,10 @@ pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Ter
         if queued.trim().is_empty() {
             continue;
         }
-        repl.state.toast = Some(("Sending queued message…".to_string(), std::time::Instant::now()));
+        repl.state.toast = Some((
+            "Sending queued message…".to_string(),
+            std::time::Instant::now(),
+        ));
         submit_input_with_text(repl, &queued, &mut terminal);
     }
 
@@ -171,7 +175,11 @@ pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Ter
 
 /// Submit pre-formed text as if the user typed and entered it.
 /// Used for queued follow-up messages.
-pub fn submit_input_with_text(repl: &mut Repl, text: &str, terminal: &mut Option<&mut super::query::Term>) {
+pub fn submit_input_with_text(
+    repl: &mut Repl,
+    text: &str,
+    terminal: &mut Option<&mut super::query::Term>,
+) {
     let expanded = expand_pasted_texts(text, &mut repl.state.pasted_texts);
     repl.chat.add_message(ChatRole::User, text.to_string());
     repl.state.turn_count += 1;
@@ -194,9 +202,13 @@ pub fn submit_input_with_text(repl: &mut Repl, text: &str, terminal: &mut Option
                     let stdout = String::from_utf8_lossy(&out.stdout);
                     let stderr = String::from_utf8_lossy(&out.stderr);
                     let mut parts = String::new();
-                    if !stdout.is_empty() { parts.push_str(&stdout); }
+                    if !stdout.is_empty() {
+                        parts.push_str(&stdout);
+                    }
                     if !stderr.is_empty() {
-                        if !parts.is_empty() { parts.push('\n'); }
+                        if !parts.is_empty() {
+                            parts.push('\n');
+                        }
                         parts.push_str("[stderr]\n");
                         parts.push_str(&stderr);
                     }
@@ -209,15 +221,18 @@ pub fn submit_input_with_text(repl: &mut Repl, text: &str, terminal: &mut Option
                 Err(e) => format!("$ {shell_cmd}\nFailed to execute: {e}"),
             };
             let is_error = output.as_ref().map(|o| !o.status.success()).unwrap_or(true);
-            repl.chat.add_tool_message(shell_cmd.to_string(), msg, is_error, Some(start));
+            repl.chat
+                .add_tool_message(shell_cmd.to_string(), msg, is_error, Some(start));
         }
     } else if expanded.starts_with('/') {
         repl.commands_run += 1;
         if let Err(e) = handle_command(repl, &expanded) {
-            repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
+            repl.chat
+                .add_message(ChatRole::System, format!("Error: {e}"));
         }
     } else if let Err(e) = super::query::handle_query(repl, &expanded, terminal) {
-        repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
+        repl.chat
+            .add_message(ChatRole::System, format!("Error: {e}"));
     }
 }
 
@@ -227,7 +242,12 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
         Ok(p) => p,
         Err(_) => {
             let parts: Vec<&str> = input.splitn(2, ' ').collect();
-            let name = parts.first().copied().unwrap_or("").strip_prefix('/').unwrap_or("");
+            let name = parts
+                .first()
+                .copied()
+                .unwrap_or("")
+                .strip_prefix('/')
+                .unwrap_or("");
             shannon_commands::ParsedCommand::new(
                 name.to_string(),
                 parts.get(1).copied().unwrap_or("").to_string(),
@@ -241,10 +261,133 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
 
     // Check if command exists in the registry
     let command_exists = repl.runtime.block_on(async {
-        repl.shared_executor.registry().await.contains(cmd_name).await
+        repl.shared_executor
+            .registry()
+            .await
+            .contains(cmd_name)
+            .await
     });
     // Commands handled in the match block but not in the global registry
-    let repl_only_commands = ["help", "clear", "quit", "exit", "model", "models", "provider", "prov", "init", "config", "sessions", "resume", "history", "worktree", "credentials", "creds", "cred", "status", "st", "git-status", "export", "save", "import", "load", "diff", "search", "?", "hist", "history-search", "find", "grep", "conv-search", "browse", "files", "select-tools", "tools", "debug", "dbg", "dev", "doctor", "check", "diagnostics", "terminal-setup", "compact", "cost", "billing", "usage", "suggest", "permissions", "perms", "perm", "plan", "team", "agents", "agent", "route", "mcp", "branch", "fork", "web-search", "websearch", "search-web", "review", "stage", "stats", "perf", "loop", "ralph", "sandbox", "local-models", "local", "ci", "gh-actions", "hooks", "remember", "mem", "memo", "recall", "search-memory", "forget", "memory", "image", "img", "screenshot", "mode", "context", "undo", "rewind", "notify", "webhook", "routine", "schedule", "cron", "create-pr", "patch", "copy", "clip", "paste", "add", "add-dir", "adddir", "watch", "bind", "project", "theme", "session", "rename", "recap", "effort", "focus", "accessibility", "a11y", "color", "diag", "commands", "statusline", "lang", "language"];
+    let repl_only_commands = [
+        "help",
+        "clear",
+        "quit",
+        "exit",
+        "model",
+        "models",
+        "provider",
+        "prov",
+        "init",
+        "config",
+        "sessions",
+        "resume",
+        "history",
+        "worktree",
+        "credentials",
+        "creds",
+        "cred",
+        "status",
+        "st",
+        "git-status",
+        "export",
+        "save",
+        "import",
+        "load",
+        "diff",
+        "search",
+        "?",
+        "hist",
+        "history-search",
+        "find",
+        "grep",
+        "conv-search",
+        "browse",
+        "files",
+        "select-tools",
+        "tools",
+        "debug",
+        "dbg",
+        "dev",
+        "doctor",
+        "check",
+        "diagnostics",
+        "terminal-setup",
+        "compact",
+        "cost",
+        "billing",
+        "usage",
+        "suggest",
+        "permissions",
+        "perms",
+        "perm",
+        "plan",
+        "team",
+        "agents",
+        "agent",
+        "route",
+        "mcp",
+        "branch",
+        "fork",
+        "web-search",
+        "websearch",
+        "search-web",
+        "review",
+        "stage",
+        "stats",
+        "perf",
+        "loop",
+        "ralph",
+        "sandbox",
+        "local-models",
+        "local",
+        "ci",
+        "gh-actions",
+        "hooks",
+        "remember",
+        "mem",
+        "memo",
+        "recall",
+        "search-memory",
+        "forget",
+        "memory",
+        "image",
+        "img",
+        "screenshot",
+        "mode",
+        "context",
+        "undo",
+        "rewind",
+        "notify",
+        "webhook",
+        "routine",
+        "schedule",
+        "cron",
+        "create-pr",
+        "patch",
+        "copy",
+        "clip",
+        "paste",
+        "add",
+        "add-dir",
+        "adddir",
+        "watch",
+        "bind",
+        "project",
+        "theme",
+        "session",
+        "rename",
+        "recap",
+        "effort",
+        "focus",
+        "accessibility",
+        "a11y",
+        "color",
+        "diag",
+        "commands",
+        "statusline",
+        "lang",
+        "language",
+    ];
     let is_repl_command = repl_only_commands.contains(&cmd_name);
 
     if command_exists || is_repl_command {
@@ -272,13 +415,15 @@ pub fn handle_command(repl: &mut Repl, input: &str) -> Result<()> {
                 repl.state.tools_enabled = false;
                 repl.chat.add_message(
                     ChatRole::System,
-                    "Tools disabled — model will respond as plain text. Use /tools to re-enable.".to_string(),
+                    "Tools disabled — model will respond as plain text. Use /tools to re-enable."
+                        .to_string(),
                 );
             }
             "select-tools" | "tools" => {
                 if !repl.state.tools_enabled {
                     repl.state.tools_enabled = true;
-                    repl.chat.add_message(ChatRole::System, "Tools re-enabled.".to_string());
+                    repl.chat
+                        .add_message(ChatRole::System, "Tools re-enabled.".to_string());
                 } else {
                     debug::handle_select_tools(repl)?;
                 }
@@ -377,7 +522,8 @@ fn handle_clear(repl: &mut Repl) -> Result<()> {
         );
     } else {
         repl.chat.clear();
-        repl.chat.add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
+        repl.chat
+            .add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
         if let Some(ref mut engine) = repl.query_engine {
             engine.new_session();
         }
@@ -410,11 +556,25 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
                         prompt = prompt.replace(&format!("{{args[{i}]}}"), part);
                     }
                     // Replace full placeholders last (so indexed ones take priority)
-                    prompt = prompt.replace("$ARGUMENTS", args_val).replace("{args}", args_val);
+                    prompt = prompt
+                        .replace("$ARGUMENTS", args_val)
+                        .replace("{args}", args_val);
                     // Expand built-in template variables
-                    prompt = prompt.replace("$DIR", &std::env::current_dir().unwrap_or_default().display().to_string());
-                    prompt = prompt.replace("$DATE", &chrono::Local::now().format("%Y-%m-%d").to_string());
-                    prompt = prompt.replace("$TIME", &chrono::Local::now().format("%H:%M:%S").to_string());
+                    prompt = prompt.replace(
+                        "$DIR",
+                        &std::env::current_dir()
+                            .unwrap_or_default()
+                            .display()
+                            .to_string(),
+                    );
+                    prompt = prompt.replace(
+                        "$DATE",
+                        &chrono::Local::now().format("%Y-%m-%d").to_string(),
+                    );
+                    prompt = prompt.replace(
+                        "$TIME",
+                        &chrono::Local::now().format("%H:%M:%S").to_string(),
+                    );
 
                     // Run native pre-analysis for supported commands
                     let native_context = match cmd_name {
@@ -428,18 +588,25 @@ fn handle_other_command(repl: &mut Repl, cmd_name: &str, args: &str) -> Result<(
                     };
 
                     if let Some(ref analysis) = native_context {
-                        prompt = format!("{analysis}\n\n---\n\nBased on the above native analysis, provide additional insights:\n\n{prompt}");
+                        prompt = format!(
+                            "{analysis}\n\n---\n\nBased on the above native analysis, provide additional insights:\n\n{prompt}"
+                        );
                     }
 
-                    repl.chat.add_message(ChatRole::System, format!("Running /{cmd_name}..."));
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Running /{cmd_name}..."));
                     super::query::handle_query(repl, &prompt, &mut None)?;
                 } else {
-                    repl.chat.add_message(ChatRole::System, format!("/{cmd_name} — {}", prompt_cmd.base.description));
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("/{cmd_name} — {}", prompt_cmd.base.description),
+                    );
                 }
             }
             _ => {
                 let desc = command.description();
-                repl.chat.add_message(ChatRole::System, format!("/{cmd_name} — {desc}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("/{cmd_name} — {desc}"));
             }
         }
     }
@@ -451,7 +618,8 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
     match action {
         "clear_chat" => {
             repl.chat.clear();
-            repl.chat.add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
+            repl.chat
+                .add_message(ChatRole::System, t!("repl.chat_cleared").to_string());
             if let Some(ref mut engine) = repl.query_engine {
                 engine.new_session();
             }
@@ -469,7 +637,10 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
                 repl.state.approval_mode_label = "FULL".to_string();
                 repl.state.status = "Mode: FULL".to_string();
                 repl.state.toast = Some(("  Mode: FULL  ".to_string(), std::time::Instant::now()));
-                repl.chat.add_message(ChatRole::System, "Permission bypass enabled — all checks skipped.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Permission bypass enabled — all checks skipped.".to_string(),
+                );
             }
         }
         _ => {}
@@ -490,16 +661,14 @@ impl Repl {
 
     pub(crate) fn show_input_dialog(&mut self, title: &str, placeholder: &str, action: &str) {
         use crate::widgets::dialog::InputDialog;
-        let dialog = InputDialog::new(title.to_string())
-            .with_placeholder(placeholder.to_string());
+        let dialog = InputDialog::new(title.to_string()).with_placeholder(placeholder.to_string());
         self.state.input_dialog = Some(Box::new(dialog));
         self.state.input_dialog_action = Some(action.to_string());
     }
 
     pub(crate) fn show_alert_dialog(&mut self, title: &str, message: &str, danger: bool) {
         use crate::widgets::dialog::AlertDialog;
-        let mut builder = AlertDialog::new(title.to_string())
-            .with_message(message.to_string());
+        let mut builder = AlertDialog::new(title.to_string()).with_message(message.to_string());
         if danger {
             builder = builder.with_danger();
         }

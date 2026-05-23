@@ -6,8 +6,8 @@
 //! - File existence and permission checks
 //! - Comprehensive error messages with context
 
-use crate::{ToolOutput, ToolError};
 use crate::file::diff_renderer::{DiffHunk, DiffLine, DiffLineType, DiffRenderer};
+use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -134,7 +134,12 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 }
 
 /// Core editing logic — synchronous, testable without async runtime.
-pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_all: bool) -> Result<(String, usize, Vec<ReplacementLocation>), EditError> {
+pub fn perform_edit(
+    content: &str,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> Result<(String, usize, Vec<ReplacementLocation>), EditError> {
     // --- Validation ---
     if old_string.is_empty() {
         return Err(EditError::EmptyOldString);
@@ -166,7 +171,11 @@ pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_a
             while !old_string.is_char_boundary(end) {
                 end -= 1;
             }
-            format!("{}...(truncated, {} bytes total)", &old_string[..end], old_string.len())
+            format!(
+                "{}...(truncated, {} bytes total)",
+                &old_string[..end],
+                old_string.len()
+            )
         } else {
             old_string.to_string()
         };
@@ -224,8 +233,11 @@ pub fn perform_edit(content: &str, old_string: &str, new_string: &str, replace_a
         new_content = content.replace(old_string, new_string);
     } else {
         replacements = 1;
-        let offset = content.find(old_string)
-            .ok_or_else(|| EditError::NotFound("old_string not found (race condition or encoding mismatch)".to_string()))?;
+        let offset = content.find(old_string).ok_or_else(|| {
+            EditError::NotFound(
+                "old_string not found (race condition or encoding mismatch)".to_string(),
+            )
+        })?;
         let (line, col) = byte_offset_to_line_col(content, offset);
         locations = vec![ReplacementLocation { line, column: col }];
         new_content = content.replacen(old_string, new_string, 1);
@@ -350,7 +362,12 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
                     current_lines.clear();
                     // Add preceding context
                     let ctx_start = old_line.saturating_sub(CONTEXT);
-                    for (k, line) in old_lines.iter().enumerate().skip(ctx_start).take(old_line - ctx_start) {
+                    for (k, line) in old_lines
+                        .iter()
+                        .enumerate()
+                        .skip(ctx_start)
+                        .take(old_line - ctx_start)
+                    {
                         current_lines.push(DiffLine {
                             line_type: DiffLineType::Context,
                             content: line.to_string(),
@@ -378,7 +395,12 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
                     context_after_change = 0;
                     current_lines.clear();
                     let ctx_start = old_line.saturating_sub(CONTEXT);
-                    for (k, line) in old_lines.iter().enumerate().skip(ctx_start).take(old_line - ctx_start) {
+                    for (k, line) in old_lines
+                        .iter()
+                        .enumerate()
+                        .skip(ctx_start)
+                        .take(old_line - ctx_start)
+                    {
                         current_lines.push(DiffLine {
                             line_type: DiffLineType::Context,
                             content: line.to_string(),
@@ -405,7 +427,13 @@ pub fn compute_diff_hunks(old: &str, new: &str) -> Vec<DiffHunk> {
 
     // Flush remaining hunk
     if in_hunk && changes_in_hunk > 0 {
-        let hunk = finalize_hunk(hunk_old_start, hunk_new_start, &current_lines, old_line, new_line);
+        let hunk = finalize_hunk(
+            hunk_old_start,
+            hunk_new_start,
+            &current_lines,
+            old_line,
+            new_line,
+        );
         hunks.push(hunk);
     }
 
@@ -420,8 +448,14 @@ fn finalize_hunk(
     _old_end: usize,
     _new_end: usize,
 ) -> DiffHunk {
-    let old_count = lines.iter().filter(|l| l.line_type == DiffLineType::Context || l.line_type == DiffLineType::Delete).count();
-    let new_count = lines.iter().filter(|l| l.line_type == DiffLineType::Context || l.line_type == DiffLineType::Add).count();
+    let old_count = lines
+        .iter()
+        .filter(|l| l.line_type == DiffLineType::Context || l.line_type == DiffLineType::Delete)
+        .count();
+    let new_count = lines
+        .iter()
+        .filter(|l| l.line_type == DiffLineType::Context || l.line_type == DiffLineType::Add)
+        .count();
 
     let old_range = if old_count == 1 {
         format!("{old_start}")
@@ -448,20 +482,13 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
     use tokio::fs;
 
     // --- Check file existence ---
-    let metadata = fs::metadata(&input.file_path)
-        .await
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                ToolError::InvalidInput(format!(
-                    "File not found: {}",
-                    input.file_path
-                ))
-            } else {
-                ToolError::ExecutionFailed(format!(
-                    "Failed to access file: {e}"
-                ))
-            }
-        })?;
+    let metadata = fs::metadata(&input.file_path).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            ToolError::InvalidInput(format!("File not found: {}", input.file_path))
+        } else {
+            ToolError::ExecutionFailed(format!("Failed to access file: {e}"))
+        }
+    })?;
 
     if metadata.is_dir() {
         return Err(ToolError::InvalidInput(format!(
@@ -475,24 +502,24 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
     if metadata.len() > MAX_EDIT_FILE_SIZE {
         return Err(ToolError::InvalidInput(format!(
             "File too large to edit: {} bytes (max {} bytes). Use terminal commands for large files.",
-            metadata.len(), MAX_EDIT_FILE_SIZE
+            metadata.len(),
+            MAX_EDIT_FILE_SIZE
         )));
     }
 
     // --- Read file ---
-    let content = fs::read_to_string(&input.file_path)
-        .await
-        .map_err(|e| {
-            ToolError::ExecutionFailed(format!(
-                "Failed to read file '{}': {}",
-                input.file_path, e
-            ))
-        })?;
+    let content = fs::read_to_string(&input.file_path).await.map_err(|e| {
+        ToolError::ExecutionFailed(format!("Failed to read file '{}': {}", input.file_path, e))
+    })?;
 
     // --- Perform the edit ---
-    let (new_content, replacements, locations) =
-        perform_edit(&content, &input.old_string, &input.new_string, input.replace_all)
-            .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+    let (new_content, replacements, locations) = perform_edit(
+        &content,
+        &input.old_string,
+        &input.new_string,
+        input.replace_all,
+    )
+    .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
     // --- Generate diff preview ---
     let hunks = compute_diff_hunks(&content, &new_content);
@@ -514,8 +541,7 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
         let message = if replacements == 1 {
             format!(
                 "Preview: would replace 1 occurrence at {} in {}",
-                location_summary[0],
-                input.file_path
+                location_summary[0], input.file_path
             )
         } else {
             format!(
@@ -547,15 +573,14 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
     }
 
     // --- Write file (atomic: write to temp then rename to avoid corruption on crash) ---
-    let temp_path = format!("{}.shannon-edit-{}", input.file_path, uuid::Uuid::new_v4().as_simple());
-    fs::write(&temp_path, &new_content)
-        .await
-        .map_err(|e| {
-            ToolError::ExecutionFailed(format!(
-                "Failed to write file '{}': {}",
-                input.file_path, e
-            ))
-        })?;
+    let temp_path = format!(
+        "{}.shannon-edit-{}",
+        input.file_path,
+        uuid::Uuid::new_v4().as_simple()
+    );
+    fs::write(&temp_path, &new_content).await.map_err(|e| {
+        ToolError::ExecutionFailed(format!("Failed to write file '{}': {}", input.file_path, e))
+    })?;
     fs::rename(&temp_path, &input.file_path)
         .await
         .map_err(|e| {
@@ -569,8 +594,7 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
     let message = if replacements == 1 {
         format!(
             "Successfully replaced 1 occurrence at {} in {}",
-            location_summary[0],
-            input.file_path
+            location_summary[0], input.file_path
         )
     } else {
         format!(
@@ -594,10 +618,7 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
             let mut map = HashMap::new();
             map.insert("file_path".to_string(), json!(input.file_path));
             map.insert("replacements".to_string(), json!(replacements));
-            map.insert(
-                "locations".to_string(),
-                json!(locations),
-            );
+            map.insert("locations".to_string(), json!(locations));
             map
         },
     })
@@ -692,7 +713,10 @@ mod tests {
         let new = "    println!(\"hello, world!\");";
         let result = perform_edit(content, old, new, false);
         let (new_content, replacements, locations) = result.unwrap();
-        assert_eq!(new_content, "fn main() {\n    println!(\"hello, world!\");\n}\n");
+        assert_eq!(
+            new_content,
+            "fn main() {\n    println!(\"hello, world!\");\n}\n"
+        );
         assert_eq!(replacements, 1);
         assert_eq!(locations[0].line, 2);
     }
@@ -847,8 +871,18 @@ mod tests {
         let new = "line1\nLINE_TWO\nline3";
         let hunks = compute_diff_hunks(old, new);
         assert_eq!(hunks.len(), 1);
-        assert!(hunks[0].lines.iter().any(|l| l.line_type == DiffLineType::Delete));
-        assert!(hunks[0].lines.iter().any(|l| l.line_type == DiffLineType::Add));
+        assert!(
+            hunks[0]
+                .lines
+                .iter()
+                .any(|l| l.line_type == DiffLineType::Delete)
+        );
+        assert!(
+            hunks[0]
+                .lines
+                .iter()
+                .any(|l| l.line_type == DiffLineType::Add)
+        );
     }
 
     #[test]
@@ -864,7 +898,9 @@ mod tests {
         let new = "line1\nline2\nline3";
         let hunks = compute_diff_hunks(old, new);
         assert!(!hunks.is_empty());
-        let has_add = hunks.iter().any(|h| h.lines.iter().any(|l| l.line_type == DiffLineType::Add));
+        let has_add = hunks
+            .iter()
+            .any(|h| h.lines.iter().any(|l| l.line_type == DiffLineType::Add));
         assert!(has_add);
     }
 
@@ -874,7 +910,9 @@ mod tests {
         let new = "line1\nline3";
         let hunks = compute_diff_hunks(old, new);
         assert!(!hunks.is_empty());
-        let has_del = hunks.iter().any(|h| h.lines.iter().any(|l| l.line_type == DiffLineType::Delete));
+        let has_del = hunks
+            .iter()
+            .any(|h| h.lines.iter().any(|l| l.line_type == DiffLineType::Delete));
         assert!(has_del);
     }
 
@@ -901,7 +939,8 @@ mod tests {
     fn test_diff_empty_to_content() {
         let hunks = compute_diff_hunks("", "new line\nanother line");
         assert!(!hunks.is_empty());
-        let all_adds: Vec<_> = hunks.iter()
+        let all_adds: Vec<_> = hunks
+            .iter()
             .flat_map(|h| h.lines.iter())
             .filter(|l| l.line_type == DiffLineType::Add)
             .collect();
@@ -912,7 +951,8 @@ mod tests {
     fn test_diff_content_to_empty() {
         let hunks = compute_diff_hunks("old line\nanother line", "");
         assert!(!hunks.is_empty());
-        let all_dels: Vec<_> = hunks.iter()
+        let all_dels: Vec<_> = hunks
+            .iter()
             .flat_map(|h| h.lines.iter())
             .filter(|l| l.line_type == DiffLineType::Delete)
             .collect();
@@ -925,11 +965,16 @@ mod tests {
         let new = "ctx1\nctx2\nnew\nctx4\nctx5";
         let hunks = compute_diff_hunks(old, new);
         assert_eq!(hunks.len(), 1);
-        let context_count = hunks[0].lines.iter()
+        let context_count = hunks[0]
+            .lines
+            .iter()
             .filter(|l| l.line_type == DiffLineType::Context)
             .count();
         // Should have context lines surrounding the change
-        assert!(context_count >= 2, "expected >= 2 context lines, got {context_count}");
+        assert!(
+            context_count >= 2,
+            "expected >= 2 context lines, got {context_count}"
+        );
     }
 
     // --- Diff preview in execute output ---

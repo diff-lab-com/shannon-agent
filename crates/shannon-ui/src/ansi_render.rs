@@ -4,9 +4,9 @@
 //! terminal scrollback buffer instead of rendering them through ratatui's
 //! alternate screen.
 
-use std::fmt::Write;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
+use std::fmt::Write;
 
 /// Convert a slice of ratatui Lines to an ANSI-colored string.
 /// Each line is terminated with `\n`. Empty lines produce just `\n`.
@@ -33,7 +33,11 @@ pub fn lines_to_ansi(lines: &[Line<'_>], width: u16) -> String {
             out.push_str("\x1b[0m");
         }
         // Pad to width so terminal scrollback lines align
-        let content_width: usize = line.spans.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();
+        let content_width: usize = line
+            .spans
+            .iter()
+            .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
         if content_width < width as usize {
             for _ in 0..width as usize - content_width {
                 out.push(' ');
@@ -168,10 +172,7 @@ mod tests {
 
     #[test]
     fn test_multiple_lines() {
-        let lines = vec![
-            Line::from("line 1"),
-            Line::from("line 2"),
-        ];
+        let lines = vec![Line::from("line 1"), Line::from("line 2")];
         let result = lines_to_ansi(&lines, 10);
         let line_count = result.matches('\n').count();
         assert_eq!(line_count, 2);

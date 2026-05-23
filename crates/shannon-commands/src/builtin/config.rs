@@ -1,6 +1,8 @@
 //! /config command - Manage configuration settings
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Config prompt template
 const CONFIG_PROMPT: &str = r##"
@@ -34,7 +36,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[get|set|list|reset] [key] [value]".to_string()),
             when_to_use: Some(
-                "Use to view or modify configuration values such as model, temperature, max_tokens".to_string(),
+                "Use to view or modify configuration values such as model, temperature, max_tokens"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
@@ -163,8 +166,11 @@ pub fn format_config_get(key: &str) -> String {
             "{} = {} (default: {})\nDescription: {}",
             k.key, k.value_type, k.default, k.description
         ),
-        None => format!("Unknown config key: '{}'\nKnown keys: {}", key,
-            keys.iter().map(|k| k.key).collect::<Vec<_>>().join(", ")),
+        None => format!(
+            "Unknown config key: '{}'\nKnown keys: {}",
+            key,
+            keys.iter().map(|k| k.key).collect::<Vec<_>>().join(", ")
+        ),
     }
 }
 
@@ -183,7 +189,10 @@ pub fn format_config_set(key: &str, value: &str) -> String {
             if valid {
                 format!("Set {} = {} (was: {})", key, value, k.default)
             } else {
-                format!("Invalid value '{}' for key '{}' (expected: {})", value, key, k.value_type)
+                format!(
+                    "Invalid value '{}' for key '{}' (expected: {})",
+                    value, key, k.value_type
+                )
             }
         }
         None => format!("Unknown config key: '{key}'"),

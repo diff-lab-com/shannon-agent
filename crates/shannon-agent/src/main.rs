@@ -9,12 +9,10 @@
 use clap::Parser;
 use futures::StreamExt;
 use shannon_agents::{
-    frame_message, parse_message,
-    AgentReadyParams, ExecuteTaskParams, TaskCompleteParams, TaskProgressParams,
-    AgentIdleParams,
-    JsonRpcMessage, JsonRpcError,
+    AgentIdleParams, AgentReadyParams, ExecuteTaskParams, JsonRpcError, JsonRpcMessage,
+    TaskCompleteParams, TaskProgressParams, frame_message, parse_message,
 };
-use shannon_core::api::{LlmClient, Message, MessageContent, StreamEvent, ContentDelta};
+use shannon_core::api::{ContentDelta, LlmClient, Message, MessageContent, StreamEvent};
 use std::io;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -50,8 +48,7 @@ struct Args {
 
 /// Write a JSON-RPC message to stdout (line-delimited).
 async fn send_message(msg: &JsonRpcMessage) -> io::Result<()> {
-    let line = frame_message(msg)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let line = frame_message(msg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let mut stdout = tokio::io::stdout();
     stdout.write_all(line.as_bytes()).await?;
     stdout.flush().await?;
@@ -68,10 +65,7 @@ async fn notify(method: &str, params: serde_json::Value) {
 
 /// Send an RPC response (success).
 async fn respond(id: i64, result: serde_json::Value) {
-    let msg = JsonRpcMessage::response(
-        shannon_agents::JsonRpcId::Number(id),
-        result,
-    );
+    let msg = JsonRpcMessage::response(shannon_agents::JsonRpcId::Number(id), result);
     if let Err(e) = send_message(&msg).await {
         tracing::error!(id = %id, error = %e, "Failed to send response");
     }
@@ -79,10 +73,7 @@ async fn respond(id: i64, result: serde_json::Value) {
 
 /// Send an RPC error response.
 async fn respond_error(id: i64, error: JsonRpcError) {
-    let msg = JsonRpcMessage::error_response(
-        shannon_agents::JsonRpcId::Number(id),
-        error,
-    );
+    let msg = JsonRpcMessage::error_response(shannon_agents::JsonRpcId::Number(id), error);
     if let Err(e) = send_message(&msg).await {
         tracing::error!(id = %id, error = %e, "Failed to send error response");
     }
@@ -100,7 +91,8 @@ async fn execute_task(params: ExecuteTaskParams, args: &Args) {
     let progress_params = serde_json::to_value(TaskProgressParams {
         task_id: params.task_id.clone(),
         chunk: format!("Starting task: {}", params.subject),
-    }).unwrap();
+    })
+    .unwrap();
     notify(methods::TASK_PROGRESS, progress_params).await;
 
     // Build the LLM client from environment
@@ -112,7 +104,8 @@ async fn execute_task(params: ExecuteTaskParams, args: &Args) {
                 task_id: params.task_id.clone(),
                 success: true,
                 output,
-            }).unwrap();
+            })
+            .unwrap();
             notify(methods::TASK_COMPLETE, complete_params).await;
         }
         Err(err) => {
@@ -125,7 +118,8 @@ async fn execute_task(params: ExecuteTaskParams, args: &Args) {
                 task_id: params.task_id.clone(),
                 success: false,
                 output: format!("Error: {err}"),
-            }).unwrap();
+            })
+            .unwrap();
             notify(methods::TASK_COMPLETE, complete_params).await;
         }
     }
@@ -134,7 +128,8 @@ async fn execute_task(params: ExecuteTaskParams, args: &Args) {
     let idle_params = serde_json::to_value(AgentIdleParams {
         agent_name: args.name.clone(),
         available_tasks_count: 0,
-    }).unwrap();
+    })
+    .unwrap();
     notify(methods::AGENT_IDLE, idle_params).await;
 }
 
@@ -151,7 +146,7 @@ async fn run_llm_task(params: &ExecuteTaskParams, args: &Args) -> Result<String,
     // Build system prompt
     let system_prompt = args.system_prompt.as_deref().unwrap_or(
         "You are an AI agent executing a task. Follow instructions precisely. \
-         Be concise and produce actionable output."
+         Be concise and produce actionable output.",
     );
 
     // Build user message from the task description
@@ -184,7 +179,8 @@ async fn run_llm_task(params: &ExecuteTaskParams, args: &Args) -> Result<String,
                     let progress_params = serde_json::to_value(TaskProgressParams {
                         task_id: params.task_id.clone(),
                         chunk: text,
-                    }).unwrap();
+                    })
+                    .unwrap();
                     notify(methods::TASK_PROGRESS, progress_params).await;
                 }
                 ContentDelta::ThinkingDelta { thinking } => {
@@ -241,7 +237,7 @@ async fn main() {
         .with_writer(io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("shannon_agent=info".parse().unwrap())
+                .add_directive("shannon_agent=info".parse().unwrap()),
         )
         .init();
 
@@ -251,7 +247,8 @@ async fn main() {
     let ready_params = serde_json::to_value(AgentReadyParams {
         agent_name: args.name.clone(),
         capabilities: vec!["general".to_string()],
-    }).unwrap();
+    })
+    .unwrap();
     notify(methods::AGENT_READY, ready_params).await;
 
     // Read JSON-RPC from stdin
@@ -290,7 +287,8 @@ async fn main() {
                                         shannon_agents::JsonRpcId::String(_) => -1,
                                     },
                                     JsonRpcError::internal(e.to_string()),
-                                ).await;
+                                )
+                                .await;
                             }
                         }
                     }

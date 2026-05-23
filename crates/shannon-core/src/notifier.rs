@@ -40,10 +40,7 @@ pub enum NotifierError {
 
     /// A handler returned an error.
     #[error("handler '{name}' failed: {reason}")]
-    HandlerFailed {
-        name: String,
-        reason: String,
-    },
+    HandlerFailed { name: String, reason: String },
 }
 
 // ============================================================================
@@ -389,9 +386,12 @@ impl DesktopNotifier {
         };
         std::process::Command::new("notify-send")
             .args([
-                "-i", icon,
-                "-u", urgency,
-                "-t", "5000",
+                "-i",
+                icon,
+                "-u",
+                urgency,
+                "-t",
+                "5000",
                 &notification.title,
                 &notification.body,
             ])
@@ -408,9 +408,8 @@ impl DesktopNotifier {
         // Escape double quotes in body for AppleScript
         let escaped_body = notification.body.replace('"', "\\\"");
         let escaped_title = notification.title.replace('"', "\\\"");
-        let script = format!(
-            "display notification \"{escaped_body}\" with title \"{escaped_title}\""
-        );
+        let script =
+            format!("display notification \"{escaped_body}\" with title \"{escaped_title}\"");
         std::process::Command::new("osascript")
             .args(["-e", &script])
             .output()
@@ -628,9 +627,7 @@ mod tests {
     #[test]
     fn test_callback_notifier_propagates_error() {
         let cb = CallbackNotifier::new(|_n: &Notification| -> Result<(), NotifierError> {
-            Err(NotifierError::Io(std::io::Error::other(
-                "boom",
-            )))
+            Err(NotifierError::Io(std::io::Error::other("boom")))
         });
 
         let notification = Notification {
@@ -646,10 +643,7 @@ mod tests {
 
     #[test]
     fn test_callback_notifier_custom_name() {
-        let cb = CallbackNotifier::with_name(
-            |_n: &Notification| Ok(()),
-            "custom-cb",
-        );
+        let cb = CallbackNotifier::with_name(|_n: &Notification| Ok(()), "custom-cb");
         assert_eq!(cb.name(), "custom-cb");
     }
 
@@ -776,11 +770,11 @@ mod tests {
 
         let mut n = Notifier::new();
         // First handler always fails.
-        n.add_handler(Box::new(CallbackNotifier::new(|_n| -> Result<(), NotifierError> {
-            Err(NotifierError::Io(std::io::Error::other(
-                "fail",
-            )))
-        })));
+        n.add_handler(Box::new(CallbackNotifier::new(
+            |_n| -> Result<(), NotifierError> {
+                Err(NotifierError::Io(std::io::Error::other("fail")))
+            },
+        )));
         // Second handler should still run.
         n.add_handler(Box::new(CallbackNotifier::new(move |_n| {
             *c.lock().unwrap() += 1;

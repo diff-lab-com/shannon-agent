@@ -3,12 +3,12 @@
 //! Provides ripgrep-like search capabilities using the `regex` and `ignore` crates.
 //! Supports pattern matching, include/exclude globs, context lines, and multiple output modes.
 
+use crate::file::sandbox::PathSandbox;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use shannon_core::{Tool, ToolOutput, ToolResult};
+use serde_json::{Value, json};
 use shannon_core::tools::ToolError;
-use crate::file::sandbox::PathSandbox;
+use shannon_core::{Tool, ToolOutput, ToolResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -333,7 +333,9 @@ impl Tool for GrepTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid grep input: {e}")))?;
 
         if grep_input.pattern.is_empty() {
-            return Err(ToolError::InvalidInput("Pattern cannot be empty".to_string()));
+            return Err(ToolError::InvalidInput(
+                "Pattern cannot be empty".to_string(),
+            ));
         }
 
         // Compile regex
@@ -342,14 +344,14 @@ impl Tool for GrepTool {
             .case_insensitive(case_insensitive)
             .build()
             .map_err(|e| {
-                ToolError::InvalidInput(format!("Invalid regex pattern '{}': {}", grep_input.pattern, e))
+                ToolError::InvalidInput(format!(
+                    "Invalid regex pattern '{}': {}",
+                    grep_input.pattern, e
+                ))
             })?;
 
         // Determine search path
-        let search_path = grep_input
-            .path
-            .as_deref()
-            .unwrap_or(".");
+        let search_path = grep_input.path.as_deref().unwrap_or(".");
         let search_root = PathBuf::from(search_path);
 
         // Validate search path through sandbox
@@ -385,9 +387,15 @@ impl Tool for GrepTool {
         }
 
         let show_line_numbers = grep_input.line_number.unwrap_or(true);
-        let context_before = grep_input.context_before.unwrap_or(0).min(MAX_CONTEXT_LINES);
+        let context_before = grep_input
+            .context_before
+            .unwrap_or(0)
+            .min(MAX_CONTEXT_LINES);
         let context_after = grep_input.context_after.unwrap_or(0).min(MAX_CONTEXT_LINES);
-        let max_results = grep_input.max_results.unwrap_or(DEFAULT_MAX_RESULTS).min(MAX_ALLOWED_RESULTS);
+        let max_results = grep_input
+            .max_results
+            .unwrap_or(DEFAULT_MAX_RESULTS)
+            .min(MAX_ALLOWED_RESULTS);
         let output_mode = grep_input.output_mode.unwrap_or_default();
 
         // Collect results (this runs in an async context but file I/O is synchronous)
@@ -425,9 +433,13 @@ impl Tool for GrepTool {
                 }
             }
 
-            if let Some(mut file_match) =
-                self.search_file(path, &regex, show_line_numbers, context_before, context_after)
-            {
+            if let Some(mut file_match) = self.search_file(
+                path,
+                &regex,
+                show_line_numbers,
+                context_before,
+                context_after,
+            ) {
                 // Truncate matches if we'd exceed max_results
                 let remaining = max_results - total_matches;
                 if file_match.matches.len() > remaining {
@@ -456,7 +468,10 @@ impl Tool for GrepTool {
                 let mut map = HashMap::new();
                 map.insert("total_files".to_string(), json!(total_files));
                 map.insert("total_matches".to_string(), json!(total_matches));
-                map.insert("output_mode".to_string(), json!(format!("{output_mode:?}").to_lowercase()));
+                map.insert(
+                    "output_mode".to_string(),
+                    json!(format!("{output_mode:?}").to_lowercase()),
+                );
                 map.insert("truncated".to_string(), json!(total_matches >= max_results));
                 map
             },
@@ -466,7 +481,9 @@ impl Tool for GrepTool {
     fn category(&self) -> &str {
         "search"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 impl Default for GrepTool {
@@ -499,8 +516,7 @@ fn path_matches_glob(path: &Path, pattern: &str) -> bool {
             let sep_str = std::path::MAIN_SEPARATOR.to_string();
             let dir_with_sep = format!("{}{}", dir_part, '/');
             let dir_with_sep_native = format!("{dir_part}{sep_str}");
-            return path_str.contains(&dir_with_sep)
-                || path_str.contains(&dir_with_sep_native);
+            return path_str.contains(&dir_with_sep) || path_str.contains(&dir_with_sep_native);
         }
 
         // "**" alone matches everything
@@ -511,8 +527,7 @@ fn path_matches_glob(path: &Path, pattern: &str) -> bool {
     if pattern.contains('/') || pattern.contains('\\') {
         let sep_str = std::path::MAIN_SEPARATOR.to_string();
         // Check if the path ends with the pattern (for "src/file.rs" style patterns)
-        return path_str.ends_with(pattern)
-            || path_str.ends_with(&pattern.replace('/', &sep_str));
+        return path_str.ends_with(pattern) || path_str.ends_with(&pattern.replace('/', &sep_str));
     }
 
     // Fallback: check if filename matches pattern
@@ -590,7 +605,15 @@ mod tests {
         let result = tool.execute(input).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("println"));
-        assert!(result.metadata.get("total_matches").unwrap().as_u64().unwrap() >= 2);
+        assert!(
+            result
+                .metadata
+                .get("total_matches")
+                .unwrap()
+                .as_u64()
+                .unwrap()
+                >= 2
+        );
     }
 
     #[tokio::test]
@@ -616,7 +639,15 @@ mod tests {
         let result = tool.execute(input).await.unwrap();
         assert!(!result.is_error);
         // "Hello" appears as "Hello, world!" and "Hello" in JS file
-        assert!(result.metadata.get("total_matches").unwrap().as_u64().unwrap() >= 2);
+        assert!(
+            result
+                .metadata
+                .get("total_matches")
+                .unwrap()
+                .as_u64()
+                .unwrap()
+                >= 2
+        );
     }
 
     #[tokio::test]
@@ -629,7 +660,15 @@ mod tests {
         let result = tool.execute(input).await.unwrap();
         assert!(!result.is_error);
         // With case insensitive, should find "Hello, world!", "Hello", and "Hello, {name}!"
-        assert!(result.metadata.get("total_matches").unwrap().as_u64().unwrap() >= 3);
+        assert!(
+            result
+                .metadata
+                .get("total_matches")
+                .unwrap()
+                .as_u64()
+                .unwrap()
+                >= 3
+        );
     }
 
     // === Include/exclude patterns ===
@@ -646,7 +685,15 @@ mod tests {
         // Should only match .rs files, not .js
         let content = &result.content;
         assert!(!content.contains("app.js"));
-        assert!(result.metadata.get("total_matches").unwrap().as_u64().unwrap() >= 4);
+        assert!(
+            result
+                .metadata
+                .get("total_matches")
+                .unwrap()
+                .as_u64()
+                .unwrap()
+                >= 4
+        );
     }
 
     #[tokio::test]
@@ -732,7 +779,12 @@ mod tests {
         // Content mode should show line numbers by default
         assert!(result.content.contains(':')); // colon before line number
         assert_eq!(
-            result.metadata.get("output_mode").unwrap().as_str().unwrap(),
+            result
+                .metadata
+                .get("output_mode")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "content"
         );
     }
@@ -752,7 +804,12 @@ mod tests {
         // Should not contain code lines
         assert!(!result.content.contains("fn main"));
         assert_eq!(
-            result.metadata.get("output_mode").unwrap().as_str().unwrap(),
+            result
+                .metadata
+                .get("output_mode")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "files"
         );
     }
@@ -770,7 +827,12 @@ mod tests {
         assert!(result.content.contains(':'));
         assert!(result.content.contains("main.rs"));
         assert_eq!(
-            result.metadata.get("output_mode").unwrap().as_str().unwrap(),
+            result
+                .metadata
+                .get("output_mode")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "count"
         );
     }
@@ -819,12 +881,15 @@ mod tests {
         assert!(!result.is_error);
         // Should be limited to 5 matches
         assert_eq!(
-            result.metadata.get("total_matches").unwrap().as_u64().unwrap(),
+            result
+                .metadata
+                .get("total_matches")
+                .unwrap()
+                .as_u64()
+                .unwrap(),
             5
         );
-        assert!(
-            result.metadata.get("truncated").unwrap().as_bool().unwrap()
-        );
+        assert!(result.metadata.get("truncated").unwrap().as_bool().unwrap());
     }
 
     // === Empty results ===
@@ -833,17 +898,30 @@ mod tests {
     async fn test_empty_results() {
         let dir = setup_test_files();
         let tool = GrepTool::new();
-        let input = create_grep_input("ZZZZNONEXISTENT_PATTERN", Some(dir.path().to_str().unwrap()));
+        let input = create_grep_input(
+            "ZZZZNONEXISTENT_PATTERN",
+            Some(dir.path().to_str().unwrap()),
+        );
 
         let result = tool.execute(input).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.is_empty());
         assert_eq!(
-            result.metadata.get("total_matches").unwrap().as_u64().unwrap(),
+            result
+                .metadata
+                .get("total_matches")
+                .unwrap()
+                .as_u64()
+                .unwrap(),
             0
         );
         assert_eq!(
-            result.metadata.get("total_files").unwrap().as_u64().unwrap(),
+            result
+                .metadata
+                .get("total_files")
+                .unwrap()
+                .as_u64()
+                .unwrap(),
             0
         );
     }
@@ -868,7 +946,12 @@ mod tests {
 
         let result = tool.execute(input).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Pattern cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Pattern cannot be empty")
+        );
     }
 
     // === Nonexistent path ===
@@ -920,7 +1003,11 @@ mod tests {
         // Should not contain a colon followed by a digit
         let lines: Vec<&str> = result.content.lines().collect();
         let has_line_num = lines.iter().any(|l| {
-            l.starts_with(':') && l.chars().nth(1).map(|c| c.is_ascii_digit()).unwrap_or(false)
+            l.starts_with(':')
+                && l.chars()
+                    .nth(1)
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
         });
         assert!(!has_line_num);
     }
@@ -967,16 +1054,18 @@ mod tests {
     async fn test_search_single_file() {
         let dir = setup_test_files();
         let tool = GrepTool::new();
-        let input = create_grep_input(
-            "require",
-            Some(dir.path().join("app.js").to_str().unwrap()),
-        );
+        let input = create_grep_input("require", Some(dir.path().join("app.js").to_str().unwrap()));
 
         let result = tool.execute(input).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("require"));
         assert_eq!(
-            result.metadata.get("total_files").unwrap().as_u64().unwrap(),
+            result
+                .metadata
+                .get("total_files")
+                .unwrap()
+                .as_u64()
+                .unwrap(),
             1
         );
     }

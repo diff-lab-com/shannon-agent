@@ -5,14 +5,14 @@
 #![allow(dead_code)]
 
 use crate::theme::Theme;
-use rust_i18n::t;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
+use rust_i18n::t;
 use std::collections::HashSet;
 
 /// Data needed to render the sidebar
@@ -103,10 +103,16 @@ fn truncate_to(s: &str, max_chars: usize) -> String {
         s.to_string()
     } else if max_chars > 1 {
         let mut len = 0;
-        let truncated: String = s.chars()
+        let truncated: String = s
+            .chars()
             .take_while(|c| {
                 let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                if len + cw > max_chars - 1 { false } else { len += cw; true }
+                if len + cw > max_chars - 1 {
+                    false
+                } else {
+                    len += cw;
+                    true
+                }
             })
             .collect();
         format!("{truncated}…")
@@ -150,22 +156,40 @@ impl SidebarWidget {
 
     /// Build a section header line with collapse indicator.
     fn section_header(&self, label: &str, section: SidebarSection, theme: &Theme) -> Line<'static> {
-        let indicator = if self.is_collapsed(section) { "▸" } else { "▾" };
+        let indicator = if self.is_collapsed(section) {
+            "▸"
+        } else {
+            "▾"
+        };
         Line::from(vec![
             Span::styled(indicator.to_string(), Style::default().fg(theme.muted)),
             Span::styled(
                 format!(" {label}"),
-                Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.text_dim)
+                    .add_modifier(Modifier::BOLD),
             ),
         ])
     }
 
     /// Render the sidebar panel
-    pub fn render(&self, frame: &mut Frame, area: Rect, info: &SidebarInfo, theme: &Theme, tab: crate::repl::SidebarTab) {
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        info: &SidebarInfo,
+        theme: &Theme,
+        tab: crate::repl::SidebarTab,
+    ) {
         let block = Block::default()
             .borders(Borders::LEFT)
             .border_style(Style::default().fg(theme.border))
-            .title(Line::from(Span::styled(" Info ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD))));
+            .title(Line::from(Span::styled(
+                " Info ",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            )));
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -179,22 +203,30 @@ impl SidebarWidget {
         let agents_label = " Agents ";
         let perf_label = " Perf ";
         let ctx_style = if tab == crate::repl::SidebarTab::Context {
-            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             Style::default().fg(theme.muted)
         };
         let files_style = if tab == crate::repl::SidebarTab::Files {
-            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             Style::default().fg(theme.muted)
         };
         let agents_style = if tab == crate::repl::SidebarTab::Agents {
-            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             Style::default().fg(theme.muted)
         };
         let perf_style = if tab == crate::repl::SidebarTab::Perf {
-            Style::default().fg(theme.primary).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
         } else {
             Style::default().fg(theme.muted)
         };
@@ -223,7 +255,10 @@ impl SidebarWidget {
                         0.0
                     };
                     let pct_label = format!("{tokens_str} ({pct:.0}%)");
-                    lines.push(Line::from(Span::styled(pct_label, Style::default().fg(theme.text))));
+                    lines.push(Line::from(Span::styled(
+                        pct_label,
+                        Style::default().fg(theme.text),
+                    )));
                     // Progress bar based on actual context window percentage
                     let bar_width = w.saturating_sub(2).max(4);
                     let filled = (pct / 100.0 * bar_width as f64).round() as usize;
@@ -235,8 +270,15 @@ impl SidebarWidget {
                     } else {
                         theme.secondary
                     };
-                    let bar_str = format!(" {}{}", crate::a11y::bar_filled().repeat(filled), crate::a11y::bar_empty().repeat(bar_width.saturating_sub(filled)));
-                    lines.push(Line::from(Span::styled(truncate_to(&bar_str, w), Style::default().fg(bar_color))));
+                    let bar_str = format!(
+                        " {}{}",
+                        crate::a11y::bar_filled().repeat(filled),
+                        crate::a11y::bar_empty().repeat(bar_width.saturating_sub(filled))
+                    );
+                    lines.push(Line::from(Span::styled(
+                        truncate_to(&bar_str, w),
+                        Style::default().fg(bar_color),
+                    )));
 
                     // Pressure level indicator
                     let level_label = if pct > 95.0 {
@@ -261,7 +303,12 @@ impl SidebarWidget {
                     };
                     lines.push(Line::from(vec![
                         Span::styled("  ", Style::default()),
-                        Span::styled(level_label, Style::default().fg(level_color).add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            level_label,
+                            Style::default()
+                                .fg(level_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     ]));
                     lines.push(Line::from(""));
                 }
@@ -271,7 +318,10 @@ impl SidebarWidget {
                 lines.push(self.section_header(&cost_hdr, SidebarSection::Cost, theme));
                 if !self.is_collapsed(SidebarSection::Cost) {
                     let cost_str = format!("${:.4}", info.cost_usd);
-                    lines.push(Line::from(Span::styled(cost_str, Style::default().fg(theme.warning))));
+                    lines.push(Line::from(Span::styled(
+                        cost_str,
+                        Style::default().fg(theme.warning),
+                    )));
                     lines.push(Line::from(""));
                 }
 
@@ -284,7 +334,10 @@ impl SidebarWidget {
                     } else {
                         format!("{:.0} KB", info.memory_rss_kb as f64 / 1_024.0)
                     };
-                    lines.push(Line::from(Span::styled(mem_str, Style::default().fg(theme.text))));
+                    lines.push(Line::from(Span::styled(
+                        mem_str,
+                        Style::default().fg(theme.text),
+                    )));
                     lines.push(Line::from(""));
                 }
 
@@ -292,14 +345,27 @@ impl SidebarWidget {
                 let tools_hdr = t!("ui.sidebar.tools").to_string();
                 lines.push(self.section_header(&tools_hdr, SidebarSection::Tools, theme));
                 if !self.is_collapsed(SidebarSection::Tools) {
-                    lines.push(Line::from(Span::styled(info.tools_invoked.to_string(), Style::default().fg(theme.text))));
+                    lines.push(Line::from(Span::styled(
+                        info.tools_invoked.to_string(),
+                        Style::default().fg(theme.text),
+                    )));
                     if !info.tool_breakdown.is_empty() {
-                        let parts: Vec<Span<'static>> = info.tool_breakdown.iter().flat_map(|(icon, count)| {
-                            vec![
-                                Span::styled(format!(" {icon}"), Style::default().fg(theme.text_dim)),
-                                Span::styled(count.to_string(), Style::default().fg(theme.text)),
-                            ]
-                        }).collect();
+                        let parts: Vec<Span<'static>> = info
+                            .tool_breakdown
+                            .iter()
+                            .flat_map(|(icon, count)| {
+                                vec![
+                                    Span::styled(
+                                        format!(" {icon}"),
+                                        Style::default().fg(theme.text_dim),
+                                    ),
+                                    Span::styled(
+                                        count.to_string(),
+                                        Style::default().fg(theme.text),
+                                    ),
+                                ]
+                            })
+                            .collect();
                         lines.push(Line::from(parts));
                     }
                     if info.error_count > 0 {
@@ -317,11 +383,20 @@ impl SidebarWidget {
                     if !self.is_collapsed(SidebarSection::Changes) {
                         lines.push(Line::from(vec![
                             Span::styled("+", Style::default().fg(theme.success)),
-                            Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
+                            Span::styled(
+                                info.total_additions.to_string(),
+                                Style::default().fg(theme.success),
+                            ),
                             Span::styled(" ", Style::default().fg(theme.text_dim)),
                             Span::styled("-", Style::default().fg(theme.error)),
-                            Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
-                            Span::styled(format!("  ({} files)", info.modified_files.len()), Style::default().fg(theme.muted)),
+                            Span::styled(
+                                info.total_deletions.to_string(),
+                                Style::default().fg(theme.error),
+                            ),
+                            Span::styled(
+                                format!("  ({} files)", info.modified_files.len()),
+                                Style::default().fg(theme.muted),
+                            ),
                         ]));
                     }
                 }
@@ -329,10 +404,32 @@ impl SidebarWidget {
                 // Diagnostics section
                 if !info.diagnostics.is_empty() {
                     lines.push(Line::from(""));
-                    lines.push(self.section_header("Diagnostics", SidebarSection::Diagnostics, theme));
+                    lines.push(self.section_header(
+                        "Diagnostics",
+                        SidebarSection::Diagnostics,
+                        theme,
+                    ));
                     if !self.is_collapsed(SidebarSection::Diagnostics) {
-                        let errs = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Error)).count();
-                        let warns = info.diagnostics.iter().filter(|d| matches!(d.severity, super::super::lsp_bridge::DiagnosticSeverity::Warning)).count();
+                        let errs = info
+                            .diagnostics
+                            .iter()
+                            .filter(|d| {
+                                matches!(
+                                    d.severity,
+                                    super::super::lsp_bridge::DiagnosticSeverity::Error
+                                )
+                            })
+                            .count();
+                        let warns = info
+                            .diagnostics
+                            .iter()
+                            .filter(|d| {
+                                matches!(
+                                    d.severity,
+                                    super::super::lsp_bridge::DiagnosticSeverity::Warning
+                                )
+                            })
+                            .count();
                         lines.push(Line::from(vec![
                             Span::styled(format!("{errs}"), Style::default().fg(theme.error)),
                             Span::styled("E ", Style::default().fg(theme.text_dim)),
@@ -342,9 +439,13 @@ impl SidebarWidget {
                         for diag in info.diagnostics.iter().take(8) {
                             let color = match diag.severity {
                                 super::super::lsp_bridge::DiagnosticSeverity::Error => theme.error,
-                                super::super::lsp_bridge::DiagnosticSeverity::Warning => theme.warning,
+                                super::super::lsp_bridge::DiagnosticSeverity::Warning => {
+                                    theme.warning
+                                }
                                 super::super::lsp_bridge::DiagnosticSeverity::Info => theme.primary,
-                                super::super::lsp_bridge::DiagnosticSeverity::Hint => theme.text_dim,
+                                super::super::lsp_bridge::DiagnosticSeverity::Hint => {
+                                    theme.text_dim
+                                }
                             };
                             let icon = match diag.severity {
                                 super::super::lsp_bridge::DiagnosticSeverity::Error => "E",
@@ -352,10 +453,17 @@ impl SidebarWidget {
                                 super::super::lsp_bridge::DiagnosticSeverity::Info => "I",
                                 super::super::lsp_bridge::DiagnosticSeverity::Hint => "H",
                             };
-                            let fname = diag.file_path.split('/').next_back().unwrap_or(&diag.file_path);
+                            let fname = diag
+                                .file_path
+                                .split('/')
+                                .next_back()
+                                .unwrap_or(&diag.file_path);
                             lines.push(Line::from(vec![
                                 Span::styled(format!("[{icon}]"), Style::default().fg(color)),
-                                Span::styled(format!(" {}", truncate_to(fname, w.saturating_sub(6))), Style::default().fg(theme.text_dim)),
+                                Span::styled(
+                                    format!(" {}", truncate_to(fname, w.saturating_sub(6))),
+                                    Style::default().fg(theme.text_dim),
+                                ),
                             ]));
                             lines.push(Line::from(Span::styled(
                                 format!("  {}", truncate_to(&diag.message, w.saturating_sub(4))),
@@ -373,16 +481,28 @@ impl SidebarWidget {
             }
             crate::repl::SidebarTab::Files => {
                 if info.modified_files.is_empty() {
-                    lines.push(Line::from(Span::styled("No modified files", Style::default().fg(theme.muted))));
+                    lines.push(Line::from(Span::styled(
+                        "No modified files",
+                        Style::default().fg(theme.muted),
+                    )));
                 } else {
                     // Summary line
                     lines.push(Line::from(vec![
                         Span::styled("+", Style::default().fg(theme.success)),
-                        Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
+                        Span::styled(
+                            info.total_additions.to_string(),
+                            Style::default().fg(theme.success),
+                        ),
                         Span::styled(" ", Style::default().fg(theme.text_dim)),
                         Span::styled("-", Style::default().fg(theme.error)),
-                        Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
-                        Span::styled(format!("  ({} files)", info.modified_files.len()), Style::default().fg(theme.muted)),
+                        Span::styled(
+                            info.total_deletions.to_string(),
+                            Style::default().fg(theme.error),
+                        ),
+                        Span::styled(
+                            format!("  ({} files)", info.modified_files.len()),
+                            Style::default().fg(theme.muted),
+                        ),
                     ]));
                     lines.push(Line::from(""));
 
@@ -397,12 +517,17 @@ impl SidebarWidget {
                             format!("-{dels}")
                         };
                         lines.push(Line::from(vec![
-                            Span::styled(truncate_to(fname, w.saturating_sub(8)), Style::default().fg(theme.text)),
+                            Span::styled(
+                                truncate_to(fname, w.saturating_sub(8)),
+                                Style::default().fg(theme.text),
+                            ),
                             Span::styled(" ", Style::default().fg(theme.text_dim)),
                             Span::styled(changes, Style::default().fg(theme.muted)),
                         ]));
                         // Show parent path if it fits
-                        if let Some(parent) = path.strip_suffix(fname).and_then(|p| p.strip_suffix('/')) {
+                        if let Some(parent) =
+                            path.strip_suffix(fname).and_then(|p| p.strip_suffix('/'))
+                        {
                             if !parent.is_empty() && w > 20 {
                                 lines.push(Line::from(Span::styled(
                                     format!("  {}", truncate_to(parent, w - 2)),
@@ -431,7 +556,10 @@ impl SidebarWidget {
                     } else {
                         format!("{dur}s")
                     };
-                    lines.push(Line::from(Span::styled(dur_str, Style::default().fg(theme.text))));
+                    lines.push(Line::from(Span::styled(
+                        dur_str,
+                        Style::default().fg(theme.text),
+                    )));
                     lines.push(Line::from(""));
                 }
 
@@ -442,10 +570,16 @@ impl SidebarWidget {
                     if let Some(tps) = info.tokens_per_sec {
                         lines.push(Line::from(vec![
                             Span::styled(tok_str, Style::default().fg(theme.text)),
-                            Span::styled(format!(" ({tps:.0} tok/s)"), Style::default().fg(theme.text_dim)),
+                            Span::styled(
+                                format!(" ({tps:.0} tok/s)"),
+                                Style::default().fg(theme.text_dim),
+                            ),
                         ]));
                     } else {
-                        lines.push(Line::from(Span::styled(tok_str, Style::default().fg(theme.text))));
+                        lines.push(Line::from(Span::styled(
+                            tok_str,
+                            Style::default().fg(theme.text),
+                        )));
                     }
                     // Turns and rate
                     let dur = info.session_duration_secs;
@@ -465,7 +599,10 @@ impl SidebarWidget {
                 // Cost efficiency
                 lines.push(self.section_header("Cost", SidebarSection::PerfCost, theme));
                 if !self.is_collapsed(SidebarSection::PerfCost) {
-                    lines.push(Line::from(Span::styled(format!("${:.4}", info.cost_usd), Style::default().fg(theme.warning))));
+                    lines.push(Line::from(Span::styled(
+                        format!("${:.4}", info.cost_usd),
+                        Style::default().fg(theme.warning),
+                    )));
                     if info.turn_count > 0 {
                         let per_turn = info.cost_usd / info.turn_count as f64;
                         lines.push(Line::from(Span::styled(
@@ -487,19 +624,36 @@ impl SidebarWidget {
                 lines.push(self.section_header("Activity", SidebarSection::Activity, theme));
                 if !self.is_collapsed(SidebarSection::Activity) {
                     lines.push(Line::from(vec![
-                        Span::styled(format!("{}", info.tools_invoked), Style::default().fg(theme.text)),
+                        Span::styled(
+                            format!("{}", info.tools_invoked),
+                            Style::default().fg(theme.text),
+                        ),
                         Span::styled(" tools", Style::default().fg(theme.text_dim)),
                     ]));
                     if !info.tool_breakdown.is_empty() {
-                        let parts: Vec<Span<'static>> = info.tool_breakdown.iter().flat_map(|(icon, count)| {
-                            vec![
-                                Span::styled(format!(" {icon}"), Style::default().fg(theme.text_dim)),
-                                Span::styled(count.to_string(), Style::default().fg(theme.text)),
-                            ]
-                        }).collect();
+                        let parts: Vec<Span<'static>> = info
+                            .tool_breakdown
+                            .iter()
+                            .flat_map(|(icon, count)| {
+                                vec![
+                                    Span::styled(
+                                        format!(" {icon}"),
+                                        Style::default().fg(theme.text_dim),
+                                    ),
+                                    Span::styled(
+                                        count.to_string(),
+                                        Style::default().fg(theme.text),
+                                    ),
+                                ]
+                            })
+                            .collect();
                         lines.push(Line::from(parts));
-                    }                    lines.push(Line::from(vec![
-                        Span::styled(format!("{}", info.commands_run), Style::default().fg(theme.text)),
+                    }
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{}", info.commands_run),
+                            Style::default().fg(theme.text),
+                        ),
                         Span::styled(" commands", Style::default().fg(theme.text_dim)),
                     ]));
                     if info.error_count > 0 {
@@ -517,29 +671,52 @@ impl SidebarWidget {
                     if !self.is_collapsed(SidebarSection::Changes) {
                         lines.push(Line::from(vec![
                             Span::styled("+", Style::default().fg(theme.success)),
-                            Span::styled(info.total_additions.to_string(), Style::default().fg(theme.success)),
+                            Span::styled(
+                                info.total_additions.to_string(),
+                                Style::default().fg(theme.success),
+                            ),
                             Span::styled(" ", Style::default().fg(theme.text_dim)),
                             Span::styled("-", Style::default().fg(theme.error)),
-                            Span::styled(info.total_deletions.to_string(), Style::default().fg(theme.error)),
-                            Span::styled(format!("  ({} files)", info.modified_files.len()), Style::default().fg(theme.muted)),
+                            Span::styled(
+                                info.total_deletions.to_string(),
+                                Style::default().fg(theme.error),
+                            ),
+                            Span::styled(
+                                format!("  ({} files)", info.modified_files.len()),
+                                Style::default().fg(theme.muted),
+                            ),
                         ]));
                         let dur = info.session_duration_secs;
                         let chg_rate = if dur > 0 {
-                            let lines_per_min = ((info.total_additions + info.total_deletions) as f64 / dur as f64) * 60.0;
+                            let lines_per_min =
+                                ((info.total_additions + info.total_deletions) as f64 / dur as f64)
+                                    * 60.0;
                             format!("  {lines_per_min:.0} lines/min")
                         } else {
                             String::new()
                         };
-                        lines.push(Line::from(Span::styled(chg_rate, Style::default().fg(theme.text_dim))));
+                        lines.push(Line::from(Span::styled(
+                            chg_rate,
+                            Style::default().fg(theme.text_dim),
+                        )));
                     }
                 }
             }
             crate::repl::SidebarTab::Agents => {
                 if info.active_agents.is_empty() {
-                    lines.push(Line::from(Span::styled("No active agents", Style::default().fg(theme.muted))));
+                    lines.push(Line::from(Span::styled(
+                        "No active agents",
+                        Style::default().fg(theme.muted),
+                    )));
                     lines.push(Line::from(""));
-                    lines.push(Line::from(Span::styled("Use /team or /agent", Style::default().fg(theme.text_dim))));
-                    lines.push(Line::from(Span::styled("to spawn agents", Style::default().fg(theme.text_dim))));
+                    lines.push(Line::from(Span::styled(
+                        "Use /team or /agent",
+                        Style::default().fg(theme.text_dim),
+                    )));
+                    lines.push(Line::from(Span::styled(
+                        "to spawn agents",
+                        Style::default().fg(theme.text_dim),
+                    )));
                 } else {
                     // Count active vs total
                     let active_count = info.active_agents.iter().filter(|a| a.active).count();
@@ -553,11 +730,23 @@ impl SidebarWidget {
                     for agent in info.active_agents.iter().take(15) {
                         let status_icon = match agent.status.as_str() {
                             "running" => crate::a11y::status_dot(true),
-                            "spawning" => if crate::a11y::is_enabled() { "~" } else { "◐" },
+                            "spawning" => {
+                                if crate::a11y::is_enabled() {
+                                    "~"
+                                } else {
+                                    "◐"
+                                }
+                            }
                             "idle" => crate::a11y::status_dot(false),
                             "completed" => crate::a11y::check(true),
                             s if s.starts_with("failed") => crate::a11y::check(false),
-                            _ => if crate::a11y::is_enabled() { "." } else { "·" },
+                            _ => {
+                                if crate::a11y::is_enabled() {
+                                    "."
+                                } else {
+                                    "·"
+                                }
+                            }
                         };
                         let status_color = match agent.status.as_str() {
                             "running" => theme.success,
@@ -707,7 +896,7 @@ mod tests {
         assert_eq!(info.modified_files.len(), 2);
         assert_eq!(info.modified_files[0].0, "src/main.rs");
         assert_eq!(info.modified_files[0].1, 20); // additions
-        assert_eq!(info.modified_files[0].2, 5);  // deletions
+        assert_eq!(info.modified_files[0].2, 5); // deletions
     }
 
     #[test]

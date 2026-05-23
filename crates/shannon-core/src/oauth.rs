@@ -204,13 +204,27 @@ impl OAuthClientBuilder {
 
     /// Build the OAuthClient, returning an error if any required field is missing.
     pub fn build(self) -> Result<OAuthClient, OAuthError> {
-        let id = self.id.ok_or_else(|| OAuthError::MissingField("id".into()))?;
-        let name = self.name.ok_or_else(|| OAuthError::MissingField("name".into()))?;
-        let client_id = self.client_id.ok_or_else(|| OAuthError::MissingField("client_id".into()))?;
-        let client_secret = self.client_secret.ok_or_else(|| OAuthError::MissingField("client_secret".into()))?;
-        let auth_url = self.auth_url.ok_or_else(|| OAuthError::MissingField("auth_url".into()))?;
-        let token_url = self.token_url.ok_or_else(|| OAuthError::MissingField("token_url".into()))?;
-        let redirect_url = self.redirect_url.ok_or_else(|| OAuthError::MissingField("redirect_url".into()))?;
+        let id = self
+            .id
+            .ok_or_else(|| OAuthError::MissingField("id".into()))?;
+        let name = self
+            .name
+            .ok_or_else(|| OAuthError::MissingField("name".into()))?;
+        let client_id = self
+            .client_id
+            .ok_or_else(|| OAuthError::MissingField("client_id".into()))?;
+        let client_secret = self
+            .client_secret
+            .ok_or_else(|| OAuthError::MissingField("client_secret".into()))?;
+        let auth_url = self
+            .auth_url
+            .ok_or_else(|| OAuthError::MissingField("auth_url".into()))?;
+        let token_url = self
+            .token_url
+            .ok_or_else(|| OAuthError::MissingField("token_url".into()))?;
+        let redirect_url = self
+            .redirect_url
+            .ok_or_else(|| OAuthError::MissingField("redirect_url".into()))?;
 
         Ok(OAuthClient {
             id,
@@ -248,11 +262,7 @@ fn default_token_type() -> String {
 
 impl OAuthToken {
     /// Create a new OAuth token.
-    pub fn new(
-        access_token: &str,
-        scope: &str,
-        expires_in_secs: i64,
-    ) -> Self {
+    pub fn new(access_token: &str, scope: &str, expires_in_secs: i64) -> Self {
         Self {
             access_token: access_token.to_string(),
             refresh_token: None,
@@ -369,8 +379,7 @@ impl TokenEncryption {
             decrypted.push(byte ^ self.key[i % self.key.len()]);
         }
 
-        String::from_utf8(decrypted)
-            .map_err(|e| OAuthError::DecryptionError(e.to_string()))
+        String::from_utf8(decrypted).map_err(|e| OAuthError::DecryptionError(e.to_string()))
     }
 }
 
@@ -456,7 +465,10 @@ impl OAuthService {
         }
         let id = client.id.clone();
         self.clients.insert(id.clone(), client);
-        Ok(self.clients.get(&id).expect("client was just inserted after contains_key check"))
+        Ok(self
+            .clients
+            .get(&id)
+            .expect("client was just inserted after contains_key check"))
     }
 
     /// List all registered client IDs.
@@ -493,7 +505,11 @@ impl OAuthService {
     ///
     /// This creates a state parameter and stores a pending auth internally.
     /// In a real implementation, the user would visit this URL to authorize.
-    pub fn authorization_url(&mut self, client_id: &str, scope: &str) -> Result<String, OAuthError> {
+    pub fn authorization_url(
+        &mut self,
+        client_id: &str,
+        scope: &str,
+    ) -> Result<String, OAuthError> {
         let client = self.get_client(client_id)?;
 
         let state = uuid::Uuid::new_v4().to_string();
@@ -537,11 +553,7 @@ impl OAuthService {
     /// In this in-memory implementation, the code was created during
     /// [`authorization_url`](Self::authorization_url). In production,
     /// this would make an HTTP POST to the provider's token endpoint.
-    pub fn exchange_code(
-        &mut self,
-        client_id: &str,
-        code: &str,
-    ) -> Result<OAuthToken, OAuthError> {
+    pub fn exchange_code(&mut self, client_id: &str, code: &str) -> Result<OAuthToken, OAuthError> {
         let pending = self
             .pending_codes
             .get(code)
@@ -595,10 +607,9 @@ impl OAuthService {
             .get(client_id)
             .ok_or_else(|| OAuthError::TokenNotFound(client_id.to_string()))?;
 
-        let refresh = existing
-            .refresh_token
-            .as_ref()
-            .ok_or_else(|| OAuthError::TokenNotFound(format!("No refresh token for {client_id}")))?;
+        let refresh = existing.refresh_token.as_ref().ok_or_else(|| {
+            OAuthError::TokenNotFound(format!("No refresh token for {client_id}"))
+        })?;
 
         if refresh.is_empty() {
             return Err(OAuthError::TokenNotFound(format!(
@@ -771,7 +782,10 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), OAuthError::ClientAlreadyExists(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            OAuthError::ClientAlreadyExists(_)
+        ));
         assert_eq!(service.client_count(), 1);
     }
 
@@ -815,7 +829,9 @@ mod tests {
     #[test]
     fn test_authorization_url_generation() {
         let mut service = create_test_service();
-        let url = service.authorization_url("github", "read:user repo").unwrap();
+        let url = service
+            .authorization_url("github", "read:user repo")
+            .unwrap();
 
         assert!(url.contains("https://github.com/login/oauth/authorize"));
         assert!(url.contains("client_id=gh_client_123"));

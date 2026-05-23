@@ -7,10 +7,10 @@
 //! the live registry at execution time (including tools registered after the
 //! search tool itself was created).
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shannon_core::tools::{ToolInfo, ToolRegistry};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -74,14 +74,8 @@ impl ToolSearchTool {
             all_tools.extend(deferred_matches);
         }
 
-        let query_lower = input
-            .query
-            .as_deref()
-            .map(str::to_lowercase);
-        let category_lower = input
-            .category
-            .as_deref()
-            .map(str::to_lowercase);
+        let query_lower = input.query.as_deref().map(str::to_lowercase);
+        let category_lower = input.category.as_deref().map(str::to_lowercase);
 
         let matching: Vec<ToolInfo> = all_tools
             .into_iter()
@@ -175,7 +169,9 @@ impl Tool for ToolSearchTool {
             },
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +204,10 @@ mod tests {
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {}})
         }
-        async fn execute(&self, _input: Value) -> shannon_core::tools::ToolResult<shannon_core::tools::ToolOutput> {
+        async fn execute(
+            &self,
+            _input: Value,
+        ) -> shannon_core::tools::ToolResult<shannon_core::tools::ToolOutput> {
             Ok(shannon_core::tools::ToolOutput {
                 content: "ok".into(),
                 is_error: false,
@@ -432,10 +431,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_no_filters() {
         let tool = ToolSearchTool::new(build_test_registry());
-        let result = tool
-            .execute(json!({}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({})).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("4 tool(s)"));
         assert_eq!(result.metadata["count"], 4);
@@ -444,10 +440,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_with_query() {
         let tool = ToolSearchTool::new(build_test_registry());
-        let result = tool
-            .execute(json!({"query": "file"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"query": "file"})).await.unwrap();
         assert!(!result.is_error);
         assert_eq!(result.metadata["count"], 2);
     }

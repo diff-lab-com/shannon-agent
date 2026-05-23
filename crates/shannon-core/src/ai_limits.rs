@@ -145,7 +145,9 @@ impl AiLimitsTracker {
             }
         } else {
             // Unknown limit type: assume within limits
-            LimitStatus::WithinLimit { remaining: usize::MAX }
+            LimitStatus::WithinLimit {
+                remaining: usize::MAX,
+            }
         }
     }
 
@@ -291,7 +293,10 @@ mod tests {
     fn test_reset_window() {
         let mut tracker = AiLimitsTracker::new();
         tracker.record_usage(AiLimitType::TokensPerDay, 500_000);
-        assert_eq!(tracker.get_current(AiLimitType::TokensPerDay), Some(500_000));
+        assert_eq!(
+            tracker.get_current(AiLimitType::TokensPerDay),
+            Some(500_000)
+        );
 
         tracker.reset_window(AiLimitType::TokensPerDay);
         assert_eq!(tracker.get_current(AiLimitType::TokensPerDay), Some(0));
@@ -345,10 +350,7 @@ mod tests {
             format!("{}", AiLimitType::RequestsPerDay),
             "requests per day"
         );
-        assert_eq!(
-            format!("{}", AiLimitType::TokensPerDay),
-            "tokens per day"
-        );
+        assert_eq!(format!("{}", AiLimitType::TokensPerDay), "tokens per day");
         assert_eq!(
             format!("{}", AiLimitType::TokensPerMinute),
             "tokens per minute"

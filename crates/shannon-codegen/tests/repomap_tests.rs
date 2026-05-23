@@ -1,6 +1,6 @@
 //! Integration tests for repository map generation.
 
-use shannon_codegen::{generate_repomap, generate_repomap_filtered, FileSummary, RepoMap};
+use shannon_codegen::{FileSummary, RepoMap, generate_repomap, generate_repomap_filtered};
 
 // ── Basic RepoMap Generation ────────────────────────────────────────────
 
@@ -15,11 +15,7 @@ fn test_repomap_from_temp_directory() {
     )
     .unwrap();
 
-    std::fs::write(
-        root.join("app.py"),
-        "def main():\n    print('hello')\n",
-    )
-    .unwrap();
+    std::fs::write(root.join("app.py"), "def main():\n    print('hello')\n").unwrap();
 
     let repo_map = generate_repomap(root, 10).unwrap();
     assert_eq!(repo_map.files.len(), 2);
@@ -278,7 +274,10 @@ fn test_repomap_files_sorted_by_path() {
 
     let mut sorted = paths.to_vec();
     sorted.sort();
-    assert_eq!(paths, sorted, "Files should be sorted alphabetically by path");
+    assert_eq!(
+        paths, sorted,
+        "Files should be sorted alphabetically by path"
+    );
 }
 
 // ── Line Count ──────────────────────────────────────────────────────────

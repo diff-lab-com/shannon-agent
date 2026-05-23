@@ -4,9 +4,9 @@
 //! On macOS, uses `caffeinate` to prevent idle sleep.
 //! On other platforms, provides a no-op implementation.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(target_os = "macos")]
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Reference count for nested sleep prevention
 static PREVENT_SLEEP_REF_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -28,10 +28,7 @@ pub fn start_prevent_sleep() {
         {
             spawn_caffeinate();
         }
-        tracing::debug!(
-            "Sleep prevention started (ref count: {})",
-            prev + 1
-        );
+        tracing::debug!("Sleep prevention started (ref count: {})", prev + 1);
     }
 }
 
@@ -77,7 +74,10 @@ fn spawn_caffeinate() {
         Ok(child) => {
             tracing::debug!("Started caffeinate (pid: {:?})", child.id());
             // Take previous child out of the lock before blocking on kill/wait
-            let prev = CAFFEINATE_CHILD.lock().ok().and_then(|mut guard| guard.take());
+            let prev = CAFFEINATE_CHILD
+                .lock()
+                .ok()
+                .and_then(|mut guard| guard.take());
             if let Some(mut prev) = prev {
                 let _ = prev.kill();
                 let _ = prev.wait();

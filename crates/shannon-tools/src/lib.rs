@@ -24,123 +24,131 @@
 
 use std::sync::Arc;
 
-pub mod file;
-pub mod system;
-pub mod git;
-pub mod github;
-pub mod web;
 pub mod agent;
-pub mod task;
-pub mod notebook;
-pub mod worktree;
-pub mod mcp;
-pub mod mcp_tools;
-pub mod messaging;
-pub mod todo;
-pub mod skill;
-pub mod cron;
-pub mod plan_mode;
-pub mod lsp;
-pub mod lsp_diagnostics;
-pub mod grep;
 pub mod ask_user;
-pub mod tool_search;
 pub mod brief;
 pub mod config;
+pub mod cron;
+pub mod file;
+pub mod git;
+pub mod github;
+pub mod grep;
+pub mod lsp;
+pub mod lsp_diagnostics;
+pub mod mcp;
+pub mod mcp_auth;
+pub mod mcp_tools;
+pub mod messaging;
+pub mod notebook;
+pub mod plan_mode;
+pub mod pty;
 pub mod remote_trigger;
+pub mod repl_tool;
+pub mod schedule_wakeup;
+pub mod skill;
+pub mod synthetic_output;
+pub mod system;
+pub mod task;
 pub mod task_output;
 pub mod task_stop;
 pub mod team_delete;
-pub mod synthetic_output;
-pub mod repl_tool;
-pub mod mcp_auth;
-pub mod schedule_wakeup;
-pub mod pty;
+pub mod todo;
+pub mod tool_search;
+pub mod web;
+pub mod worktree;
 
 // Re-exports for convenience
-pub use file::{ReadTool, WriteTool, EditTool, MultiEditTool, GlobTool, FileOperation};
-pub use system::{SystemTool, ShellCommand, SleepTool, BashTool, PowerShellTool, DockerSandbox, DockerSandboxConfig, SandboxMode, PathValidationError};
-pub use git::{GitBranchTool, GitDiffTool, GitLogTool, GitStashTool, GitSafetyTool, AutoCommitTool};
-pub use github::{GhIssueListTool, GhIssueViewTool, GhPrCreateTool, GhPrListTool, GhPrViewTool};
-pub use web::{WebFetchTool, WebSearchTool, WebOperation};
-pub use agent::{AgentTool, AgentOperation, AgentToolContext};
-pub use task::{TaskTool, TaskOperation};
-pub use notebook::{NotebookEditTool, NotebookEditInput, NotebookEditOutput};
-pub use worktree::{WorktreeTool, EnterWorktreeInput, EnterWorktreeOutput, ExitWorktreeInput, ExitWorktreeOutput};
-pub use mcp::{McpResourceTool, ReadMcpResourceInput, ReadMcpResourceOutput, ListMcpResourcesInput, ListMcpResourcesOutput};
-pub use mcp_tools::{ListMcpResourcesTool, ReadMcpResourceTool, ListPromptsTool, GetPromptTool, McpToolSearchTool};
-pub use messaging::{SendMessageTool, SendMessageInput, SendMessageOutput};
-pub use todo::{
-    TodoWriteTool, TodoWriteInput, TodoWriteOutput,
-    TaskCreateTool, TaskCreateInput, TaskCreateOutput,
-    TaskListTool, TaskListInput, TaskListOutput,
-    TaskUpdateTool, TaskUpdateInput, TaskUpdateOutput,
-    TaskGetTool, TaskGetInput, TaskGetOutput,
-    TaskStore, TodoItem, TodoStatus,
-};
-pub use skill::{SkillTool, SkillInvokeInput, SkillInvokeOutput};
-pub use cron::{CronTool, CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput, CronListOutput};
-pub use schedule_wakeup::{ScheduleWakeupTool, WakeupRequest, ScheduleWakeupInput, AUTONOMOUS_LOOP_SENTINEL};
-pub use plan_mode::{
-    PlanModeState, EnterPlanModeTool, ExitPlanModeTool, GetPlanStatusTool,
-    PlanManager, PlanEntry,
-    new_plan_mode_state, is_plan_mode_active,
-};
-pub use lsp::{
-    GoToDefinitionTool, FindReferencesTool, HoverTool, DocumentSymbolTool,
-    WorkspaceSymbolTool, RenameSymbolTool, CodeActionsTool,
-    LspPosition, LspRange, LspLocation, HoverResult, DocumentSymbolItem,
-    GoToDefinitionInput, FindReferencesInput, HoverInput, DocumentSymbolInput,
-    GoToDefinitionOutput, FindReferencesOutput, HoverOutput, DocumentSymbolOutput,
-    WorkspaceSymbolInput, WorkspaceSymbolOutput, WorkspaceSymbolItem,
-    RenameSymbolInput, RenameSymbolOutput,
-    CodeActionsInput, CodeActionsOutput, CodeActionItem,
-    detect_language_id,
-};
-pub use lsp_diagnostics::{
-    LspDiagnostic, DiagnosticSeverity, RelatedInfo,
-    DiagnosticRegistry, DiagnosticSummary,
-    CliDiagnosticResult, run_cli_diagnostics,
-};
-pub use grep::GrepTool;
+pub use agent::{AgentOperation, AgentTool, AgentToolContext};
 pub use ask_user::{
-    AskUserQuestionTool, AskUserInput, AskUserError, Question, QuestionOption, QuestionAnswer,
-    QuestionHandler, SharedQuestionHandler, TerminalQuestionHandler,
-    MockQuestionHandler, ErrorQuestionHandler,
+    AskUserError, AskUserInput, AskUserQuestionTool, ErrorQuestionHandler, MockQuestionHandler,
+    Question, QuestionAnswer, QuestionHandler, QuestionOption, SharedQuestionHandler,
+    TerminalQuestionHandler,
 };
-pub use tool_search::{ToolSearchTool, ToolSearchInput, ToolSearchOutput};
-pub use brief::{BriefTool, BriefInput, BriefMessage, BriefFormat};
-pub use config::{ConfigTool, ConfigInput, ConfigAction, ConfigManager, SharedConfigManager};
-pub use remote_trigger::{
-    RemoteTriggerTool, RemoteTriggerServer, RemoteTriggerInput, TriggerAction,
-};
-pub use task_output::{TaskOutputTool, TaskOutputInput, TaskOutputOutput};
-pub use task_stop::{TaskStopTool, TaskStopInput, TaskStopOutput};
-pub use team_delete::{TeamDeleteTool, TeamDeleteInput, TeamDeleteOutput, TeamEntry, TeamRegistry};
-pub use synthetic_output::{StructuredOutputTool, StructuredOutputInput, StructuredOutputOutput, STRUCTURED_OUTPUT_TOOL_NAME};
-pub use repl_tool::{ReplTool, ReplInput, ReplOutput, REPL_TOOL_NAME};
-pub use mcp_auth::{
-    McpAuthTool, McpAuthAction, McpOAuthConfig, OAuthToken, OAuthTokenStore,
-};
-pub use file::history::{
-    FileHistoryManager, FileHistoryConfig, FileHistoryError,
-    FileSnapshot, FileHistory, FileDiff, FileOperation as FileHistoryOperation,
-    DiffHunk,
+pub use brief::{BriefFormat, BriefInput, BriefMessage, BriefTool};
+pub use config::{ConfigAction, ConfigInput, ConfigManager, ConfigTool, SharedConfigManager};
+pub use cron::{
+    CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput,
+    CronListOutput, CronTool,
 };
 pub use file::diff_renderer::{
-    DiffRenderer, DiffHunk as DiffRenderHunk, DiffLine, DiffLineType, DiffStats, ColorScheme,
+    ColorScheme, DiffHunk as DiffRenderHunk, DiffLine, DiffLineType, DiffRenderer, DiffStats,
 };
-pub use file::sandbox_adapter::{
-    SandboxAdapter, PathSandboxAdapter, SandboxViolation, SandboxResult,
-    SandboxConfig as SandboxAdapterConfig,
+pub use file::history::{
+    DiffHunk, FileDiff, FileHistory, FileHistoryConfig, FileHistoryError, FileHistoryManager,
+    FileOperation as FileHistoryOperation, FileSnapshot,
 };
 pub use file::sandbox::{PathSandbox, SandboxConfig as PathSandboxConfig, SandboxError};
-pub use system::{SecurityLevel, SecurityAnalysis, CommandOutput, analyze_command_security};
+pub use file::sandbox_adapter::{
+    PathSandboxAdapter, SandboxAdapter, SandboxConfig as SandboxAdapterConfig, SandboxResult,
+    SandboxViolation,
+};
+pub use file::{EditTool, FileOperation, GlobTool, MultiEditTool, ReadTool, WriteTool};
+pub use git::{
+    AutoCommitTool, GitBranchTool, GitDiffTool, GitLogTool, GitSafetyTool, GitStashTool,
+};
+pub use github::{GhIssueListTool, GhIssueViewTool, GhPrCreateTool, GhPrListTool, GhPrViewTool};
+pub use grep::GrepTool;
+pub use lsp::{
+    CodeActionItem, CodeActionsInput, CodeActionsOutput, CodeActionsTool, DocumentSymbolInput,
+    DocumentSymbolItem, DocumentSymbolOutput, DocumentSymbolTool, FindReferencesInput,
+    FindReferencesOutput, FindReferencesTool, GoToDefinitionInput, GoToDefinitionOutput,
+    GoToDefinitionTool, HoverInput, HoverOutput, HoverResult, HoverTool, LspLocation, LspPosition,
+    LspRange, RenameSymbolInput, RenameSymbolOutput, RenameSymbolTool, WorkspaceSymbolInput,
+    WorkspaceSymbolItem, WorkspaceSymbolOutput, WorkspaceSymbolTool, detect_language_id,
+};
+pub use lsp_diagnostics::{
+    CliDiagnosticResult, DiagnosticRegistry, DiagnosticSeverity, DiagnosticSummary, LspDiagnostic,
+    RelatedInfo, run_cli_diagnostics,
+};
+pub use mcp::{
+    ListMcpResourcesInput, ListMcpResourcesOutput, McpResourceTool, ReadMcpResourceInput,
+    ReadMcpResourceOutput,
+};
+pub use mcp_auth::{McpAuthAction, McpAuthTool, McpOAuthConfig, OAuthToken, OAuthTokenStore};
+pub use mcp_tools::{
+    GetPromptTool, ListMcpResourcesTool, ListPromptsTool, McpToolSearchTool, ReadMcpResourceTool,
+};
+pub use messaging::{SendMessageInput, SendMessageOutput, SendMessageTool};
+pub use notebook::{NotebookEditInput, NotebookEditOutput, NotebookEditTool};
+pub use plan_mode::{
+    EnterPlanModeTool, ExitPlanModeTool, GetPlanStatusTool, PlanEntry, PlanManager, PlanModeState,
+    is_plan_mode_active, new_plan_mode_state,
+};
+pub use remote_trigger::{
+    RemoteTriggerInput, RemoteTriggerServer, RemoteTriggerTool, TriggerAction,
+};
+pub use repl_tool::{REPL_TOOL_NAME, ReplInput, ReplOutput, ReplTool};
+pub use schedule_wakeup::{
+    AUTONOMOUS_LOOP_SENTINEL, ScheduleWakeupInput, ScheduleWakeupTool, WakeupRequest,
+};
+pub use skill::{SkillInvokeInput, SkillInvokeOutput, SkillTool};
+pub use synthetic_output::{
+    STRUCTURED_OUTPUT_TOOL_NAME, StructuredOutputInput, StructuredOutputOutput,
+    StructuredOutputTool,
+};
+pub use system::{
+    BashTool, DockerSandbox, DockerSandboxConfig, PathValidationError, PowerShellTool, SandboxMode,
+    ShellCommand, SleepTool, SystemTool,
+};
+pub use system::{CommandOutput, SecurityAnalysis, SecurityLevel, analyze_command_security};
+pub use task::{TaskOperation, TaskTool};
+pub use task_output::{TaskOutputInput, TaskOutputOutput, TaskOutputTool};
+pub use task_stop::{TaskStopInput, TaskStopOutput, TaskStopTool};
+pub use team_delete::{TeamDeleteInput, TeamDeleteOutput, TeamDeleteTool, TeamEntry, TeamRegistry};
+pub use todo::{
+    TaskCreateInput, TaskCreateOutput, TaskCreateTool, TaskGetInput, TaskGetOutput, TaskGetTool,
+    TaskListInput, TaskListOutput, TaskListTool, TaskStore, TaskUpdateInput, TaskUpdateOutput,
+    TaskUpdateTool, TodoItem, TodoStatus, TodoWriteInput, TodoWriteOutput, TodoWriteTool,
+};
+pub use tool_search::{ToolSearchInput, ToolSearchOutput, ToolSearchTool};
+pub use web::{WebFetchTool, WebOperation, WebSearchTool};
+pub use worktree::{
+    EnterWorktreeInput, EnterWorktreeOutput, ExitWorktreeInput, ExitWorktreeOutput, WorktreeTool,
+};
 
 // Re-export from shannon_core
 pub use shannon_core::tools::{
-    Tool, ToolError, ToolResult, ToolOutput, ToolRegistry,
-    ProgressSender, BoxedProgressSender,
+    BoxedProgressSender, ProgressSender, Tool, ToolError, ToolOutput, ToolRegistry, ToolResult,
 };
 
 /// Register all standard tools into the given registry.
@@ -149,7 +157,10 @@ pub use shannon_core::tools::{
 /// defaults. Callers can override by re-registering with custom instances after this call.
 ///
 /// Returns the AgentTool's context handle for late injection of LLM client config.
-pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::Arc<std::sync::Mutex<Option<AgentToolContext>>>, Box<dyn std::error::Error>> {
+pub fn register_default_tools(
+    registry: &mut ToolRegistry,
+) -> Result<std::sync::Arc<std::sync::Mutex<Option<AgentToolContext>>>, Box<dyn std::error::Error>>
+{
     // ── File operations ────────────────────────────────────────────────
     registry.register(Box::new(ReadTool::new()))?;
     registry.register(Box::new(WriteTool::new()))?;
@@ -210,8 +221,12 @@ pub fn register_default_tools(registry: &mut ToolRegistry) -> Result<std::sync::
 
     // ── Plan mode (shared state + PlanManager) ──────────────────────────
     let plan_manager = PlanManager::new();
-    registry.register(Box::new(EnterPlanModeTool::with_manager(plan_manager.clone())))?;
-    registry.register(Box::new(ExitPlanModeTool::with_manager(plan_manager.clone())))?;
+    registry.register(Box::new(EnterPlanModeTool::with_manager(
+        plan_manager.clone(),
+    )))?;
+    registry.register(Box::new(ExitPlanModeTool::with_manager(
+        plan_manager.clone(),
+    )))?;
     registry.register(Box::new(GetPlanStatusTool::new(plan_manager)))?;
 
     // ── LSP ────────────────────────────────────────────────────────────
@@ -335,8 +350,12 @@ pub fn register_default_tools_with_project_dir(
 
     // ── Plan mode (shared state + PlanManager) ──────────────────────────
     let plan_manager = PlanManager::new();
-    registry.register(Box::new(EnterPlanModeTool::with_manager(plan_manager.clone())))?;
-    registry.register(Box::new(ExitPlanModeTool::with_manager(plan_manager.clone())))?;
+    registry.register(Box::new(EnterPlanModeTool::with_manager(
+        plan_manager.clone(),
+    )))?;
+    registry.register(Box::new(ExitPlanModeTool::with_manager(
+        plan_manager.clone(),
+    )))?;
     registry.register(Box::new(GetPlanStatusTool::new(plan_manager)))?;
 
     // ── LSP ────────────────────────────────────────────────────────────
@@ -474,8 +493,12 @@ pub fn register_default_tools_with_project_dir_ex(
 
     // ── Plan mode (shared state + PlanManager) ──────────────────────────
     let plan_manager = PlanManager::new();
-    registry.register(Box::new(EnterPlanModeTool::with_manager(plan_manager.clone())))?;
-    registry.register(Box::new(ExitPlanModeTool::with_manager(plan_manager.clone())))?;
+    registry.register(Box::new(EnterPlanModeTool::with_manager(
+        plan_manager.clone(),
+    )))?;
+    registry.register(Box::new(ExitPlanModeTool::with_manager(
+        plan_manager.clone(),
+    )))?;
     registry.register(Box::new(GetPlanStatusTool::new(plan_manager.clone())))?;
 
     // ── LSP ────────────────────────────────────────────────────────────
@@ -532,8 +555,12 @@ pub fn register_team_tools(
     registry: &mut ToolRegistry,
     coordinator: Arc<shannon_agents::AgentCoordinator>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    registry.register(Box::new(shannon_agents::TeamTaskCreateTool::new(coordinator.clone())))?;
-    registry.register(Box::new(shannon_agents::TeamTaskUpdateTool::new(coordinator.clone())))?;
+    registry.register(Box::new(shannon_agents::TeamTaskCreateTool::new(
+        coordinator.clone(),
+    )))?;
+    registry.register(Box::new(shannon_agents::TeamTaskUpdateTool::new(
+        coordinator.clone(),
+    )))?;
     registry.register(Box::new(shannon_agents::TeamTaskListTool::new(coordinator)))?;
     Ok(())
 }
@@ -563,12 +590,31 @@ mod tests {
         let mut registry = ToolRegistry::new();
         register_default_tools(&mut registry).unwrap();
 
-        let names: Vec<String> = registry.list_tools_info().iter().map(|t| t.name.clone()).collect();
-        assert!(names.contains(&"Read".to_string()), "Read tool should be registered");
-        assert!(names.contains(&"Write".to_string()), "Write tool should be registered");
-        assert!(names.contains(&"Edit".to_string()), "Edit tool should be registered");
-        assert!(names.contains(&"Bash".to_string()), "Bash tool should be registered");
-        assert!(names.contains(&"Glob".to_string()), "Glob tool should be registered");
+        let names: Vec<String> = registry
+            .list_tools_info()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
+        assert!(
+            names.contains(&"Read".to_string()),
+            "Read tool should be registered"
+        );
+        assert!(
+            names.contains(&"Write".to_string()),
+            "Write tool should be registered"
+        );
+        assert!(
+            names.contains(&"Edit".to_string()),
+            "Edit tool should be registered"
+        );
+        assert!(
+            names.contains(&"Bash".to_string()),
+            "Bash tool should be registered"
+        );
+        assert!(
+            names.contains(&"Glob".to_string()),
+            "Glob tool should be registered"
+        );
     }
 
     #[test]
@@ -576,7 +622,11 @@ mod tests {
         let mut registry = ToolRegistry::new();
         register_default_tools(&mut registry).unwrap();
 
-        let names: Vec<String> = registry.list_tools_info().iter().map(|t| t.name.clone()).collect();
+        let names: Vec<String> = registry
+            .list_tools_info()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
         assert!(names.contains(&"go_to_definition".to_string()));
         assert!(names.contains(&"find_references".to_string()));
         assert!(names.contains(&"hover".to_string()));
@@ -591,7 +641,11 @@ mod tests {
         let mut registry = ToolRegistry::new();
         register_default_tools(&mut registry).unwrap();
 
-        let names: Vec<String> = registry.list_tools_info().iter().map(|t| t.name.clone()).collect();
+        let names: Vec<String> = registry
+            .list_tools_info()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
         assert!(names.contains(&"TodoWrite".to_string()));
         assert!(names.contains(&"TaskCreate".to_string()));
         assert!(names.contains(&"TaskList".to_string()));
@@ -604,7 +658,11 @@ mod tests {
         let mut registry = ToolRegistry::new();
         register_default_tools(&mut registry).unwrap();
 
-        let names: Vec<String> = registry.list_tools_info().iter().map(|t| t.name.clone()).collect();
+        let names: Vec<String> = registry
+            .list_tools_info()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
         let mut seen = std::collections::HashSet::new();
         for name in &names {
             assert!(seen.insert(name.clone()), "Duplicate tool name: {name}");

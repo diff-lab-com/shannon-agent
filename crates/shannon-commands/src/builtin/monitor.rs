@@ -3,7 +3,9 @@
 //! Monitor allows running long-lived commands (test suites, build watchers,
 //! log tailing) in the background with output streaming back to the conversation.
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 const MONITOR_PROMPT: &str = r##"
 Run a command in the background and monitor its output.
@@ -79,9 +81,7 @@ pub fn command() -> Command {
         progress_message: "Starting background monitor...".to_string(),
         content_length: 2000,
         arg_names: vec!["command".to_string()],
-        allowed_tools: vec![
-            "Bash".to_string(),
-        ],
+        allowed_tools: vec!["Bash".to_string()],
         model: None,
         hooks: std::collections::HashMap::new(),
         context: ExecutionContext::Inline,

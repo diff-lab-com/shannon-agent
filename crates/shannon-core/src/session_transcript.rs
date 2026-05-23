@@ -276,7 +276,11 @@ impl TranscriptQuery {
             }
         }
         if let Some(ref pattern) = self.content_pattern {
-            if !entry.content.to_lowercase().contains(&pattern.to_lowercase()) {
+            if !entry
+                .content
+                .to_lowercase()
+                .contains(&pattern.to_lowercase())
+            {
                 return false;
             }
         }
@@ -338,8 +342,7 @@ impl TranscriptStore {
 
     /// Create a store in the default location (`~/.shannon/transcripts/`).
     pub fn new() -> Result<Self, TranscriptError> {
-        let base = dirs::home_dir()
-            .ok_or(TranscriptError::NotInitialized)?;
+        let base = dirs::home_dir().ok_or(TranscriptError::NotInitialized)?;
         let dir = base.join(".shannon").join("transcripts");
         Self::new_in_dir(dir)
     }
@@ -472,10 +475,7 @@ impl TranscriptStore {
 
     /// Fuzzy search: matches entries where the content contains any of the
     /// given words (case-insensitive).
-    pub fn fuzzy_search(
-        &self,
-        terms: &[&str],
-    ) -> Result<Vec<TranscriptEntry>, TranscriptError> {
+    pub fn fuzzy_search(&self, terms: &[&str]) -> Result<Vec<TranscriptEntry>, TranscriptError> {
         if terms.is_empty() {
             return Ok(Vec::new());
         }
@@ -498,7 +498,10 @@ impl TranscriptStore {
     }
 
     /// Compute statistics for a single session.
-    pub fn session_stats(&self, session_id: &str) -> Result<SessionTranscriptStats, TranscriptError> {
+    pub fn session_stats(
+        &self,
+        session_id: &str,
+    ) -> Result<SessionTranscriptStats, TranscriptError> {
         let entries = self.get_session(session_id)?;
 
         let mut stats = SessionTranscriptStats {
@@ -577,9 +580,7 @@ impl TranscriptStore {
                 }
             }
 
-            global
-                .session_stats
-                .insert(session_id.clone(), s);
+            global.session_stats.insert(session_id.clone(), s);
         }
 
         Ok(global)
@@ -639,13 +640,14 @@ mod tests {
 
     #[test]
     fn test_entry_with_tool_call() {
-        let entry = make_entry(TranscriptRole::Assistant, "reading file", "s1")
-            .with_tool_call(ToolCallRecord {
+        let entry = make_entry(TranscriptRole::Assistant, "reading file", "s1").with_tool_call(
+            ToolCallRecord {
                 name: "file_read".into(),
                 input: serde_json::json!({"path": "/tmp/test.txt"}),
                 success: true,
                 duration_ms: Some(42),
-            });
+            },
+        );
         assert_eq!(entry.tool_calls.len(), 1);
         assert_eq!(entry.tool_calls[0].name, "file_read");
         assert!(entry.tool_calls[0].success);
@@ -746,12 +748,8 @@ mod tests {
     #[test]
     fn test_query_date_filter() {
         let now = Utc::now();
-        let entry = TranscriptEntry::with_timestamp(
-            TranscriptRole::User,
-            "test".into(),
-            "s1".into(),
-            now,
-        );
+        let entry =
+            TranscriptEntry::with_timestamp(TranscriptRole::User, "test".into(), "s1".into(), now);
 
         let q = TranscriptQuery::new().after(now - chrono::Duration::seconds(1));
         assert!(q.matches(&entry));
@@ -842,10 +840,18 @@ mod tests {
     #[test]
     fn test_search_by_content() {
         let s = store();
-        s.append_entry(&make_entry(TranscriptRole::User, "implement CSV parser", "s1"))
-            .unwrap();
-        s.append_entry(&make_entry(TranscriptRole::Assistant, "I'll build a parser", "s1"))
-            .unwrap();
+        s.append_entry(&make_entry(
+            TranscriptRole::User,
+            "implement CSV parser",
+            "s1",
+        ))
+        .unwrap();
+        s.append_entry(&make_entry(
+            TranscriptRole::Assistant,
+            "I'll build a parser",
+            "s1",
+        ))
+        .unwrap();
         s.append_entry(&make_entry(TranscriptRole::User, "unrelated message", "s2"))
             .unwrap();
 
@@ -957,13 +963,14 @@ mod tests {
     #[test]
     fn test_session_stats_with_tool_calls() {
         let s = store();
-        let entry = make_entry(TranscriptRole::Assistant, "reading file", "s1")
-            .with_tool_call(ToolCallRecord {
+        let entry = make_entry(TranscriptRole::Assistant, "reading file", "s1").with_tool_call(
+            ToolCallRecord {
                 name: "file_read".into(),
                 input: serde_json::json!({"path": "/tmp/test"}),
                 success: true,
                 duration_ms: None,
-            });
+            },
+        );
         s.append_entry(&entry).unwrap();
 
         let stats = s.session_stats("s1").unwrap();

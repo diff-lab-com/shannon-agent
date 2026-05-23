@@ -5,7 +5,7 @@
 //!
 //! Supports both inline and forked skill execution contexts.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -141,7 +141,8 @@ impl Default for SkillTool {
 impl SkillTool {
     pub fn new() -> Self {
         Self {
-            description: "Invoke user-callable slash-command skills for specialized workflows".to_string(),
+            description: "Invoke user-callable slash-command skills for specialized workflows"
+                .to_string(),
             registry: get_skill_registry(),
         }
     }
@@ -193,12 +194,15 @@ impl SkillTool {
     }
 
     /// Execute skill invocation
-    async fn execute_invoke(&self, input: SkillInvokeInput) -> Result<SkillInvokeOutput, ToolError> {
+    async fn execute_invoke(
+        &self,
+        input: SkillInvokeInput,
+    ) -> Result<SkillInvokeOutput, ToolError> {
         let normalized_name = input.skill.trim().strip_prefix('/').unwrap_or(&input.skill);
 
-        let command = self.find_skill(normalized_name).ok_or_else(|| {
-            ToolError::InvalidInput(format!("Unknown skill: {normalized_name}"))
-        })?;
+        let command = self
+            .find_skill(normalized_name)
+            .ok_or_else(|| ToolError::InvalidInput(format!("Unknown skill: {normalized_name}")))?;
 
         // Check if command is a prompt-based skill
         if command.command_type != "prompt" {
@@ -208,7 +212,9 @@ impl SkillTool {
                 allowed_tools: None,
                 model: None,
                 status: None,
-                result: Some(format!("Skill {normalized_name} is not a prompt-based skill")),
+                result: Some(format!(
+                    "Skill {normalized_name} is not a prompt-based skill"
+                )),
                 agent_id: None,
             });
         }
@@ -233,7 +239,10 @@ impl Tool for SkillTool {
         let content = if output.success {
             format!("Skill '{}' executed successfully", output.command_name)
         } else {
-            output.result.clone().unwrap_or_else(|| format!("Skill '{}' execution failed", output.command_name))
+            output
+                .result
+                .clone()
+                .unwrap_or_else(|| format!("Skill '{}' execution failed", output.command_name))
         };
 
         Ok(ToolOutput {
@@ -287,7 +296,9 @@ impl Tool for SkillTool {
             "required": ["skill"]
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -446,17 +457,20 @@ mod tests {
         // Manually test inline execution by inserting an inline skill
         {
             let mut reg = tool.registry.write().unwrap();
-            reg.insert("inline-test".into(), SkillCommand {
-                name: "inline-test".into(),
-                description: "Test".into(),
-                command_type: "prompt".into(),
-                context: Some(SkillContext::Inline),
-                allowed_tools: Some(vec!["Read".into()]),
-                model: None,
-                content: Some("test content".into()),
-                source: None,
-                effort: None,
-            });
+            reg.insert(
+                "inline-test".into(),
+                SkillCommand {
+                    name: "inline-test".into(),
+                    description: "Test".into(),
+                    command_type: "prompt".into(),
+                    context: Some(SkillContext::Inline),
+                    allowed_tools: Some(vec!["Read".into()]),
+                    model: None,
+                    content: Some("test content".into()),
+                    source: None,
+                    effort: None,
+                },
+            );
         }
         let output = tool.execute(json!({"skill": "inline-test"})).await.unwrap();
         assert!(!output.is_error);

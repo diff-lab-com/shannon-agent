@@ -5,8 +5,8 @@
 //! and tool definition structure.
 
 use insta::assert_snapshot;
-use serde_json::{json, Value};
-use shannon_core::testing::snapshot::{render_request_snapshot, RenderMode, snapshot_tool_chain};
+use serde_json::{Value, json};
+use shannon_core::testing::snapshot::{RenderMode, render_request_snapshot, snapshot_tool_chain};
 
 // ── Basic request shape snapshots ──
 
@@ -91,12 +91,14 @@ fn test_compacted_context_snapshot() {
 
 #[test]
 fn test_system_prompt_with_tools_snapshot() {
-    let tools: Vec<Value> = (0..8).map(|i| {
-        json!({
-            "name": format!("Tool{}", i),
-            "description": format!("Description for tool {}", i)
+    let tools: Vec<Value> = (0..8)
+        .map(|i| {
+            json!({
+                "name": format!("Tool{}", i),
+                "description": format!("Description for tool {}", i)
+            })
         })
-    }).collect();
+        .collect();
 
     let request = json!({
         "model": "test-model",
@@ -139,9 +141,24 @@ fn test_tool_result_injection_snapshot() {
 #[test]
 fn test_tool_chain_snapshot() {
     let calls = vec![
-        ("Read".to_string(), json!({"path": "src/main.rs"}), "fn main() {}".to_string(), false),
-        ("Edit".to_string(), json!({"path": "src/main.rs", "old": "fn main() {}", "new": "fn main() { println!(\"hello\"); }"}), "ok".to_string(), false),
-        ("Bash".to_string(), json!({"command": "cargo test"}), "1 test passed".to_string(), false),
+        (
+            "Read".to_string(),
+            json!({"path": "src/main.rs"}),
+            "fn main() {}".to_string(),
+            false,
+        ),
+        (
+            "Edit".to_string(),
+            json!({"path": "src/main.rs", "old": "fn main() {}", "new": "fn main() { println!(\"hello\"); }"}),
+            "ok".to_string(),
+            false,
+        ),
+        (
+            "Bash".to_string(),
+            json!({"command": "cargo test"}),
+            "1 test passed".to_string(),
+            false,
+        ),
     ];
     let snapshot = snapshot_tool_chain(&calls);
     assert_snapshot!("tool_chain_basic", snapshot);
@@ -150,10 +167,30 @@ fn test_tool_chain_snapshot() {
 #[test]
 fn test_tool_chain_with_errors_snapshot() {
     let calls = vec![
-        ("Bash".to_string(), json!({"command": "cargo build"}), "error[E0425]: unresolved".to_string(), true),
-        ("Read".to_string(), json!({"path": "src/lib.rs"}), "pub fn broken() {}".to_string(), false),
-        ("Edit".to_string(), json!({"path": "src/lib.rs"}), "ok".to_string(), false),
-        ("Bash".to_string(), json!({"command": "cargo build"}), "Finished dev".to_string(), false),
+        (
+            "Bash".to_string(),
+            json!({"command": "cargo build"}),
+            "error[E0425]: unresolved".to_string(),
+            true,
+        ),
+        (
+            "Read".to_string(),
+            json!({"path": "src/lib.rs"}),
+            "pub fn broken() {}".to_string(),
+            false,
+        ),
+        (
+            "Edit".to_string(),
+            json!({"path": "src/lib.rs"}),
+            "ok".to_string(),
+            false,
+        ),
+        (
+            "Bash".to_string(),
+            json!({"command": "cargo build"}),
+            "Finished dev".to_string(),
+            false,
+        ),
     ];
     let snapshot = snapshot_tool_chain(&calls);
     assert_snapshot!("tool_chain_with_errors", snapshot);

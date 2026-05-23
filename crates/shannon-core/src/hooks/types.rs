@@ -54,7 +54,10 @@ mod tests {
 
     #[test]
     fn test_timeout_message() {
-        let err = HookError::Timeout { command: "sleep 999".to_string(), timeout_secs: 30 };
+        let err = HookError::Timeout {
+            command: "sleep 999".to_string(),
+            timeout_secs: 30,
+        };
         let msg = err.to_string();
         assert!(msg.contains("30"));
         assert!(msg.contains("sleep 999"));
@@ -80,7 +83,9 @@ mod tests {
 
     #[test]
     fn test_denied_message() {
-        let err = HookError::Denied { reason: "unsafe".to_string() };
+        let err = HookError::Denied {
+            reason: "unsafe".to_string(),
+        };
         assert!(err.to_string().contains("unsafe"));
     }
 

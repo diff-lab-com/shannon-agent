@@ -66,7 +66,12 @@ fn test_live_ollama_simple_query() {
     require_live_tests();
 
     let result = shannon_live_ollama()
-        .args(["--prompt", "Say exactly: hello world", "--output-format", "json"])
+        .args([
+            "--prompt",
+            "Say exactly: hello world",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(60))
         .assert();
 
@@ -74,7 +79,10 @@ fn test_live_ollama_simple_query() {
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("Invalid JSON output:\n{stdout}\nParse error: {e}"));
 
-    assert_eq!(json["exit_code"], "success", "Expected success exit code, got: {json}");
+    assert_eq!(
+        json["exit_code"], "success",
+        "Expected success exit code, got: {json}"
+    );
     let response = json["response"].as_str().unwrap_or("");
     assert!(!response.is_empty(), "Response should not be empty");
 }
@@ -85,7 +93,12 @@ fn test_live_ollama_streaming() {
     require_live_tests();
 
     shannon_live_ollama()
-        .args(["--prompt", "Say exactly: streaming works", "--output-format", "text"])
+        .args([
+            "--prompt",
+            "Say exactly: streaming works",
+            "--output-format",
+            "text",
+        ])
         .timeout(std::time::Duration::from_secs(60))
         .assert()
         .success();
@@ -145,7 +158,14 @@ fn test_live_headless_json_structure() {
     let json: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("Invalid JSON output:\n{stdout}\nParse error: {e}"));
 
-    for field in &["prompt", "response", "tool_calls", "total_tokens", "duration_ms", "exit_code"] {
+    for field in &[
+        "prompt",
+        "response",
+        "tool_calls",
+        "total_tokens",
+        "duration_ms",
+        "exit_code",
+    ] {
         assert!(
             json.get(*field).is_some(),
             "Missing required field '{field}' in JSON output"
@@ -153,7 +173,10 @@ fn test_live_headless_json_structure() {
     }
 
     let tokens = json["total_tokens"].as_u64().unwrap_or(0);
-    assert!(tokens > 0, "total_tokens should be > 0 for a live response, got: {tokens}");
+    assert!(
+        tokens > 0,
+        "total_tokens should be > 0 for a live response, got: {tokens}"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -167,13 +190,18 @@ fn test_live_ollama_prompt_preserved() {
     require_live_tests();
 
     let result = shannon_live_ollama()
-        .args(["--prompt", "What is the capital of France?", "--output-format", "json"])
+        .args([
+            "--prompt",
+            "What is the capital of France?",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(60))
         .assert();
 
     let stdout = stdout_string(&result);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
 
     let prompt = json["prompt"].as_str().unwrap_or("");
     assert!(
@@ -219,8 +247,8 @@ fn test_live_ollama_duration_positive() {
         .assert();
 
     let stdout = stdout_string(&result);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
 
     let duration = json["duration_ms"].as_u64().unwrap_or(0);
     assert!(duration > 0, "duration_ms should be > 0, got: {duration}");
@@ -238,8 +266,8 @@ fn test_live_ollama_nonempty_response() {
         .assert();
 
     let stdout = stdout_string(&result);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
 
     let response = json["response"].as_str().unwrap_or("");
     assert!(!response.is_empty(), "Response should not be empty");
@@ -267,15 +295,23 @@ fn test_live_deepseek_simple_query() {
     };
 
     let result = cmd
-        .args(["--prompt", "Say exactly: deepseek works", "--output-format", "json"])
+        .args([
+            "--prompt",
+            "Say exactly: deepseek works",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(60))
         .assert();
 
     let stdout = stdout_string(&result);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
 
-    assert_eq!(json["exit_code"], "success", "Expected success, got: {json}");
+    assert_eq!(
+        json["exit_code"], "success",
+        "Expected success, got: {json}"
+    );
     assert!(!json["response"].as_str().unwrap_or("").is_empty());
 }
 
@@ -315,10 +351,17 @@ fn test_live_deepseek_json_structure() {
         .assert();
 
     let stdout = stdout_string(&result);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
 
-    for field in &["prompt", "response", "tool_calls", "total_tokens", "duration_ms", "exit_code"] {
+    for field in &[
+        "prompt",
+        "response",
+        "tool_calls",
+        "total_tokens",
+        "duration_ms",
+        "exit_code",
+    ] {
         assert!(
             json.get(*field).is_some(),
             "DeepSeek missing field '{field}'"
@@ -342,14 +385,16 @@ fn test_live_ollama_context_relevance() {
         .assert();
 
     let stdout = stdout_string(&result);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
 
     let response = json["response"].as_str().unwrap_or("").to_lowercase();
     // At least one common color should appear in the response
-    let has_color = ["red", "blue", "green", "yellow", "black", "white", "orange", "purple"]
-        .iter()
-        .any(|c| response.contains(c));
+    let has_color = [
+        "red", "blue", "green", "yellow", "black", "white", "orange", "purple",
+    ]
+    .iter()
+    .any(|c| response.contains(c));
     assert!(
         has_color,
         "Response about colors should mention at least one color, got: {response}"
@@ -368,8 +413,8 @@ fn test_live_ollama_tool_calls_empty_by_default() {
         .assert();
 
     let stdout = stdout_string(&result);
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("Invalid JSON:\n{stdout}\n{e}"));
 
     let tool_calls = json["tool_calls"].as_array();
     assert!(tool_calls.is_some(), "tool_calls should be an array");

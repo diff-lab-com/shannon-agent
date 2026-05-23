@@ -230,7 +230,11 @@ fn test_language_for_name_unknown() {
 #[test]
 fn test_supported_languages_count() {
     let langs = supported_languages();
-    assert!(langs.len() >= 8, "Expected at least 8 languages, got {}", langs.len());
+    assert!(
+        langs.len() >= 8,
+        "Expected at least 8 languages, got {}",
+        langs.len()
+    );
 }
 
 #[test]

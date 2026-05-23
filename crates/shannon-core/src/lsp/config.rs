@@ -108,8 +108,7 @@ pub mod known_servers {
 
     /// TypeScript language server configuration
     pub fn typescript_language_server() -> ServerConfig {
-        ServerConfig::new("typescript-language-server")
-            .with_args(vec!["--stdio".to_string()])
+        ServerConfig::new("typescript-language-server").with_args(vec!["--stdio".to_string()])
     }
 
     /// gopls configuration
@@ -152,7 +151,10 @@ mod tests {
     fn test_server_config_builder() {
         let config = ServerConfig::new("typescript-language-server")
             .with_args(vec!["--stdio".to_string()])
-            .with_env(HashMap::from([("NODE_PATH".to_string(), "/usr/lib".to_string())]));
+            .with_env(HashMap::from([(
+                "NODE_PATH".to_string(),
+                "/usr/lib".to_string(),
+            )]));
 
         assert_eq!(config.command, "typescript-language-server");
         assert_eq!(config.args, vec!["--stdio"]);

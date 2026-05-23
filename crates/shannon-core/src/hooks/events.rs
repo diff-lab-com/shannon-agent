@@ -431,14 +431,18 @@ impl HookEvent {
             Self::SubagentStart { agent_id, .. } => agent_id.clone(),
             Self::SubagentStop { agent_id, .. } => agent_id.clone(),
             Self::PermissionDenied { tool_name, .. } => tool_name.clone(),
-            Self::Stop { tool_calls_count, .. } => tool_calls_count.to_string(),
+            Self::Stop {
+                tool_calls_count, ..
+            } => tool_calls_count.to_string(),
             Self::PostToolUseFailure { tool_name, .. } => tool_name.clone(),
             Self::PostCompact { tokens_freed, .. } => tokens_freed.to_string(),
             Self::StopFailure { error } => error.clone(),
             Self::FileChanged { path, .. } => path.clone(),
             Self::CwdChanged { new_cwd, .. } => new_cwd.clone(),
             Self::PermissionRequest { tool_name, .. } => tool_name.clone(),
-            Self::UserPromptExpansion { expanded_prompt, .. } => expanded_prompt.clone(),
+            Self::UserPromptExpansion {
+                expanded_prompt, ..
+            } => expanded_prompt.clone(),
             Self::PostToolBatch { tool_names, .. } => tool_names.join(","),
             Self::ConfigChange { config_path, .. } => config_path.clone(),
             Self::InstructionsLoaded { files_count, .. } => files_count.to_string(),
@@ -466,11 +470,16 @@ mod tests {
     #[test]
     fn test_event_type_display_roundtrip() {
         let all_types = [
-            HookEventType::PreToolUse, HookEventType::PostToolUse,
-            HookEventType::SessionStart, HookEventType::SessionEnd,
-            HookEventType::Notification, HookEventType::UserPromptSubmit,
-            HookEventType::PreCompact, HookEventType::Stop,
-            HookEventType::FileChanged, HookEventType::CwdChanged,
+            HookEventType::PreToolUse,
+            HookEventType::PostToolUse,
+            HookEventType::SessionStart,
+            HookEventType::SessionEnd,
+            HookEventType::Notification,
+            HookEventType::UserPromptSubmit,
+            HookEventType::PreCompact,
+            HookEventType::Stop,
+            HookEventType::FileChanged,
+            HookEventType::CwdChanged,
         ];
         for ty in &all_types {
             let s = ty.to_string();
@@ -487,15 +496,36 @@ mod tests {
     #[test]
     fn test_from_str_lossy_all_variants() {
         let all_strs = [
-            "PreToolUse", "PostToolUse", "SessionStart", "SessionEnd",
-            "Notification", "UserPromptSubmit", "TeamTaskCreated",
-            "TeamTaskCompleted", "TeammateIdle", "PreCompact",
-            "SubagentStart", "SubagentStop", "PermissionDenied", "Stop",
-            "PostToolUseFailure", "PostCompact", "StopFailure",
-            "FileChanged", "CwdChanged", "PermissionRequest",
-            "UserPromptExpansion", "PostToolBatch", "ConfigChange",
-            "InstructionsLoaded", "WorktreeCreate", "WorktreeRemove",
-            "Elicitation", "ElicitationResult", "TaskCreated", "TaskCompleted",
+            "PreToolUse",
+            "PostToolUse",
+            "SessionStart",
+            "SessionEnd",
+            "Notification",
+            "UserPromptSubmit",
+            "TeamTaskCreated",
+            "TeamTaskCompleted",
+            "TeammateIdle",
+            "PreCompact",
+            "SubagentStart",
+            "SubagentStop",
+            "PermissionDenied",
+            "Stop",
+            "PostToolUseFailure",
+            "PostCompact",
+            "StopFailure",
+            "FileChanged",
+            "CwdChanged",
+            "PermissionRequest",
+            "UserPromptExpansion",
+            "PostToolBatch",
+            "ConfigChange",
+            "InstructionsLoaded",
+            "WorktreeCreate",
+            "WorktreeRemove",
+            "Elicitation",
+            "ElicitationResult",
+            "TaskCreated",
+            "TaskCompleted",
         ];
         for s in &all_strs {
             assert!(HookEventType::from_str_lossy(s).is_some(), "Failed for {s}");
@@ -504,7 +534,11 @@ mod tests {
 
     #[test]
     fn test_event_type_serialization_roundtrip() {
-        let types = [HookEventType::PreToolUse, HookEventType::Stop, HookEventType::FileChanged];
+        let types = [
+            HookEventType::PreToolUse,
+            HookEventType::Stop,
+            HookEventType::FileChanged,
+        ];
         for ty in &types {
             let json = serde_json::to_string(ty).unwrap();
             let parsed: HookEventType = serde_json::from_str(&json).unwrap();
@@ -537,8 +571,12 @@ mod tests {
 
     #[test]
     fn test_session_events() {
-        let start = HookEvent::SessionStart { session_id: "s1".into() };
-        let end = HookEvent::SessionEnd { session_id: "s1".into() };
+        let start = HookEvent::SessionStart {
+            session_id: "s1".into(),
+        };
+        let end = HookEvent::SessionEnd {
+            session_id: "s1".into(),
+        };
         assert_eq!(start.event_type(), HookEventType::SessionStart);
         assert_eq!(end.event_type(), HookEventType::SessionEnd);
         assert_eq!(start.match_subject(), "s1");
@@ -546,49 +584,69 @@ mod tests {
 
     #[test]
     fn test_notification_event() {
-        let event = HookEvent::Notification { message: "hello".into() };
+        let event = HookEvent::Notification {
+            message: "hello".into(),
+        };
         assert_eq!(event.event_type(), HookEventType::Notification);
         assert_eq!(event.match_subject(), "hello");
     }
 
     #[test]
     fn test_user_prompt_submit() {
-        let event = HookEvent::UserPromptSubmit { prompt: "fix bug".into() };
+        let event = HookEvent::UserPromptSubmit {
+            prompt: "fix bug".into(),
+        };
         assert_eq!(event.event_type(), HookEventType::UserPromptSubmit);
         assert_eq!(event.match_subject(), "fix bug");
     }
 
     #[test]
     fn test_pre_compact() {
-        let event = HookEvent::PreCompact { messages_count: 50, estimated_tokens: 80000 };
+        let event = HookEvent::PreCompact {
+            messages_count: 50,
+            estimated_tokens: 80000,
+        };
         assert_eq!(event.event_type(), HookEventType::PreCompact);
         assert_eq!(event.match_subject(), "50");
     }
 
     #[test]
     fn test_post_compact() {
-        let event = HookEvent::PostCompact { messages_before: 50, messages_after: 10, tokens_freed: 30000 };
+        let event = HookEvent::PostCompact {
+            messages_before: 50,
+            messages_after: 10,
+            tokens_freed: 30000,
+        };
         assert_eq!(event.event_type(), HookEventType::PostCompact);
         assert_eq!(event.match_subject(), "30000");
     }
 
     #[test]
     fn test_stop_event() {
-        let event = HookEvent::Stop { tool_calls_count: 5, should_continue: false };
+        let event = HookEvent::Stop {
+            tool_calls_count: 5,
+            should_continue: false,
+        };
         assert_eq!(event.event_type(), HookEventType::Stop);
         assert_eq!(event.match_subject(), "5");
     }
 
     #[test]
     fn test_file_changed_event() {
-        let event = HookEvent::FileChanged { path: "/src/main.rs".into(), change_type: "modify".into() };
+        let event = HookEvent::FileChanged {
+            path: "/src/main.rs".into(),
+            change_type: "modify".into(),
+        };
         assert_eq!(event.event_type(), HookEventType::FileChanged);
         assert_eq!(event.match_subject(), "/src/main.rs");
     }
 
     #[test]
     fn test_cwd_changed_event() {
-        let event = HookEvent::CwdChanged { old_cwd: "/old".into(), new_cwd: "/new".into() };
+        let event = HookEvent::CwdChanged {
+            old_cwd: "/old".into(),
+            new_cwd: "/new".into(),
+        };
         assert_eq!(event.event_type(), HookEventType::CwdChanged);
         assert_eq!(event.match_subject(), "/new");
     }
@@ -618,15 +676,22 @@ mod tests {
     #[test]
     fn test_team_events() {
         let created = HookEvent::TeamTaskCreated {
-            task_id: "t1".into(), team_name: "team".into(),
-            agent_name: Some("agent".into()), subject: "task".into(), priority: "high".into(),
+            task_id: "t1".into(),
+            team_name: "team".into(),
+            agent_name: Some("agent".into()),
+            subject: "task".into(),
+            priority: "high".into(),
         };
         let completed = HookEvent::TeamTaskCompleted {
-            task_id: "t1".into(), team_name: "team".into(),
-            agent_name: "agent".into(), subject: "task".into(),
+            task_id: "t1".into(),
+            team_name: "team".into(),
+            agent_name: "agent".into(),
+            subject: "task".into(),
         };
         let idle = HookEvent::TeammateIdle {
-            team_name: "team".into(), agent_name: "agent".into(), available_tasks: 3,
+            team_name: "team".into(),
+            agent_name: "agent".into(),
+            available_tasks: 3,
         };
         assert_eq!(created.event_type(), HookEventType::TeamTaskCreated);
         assert_eq!(completed.event_type(), HookEventType::TeamTaskCompleted);
@@ -655,7 +720,10 @@ mod tests {
             output: serde_json::json!(null),
         };
         let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"PostToolUse\""), "Expected PascalCase, got: {json}");
+        assert!(
+            json.contains("\"PostToolUse\""),
+            "Expected PascalCase, got: {json}"
+        );
     }
 
     #[test]

@@ -202,10 +202,10 @@ pub struct ColorScheme {
 impl Default for ColorScheme {
     fn default() -> Self {
         Self {
-            add: "\x1b[32m",       // green
-            delete: "\x1b[31m",    // red
-            context: "\x1b[36m",   // cyan
-            header: "\x1b[1m",     // bold
+            add: "\x1b[32m",     // green
+            delete: "\x1b[31m",  // red
+            context: "\x1b[36m", // cyan
+            header: "\x1b[1m",   // bold
             reset: "\x1b[0m",
             bold: "\x1b[1m",
             dim: "\x1b[2m",
@@ -388,18 +388,24 @@ impl DiffRenderer {
             let (left, right) = match line.line_type {
                 DiffLineType::Context => {
                     let text = self.pad_content(&line.content, half_width);
-                    (format!("{}{}{}", self.colors.context, text, self.colors.reset),
-                     format!("{}{}{}", self.colors.context, text, self.colors.reset))
+                    (
+                        format!("{}{}{}", self.colors.context, text, self.colors.reset),
+                        format!("{}{}{}", self.colors.context, text, self.colors.reset),
+                    )
                 }
                 DiffLineType::Delete => {
                     let text = self.pad_content(&line.content, half_width);
-                    (format!("{}{}{}", self.colors.delete, text, self.colors.reset),
-                     " ".repeat(half_width))
+                    (
+                        format!("{}{}{}", self.colors.delete, text, self.colors.reset),
+                        " ".repeat(half_width),
+                    )
                 }
                 DiffLineType::Add => {
                     let text = self.pad_content(&line.content, half_width);
-                    (" ".repeat(half_width),
-                     format!("{}{}{}", self.colors.add, text, self.colors.reset))
+                    (
+                        " ".repeat(half_width),
+                        format!("{}{}{}", self.colors.add, text, self.colors.reset),
+                    )
                 }
                 DiffLineType::Header => continue,
             };
@@ -430,12 +436,9 @@ impl DiffRenderer {
                 .line_number_new
                 .map(|n| format!("{n:>4}"))
                 .unwrap_or_else(|| "    ".to_string());
-            result.push_str(&format!("{}{} | {}{}{}",
-                self.colors.dim,
-                old_num,
-                new_num,
-                self.colors.reset,
-                prefix,
+            result.push_str(&format!(
+                "{}{} | {}{}{}",
+                self.colors.dim, old_num, new_num, self.colors.reset, prefix,
             ));
         } else {
             result.push_str(&prefix);
@@ -458,10 +461,7 @@ impl DiffRenderer {
 
     /// Render stats as a summary line.
     pub fn render_stats(&self, stats: &DiffStats) -> String {
-        format!(
-            "{}{}{}",
-            self.colors.bold, stats, self.colors.reset
-        )
+        format!("{}{}{}", self.colors.bold, stats, self.colors.reset)
     }
 }
 
@@ -512,19 +512,23 @@ mod tests {
     fn multi_hunk_hunks() -> Vec<DiffHunk> {
         vec![
             DiffHunk {
-                old_start: 1, old_count: 1, new_start: 1, new_count: 1,
+                old_start: 1,
+                old_count: 1,
+                new_start: 1,
+                new_count: 1,
                 header: "@@ -1,1 +1,1 @@".to_string(),
-                lines: vec![
-                    DiffLine {
-                        line_type: DiffLineType::Add,
-                        content: "use std::io;".to_string(),
-                        line_number_old: None,
-                        line_number_new: Some(1),
-                    },
-                ],
+                lines: vec![DiffLine {
+                    line_type: DiffLineType::Add,
+                    content: "use std::io;".to_string(),
+                    line_number_old: None,
+                    line_number_new: Some(1),
+                }],
             },
             DiffHunk {
-                old_start: 5, old_count: 2, new_start: 6, new_count: 2,
+                old_start: 5,
+                old_count: 2,
+                new_start: 6,
+                new_count: 2,
                 header: "@@ -5,2 +6,2 @@".to_string(),
                 lines: vec![
                     DiffLine {
@@ -566,7 +570,11 @@ mod tests {
 
     #[test]
     fn stats_display() {
-        let s = DiffStats { additions: 3, deletions: 1, changes: 4 };
+        let s = DiffStats {
+            additions: 3,
+            deletions: 1,
+            changes: 4,
+        };
         let text = s.to_string();
         assert!(text.contains("+3"));
         assert!(text.contains("-1"));
@@ -584,8 +592,16 @@ mod tests {
 
     #[test]
     fn stats_merge() {
-        let mut a = DiffStats { additions: 1, deletions: 2, changes: 3 };
-        let b = DiffStats { additions: 4, deletions: 5, changes: 9 };
+        let mut a = DiffStats {
+            additions: 1,
+            deletions: 2,
+            changes: 3,
+        };
+        let b = DiffStats {
+            additions: 4,
+            deletions: 5,
+            changes: 9,
+        };
         a.merge(&b);
         assert_eq!(a.additions, 5);
         assert_eq!(a.deletions, 7);
@@ -597,7 +613,10 @@ mod tests {
     #[test]
     fn hunk_make_header() {
         let hunk = DiffHunk {
-            old_start: 10, old_count: 3, new_start: 10, new_count: 4,
+            old_start: 10,
+            old_count: 3,
+            new_start: 10,
+            new_count: 4,
             header: String::new(),
             lines: vec![],
         };
@@ -607,7 +626,10 @@ mod tests {
     #[test]
     fn hunk_make_header_single_line() {
         let hunk = DiffHunk {
-            old_start: 5, old_count: 1, new_start: 5, new_count: 1,
+            old_start: 5,
+            old_count: 1,
+            new_start: 5,
+            new_count: 1,
             header: String::new(),
             lines: vec![],
         };
@@ -713,7 +735,11 @@ mod tests {
 
     #[test]
     fn diff_stats_serialization() {
-        let stats = DiffStats { additions: 10, deletions: 3, changes: 13 };
+        let stats = DiffStats {
+            additions: 10,
+            deletions: 3,
+            changes: 13,
+        };
         let json = serde_json::to_string(&stats).unwrap();
         let back: DiffStats = serde_json::from_str(&json).unwrap();
         assert_eq!(stats, back);
@@ -722,7 +748,11 @@ mod tests {
     #[test]
     fn render_stats_string() {
         let renderer = DiffRenderer::new();
-        let stats = DiffStats { additions: 5, deletions: 2, changes: 7 };
+        let stats = DiffStats {
+            additions: 5,
+            deletions: 2,
+            changes: 7,
+        };
         let output = renderer.render_stats(&stats);
         assert!(output.contains("changed"));
     }

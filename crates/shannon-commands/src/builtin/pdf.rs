@@ -6,7 +6,9 @@
 //! `ImageFormat`, `PdfOptions`) describe the expected output structure so
 //! that callers can parse the AI response back into structured data.
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// PDF processing prompt template
 ///
@@ -192,7 +194,9 @@ impl PdfContent {
                 in_metadata = true;
                 in_findings = false;
                 continue;
-            } else if trimmed.starts_with("### Key Findings") || trimmed.starts_with("### Content Summary") {
+            } else if trimmed.starts_with("### Key Findings")
+                || trimmed.starts_with("### Content Summary")
+            {
                 in_metadata = false;
                 in_findings = true;
                 continue;
@@ -223,8 +227,12 @@ impl PdfContent {
                             "Keywords" => content.metadata.keywords = Some(value.to_string()),
                             "Creator" => content.metadata.creator = Some(value.to_string()),
                             "Producer" => content.metadata.producer = Some(value.to_string()),
-                            "Creation date" => content.metadata.creation_date = Some(value.to_string()),
-                            "Modification date" => content.metadata.modification_date = Some(value.to_string()),
+                            "Creation date" => {
+                                content.metadata.creation_date = Some(value.to_string())
+                            }
+                            "Modification date" => {
+                                content.metadata.modification_date = Some(value.to_string())
+                            }
                             "Pages" => {
                                 if let Ok(n) = value.parse::<usize>() {
                                     content.metadata.page_count = n;
@@ -375,7 +383,12 @@ pub struct PdfTable {
 impl PdfTable {
     /// Create a new table
     pub fn new(index: usize, page: usize, headers: Vec<String>, rows: Vec<Vec<String>>) -> Self {
-        Self { index, page, headers, rows }
+        Self {
+            index,
+            page,
+            headers,
+            rows,
+        }
     }
 
     /// Get the number of data rows (excluding header)
@@ -391,13 +404,20 @@ impl PdfTable {
     /// Format as a simple text table
     pub fn to_text(&self) -> String {
         let mut output = String::new();
-        let col_widths: Vec<usize> = self.headers.iter().enumerate().map(|(i, h)| {
-            let data_width = self.rows.iter()
-                .filter_map(|r| r.get(i).map(|c| c.len()))
-                .max()
-                .unwrap_or(0);
-            h.len().max(data_width).max(4)
-        }).collect();
+        let col_widths: Vec<usize> = self
+            .headers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                let data_width = self
+                    .rows
+                    .iter()
+                    .filter_map(|r| r.get(i).map(|c| c.len()))
+                    .max()
+                    .unwrap_or(0);
+                h.len().max(data_width).max(4)
+            })
+            .collect();
 
         // Header
         for (i, header) in self.headers.iter().enumerate() {
@@ -630,10 +650,19 @@ This paper explores ownership semantics in Rust.
 
         assert_eq!(content.source_path, "paper.pdf");
         assert_eq!(content.total_pages, 42);
-        assert_eq!(content.metadata.title.as_deref(), Some("Research Paper on Rust"));
+        assert_eq!(
+            content.metadata.title.as_deref(),
+            Some("Research Paper on Rust")
+        );
         assert_eq!(content.metadata.author.as_deref(), Some("Jane Doe"));
-        assert_eq!(content.metadata.subject.as_deref(), Some("Programming Languages"));
-        assert_eq!(content.metadata.keywords.as_deref(), Some("rust, systems, safety"));
+        assert_eq!(
+            content.metadata.subject.as_deref(),
+            Some("Programming Languages")
+        );
+        assert_eq!(
+            content.metadata.keywords.as_deref(),
+            Some("rust, systems, safety")
+        );
         assert_eq!(content.metadata.creator.as_deref(), Some("LaTeX"));
         assert_eq!(content.metadata.producer.as_deref(), Some("pdfTeX"));
         assert!(!content.metadata.encrypted);

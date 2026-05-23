@@ -158,13 +158,9 @@ pub struct GroupedMessage {
 #[derive(Debug, Clone)]
 pub enum MessageGroup {
     /// A user turn (may include multiple user messages in sequence)
-    UserTurn {
-        messages: Vec<GroupedMessage>,
-    },
+    UserTurn { messages: Vec<GroupedMessage> },
     /// An assistant turn (may include text + tool use blocks)
-    AssistantTurn {
-        messages: Vec<GroupedMessage>,
-    },
+    AssistantTurn { messages: Vec<GroupedMessage> },
     /// A tool use turn: groups the assistant's tool_use with the tool_result
     ToolUseTurn {
         tool_name: String,
@@ -172,16 +168,16 @@ pub enum MessageGroup {
         messages: Vec<GroupedMessage>,
     },
     /// System messages (CLAUDE.md context, summaries, etc.)
-    SystemMessage {
-        messages: Vec<GroupedMessage>,
-    },
+    SystemMessage { messages: Vec<GroupedMessage> },
 }
 
 impl MessageGroup {
     /// Total estimated tokens for all messages in this group
     pub fn total_tokens(&self) -> usize {
         match self {
-            MessageGroup::UserTurn { messages } => messages.iter().map(|m| m.estimated_tokens).sum(),
+            MessageGroup::UserTurn { messages } => {
+                messages.iter().map(|m| m.estimated_tokens).sum()
+            }
             MessageGroup::AssistantTurn { messages } => {
                 messages.iter().map(|m| m.estimated_tokens).sum()
             }
@@ -213,7 +209,11 @@ impl MessageGroup {
             MessageGroup::AssistantTurn { messages } => {
                 format!("AssistantTurn ({} messages)", messages.len())
             }
-            MessageGroup::ToolUseTurn { tool_name, messages, .. } => {
+            MessageGroup::ToolUseTurn {
+                tool_name,
+                messages,
+                ..
+            } => {
                 format!("ToolUse[{}] ({} messages)", tool_name, messages.len())
             }
             MessageGroup::SystemMessage { messages } => {
@@ -336,7 +336,9 @@ impl CompactPrompt {
             let content_text = extract_text_content(msg);
             let preview = if content_text.len() > 500 {
                 let mut end = 497;
-                while !content_text.is_char_boundary(end) { end -= 1; }
+                while !content_text.is_char_boundary(end) {
+                    end -= 1;
+                }
                 format!("{}...", &content_text[..end])
             } else {
                 content_text
@@ -358,7 +360,9 @@ impl CompactPrompt {
             max_tokens,
             if content.len() > 2000 {
                 let mut end = 1997;
-                while !content.is_char_boundary(end) { end -= 1; }
+                while !content.is_char_boundary(end) {
+                    end -= 1;
+                }
                 format!("{}...", &content[..end])
             } else {
                 content
@@ -377,7 +381,8 @@ pub trait Summarizer: Send + Sync {
     fn summarize(&self, messages: &[Message], max_tokens: usize) -> Result<String, CompactError>;
 
     /// Compress a single message's content
-    fn micro_summarize(&self, message: &Message, max_tokens: usize) -> Result<String, CompactError>;
+    fn micro_summarize(&self, message: &Message, max_tokens: usize)
+    -> Result<String, CompactError>;
 }
 
 #[cfg(test)]
@@ -392,20 +397,29 @@ mod tests {
             CompactError::NoMessagesToCompact.to_string(),
             "No messages to compact"
         );
-        assert!(CompactError::SummarizationFailed("timeout".into())
-            .to_string()
-            .contains("timeout"));
-        assert!(CompactError::InvalidConfig("bad".into())
-            .to_string()
-            .contains("bad"));
-        assert!(CompactError::TokenEstimationError("overflow".into())
-            .to_string()
-            .contains("overflow"));
+        assert!(
+            CompactError::SummarizationFailed("timeout".into())
+                .to_string()
+                .contains("timeout")
+        );
+        assert!(
+            CompactError::InvalidConfig("bad".into())
+                .to_string()
+                .contains("bad")
+        );
+        assert!(
+            CompactError::TokenEstimationError("overflow".into())
+                .to_string()
+                .contains("overflow")
+        );
         assert_eq!(
             CompactError::AlreadyInProgress.to_string(),
             "Compression already in progress"
         );
-        assert_eq!(CompactError::Timeout.to_string(), "Compact duration exceeded limit");
+        assert_eq!(
+            CompactError::Timeout.to_string(),
+            "Compact duration exceeded limit"
+        );
     }
 
     // ── CompactConfig ────────────────────────────────────────────────────
@@ -604,7 +618,9 @@ mod tests {
     fn test_micro_compact_prompt() {
         let msg = Message {
             role: "user".to_string(),
-            content: crate::api::MessageContent::Text("This is a very long tool output...".to_string()),
+            content: crate::api::MessageContent::Text(
+                "This is a very long tool output...".to_string(),
+            ),
         };
         let prompt = CompactPrompt::micro_compact_prompt(&msg, 500);
         assert!(prompt.contains("500"));

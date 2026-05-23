@@ -4,16 +4,12 @@
 //! - Agent: Spawn and manage subagent operations with real execution
 //! - Team: Create and manage multi-agent teams via AgentCoordinator
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use shannon_agents::{
-    TeamContext,
-    AgentConfig,
-    AgentMessage, MessageContent, ProtocolMessage,
-};
+use shannon_agents::{AgentConfig, AgentMessage, MessageContent, ProtocolMessage, TeamContext};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -175,7 +171,8 @@ impl Default for AgentTool {
 impl AgentTool {
     pub fn new() -> Self {
         Self {
-            description: "Spawn and manage AI agent teammates for collaborative problem-solving".to_string(),
+            description: "Spawn and manage AI agent teammates for collaborative problem-solving"
+                .to_string(),
             context: Arc::new(Mutex::new(None)),
         }
     }
@@ -263,17 +260,25 @@ impl AgentTool {
 
         if let Some(ctx) = self.get_team_context() {
             // 1. Register in coordinator for team coordination
-            let team = input.context.as_ref()
-                .and_then(|c| c.get("team").and_then(|v| v.as_str()).map(|s| s.to_string()));
+            let team = input.context.as_ref().and_then(|c| {
+                c.get("team")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            });
 
             let config = AgentConfig {
                 name: format!("{}-{}", &agent_type, &agent_id[6..14]), // readable name
-                model: input.model.clone().unwrap_or_else(|| ctx.client_config.model.clone()),
+                model: input
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| ctx.client_config.model.clone()),
                 system_prompt: format!(
                     "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."
                 ),
                 tools: input.allowed_tools.clone().unwrap_or_default(),
-                working_directory: input.context.as_ref()
+                working_directory: input
+                    .context
+                    .as_ref()
                     .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()))
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| std::path::PathBuf::from(".")),
@@ -282,8 +287,10 @@ impl AgentTool {
             };
 
             // Spawn in the registry (creates team if needed, adds teammate)
-            let agent = ctx.registry.spawn(config).await
-                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn agent: {e}")))?;
+            let agent =
+                ctx.registry.spawn(config).await.map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Failed to spawn agent: {e}"))
+                })?;
 
             let agent_name = agent.name.clone();
             let agent_uid = agent.id.clone();
@@ -293,12 +300,14 @@ impl AgentTool {
             if let Some(ref model) = input.model {
                 subagent_config.model = model.clone();
             }
-            let result = self.execute_subagent(
-                agent_uid.clone(),
-                agent_type.clone(),
-                input,
-                subagent_config,
-            ).await?;
+            let result = self
+                .execute_subagent(
+                    agent_uid.clone(),
+                    agent_type.clone(),
+                    input,
+                    subagent_config,
+                )
+                .await?;
 
             // 3. Update agent status in registry (use list to find and update)
             // The SubAgentRegistry tracks agents internally; the coordinator
@@ -320,26 +329,27 @@ impl AgentTool {
         } else {
             // Fallback: no context injected, use standalone execution
             // Try to get client_config for standalone mode
-            let client_config = self.context.lock().ok().and_then(|g| {
-                g.as_ref().map(|c| c.client_config.clone())
-            });
+            let client_config = self
+                .context
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(|c| c.client_config.clone()));
 
             match client_config {
                 Some(client_config) => {
-                    self.execute_subagent(agent_id, agent_type, input, client_config).await
+                    self.execute_subagent(agent_id, agent_type, input, client_config)
+                        .await
                 }
-                None => {
-                    Ok(AgentSpawnOutput {
-                        agent_id,
-                        agent_type,
-                        status: "initialized".to_string(),
-                        message: format!(
-                            "Agent spawned (no execution context). Task: {}",
-                            &input.task[..input.task.len().min(100)]
-                        ),
-                        result: None,
-                    })
-                }
+                None => Ok(AgentSpawnOutput {
+                    agent_id,
+                    agent_type,
+                    status: "initialized".to_string(),
+                    message: format!(
+                        "Agent spawned (no execution context). Task: {}",
+                        &input.task[..input.task.len().min(100)]
+                    ),
+                    result: None,
+                }),
             }
         }
     }
@@ -375,7 +385,8 @@ impl AgentTool {
         let state = shannon_core::state::StateManager::new();
 
         let engine = shannon_core::query_engine::QueryEngine::with_defaults(
-            client, sub_tools,
+            client,
+            sub_tools,
             permissions,
             state,
         );
@@ -431,9 +442,14 @@ impl AgentTool {
                     }
                     let _ = tool_name; // suppress unused warning
                 }
-                Ok(QueryEvent::ToolUseResult { is_error, result, .. }) => {
+                Ok(QueryEvent::ToolUseResult {
+                    is_error, result, ..
+                }) => {
                     if is_error {
-                        response_text.push_str(&format!("\n[Tool error: {}]", &result[..result.len().min(200)]));
+                        response_text.push_str(&format!(
+                            "\n[Tool error: {}]",
+                            &result[..result.len().min(200)]
+                        ));
                     }
                 }
                 Ok(QueryEvent::Failed { error, .. }) => {
@@ -457,7 +473,11 @@ impl AgentTool {
 
         // Truncate very long responses to avoid bloating the conversation
         let result_text = if response_text.len() > 4000 {
-            format!("{}...\n[Response truncated: {} chars total]", &response_text[..4000], response_text.len())
+            format!(
+                "{}...\n[Response truncated: {} chars total]",
+                &response_text[..4000],
+                response_text.len()
+            )
         } else {
             response_text
         };
@@ -466,9 +486,7 @@ impl AgentTool {
             agent_id,
             agent_type,
             status,
-            message: format!(
-                "Sub-agent completed ({tools_used} tool(s) used)."
-            ),
+            message: format!("Sub-agent completed ({tools_used} tool(s) used)."),
             result: Some(result_text),
         })
     }
@@ -478,12 +496,18 @@ impl AgentTool {
 
         if let Some(ctx) = self.get_team_context() {
             // Real message routing through the coordinator
-            let responses = ctx.registry
-                .send_message("lead", &input.agent_id, serde_json::Value::String(input.message))
+            let responses = ctx
+                .registry
+                .send_message(
+                    "lead",
+                    &input.agent_id,
+                    serde_json::Value::String(input.message),
+                )
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to send message: {e}")))?;
 
-            let response_text = responses.first()
+            let response_text = responses
+                .first()
                 .map(|r| match &r.content {
                     MessageContent::Text(t) => t.clone(),
                     other => format!("{other:?}"),
@@ -508,7 +532,8 @@ impl AgentTool {
     async fn create_team(&self, input: CreateTeamInput) -> Result<CreateTeamOutput, ToolError> {
         if let Some(ctx) = self.get_team_context() {
             // Real team creation through the coordinator
-            let team_name = ctx.registry
+            let team_name = ctx
+                .registry
                 .create_team(input.team_name.clone(), input.description.clone())
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create team: {e}")))?;
@@ -519,14 +544,17 @@ impl AgentTool {
                 let config = AgentConfig {
                     name: format!("{}-{}", agent_type, uuid::Uuid::new_v4().as_simple()),
                     model: ctx.client_config.model.clone(),
-                    system_prompt: format!("You are a {agent_type} agent. Focus on your specialty."),
+                    system_prompt: format!(
+                        "You are a {agent_type} agent. Focus on your specialty."
+                    ),
                     tools: Vec::new(),
                     working_directory: std::path::PathBuf::from("."),
                     max_turns: 50,
                     team: Some(team_name.clone()),
                 };
-                let agent = ctx.registry.spawn(config).await
-                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn {agent_type}: {e}")))?;
+                let agent = ctx.registry.spawn(config).await.map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Failed to spawn {agent_type}: {e}"))
+                })?;
                 agent_ids.push(agent.id);
             }
 
@@ -561,11 +589,15 @@ impl AgentTool {
                 "lead".to_string(),
                 input.agent_id.clone(),
                 ProtocolMessage::ShutdownRequest {
-                    reason: input.reason.unwrap_or_else(|| "Graceful shutdown".to_string()),
+                    reason: input
+                        .reason
+                        .unwrap_or_else(|| "Graceful shutdown".to_string()),
                 },
             );
 
-            ctx.coordinator.send_message(msg).await
+            ctx.coordinator
+                .send_message(msg)
+                .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("Shutdown failed: {e}")))?;
 
             Ok(ShutdownOutput {
@@ -620,7 +652,10 @@ impl Tool for AgentTool {
                 let output = self.send_message(msg_input).await?;
                 Ok(ToolOutput {
                     content: if let Some(response) = &output.response {
-                        format!("Message {} delivered. Response: {}", output.message_id, response)
+                        format!(
+                            "Message {} delivered. Response: {}",
+                            output.message_id, response
+                        )
                     } else {
                         format!("Message {} delivered successfully", output.message_id)
                     },
@@ -641,7 +676,11 @@ impl Tool for AgentTool {
                     .map_err(|e| ToolError::InvalidInput(format!("Invalid team input: {e}")))?;
                 let output = self.create_team(team_input).await?;
                 Ok(ToolOutput {
-                    content: format!("Team '{}' created with {} agent(s)", output.team_name, output.agent_ids.len()),
+                    content: format!(
+                        "Team '{}' created with {} agent(s)",
+                        output.team_name,
+                        output.agent_ids.len()
+                    ),
                     is_error: false,
                     metadata: {
                         let mut map = HashMap::new();
@@ -819,7 +858,9 @@ mod tests {
         };
         let ser = serde_json::to_string(&input).unwrap();
         let de: AgentSpawnInput = serde_json::from_str(&ser).unwrap();
-        let wd = de.context.as_ref()
+        let wd = de
+            .context
+            .as_ref()
             .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()));
         assert_eq!(wd, Some("/tmp/worktree-auth-fix"));
     }
@@ -835,7 +876,9 @@ mod tests {
             model: None,
             allowed_tools: None,
         };
-        let wd = input.context.as_ref()
+        let wd = input
+            .context
+            .as_ref()
             .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()));
         assert_eq!(wd, Some("/tmp/wt-1"));
 
@@ -848,7 +891,9 @@ mod tests {
             model: None,
             allowed_tools: None,
         };
-        let wd2 = input2.context.as_ref()
+        let wd2 = input2
+            .context
+            .as_ref()
             .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()));
         assert_eq!(wd2, None);
 
@@ -861,7 +906,9 @@ mod tests {
             model: None,
             allowed_tools: None,
         };
-        let wd3 = input3.context.as_ref()
+        let wd3 = input3
+            .context
+            .as_ref()
             .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()));
         assert_eq!(wd3, None);
     }
@@ -965,11 +1012,14 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_without_context() {
         let tool = AgentTool::new();
-        let output = tool.execute(json!({
-            "operation": "Spawn",
-            "agent_type": "researcher",
-            "task": "Investigate something"
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "Spawn",
+                "agent_type": "researcher",
+                "task": "Investigate something"
+            }))
+            .await
+            .unwrap();
         assert!(!output.is_error);
         assert!(output.metadata.contains_key("agent_id"));
         assert!(output.metadata.contains_key("agent_type"));
@@ -979,11 +1029,14 @@ mod tests {
     #[tokio::test]
     async fn test_send_message_without_context() {
         let tool = AgentTool::new();
-        let output = tool.execute(json!({
-            "operation": "SendMessage",
-            "agent_id": "agent-1",
-            "message": "hello"
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "SendMessage",
+                "agent_id": "agent-1",
+                "message": "hello"
+            }))
+            .await
+            .unwrap();
         assert!(!output.is_error);
         assert!(output.metadata.contains_key("message_id"));
         assert!(output.metadata["delivered"].as_bool().unwrap());
@@ -992,12 +1045,15 @@ mod tests {
     #[tokio::test]
     async fn test_create_team_without_context() {
         let tool = AgentTool::new();
-        let output = tool.execute(json!({
-            "operation": "CreateTeam",
-            "team_name": "test-team",
-            "description": "A test team",
-            "agents": ["backend", "frontend"]
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "CreateTeam",
+                "team_name": "test-team",
+                "description": "A test team",
+                "agents": ["backend", "frontend"]
+            }))
+            .await
+            .unwrap();
         assert!(!output.is_error);
         assert!(output.content.contains("test-team"));
         let agent_ids = output.metadata["agent_ids"].as_array().unwrap();
@@ -1007,10 +1063,13 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_without_context() {
         let tool = AgentTool::new();
-        let output = tool.execute(json!({
-            "operation": "Shutdown",
-            "agent_id": "agent-1"
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "Shutdown",
+                "agent_id": "agent-1"
+            }))
+            .await
+            .unwrap();
         assert!(!output.is_error);
         assert!(output.metadata["success"].as_bool().unwrap());
     }
@@ -1067,7 +1126,9 @@ mod tests {
         let schema = tool.input_schema();
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"]["operation"].is_object());
-        let ops = schema["properties"]["operation"]["enum"].as_array().unwrap();
+        let ops = schema["properties"]["operation"]["enum"]
+            .as_array()
+            .unwrap();
         assert_eq!(ops.len(), 4);
     }
 

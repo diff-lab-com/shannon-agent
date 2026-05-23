@@ -4,7 +4,7 @@
 //! covering input validation, tool metadata, and error handling without
 //! requiring real network access.
 
-use shannon_tools::{WebFetchTool, WebSearchTool, Tool};
+use shannon_tools::{Tool, WebFetchTool, WebSearchTool};
 
 // ============================================================================
 // WebFetchTool URL validation tests
@@ -44,7 +44,10 @@ async fn test_web_fetch_missing_url_field_returns_error() {
     let result = tool.execute(input).await;
     assert!(result.is_err(), "Missing URL field should produce an error");
     assert!(
-        result.unwrap_err().to_string().contains("Invalid WebFetch input"),
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid WebFetch input"),
         "Error should mention invalid input"
     );
 }
@@ -92,7 +95,10 @@ async fn test_web_search_missing_query_returns_error() {
     let result = tool.execute(input).await;
     assert!(result.is_err(), "Missing query should produce an error");
     assert!(
-        result.unwrap_err().to_string().contains("Invalid WebSearch input"),
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid WebSearch input"),
         "Error should mention invalid input"
     );
 }
@@ -111,7 +117,10 @@ fn test_web_fetch_tool_name() {
 fn test_web_fetch_tool_description_not_empty() {
     let tool = WebFetchTool::new();
     assert!(!tool.description().is_empty());
-    assert!(tool.description().len() > 10, "Description should be meaningful");
+    assert!(
+        tool.description().len() > 10,
+        "Description should be meaningful"
+    );
 }
 
 #[test]
@@ -124,7 +133,10 @@ fn test_web_search_tool_name() {
 fn test_web_search_tool_description_not_empty() {
     let tool = WebSearchTool::without_api_key();
     assert!(!tool.description().is_empty());
-    assert!(tool.description().len() > 10, "Description should be meaningful");
+    assert!(
+        tool.description().len() > 10,
+        "Description should be meaningful"
+    );
 }
 
 #[test]

@@ -1,40 +1,40 @@
 //! Ratatui widgets for Shannon UI
 
-pub mod select;
-pub mod progress;
+pub mod agent_bar;
+pub mod agents_panel;
+pub mod attachment_bar;
+pub mod chat;
+pub mod column;
+pub mod command_palette;
 pub mod dialog;
 pub mod diff_viewer;
 pub mod header;
-pub mod status_bar;
-pub mod chat;
-pub mod prompt;
-pub mod sidebar;
 pub mod key_hint;
-pub mod session_tab;
-pub mod tool_approval;
-pub mod attachment_bar;
-pub mod command_palette;
-pub mod agents_panel;
+pub mod progress;
+pub mod prompt;
 pub mod renderable;
-pub mod column;
-pub mod agent_bar;
+pub mod select;
+pub mod session_tab;
+pub mod sidebar;
+pub mod status_bar;
+pub mod tool_approval;
 
 // Re-exports for convenient access
+#[allow(unused_imports)]
+pub use attachment_bar::{Attachment, AttachmentBarWidget, AttachmentKind};
+pub use chat::{ChatMessage, ChatRole, ChatWidget};
+#[allow(unused_imports)]
+pub use command_palette::{CommandCategory, CommandPaletteWidget, PaletteCommand};
 pub use header::HeaderWidget;
-pub use status_bar::StatusBarWidget;
-pub use chat::{ChatWidget, ChatMessage, ChatRole};
+pub use key_hint::KeyHintWidget;
 pub use prompt::PromptWidget;
 #[allow(unused_imports)]
-pub use sidebar::{SidebarWidget, SidebarInfo, SidebarSection};
-pub use key_hint::KeyHintWidget;
+pub use session_tab::{SessionInfo, SessionTabWidget};
 #[allow(unused_imports)]
-pub use session_tab::{SessionTabWidget, SessionInfo};
+pub use sidebar::{SidebarInfo, SidebarSection, SidebarWidget};
+pub use status_bar::StatusBarWidget;
 #[allow(unused_imports)]
-pub use tool_approval::{ToolApprovalWidget, ToolApprovalRequest, ApprovalDecision, RiskLevel};
-#[allow(unused_imports)]
-pub use attachment_bar::{AttachmentBarWidget, Attachment, AttachmentKind};
-#[allow(unused_imports)]
-pub use command_palette::{CommandPaletteWidget, PaletteCommand, CommandCategory};
+pub use tool_approval::{ApprovalDecision, RiskLevel, ToolApprovalRequest, ToolApprovalWidget};
 
 // Re-export shared utilities used by other crates
 pub use chat::{detect_diff_language, highlight_diff_line};
@@ -42,18 +42,16 @@ pub use chat::{detect_diff_language, highlight_diff_line};
 use crate::theme::Theme;
 
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Rect},
     style::Style,
     widgets::{Clear, Paragraph},
-    Frame,
 };
 
 // Layout constants (shared with sidebar module)
 use sidebar::{
-    MIN_SIDEBAR_WIDTH_VAL as MIN_SIDEBAR_WIDTH,
-    COLLAPSE_HEADER_WIDTH_VAL as COLLAPSE_HEADER_WIDTH,
-    MIN_TERMINAL_WIDTH_VAL as MIN_TERMINAL_WIDTH,
-    MIN_TERMINAL_HEIGHT_VAL as MIN_TERMINAL_HEIGHT,
+    COLLAPSE_HEADER_WIDTH_VAL as COLLAPSE_HEADER_WIDTH, MIN_SIDEBAR_WIDTH_VAL as MIN_SIDEBAR_WIDTH,
+    MIN_TERMINAL_HEIGHT_VAL as MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH_VAL as MIN_TERMINAL_WIDTH,
 };
 
 // ---------------------------------------------------------------------------
@@ -128,20 +126,46 @@ pub struct RenderContext<'a> {
 
 impl<'a> RenderContext<'a> {
     /// Construct a minimal render context with all optional fields defaulted.
-    pub fn new(chat: &'a ChatWidget, prompt: &'a PromptWidget, theme: &'a Theme, status: &'a str) -> Self {
+    pub fn new(
+        chat: &'a ChatWidget,
+        prompt: &'a PromptWidget,
+        theme: &'a Theme,
+        status: &'a str,
+    ) -> Self {
         Self {
-            chat, prompt, theme, status,
-            model: None, tokens_used: None, max_tokens: None, cost_usd: None,
-            git_branch: None, token_breakdown: None, cached_tokens: None,
-            cache_read_tokens: None, cache_creation_tokens: None,
-            diag_counts: None, rate_limit: None, turn_count: None, memory_rss_kb: None,
-            spinner: None, progress_bar: None, sidebar_info: None,
+            chat,
+            prompt,
+            theme,
+            status,
+            model: None,
+            tokens_used: None,
+            max_tokens: None,
+            cost_usd: None,
+            git_branch: None,
+            token_breakdown: None,
+            cached_tokens: None,
+            cache_read_tokens: None,
+            cache_creation_tokens: None,
+            diag_counts: None,
+            rate_limit: None,
+            turn_count: None,
+            memory_rss_kb: None,
+            spinner: None,
+            progress_bar: None,
+            sidebar_info: None,
             sidebar_tab: crate::repl::SidebarTab::default(),
             approval_mode: None,
-            focus_mode: false, fullscreen_mode: false, auto_follow: true,
-            search_query: None, search_matches: &[], search_focused_idx: None,
-            cached_statusline: None, streaming_elapsed: None,
-            effort_level: None, thinking_phase: false, thinking_chars: 0,
+            focus_mode: false,
+            fullscreen_mode: false,
+            auto_follow: true,
+            search_query: None,
+            search_matches: &[],
+            search_focused_idx: None,
+            cached_statusline: None,
+            streaming_elapsed: None,
+            effort_level: None,
+            thinking_phase: false,
+            thinking_chars: 0,
         }
     }
 }
@@ -157,9 +181,9 @@ impl MainLayoutWidget {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(HeaderWidget::height() as u16), // Header bar
-                Constraint::Min(0),              // Chat area (flexible)
-                Constraint::Length(prompt_height), // Input prompt (dynamic)
-                Constraint::Length(2),            // Status bar (2 lines)
+                Constraint::Min(0),                                // Chat area (flexible)
+                Constraint::Length(prompt_height),                 // Input prompt (dynamic)
+                Constraint::Length(2),                             // Status bar (2 lines)
             ])
             .split(area);
 
@@ -174,7 +198,12 @@ impl MainLayoutWidget {
     /// Create layout with optional sidebar.
     /// When sidebar is visible and terminal is wide enough, splits the middle area horizontally.
     /// Returns (header_area, chat_area, prompt_area, status_area, sidebar_area, full_area)
-    pub fn layout_with_sidebar(area: Rect, prompt_height: u16, sidebar_visible: bool, chat_is_empty: bool) -> (Rect, Rect, Rect, Rect, Option<Rect>, Rect) {
+    pub fn layout_with_sidebar(
+        area: Rect,
+        prompt_height: u16,
+        sidebar_visible: bool,
+        chat_is_empty: bool,
+    ) -> (Rect, Rect, Rect, Rect, Option<Rect>, Rect) {
         // Responsive: collapse header on very narrow terminals; hide when chat has messages
         let header_height: u16 = if !chat_is_empty {
             0
@@ -252,26 +281,31 @@ impl MainLayoutWidget {
                     })
                 }
             });
-            ctx.chat.render(frame, chat_area, theme, search.as_ref(), ctx.auto_follow);
+            ctx.chat
+                .render(frame, chat_area, theme, search.as_ref(), ctx.auto_follow);
         };
 
         if ctx.fullscreen_mode || ctx.focus_mode {
             let chunks = ratatui::layout::Layout::default()
                 .direction(Direction::Vertical)
                 .margin(0)
-                .constraints([
-                    Constraint::Min(0),
-                    Constraint::Length(prompt_height),
-                ])
+                .constraints([Constraint::Min(0), Constraint::Length(prompt_height)])
                 .split(area);
             render_chat(frame, chunks[0], ctx.theme);
-            ctx.prompt.render(frame, chunks[1], ctx.theme, ctx.approval_mode);
+            ctx.prompt
+                .render(frame, chunks[1], ctx.theme, ctx.approval_mode);
         } else {
             let (_header_area, chat_area, prompt_area, status_area, sidebar_area, _) =
-                Self::layout_with_sidebar(area, prompt_height, sidebar_visible, ctx.chat.is_empty());
+                Self::layout_with_sidebar(
+                    area,
+                    prompt_height,
+                    sidebar_visible,
+                    ctx.chat.is_empty(),
+                );
 
             render_chat(frame, chat_area, ctx.theme);
-            ctx.prompt.render(frame, prompt_area, ctx.theme, ctx.approval_mode);
+            ctx.prompt
+                .render(frame, prompt_area, ctx.theme, ctx.approval_mode);
             if let Some(custom) = ctx.cached_statusline {
                 StatusBarWidget::render_custom(frame, status_area, custom, ctx.theme);
             } else {
@@ -440,9 +474,11 @@ mod tests {
         let theme = Theme::default_dark();
         let backend = ratatui::backend::TestBackend::new(80, 5);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal.draw(|f| {
-            HeaderWidget::render(f, f.area(), &theme);
-        }).unwrap();
+        terminal
+            .draw(|f| {
+                HeaderWidget::render(f, f.area(), &theme);
+            })
+            .unwrap();
         // Should render without panic — verify the buffer has some content
         let buf = terminal.backend().buffer().clone();
         assert!(buf.area.width > 0);
@@ -764,20 +800,26 @@ mod tests {
     #[test]
     fn test_highlight_code_with_renderer() {
         let code = "fn main() {\n    println!(\"hello\");\n}";
-        let lines = crate::render::Renderer::new().highlight_code(code, "rust", &Theme::default_dark());
+        let lines =
+            crate::render::Renderer::new().highlight_code(code, "rust", &Theme::default_dark());
         assert!(!lines.is_empty());
         assert_eq!(lines.len(), 3); // One line per source line
     }
 
     #[test]
     fn test_highlight_code_empty_with_renderer() {
-        let lines = crate::render::Renderer::new().highlight_code("", "rust", &Theme::default_dark());
+        let lines =
+            crate::render::Renderer::new().highlight_code("", "rust", &Theme::default_dark());
         assert!(lines.is_empty());
     }
 
     #[test]
     fn test_highlight_code_unknown_language_with_renderer() {
-        let lines = crate::render::Renderer::new().highlight_code("fn main() {}", "no_such_lang", &Theme::default_dark());
+        let lines = crate::render::Renderer::new().highlight_code(
+            "fn main() {}",
+            "no_such_lang",
+            &Theme::default_dark(),
+        );
         assert!(!lines.is_empty()); // Should still render, just plain
     }
 
@@ -786,7 +828,12 @@ mod tests {
     #[test]
     fn test_add_tool_message() {
         let mut chat = ChatWidget::new(100);
-        let idx = chat.add_tool_message("bash".to_string(), "cargo test\nall passed".to_string(), false, None);
+        let idx = chat.add_tool_message(
+            "bash".to_string(),
+            "cargo test\nall passed".to_string(),
+            false,
+            None,
+        );
         assert_eq!(chat.len(), 1);
         let msg = &chat.messages[idx];
         assert_eq!(msg.role, ChatRole::Tool);
@@ -797,7 +844,12 @@ mod tests {
     #[test]
     fn test_add_tool_message_error() {
         let mut chat = ChatWidget::new(100);
-        chat.add_tool_message("bash".to_string(), "error: build failed".to_string(), true, None);
+        chat.add_tool_message(
+            "bash".to_string(),
+            "error: build failed".to_string(),
+            true,
+            None,
+        );
         let msg = &chat.messages[0];
         assert!(msg.is_error);
         assert_eq!(msg.tool_name.as_deref(), Some("bash"));
@@ -810,11 +862,15 @@ mod tests {
         // << and >> should not be silently dropped (regression test for Event::Html fix)
         let segments = chat::parse_markdown_segments("result << 5 >> 3");
         assert!(!segments.is_empty(), "segments should not be empty");
-        let all_text: String = segments.iter().flat_map(|s| match s {
-            chat::MdSegment::Text(lines) => lines.clone(),
-            chat::MdSegment::Header { text, .. } => vec![text.clone()],
-            _ => vec![],
-        }).collect::<Vec<_>>().join(" ");
+        let all_text: String = segments
+            .iter()
+            .flat_map(|s| match s {
+                chat::MdSegment::Text(lines) => lines.clone(),
+                chat::MdSegment::Header { text, .. } => vec![text.clone()],
+                _ => vec![],
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(
             all_text.contains("<") || all_text.contains(">") || all_text.contains("&lt;"),
             "angle brackets should appear in output, got: {all_text}"
@@ -825,10 +881,14 @@ mod tests {
     fn test_parse_markdown_inline_html() {
         let segments = chat::parse_markdown_segments("text <b>bold</b> more");
         assert!(!segments.is_empty(), "segments should not be empty");
-        let all_text: String = segments.iter().flat_map(|s| match s {
-            chat::MdSegment::Text(lines) => lines.clone(),
-            _ => vec![],
-        }).collect::<Vec<_>>().join(" ");
+        let all_text: String = segments
+            .iter()
+            .flat_map(|s| match s {
+                chat::MdSegment::Text(lines) => lines.clone(),
+                _ => vec![],
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         assert!(!all_text.is_empty(), "should have text content");
     }
 
@@ -853,7 +913,8 @@ mod tests {
             turn_count: 5,
             commands_run: 3,
             tokens_per_sec: Some(42.0),
-            memory_rss_kb: 0,        };
+            memory_rss_kb: 0,
+        };
         assert_eq!(info.context_window, 200_000);
         assert_eq!(info.error_count, 1);
     }
@@ -886,7 +947,10 @@ mod tests {
 
     #[test]
     fn test_sidebar_tab_default() {
-        assert_eq!(crate::repl::SidebarTab::default(), crate::repl::SidebarTab::Context);
+        assert_eq!(
+            crate::repl::SidebarTab::default(),
+            crate::repl::SidebarTab::Context
+        );
     }
 
     #[test]
@@ -983,7 +1047,10 @@ mod tests {
 
     #[test]
     fn test_parse_markdown_many_lines() {
-        let input: String = (0..500).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+        let input: String = (0..500)
+            .map(|i| format!("Line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let segments = chat::parse_markdown_segments(&input);
         assert_eq!(segments.len(), 1);
         match &segments[0] {
@@ -997,7 +1064,11 @@ mod tests {
         for level in 1..=6 {
             let input = format!("{} Header", "#".repeat(level));
             let segments = chat::parse_markdown_segments(&input);
-            assert_eq!(segments.len(), 1, "Expected single header segment for level {level}");
+            assert_eq!(
+                segments.len(),
+                1,
+                "Expected single header segment for level {level}"
+            );
             match &segments[0] {
                 chat::MdSegment::Header { level: l, text } => {
                     assert_eq!(*l, level);
@@ -1137,7 +1208,8 @@ mod tests {
             turn_count: 10,
             commands_run: 5,
             tokens_per_sec: Some(85.5),
-            memory_rss_kb: 0,        };
+            memory_rss_kb: 0,
+        };
         assert_eq!(info.model.as_deref(), Some("claude-opus"));
         assert_eq!(info.tokens_used, 150_000);
         assert_eq!(info.modified_files.len(), 2);
@@ -1164,7 +1236,8 @@ mod tests {
             turn_count: 0,
             commands_run: 0,
             tokens_per_sec: None,
-            memory_rss_kb: 0,        };
+            memory_rss_kb: 0,
+        };
         assert!(info.model.is_none());
         assert!(info.modified_files.is_empty());
     }
@@ -1306,13 +1379,19 @@ mod tests {
     #[test]
     fn test_streaming_state_variants() {
         let thinking = StreamingState::Thinking;
-        let tool = StreamingState::CallingTool { name: "bash".to_string() };
+        let tool = StreamingState::CallingTool {
+            name: "bash".to_string(),
+        };
         let generating = StreamingState::Generating { elapsed_secs: 5 };
         assert_eq!(thinking, StreamingState::Thinking);
-        assert_eq!(tool, StreamingState::CallingTool { name: "bash".to_string() });
+        assert_eq!(
+            tool,
+            StreamingState::CallingTool {
+                name: "bash".to_string()
+            }
+        );
         assert_eq!(generating, StreamingState::Generating { elapsed_secs: 5 });
     }
-
 
     // ── Chat Toggle Fold Tests ─────────────────────────────────────────────
 
@@ -1355,8 +1434,14 @@ mod tests {
         // First line should be the header "▸ You · HH:MM"
         let header = &lines[0];
         let header_text: String = header.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(header_text.contains("You"), "user header should contain 'You'");
-        assert!(header_text.contains("·"), "user header should contain time separator");
+        assert!(
+            header_text.contains("You"),
+            "user header should contain 'You'"
+        );
+        assert!(
+            header_text.contains("·"),
+            "user header should contain time separator"
+        );
     }
 
     #[test]
@@ -1368,14 +1453,31 @@ mod tests {
 
         // First user message: has timestamp
         let first_lines = chat.cell_lines(0, 80, &theme).unwrap();
-        let first_header: String = first_lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(first_header.contains("·"), "first user message should have timestamp");
+        let first_header: String = first_lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            first_header.contains("·"),
+            "first user message should have timestamp"
+        );
 
         // Second user message (continuation): no timestamp
-        assert!(chat.is_cell_continuation(1), "second user message should be marked as continuation");
+        assert!(
+            chat.is_cell_continuation(1),
+            "second user message should be marked as continuation"
+        );
         let second_lines = chat.cell_lines(1, 80, &theme).unwrap();
-        let second_header: String = second_lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(!second_header.contains("·"), "continuation user message should NOT have timestamp");
+        let second_header: String = second_lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(
+            !second_header.contains("·"),
+            "continuation user message should NOT have timestamp"
+        );
     }
 
     #[test]
@@ -1389,7 +1491,10 @@ mod tests {
         let lines = chat.cell_lines(1, 80, &theme).unwrap();
         let sep_line = &lines[0];
         let sep_text: String = sep_line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(sep_text.contains("─"), "assistant message separator should contain dashes");
+        assert!(
+            sep_text.contains("─"),
+            "assistant message separator should contain dashes"
+        );
     }
 
     #[test]
@@ -1402,7 +1507,13 @@ mod tests {
         // There should be NO standalone dash separator line before user messages.
         // The first line should be the header "▸ You · HH:MM", not a dash separator.
         let first_text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(!first_text.starts_with("─"), "first line should be header, not a dash separator");
-        assert!(first_text.contains("You"), "first line should be the user header");
+        assert!(
+            !first_text.starts_with("─"),
+            "first line should be header, not a dash separator"
+        );
+        assert!(
+            first_text.contains("You"),
+            "first line should be the user header"
+        );
     }
 }

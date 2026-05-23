@@ -770,10 +770,7 @@ mod tests {
         };
         let suggestions = engine.suggest(&ctx, &[]);
         assert_eq!(suggestions.len(), 1);
-        assert_eq!(
-            suggestions[0].text,
-            "Show files related to src/lib.rs"
-        );
+        assert_eq!(suggestions[0].text, "Show files related to src/lib.rs");
         assert_eq!(
             suggestions[0].description,
             "Explore files related to src/lib.rs"
@@ -797,7 +794,11 @@ mod tests {
         ));
         // Count should be the same -- existing rule replaced.
         assert_eq!(engine.rules().len(), count_before);
-        let rule = engine.rules().iter().find(|r| r.id == "rust_check_compile").unwrap();
+        let rule = engine
+            .rules()
+            .iter()
+            .find(|r| r.id == "rust_check_compile")
+            .unwrap();
         assert_eq!(rule.template, "New template");
         assert_eq!(rule.priority, 1.0);
     }

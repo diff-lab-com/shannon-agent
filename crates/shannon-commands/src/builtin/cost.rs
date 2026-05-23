@@ -1,6 +1,8 @@
 //! /cost command - Show token usage and cost tracking
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Cost prompt template
 const COST_PROMPT: &str = r##"
@@ -34,7 +36,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[--detailed] [--reset]".to_string()),
             when_to_use: Some(
-                "To check how many tokens have been used and the estimated cost of the session".to_string(),
+                "To check how many tokens have been used and the estimated cost of the session"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,

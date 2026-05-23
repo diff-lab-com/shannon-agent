@@ -4,10 +4,10 @@
 //! Validates input against a provided JSON schema and returns the structured data.
 //! Based on Claude Code's SyntheticOutputTool.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 pub const STRUCTURED_OUTPUT_TOOL_NAME: &str = "StructuredOutput";
@@ -72,30 +72,25 @@ impl Tool for StructuredOutputTool {
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
-        let parsed: StructuredOutputInput = serde_json::from_value(input)
-            .map_err(|e| ToolError::InvalidInput(format!("Invalid structured output input: {e}")))?;
+        let parsed: StructuredOutputInput = serde_json::from_value(input).map_err(|e| {
+            ToolError::InvalidInput(format!("Invalid structured output input: {e}"))
+        })?;
 
         let field_count = parsed.data.len();
 
         let mut metadata = HashMap::new();
-        metadata.insert(
-            "structured_output".to_string(),
-            json!(parsed.data),
-        );
-        metadata.insert(
-            "field_count".to_string(),
-            json!(field_count),
-        );
+        metadata.insert("structured_output".to_string(), json!(parsed.data));
+        metadata.insert("field_count".to_string(), json!(field_count));
 
         Ok(ToolOutput {
-            content: format!(
-                "Structured output provided successfully ({field_count} fields)"
-            ),
+            content: format!("Structured output provided successfully ({field_count} fields)"),
             is_error: false,
             metadata,
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -121,10 +116,7 @@ mod tests {
             output.metadata.get("structured_output").unwrap()["name"],
             "test"
         );
-        assert_eq!(
-            output.metadata.get("field_count").unwrap(),
-            3
-        );
+        assert_eq!(output.metadata.get("field_count").unwrap(), 3);
     }
 
     #[tokio::test]
@@ -154,10 +146,7 @@ mod tests {
         let output = result.unwrap();
         assert!(!output.is_error);
         assert!(output.content.contains("0 fields"));
-        assert_eq!(
-            output.metadata.get("field_count").unwrap(),
-            0
-        );
+        assert_eq!(output.metadata.get("field_count").unwrap(), 0);
     }
 
     #[tokio::test]

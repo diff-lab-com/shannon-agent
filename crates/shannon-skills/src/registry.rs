@@ -2,7 +2,10 @@
 
 use crate::definition::{Skill, SkillFull, SkillId, SkillMetadata, SkillSource};
 use crate::error::{SkillError, SkillResult};
-use crate::loader::{load_full_skill as loader_load_full_skill, load_metadata_only as loader_load_metadata_only, load_skill_from_file, load_skills_from_directory};
+use crate::loader::{
+    load_full_skill as loader_load_full_skill, load_metadata_only as loader_load_metadata_only,
+    load_skill_from_file, load_skills_from_directory,
+};
 use shannon_types::recover_lock;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -16,8 +19,7 @@ pub struct SkillRegistry {
     inner: Arc<RwLock<RegistryInner>>,
 }
 
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct RegistryInner {
     /// All registered skills by ID
     skills: HashMap<SkillId, Skill>,
@@ -38,7 +40,6 @@ struct RegistryInner {
     full_cache: HashMap<SkillId, SkillFull>,
 }
 
-
 impl Default for SkillRegistry {
     fn default() -> Self {
         Self::new()
@@ -55,7 +56,9 @@ impl SkillRegistry {
 
     /// Register a new skill
     pub fn register(&self, skill: Skill) -> SkillResult<()> {
-        let mut inner = self.inner.write()
+        let mut inner = self
+            .inner
+            .write()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: skill.name.clone(),
                 message: format!("Failed to acquire write lock: {e}"),
@@ -64,7 +67,10 @@ impl SkillRegistry {
         // Check for duplicates
         if let Some(existing_id) = inner.by_name.get(&skill.name) {
             if existing_id != &skill.id {
-                warn!("Skill name conflict: '{}' ({} vs {})", skill.name, existing_id, skill.id);
+                warn!(
+                    "Skill name conflict: '{}' ({} vs {})",
+                    skill.name, existing_id, skill.id
+                );
             }
         }
 
@@ -81,7 +87,9 @@ impl SkillRegistry {
 
         // Store based on whether it's conditional
         if skill.is_conditional() {
-            inner.conditional_skills.insert(skill_id.clone(), skill.clone());
+            inner
+                .conditional_skills
+                .insert(skill_id.clone(), skill.clone());
         }
 
         inner.skills.insert(skill_id.clone(), skill);
@@ -100,35 +108,39 @@ impl SkillRegistry {
 
     /// Get a skill by ID
     pub fn get(&self, id: &SkillId) -> SkillResult<Skill> {
-        let inner = self.inner.read()
-            .map_err(|e| SkillError::ExecutionFailed {
-                name: "registry".to_string(),
-                message: format!("Failed to acquire read lock: {e}"),
-            })?;
+        let inner = self.inner.read().map_err(|e| SkillError::ExecutionFailed {
+            name: "registry".to_string(),
+            message: format!("Failed to acquire read lock: {e}"),
+        })?;
 
-        inner.skills.get(id)
+        inner
+            .skills
+            .get(id)
             .cloned()
             .ok_or_else(|| SkillError::NotFound(id.clone()))
     }
 
     /// Get a skill by name or alias
     pub fn get_by_name(&self, name: &str) -> SkillResult<Skill> {
-        let inner = self.inner.read()
-            .map_err(|e| SkillError::ExecutionFailed {
-                name: "registry".to_string(),
-                message: format!("Failed to acquire read lock: {e}"),
-            })?;
+        let inner = self.inner.read().map_err(|e| SkillError::ExecutionFailed {
+            name: "registry".to_string(),
+            message: format!("Failed to acquire read lock: {e}"),
+        })?;
 
         // Try direct name first
         if let Some(id) = inner.by_name.get(name) {
-            return inner.skills.get(id)
+            return inner
+                .skills
+                .get(id)
                 .cloned()
                 .ok_or_else(|| SkillError::NotFound(name.to_string()));
         }
 
         // Try aliases
         if let Some(id) = inner.by_alias.get(name) {
-            return inner.skills.get(id)
+            return inner
+                .skills
+                .get(id)
                 .cloned()
                 .ok_or_else(|| SkillError::NotFound(name.to_string()));
         }
@@ -138,7 +150,8 @@ impl SkillRegistry {
 
     /// List all skills
     pub fn list(&self) -> Vec<Skill> {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|inner| inner.skills.values().cloned().collect())
             .unwrap_or_default()
     }
@@ -153,9 +166,12 @@ impl SkillRegistry {
 
     /// List conditional skills that haven't been activated yet
     pub fn list_conditional(&self) -> Vec<Skill> {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|inner| {
-                inner.conditional_skills.values()
+                inner
+                    .conditional_skills
+                    .values()
                     .filter(|s| !inner.activated_skills.contains(&s.id))
                     .cloned()
                     .collect()
@@ -165,21 +181,25 @@ impl SkillRegistry {
 
     /// List dynamically discovered skills
     pub fn list_dynamic(&self) -> Vec<Skill> {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|inner| inner.dynamic_skills.values().cloned().collect())
             .unwrap_or_default()
     }
 
     /// Check if a skill exists
     pub fn contains(&self, id: &SkillId) -> bool {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|inner| inner.skills.contains_key(id))
             .unwrap_or(false)
     }
 
     /// Remove a skill from the registry
     pub fn remove(&self, id: &SkillId) -> SkillResult<()> {
-        let mut inner = self.inner.write()
+        let mut inner = self
+            .inner
+            .write()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "registry".to_string(),
                 message: format!("Failed to acquire write lock: {e}"),
@@ -210,7 +230,9 @@ impl SkillRegistry {
 
     /// Clear all skills from the registry
     pub fn clear(&self) -> SkillResult<()> {
-        let mut inner = self.inner.write()
+        let mut inner = self
+            .inner
+            .write()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "registry".to_string(),
                 message: format!("Failed to acquire write lock: {e}"),
@@ -232,11 +254,14 @@ impl SkillRegistry {
 
     /// Get the total number of registered skills (fully loaded + metadata-only)
     pub fn len(&self) -> usize {
-        self.inner.read()
+        self.inner
+            .read()
             .map(|inner| {
                 // Count full skills plus metadata-only skills not already in skills
                 let full_count = inner.skills.len();
-                let meta_only_unique = inner.metadata_only.keys()
+                let meta_only_unique = inner
+                    .metadata_only
+                    .keys()
                     .filter(|id| !inner.skills.contains_key(*id))
                     .count();
                 full_count + meta_only_unique
@@ -259,7 +284,8 @@ impl SkillRegistry {
         };
 
         // Collect skills to activate first, to avoid holding borrow while modifying
-        let to_activate: Vec<_> = inner.conditional_skills
+        let to_activate: Vec<_> = inner
+            .conditional_skills
             .iter()
             .filter(|(id, _)| !inner.activated_skills.contains(*id))
             .filter_map(|(id, skill)| {
@@ -276,7 +302,10 @@ impl SkillRegistry {
             inner.dynamic_skills.insert(id.clone(), skill.clone());
             inner.activated_skills.insert(id.clone());
             result.push(id);
-            debug!("Activated conditional skill '{}' for paths: {:?}", skill.name, paths);
+            debug!(
+                "Activated conditional skill '{}' for paths: {:?}",
+                skill.name, paths
+            );
         }
 
         result
@@ -312,13 +341,14 @@ impl SkillRegistry {
 
     /// Resolve a skill name/alias to its ID
     pub fn resolve_id(&self, name: &str) -> SkillResult<SkillId> {
-        let inner = self.inner.read()
-            .map_err(|e| SkillError::ExecutionFailed {
-                name: "registry".to_string(),
-                message: format!("Failed to acquire read lock: {e}"),
-            })?;
+        let inner = self.inner.read().map_err(|e| SkillError::ExecutionFailed {
+            name: "registry".to_string(),
+            message: format!("Failed to acquire read lock: {e}"),
+        })?;
 
-        inner.by_name.get(name)
+        inner
+            .by_name
+            .get(name)
             .or_else(|| inner.by_alias.get(name))
             .cloned()
             .ok_or_else(|| SkillError::NotFound(name.to_string()))
@@ -338,7 +368,9 @@ impl SkillRegistry {
         let aliases = metadata.aliases.clone();
         let is_conditional = metadata.when_to_use.is_some();
 
-        let mut inner = self.inner.write()
+        let mut inner = self
+            .inner
+            .write()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: name.clone(),
                 message: format!("Failed to acquire write lock: {e}"),
@@ -366,7 +398,11 @@ impl SkillRegistry {
     /// Load metadata-only for all SKILL.md files found under `dir`.
     ///
     /// Returns the number of skills discovered.
-    pub fn load_metadata_from_directory(&self, dir: &Path, _source: &SkillSource) -> SkillResult<usize> {
+    pub fn load_metadata_from_directory(
+        &self,
+        dir: &Path,
+        _source: &SkillSource,
+    ) -> SkillResult<usize> {
         if !dir.exists() {
             return Ok(0);
         }
@@ -406,11 +442,10 @@ impl SkillRegistry {
     pub fn get_full_skill(&self, name_or_id: &str) -> SkillResult<SkillFull> {
         // Try to resolve to an ID first
         let id = {
-            let inner = self.inner.read()
-                .map_err(|e| SkillError::ExecutionFailed {
-                    name: "registry".to_string(),
-                    message: format!("Failed to acquire read lock: {e}"),
-                })?;
+            let inner = self.inner.read().map_err(|e| SkillError::ExecutionFailed {
+                name: "registry".to_string(),
+                message: format!("Failed to acquire read lock: {e}"),
+            })?;
 
             // Check if it's already a known ID
             if inner.skills.contains_key(name_or_id) {
@@ -425,7 +460,9 @@ impl SkillRegistry {
             }
 
             // Resolve via name/alias
-            let resolved_id = inner.by_name.get(name_or_id)
+            let resolved_id = inner
+                .by_name
+                .get(name_or_id)
                 .or_else(|| inner.by_alias.get(name_or_id))
                 .cloned();
 
@@ -451,13 +488,14 @@ impl SkillRegistry {
 
         // We have an ID for a metadata-only skill — load from disk
         let file_path = {
-            let inner = self.inner.read()
-                .map_err(|e| SkillError::ExecutionFailed {
-                    name: "registry".to_string(),
-                    message: format!("Failed to acquire read lock: {e}"),
-                })?;
+            let inner = self.inner.read().map_err(|e| SkillError::ExecutionFailed {
+                name: "registry".to_string(),
+                message: format!("Failed to acquire read lock: {e}"),
+            })?;
 
-            inner.metadata_only.get(&id)
+            inner
+                .metadata_only
+                .get(&id)
                 .and_then(|m| m.file_path.clone())
                 .ok_or_else(|| SkillError::NotFound(id.clone()))?
         };
@@ -467,7 +505,9 @@ impl SkillRegistry {
 
         // Cache and also register the full skill in the main skills map
         {
-            let mut inner = self.inner.write()
+            let mut inner = self
+                .inner
+                .write()
                 .map_err(|e| SkillError::ExecutionFailed {
                     name: skill.name.clone(),
                     message: format!("Failed to acquire write lock: {e}"),
@@ -583,7 +623,8 @@ impl SkillRegistry {
 
         let mut lines = vec!["Available skills (invoke with /skill-name):".to_string()];
         for meta in &skills {
-            let hint = meta.argument_hint
+            let hint = meta
+                .argument_hint
                 .as_ref()
                 .map(|h| format!(" {h}"))
                 .unwrap_or_default();
@@ -609,7 +650,9 @@ impl SkillRegistry {
     ///
     /// The next call to [`get_full_skill`] will re-read from disk.
     pub fn invalidate_cache(&self, id: &SkillId) -> SkillResult<()> {
-        let mut inner = self.inner.write()
+        let mut inner = self
+            .inner
+            .write()
             .map_err(|e| SkillError::ExecutionFailed {
                 name: "registry".to_string(),
                 message: format!("Failed to acquire write lock: {e}"),
@@ -1080,9 +1123,7 @@ mod tests {
     }
 
     fn skill_content(name: &str, desc: &str) -> String {
-        format!(
-            "---\nname: {name}\ndescription: {desc}\n---\n\n# {name}\n\nBody for {name}.\n"
-        )
+        format!("---\nname: {name}\ndescription: {desc}\n---\n\n# {name}\n\nBody for {name}.\n")
     }
 
     #[test]
@@ -1107,12 +1148,22 @@ mod tests {
     #[test]
     fn test_load_metadata_from_directory() {
         let tmp = tempfile::tempdir().unwrap();
-        create_skill_dir(tmp.path(), "commit", &skill_content("commit", "Commit skill"));
-        create_skill_dir(tmp.path(), "review", &skill_content("review", "Review skill"));
+        create_skill_dir(
+            tmp.path(),
+            "commit",
+            &skill_content("commit", "Commit skill"),
+        );
+        create_skill_dir(
+            tmp.path(),
+            "review",
+            &skill_content("review", "Review skill"),
+        );
         create_skill_dir(tmp.path(), "test", &skill_content("test", "Test skill"));
 
         let registry = SkillRegistry::new();
-        let count = registry.load_metadata_from_directory(tmp.path(), &SkillSource::User).unwrap();
+        let count = registry
+            .load_metadata_from_directory(tmp.path(), &SkillSource::User)
+            .unwrap();
 
         assert_eq!(count, 3);
         assert_eq!(registry.len(), 3);
@@ -1121,10 +1172,9 @@ mod tests {
     #[test]
     fn test_load_metadata_from_nonexistent_directory() {
         let registry = SkillRegistry::new();
-        let count = registry.load_metadata_from_directory(
-            Path::new("/nonexistent/skills"),
-            &SkillSource::User,
-        ).unwrap();
+        let count = registry
+            .load_metadata_from_directory(Path::new("/nonexistent/skills"), &SkillSource::User)
+            .unwrap();
         assert_eq!(count, 0);
     }
 
@@ -1193,7 +1243,11 @@ mod tests {
         assert!(full1.content().contains("Body for my-skill"));
 
         // Modify the file
-        std::fs::write(&skill_path, skill_content("my-skill", "Updated description")).unwrap();
+        std::fs::write(
+            &skill_path,
+            skill_content("my-skill", "Updated description"),
+        )
+        .unwrap();
 
         // Invalidate cache
         registry.invalidate_cache(&"my-skill".to_string()).unwrap();
@@ -1217,8 +1271,16 @@ mod tests {
     #[test]
     fn test_available_skills_metadata() {
         let tmp = tempfile::tempdir().unwrap();
-        create_skill_dir(tmp.path(), "commit", &skill_content("commit", "Commit skill"));
-        create_skill_dir(tmp.path(), "review", &skill_content("review", "Review skill"));
+        create_skill_dir(
+            tmp.path(),
+            "commit",
+            &skill_content("commit", "Commit skill"),
+        );
+        create_skill_dir(
+            tmp.path(),
+            "review",
+            &skill_content("review", "Review skill"),
+        );
 
         let registry = SkillRegistry::new();
         let skill_path1 = tmp.path().join("commit").join("SKILL.md");
@@ -1344,7 +1406,10 @@ mod tests {
 
         let formatted = registry.format_skills_for_llm();
         assert!(formatted.starts_with("Available skills (invoke with /skill-name):"));
-        assert!(formatted.contains("- /commit <message>: Generate git commits with conventional messages"));
+        assert!(
+            formatted
+                .contains("- /commit <message>: Generate git commits with conventional messages")
+        );
         assert!(formatted.contains("- /review: Review code for quality issues"));
     }
 
@@ -1358,10 +1423,16 @@ mod tests {
     #[test]
     fn test_load_from_directory_backward_compat() {
         let tmp = tempfile::tempdir().unwrap();
-        create_skill_dir(tmp.path(), "compat", &skill_content("compat", "Backward compat skill"));
+        create_skill_dir(
+            tmp.path(),
+            "compat",
+            &skill_content("compat", "Backward compat skill"),
+        );
 
         let registry = SkillRegistry::new();
-        let skills = registry.load_from_directory(tmp.path(), &SkillSource::User).unwrap();
+        let skills = registry
+            .load_from_directory(tmp.path(), &SkillSource::User)
+            .unwrap();
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].name, "compat");
@@ -1375,13 +1446,23 @@ mod tests {
     #[test]
     fn test_progressive_loading_then_full_flow() {
         let tmp = tempfile::tempdir().unwrap();
-        create_skill_dir(tmp.path(), "commit", &skill_content("commit", "Commit helper"));
-        create_skill_dir(tmp.path(), "review", &skill_content("review", "Code review"));
+        create_skill_dir(
+            tmp.path(),
+            "commit",
+            &skill_content("commit", "Commit helper"),
+        );
+        create_skill_dir(
+            tmp.path(),
+            "review",
+            &skill_content("review", "Code review"),
+        );
 
         let registry = SkillRegistry::new();
 
         // Phase 1: Load metadata only for all skills
-        let count = registry.load_metadata_from_directory(tmp.path(), &SkillSource::User).unwrap();
+        let count = registry
+            .load_metadata_from_directory(tmp.path(), &SkillSource::User)
+            .unwrap();
         assert_eq!(count, 2);
 
         // Phase 2: Check available metadata for LLM injection
@@ -1430,7 +1511,9 @@ mod tests {
         create_skill_dir(tmp.path(), "b", &skill_content("b", "Skill B"));
 
         let registry = SkillRegistry::new();
-        registry.load_metadata_from_directory(tmp.path(), &SkillSource::User).unwrap();
+        registry
+            .load_metadata_from_directory(tmp.path(), &SkillSource::User)
+            .unwrap();
 
         // Also add a fully loaded skill
         let full = Skill::new(

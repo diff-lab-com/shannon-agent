@@ -131,30 +131,77 @@ mod tests {
 
     #[test]
     fn coordination_error_variants() {
-        assert!(CoordinationError::TeamNotFound("t".into()).to_string().contains("t"));
-        assert!(CoordinationError::AgentNotFound("a".into()).to_string().contains("a"));
-        assert!(CoordinationError::AgentAlreadyMember("a".into(), "t".into()).to_string().contains("a"));
-        assert!(CoordinationError::InvalidConfiguration("bad".into()).to_string().contains("bad"));
-        assert!(CoordinationError::ShutdownInProgress.to_string().contains("shutdown"));
-        assert!(CoordinationError::MaxTeamSizeExceeded(10).to_string().contains("10"));
+        assert!(
+            CoordinationError::TeamNotFound("t".into())
+                .to_string()
+                .contains("t")
+        );
+        assert!(
+            CoordinationError::AgentNotFound("a".into())
+                .to_string()
+                .contains("a")
+        );
+        assert!(
+            CoordinationError::AgentAlreadyMember("a".into(), "t".into())
+                .to_string()
+                .contains("a")
+        );
+        assert!(
+            CoordinationError::InvalidConfiguration("bad".into())
+                .to_string()
+                .contains("bad")
+        );
+        assert!(
+            CoordinationError::ShutdownInProgress
+                .to_string()
+                .contains("shutdown")
+        );
+        assert!(
+            CoordinationError::MaxTeamSizeExceeded(10)
+                .to_string()
+                .contains("10")
+        );
     }
 
     #[test]
     fn task_error_variants() {
         let id = uuid::Uuid::new_v4();
-        assert!(TaskError::TaskNotFound(id).to_string().contains(&id.to_string()));
+        assert!(
+            TaskError::TaskNotFound(id)
+                .to_string()
+                .contains(&id.to_string())
+        );
         assert!(TaskError::TaskBlocked(id).to_string().contains("blocked"));
-        assert!(TaskError::InvalidTaskState(id).to_string().contains("invalid state"));
-        assert!(TaskError::CircularDependency(id).to_string().contains("circular"));
-        assert!(TaskError::TaskFailed(id, "timeout".into()).to_string().contains("timeout"));
-        assert!(TaskError::NoAvailableAgents("task".into()).to_string().contains("task"));
+        assert!(
+            TaskError::InvalidTaskState(id)
+                .to_string()
+                .contains("invalid state")
+        );
+        assert!(
+            TaskError::CircularDependency(id)
+                .to_string()
+                .contains("circular")
+        );
+        assert!(
+            TaskError::TaskFailed(id, "timeout".into())
+                .to_string()
+                .contains("timeout")
+        );
+        assert!(
+            TaskError::NoAvailableAgents("task".into())
+                .to_string()
+                .contains("task")
+        );
     }
 
     #[test]
     fn agent_error_from_coordination() {
         let coord_err = CoordinationError::ShutdownInProgress;
         let err: AgentError = coord_err.into();
-        assert!(matches!(err, AgentError::Coordination(CoordinationError::ShutdownInProgress)));
+        assert!(matches!(
+            err,
+            AgentError::Coordination(CoordinationError::ShutdownInProgress)
+        ));
     }
 
     #[test]

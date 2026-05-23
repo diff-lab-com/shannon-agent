@@ -1,6 +1,8 @@
 //! /help command - Show command help and documentation
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Help prompt template
 const HELP_PROMPT: &str = r##"
@@ -34,7 +36,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[command name]".to_string()),
             when_to_use: Some(
-                "Use to discover available commands or get detailed help for a specific command".to_string(),
+                "Use to discover available commands or get detailed help for a specific command"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
@@ -1063,16 +1066,63 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
 /// Get all command help entries
 pub fn all_help_entries() -> Vec<CommandHelpEntry> {
     [
-        "commit", "review-pr", "pdf", "status", "diff", "search", "export",
-        "config", "debug", "clear", "quit", "model", "init", "sessions",
-        "resume", "history", "worktree", "doctor", "compact", "cost", "team",
-        "permissions", "plan", "branch", "credentials", "browse", "tools",
-        "go_to_definition", "find_references", "hover", "document_symbol",
-        "workspace_symbol", "rename_symbol", "code_actions", "web-search",
-        "review", "local-models", "ci", "hooks", "remember", "recall",
-        "forget", "memory", "image", "mode", "context", "undo", "rewind",
-        "notify", "create-pr", "patch", "sandbox",
-        "add-dir", "rename", "recap", "effort", "focus",
+        "commit",
+        "review-pr",
+        "pdf",
+        "status",
+        "diff",
+        "search",
+        "export",
+        "config",
+        "debug",
+        "clear",
+        "quit",
+        "model",
+        "init",
+        "sessions",
+        "resume",
+        "history",
+        "worktree",
+        "doctor",
+        "compact",
+        "cost",
+        "team",
+        "permissions",
+        "plan",
+        "branch",
+        "credentials",
+        "browse",
+        "tools",
+        "go_to_definition",
+        "find_references",
+        "hover",
+        "document_symbol",
+        "workspace_symbol",
+        "rename_symbol",
+        "code_actions",
+        "web-search",
+        "review",
+        "local-models",
+        "ci",
+        "hooks",
+        "remember",
+        "recall",
+        "forget",
+        "memory",
+        "image",
+        "mode",
+        "context",
+        "undo",
+        "rewind",
+        "notify",
+        "create-pr",
+        "patch",
+        "sandbox",
+        "add-dir",
+        "rename",
+        "recap",
+        "effort",
+        "focus",
     ]
     .iter()
     .filter_map(|name| get_command_help(name))
@@ -1122,7 +1172,8 @@ pub fn generate_help(command_filter: Option<&str>) -> String {
             }
         }
 
-        output.push_str("Use `/help <command>` for detailed information about a specific command.\n");
+        output
+            .push_str("Use `/help <command>` for detailed information about a specific command.\n");
         output
     }
 }

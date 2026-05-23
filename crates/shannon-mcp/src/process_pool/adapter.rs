@@ -5,8 +5,8 @@ use serde_json::Value;
 use shannon_tool_interface::{Tool, ToolError, ToolOutput, ToolResult};
 use std::sync::Arc;
 
-use super::types::*;
 use super::McpProcessPool;
+use super::types::*;
 
 // ---------------------------------------------------------------------------
 // Pooled MCP Tool Adapter
@@ -130,7 +130,12 @@ impl PooledMcpToolAdapter {
             } else {
                 drop(progress_cb);
                 self.pool
-                    .call_tool_with_limit(&self.server_name, &self.remote_tool_name, input, max_chars)
+                    .call_tool_with_limit(
+                        &self.server_name,
+                        &self.remote_tool_name,
+                        input,
+                        max_chars,
+                    )
                     .await
             }
         };
@@ -159,7 +164,8 @@ impl PooledMcpToolAdapter {
                     .map(|(k, v)| (k.clone(), v.to_string()))
                     .collect();
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));
-                pairs.into_iter()
+                pairs
+                    .into_iter()
                     .map(|(k, v)| format!("{k}:{v}"))
                     .collect::<Vec<_>>()
                     .join(",")
@@ -234,7 +240,9 @@ impl Tool for PooledMcpToolAdapter {
 
             // Store in cache on success.
             if !result.is_error {
-                self.pool.put_cached(&cache_key, result.content.clone()).await;
+                self.pool
+                    .put_cached(&cache_key, result.content.clone())
+                    .await;
             }
 
             return Ok(result);
@@ -252,9 +260,7 @@ impl Tool for PooledMcpToolAdapter {
     }
 
     fn is_read_only(&self) -> bool {
-        self.annotations
-            .as_ref()
-            .is_some_and(|a| a.read_only_hint)
+        self.annotations.as_ref().is_some_and(|a| a.read_only_hint)
     }
 
     fn is_concurrency_safe(&self) -> bool {

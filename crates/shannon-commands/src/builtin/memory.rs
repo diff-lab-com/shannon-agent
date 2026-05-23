@@ -4,7 +4,9 @@
 //! Claude Code's memory system. Stores key facts about projects, preferences,
 //! and decisions in `~/.shannon/memory/`.
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 const MEMORY_PROMPT: &str = r##"
 Manage cross-session memory for persistent context.
@@ -171,7 +173,10 @@ impl MemoryFile {
     /// Add a new memory entry
     #[allow(dead_code)]
     pub fn add(&mut self, content: String, category: String, project: String) -> String {
-        let id = format!("mem_{}", simple_hash(&format!("{}{}{}", content, category, chrono_like_now())));
+        let id = format!(
+            "mem_{}",
+            simple_hash(&format!("{}{}{}", content, category, chrono_like_now()))
+        );
         self.entries.push(MemoryEntry {
             id: id.clone(),
             content,

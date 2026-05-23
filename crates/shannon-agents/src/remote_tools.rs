@@ -5,15 +5,15 @@
 //! and send messages to teammates.
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolResult};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::{Mutex, oneshot};
 
-use crate::protocol::{frame_message, JsonRpcMessage, methods};
+use crate::protocol::{JsonRpcMessage, frame_message, methods};
 
 /// Channel for communicating with the coordinator from a process agent.
 ///
@@ -63,13 +63,20 @@ impl CoordinatorChannel {
         let msg = JsonRpcMessage::notification(method, params);
         let line = frame_message(&msg).map_err(|e| e.to_string())?;
         let mut writer = self.writer.lock().await;
-        writer.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
+        writer
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
         writer.flush().await.map_err(|e| e.to_string())?;
         Ok(())
     }
 
     /// Send a JSON-RPC request and return a oneshot receiver for the response.
-    pub async fn request(&self, method: &str, params: Value) -> Result<oneshot::Receiver<JsonRpcMessage>, String> {
+    pub async fn request(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<oneshot::Receiver<JsonRpcMessage>, String> {
         let id = self.next_id();
         let msg = JsonRpcMessage::request(method, params, id);
         let line = frame_message(&msg).map_err(|e| e.to_string())?;
@@ -81,7 +88,10 @@ impl CoordinatorChannel {
         }
 
         let mut writer = self.writer.lock().await;
-        writer.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
+        writer
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
         writer.flush().await.map_err(|e| e.to_string())?;
         Ok(rx)
     }
@@ -143,15 +153,21 @@ impl Tool for RemoteTeamTaskListTool {
             "status": input.get("status").and_then(|v| v.as_str()).unwrap_or(""),
         });
 
-        let rx = self.channel.request(methods::LIST_TASKS, params)
-            .await.map_err(ToolError::ExecutionFailed)?;
+        let rx = self
+            .channel
+            .request(methods::LIST_TASKS, params)
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let response = rx.await
-            .map_err(|_| ToolError::ExecutionFailed("Coordinator dropped response channel".into()))?;
+        let response = rx.await.map_err(|_| {
+            ToolError::ExecutionFailed("Coordinator dropped response channel".into())
+        })?;
 
         // The response result contains the task list
         if let Some(ref error) = response.error {
-            return Err(ToolError::ExecutionFailed(format!("Coordinator error: {error:?}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "Coordinator error: {error:?}"
+            )));
         }
 
         let result = response.result.as_ref().unwrap_or(&json!(null));
@@ -169,7 +185,10 @@ pub struct RemoteTeamTaskClaimTool {
 
 impl RemoteTeamTaskClaimTool {
     pub fn new(channel: CoordinatorChannel, agent_name: String) -> Self {
-        Self { channel, agent_name }
+        Self {
+            channel,
+            agent_name,
+        }
     }
 }
 
@@ -202,14 +221,20 @@ impl Tool for RemoteTeamTaskClaimTool {
             "task_id": input.get("task_id").and_then(|v| v.as_str()).unwrap_or(""),
         });
 
-        let rx = self.channel.request(methods::CLAIM_TASK, params)
-            .await.map_err(ToolError::ExecutionFailed)?;
+        let rx = self
+            .channel
+            .request(methods::CLAIM_TASK, params)
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let response = rx.await
-            .map_err(|_| ToolError::ExecutionFailed("Coordinator dropped response channel".into()))?;
+        let response = rx.await.map_err(|_| {
+            ToolError::ExecutionFailed("Coordinator dropped response channel".into())
+        })?;
 
         if let Some(ref error) = response.error {
-            return Err(ToolError::ExecutionFailed(format!("Claim failed: {error:?}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "Claim failed: {error:?}"
+            )));
         }
 
         let result = response.result.as_ref().unwrap_or(&json!(null));
@@ -227,7 +252,10 @@ pub struct RemoteTeamNotifyIdleTool {
 
 impl RemoteTeamNotifyIdleTool {
     pub fn new(channel: CoordinatorChannel, agent_name: String) -> Self {
-        Self { channel, agent_name }
+        Self {
+            channel,
+            agent_name,
+        }
     }
 }
 
@@ -246,10 +274,16 @@ impl Tool for RemoteTeamNotifyIdleTool {
     }
 
     async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
-        self.channel.notify(methods::AGENT_IDLE, json!({
-            "agent_name": self.agent_name,
-            "available_tasks_count": 0,
-        })).await.map_err(ToolError::ExecutionFailed)?;
+        self.channel
+            .notify(
+                methods::AGENT_IDLE,
+                json!({
+                    "agent_name": self.agent_name,
+                    "available_tasks_count": 0,
+                }),
+            )
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
         Ok(success_output(json!({
             "agent": self.agent_name,
@@ -268,7 +302,10 @@ pub struct RemoteSendMessageTool {
 
 impl RemoteSendMessageTool {
     pub fn new(channel: CoordinatorChannel, agent_name: String) -> Self {
-        Self { channel, agent_name }
+        Self {
+            channel,
+            agent_name,
+        }
     }
 }
 
@@ -316,8 +353,15 @@ impl Tool for RemoteSendMessageTool {
             return Err(ToolError::InvalidInput("message is required".into()));
         }
 
-        let to = input.get("to").and_then(|v| v.as_str()).unwrap_or("*").to_string();
-        let summary = input.get("summary").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let to = input
+            .get("to")
+            .and_then(|v| v.as_str())
+            .unwrap_or("*")
+            .to_string();
+        let summary = input
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         let mut params = json!({
             "from": self.agent_name,
@@ -330,8 +374,10 @@ impl Tool for RemoteSendMessageTool {
             params["summary"] = json!(s);
         }
 
-        self.channel.notify(methods::SEND_MESSAGE, params)
-            .await.map_err(ToolError::ExecutionFailed)?;
+        self.channel
+            .notify(methods::SEND_MESSAGE, params)
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
         let mut result = json!({
             "status": "sent",
@@ -411,14 +457,20 @@ impl Tool for RemoteTeamTaskCreateTool {
                 .unwrap_or_default(),
         });
 
-        let rx = self.channel.request(methods::CREATE_TASK, params)
-            .await.map_err(ToolError::ExecutionFailed)?;
+        let rx = self
+            .channel
+            .request(methods::CREATE_TASK, params)
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let response = rx.await
-            .map_err(|_| ToolError::ExecutionFailed("Coordinator dropped response channel".into()))?;
+        let response = rx.await.map_err(|_| {
+            ToolError::ExecutionFailed("Coordinator dropped response channel".into())
+        })?;
 
         if let Some(ref error) = response.error {
-            return Err(ToolError::ExecutionFailed(format!("Create task failed: {error:?}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "Create task failed: {error:?}"
+            )));
         }
 
         let result = response.result.as_ref().unwrap_or(&json!(null));
@@ -436,7 +488,10 @@ pub struct RemoteTeamTaskUpdateTool {
 
 impl RemoteTeamTaskUpdateTool {
     pub fn new(channel: CoordinatorChannel, agent_name: String) -> Self {
-        Self { channel, agent_name }
+        Self {
+            channel,
+            agent_name,
+        }
     }
 }
 
@@ -502,14 +557,20 @@ impl Tool for RemoteTeamTaskUpdateTool {
                 .unwrap_or_default(),
         });
 
-        let rx = self.channel.request(methods::UPDATE_TASK, params)
-            .await.map_err(ToolError::ExecutionFailed)?;
+        let rx = self
+            .channel
+            .request(methods::UPDATE_TASK, params)
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let response = rx.await
-            .map_err(|_| ToolError::ExecutionFailed("Coordinator dropped response channel".into()))?;
+        let response = rx.await.map_err(|_| {
+            ToolError::ExecutionFailed("Coordinator dropped response channel".into())
+        })?;
 
         if let Some(ref error) = response.error {
-            return Err(ToolError::ExecutionFailed(format!("Update task failed: {error:?}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "Update task failed: {error:?}"
+            )));
         }
 
         let result = response.result.as_ref().unwrap_or(&json!(null));
@@ -564,14 +625,20 @@ impl Tool for RemoteTeamTaskGetTool {
             "task_id": task_id,
         });
 
-        let rx = self.channel.request(methods::GET_TASK, params)
-            .await.map_err(ToolError::ExecutionFailed)?;
+        let rx = self
+            .channel
+            .request(methods::GET_TASK, params)
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let response = rx.await
-            .map_err(|_| ToolError::ExecutionFailed("Coordinator dropped response channel".into()))?;
+        let response = rx.await.map_err(|_| {
+            ToolError::ExecutionFailed("Coordinator dropped response channel".into())
+        })?;
 
         if let Some(ref error) = response.error {
-            return Err(ToolError::ExecutionFailed(format!("Get task failed: {error:?}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "Get task failed: {error:?}"
+            )));
         }
 
         let result = response.result.as_ref().unwrap_or(&json!(null));
@@ -608,14 +675,20 @@ impl Tool for RemoteTeamManifestTool {
     }
 
     async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
-        let rx = self.channel.request(methods::TEAM_MANIFEST, json!({}))
-            .await.map_err(ToolError::ExecutionFailed)?;
+        let rx = self
+            .channel
+            .request(methods::TEAM_MANIFEST, json!({}))
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let response = rx.await
-            .map_err(|_| ToolError::ExecutionFailed("Coordinator dropped response channel".into()))?;
+        let response = rx.await.map_err(|_| {
+            ToolError::ExecutionFailed("Coordinator dropped response channel".into())
+        })?;
 
         if let Some(ref error) = response.error {
-            return Err(ToolError::ExecutionFailed(format!("Manifest request failed: {error:?}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "Manifest request failed: {error:?}"
+            )));
         }
 
         let result = response.result.as_ref().unwrap_or(&json!(null));
@@ -657,14 +730,20 @@ impl Tool for RemoteDisbandTeamTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let team_name = input["team_name"].as_str().unwrap_or_default().to_string();
-        let rx = self.channel.request(methods::DISBAND_TEAM, json!({ "team_name": team_name }))
-            .await.map_err(ToolError::ExecutionFailed)?;
+        let rx = self
+            .channel
+            .request(methods::DISBAND_TEAM, json!({ "team_name": team_name }))
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let response = rx.await
-            .map_err(|_| ToolError::ExecutionFailed("Coordinator dropped response channel".into()))?;
+        let response = rx.await.map_err(|_| {
+            ToolError::ExecutionFailed("Coordinator dropped response channel".into())
+        })?;
 
         if let Some(ref error) = response.error {
-            return Err(ToolError::ExecutionFailed(format!("Disband request failed: {error:?}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "Disband request failed: {error:?}"
+            )));
         }
 
         let result = response.result.as_ref().unwrap_or(&json!(null));
@@ -706,14 +785,20 @@ impl Tool for RemoteAddAgentTool {
     }
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
-        let rx = self.channel.request(methods::ADD_AGENT, input)
-            .await.map_err(ToolError::ExecutionFailed)?;
+        let rx = self
+            .channel
+            .request(methods::ADD_AGENT, input)
+            .await
+            .map_err(ToolError::ExecutionFailed)?;
 
-        let response = rx.await
-            .map_err(|_| ToolError::ExecutionFailed("Coordinator dropped response channel".into()))?;
+        let response = rx.await.map_err(|_| {
+            ToolError::ExecutionFailed("Coordinator dropped response channel".into())
+        })?;
 
         if let Some(ref error) = response.error {
-            return Err(ToolError::ExecutionFailed(format!("Add agent request failed: {error:?}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "Add agent request failed: {error:?}"
+            )));
         }
 
         let result = response.result.as_ref().unwrap_or(&json!(null));
@@ -778,7 +863,12 @@ mod tests {
         let tool = RemoteSendMessageTool::new(channel, "worker-1".into());
         assert_eq!(tool.name(), "team_send_message");
         let schema = tool.input_schema();
-        assert!(schema["required"].as_array().unwrap().contains(&json!("message")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("message"))
+        );
     }
 
     #[test]
@@ -787,7 +877,12 @@ mod tests {
         let tool = RemoteTeamTaskCreateTool::new(channel);
         assert_eq!(tool.name(), "team_task_create");
         let schema = tool.input_schema();
-        assert!(schema["required"].as_array().unwrap().contains(&json!("subject")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("subject"))
+        );
     }
 
     #[test]
@@ -796,7 +891,12 @@ mod tests {
         let tool = RemoteTeamTaskUpdateTool::new(channel, "worker-1".into());
         assert_eq!(tool.name(), "team_task_update");
         let schema = tool.input_schema();
-        assert!(schema["required"].as_array().unwrap().contains(&json!("task_id")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("task_id"))
+        );
     }
 
     #[test]

@@ -140,22 +140,26 @@ impl PluginManifest {
 
     /// Parse manifest from TOML bytes
     pub fn from_toml_bytes(bytes: &[u8]) -> Result<Self, String> {
-        let s = str::from_utf8(bytes)
-            .map_err(|e| e.to_string())?;
-        toml::from_str(s)
-            .map_err(|e| e.to_string())
+        let s = str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        toml::from_str(s).map_err(|e| e.to_string())
     }
 
     /// Get the typed plugin kind from the manifest fields
     pub fn kind(&self) -> Result<PluginKind, String> {
         match self.plugin_type.as_str() {
             "tool" => {
-                let transport = self.transport.as_ref()
+                let transport = self
+                    .transport
+                    .as_ref()
                     .ok_or_else(|| "tool plugin requires [transport] section".to_string())?;
-                Ok(PluginKind::Tool { transport: transport.clone() })
+                Ok(PluginKind::Tool {
+                    transport: transport.clone(),
+                })
             }
             "command" => {
-                let name = self.command_name.as_ref()
+                let name = self
+                    .command_name
+                    .as_ref()
                     .ok_or_else(|| "command plugin requires command_name".to_string())?;
                 let desc = self.command_description.as_deref().unwrap_or("");
                 Ok(PluginKind::Command {
@@ -164,9 +168,13 @@ impl PluginManifest {
                 })
             }
             "skill" => {
-                let trigger = self.trigger.as_ref()
+                let trigger = self
+                    .trigger
+                    .as_ref()
                     .ok_or_else(|| "skill plugin requires trigger".to_string())?;
-                let template = self.template.as_ref()
+                let template = self
+                    .template
+                    .as_ref()
                     .ok_or_else(|| "skill plugin requires template".to_string())?;
                 Ok(PluginKind::Skill {
                     trigger: trigger.clone(),

@@ -5,8 +5,8 @@
 //! unreachable server handling, config reload, parameter validation, and
 //! tools/list format correctness.
 
-use shannon_mcp::protocol::*;
 use shannon_mcp::McpError;
+use shannon_mcp::protocol::*;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
@@ -75,10 +75,8 @@ async fn test_mcp_server_startup_timeout() {
     let (client, _server) = MockTransport::new_pair();
 
     // Client sends initialize request but server never responds.
-    let request =
-        JsonRpcRequest::with_id("init-timeout", "initialize", None);
-    let json =
-        serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+    let request = JsonRpcRequest::with_id("init-timeout", "initialize", None);
+    let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
     client.send(&json).await;
 
     // Simulate timeout by verifying the McpError::Timeout variant.
@@ -96,10 +94,8 @@ async fn test_mcp_server_startup_timeout() {
 
     // Verify that after the timeout period, no response is available.
     // Use tokio::time::timeout to simulate waiting for a response.
-    let result = tokio::time::timeout(Duration::from_millis(50), async {
-        client.receive().await
-    })
-    .await;
+    let result =
+        tokio::time::timeout(Duration::from_millis(50), async { client.receive().await }).await;
 
     // The mock server never sent anything, so timeout should fire.
     assert!(result.is_err(), "Should timeout when server never responds");
@@ -115,8 +111,7 @@ async fn test_mcp_tool_schema_validation() {
 
     // Client requests tools/list.
     let request = JsonRpcRequest::with_id("schema-1", "tools/list", None);
-    let json =
-        serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+    let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
     client.send(&json).await;
 
     // Server receives the request.
@@ -168,10 +163,8 @@ async fn test_mcp_concurrent_tool_calls() {
             "name": "compute",
             "arguments": { "input": *id }
         });
-        let request =
-            JsonRpcRequest::with_id(*id, "tools/call", Some(params));
-        let json =
-            serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+        let request = JsonRpcRequest::with_id(*id, "tools/call", Some(params));
+        let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
         client.send(&json).await;
     }
 
@@ -179,8 +172,7 @@ async fn test_mcp_concurrent_tool_calls() {
     let mut received_ids = Vec::new();
     for _ in 0..3 {
         let received = server.receive().await.unwrap();
-        let parsed: serde_json::Value =
-            serde_json::from_str(&received).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&received).unwrap();
         let req_id = parsed["id"].as_str().unwrap().to_string();
         received_ids.push(req_id);
     }
@@ -201,15 +193,17 @@ async fn test_mcp_concurrent_tool_calls() {
     let mut response_count = 0;
     for _ in 0..3 {
         if let Some(resp_str) = client.receive().await {
-            let response: JsonRpcMessage =
-                serde_json::from_str(&resp_str).unwrap();
+            let response: JsonRpcMessage = serde_json::from_str(&resp_str).unwrap();
             if let JsonRpcMessage::Response(res) = response {
                 assert!(!res.is_error());
                 response_count += 1;
             }
         }
     }
-    assert_eq!(response_count, 3, "All 3 concurrent tool calls should succeed");
+    assert_eq!(
+        response_count, 3,
+        "All 3 concurrent tool calls should succeed"
+    );
 }
 
 // ============================================================================
@@ -221,10 +215,8 @@ async fn test_mcp_deferred_schema_loading() {
     let (client, server) = MockTransport::new_pair();
 
     // First request: tools/list returns tools WITHOUT inputSchema.
-    let request =
-        JsonRpcRequest::with_id("deferred-1", "tools/list", None);
-    let json =
-        serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+    let request = JsonRpcRequest::with_id("deferred-1", "tools/list", None);
+    let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
     client.send(&json).await;
 
     let received = server.receive().await.unwrap();
@@ -245,8 +237,7 @@ async fn test_mcp_deferred_schema_loading() {
     let response: JsonRpcMessage = serde_json::from_str(&resp_json).unwrap();
     let tool_name = match response {
         JsonRpcMessage::Response(res) => {
-            let tools: Vec<Tool> =
-                serde_json::from_value(res.result.unwrap()).unwrap();
+            let tools: Vec<Tool> = serde_json::from_value(res.result.unwrap()).unwrap();
             assert_eq!(tools.len(), 1);
             assert!(tools[0].input_schema.is_none());
             tools[0].name.clone()
@@ -259,10 +250,8 @@ async fn test_mcp_deferred_schema_loading() {
         "name": tool_name,
         "arguments": { "path": "/test" }
     });
-    let request =
-        JsonRpcRequest::with_id("deferred-2", "tools/call", Some(params));
-    let json =
-        serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+    let request = JsonRpcRequest::with_id("deferred-2", "tools/call", Some(params));
+    let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
     client.send(&json).await;
 
     let received = server.receive().await.unwrap();
@@ -282,8 +271,7 @@ async fn test_mcp_deferred_schema_loading() {
     let response: JsonRpcMessage = serde_json::from_str(&resp_json).unwrap();
     match response {
         JsonRpcMessage::Response(res) => {
-            let content: ToolContent =
-                serde_json::from_value(res.result.unwrap()).unwrap();
+            let content: ToolContent = serde_json::from_value(res.result.unwrap()).unwrap();
             assert_eq!(content.is_error, Some(false));
         }
         _ => panic!("Expected response"),
@@ -298,10 +286,8 @@ async fn test_mcp_deferred_schema_loading() {
 async fn test_mcp_large_response_truncation() {
     let (client, server) = MockTransport::new_pair();
 
-    let request =
-        JsonRpcRequest::with_id("large-1", "tools/call", None);
-    let json =
-        serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+    let request = JsonRpcRequest::with_id("large-1", "tools/call", None);
+    let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
     client.send(&json).await;
 
     let received = server.receive().await.unwrap();
@@ -329,8 +315,7 @@ async fn test_mcp_large_response_truncation() {
     let response: JsonRpcMessage = serde_json::from_str(&resp_json).unwrap();
     match response {
         JsonRpcMessage::Response(res) => {
-            let content: ToolContent =
-                serde_json::from_value(res.result.unwrap()).unwrap();
+            let content: ToolContent = serde_json::from_value(res.result.unwrap()).unwrap();
             assert_eq!(content.content.len(), 1);
             match &content.content[0] {
                 ContentBlock::Text { text } => {
@@ -352,10 +337,8 @@ async fn test_mcp_unsupported_method_graceful() {
     let (client, server) = MockTransport::new_pair();
 
     // Client sends a request for a method the server does not support.
-    let request =
-        JsonRpcRequest::with_id("unsup-1", "sampling/createMessage", None);
-    let json =
-        serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+    let request = JsonRpcRequest::with_id("unsup-1", "sampling/createMessage", None);
+    let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
     client.send(&json).await;
 
     let received = server.receive().await.unwrap();
@@ -395,8 +378,7 @@ async fn test_mcp_server_unreachable() {
     use shannon_mcp::transport::TransportError;
 
     let transport_err =
-        TransportError::Http("connection refused: http://localhost:9999/mcp"
-            .to_string());
+        TransportError::Http("connection refused: http://localhost:9999/mcp".to_string());
     let mcp_err = McpError::from(transport_err);
 
     let msg = mcp_err.to_string();
@@ -410,9 +392,7 @@ async fn test_mcp_server_unreachable() {
     );
 
     // Also verify that a WebSocket connection error maps correctly.
-    let ws_err = TransportError::WebSocket(
-        "Connection refused: ws://localhost:8888".to_string(),
-    );
+    let ws_err = TransportError::WebSocket("Connection refused: ws://localhost:8888".to_string());
     let mcp_ws_err = McpError::from(ws_err);
     assert!(mcp_ws_err.to_string().contains("WebSocket"));
 }
@@ -425,7 +405,7 @@ async fn test_mcp_server_unreachable() {
 async fn test_mcp_config_reload() {
     // Verify that config parsing can be re-invoked and produces different
     // results when the underlying config file changes.
-    use shannon_mcp::config::{discover_config, McpServerConfig};
+    use shannon_mcp::config::{McpServerConfig, discover_config};
 
     let temp = tempfile::tempdir().unwrap();
 
@@ -439,8 +419,11 @@ async fn test_mcp_config_reload() {
         }
     });
     let config_path = temp.path().join(".mcp.json");
-    std::fs::write(&config_path, serde_json::to_string(&initial_config).unwrap())
-        .unwrap();
+    std::fs::write(
+        &config_path,
+        serde_json::to_string(&initial_config).unwrap(),
+    )
+    .unwrap();
 
     let config_v1 = discover_config(temp.path()).unwrap();
     assert_eq!(config_v1.mcp_servers.len(), 1);
@@ -454,8 +437,11 @@ async fn test_mcp_config_reload() {
             }
         }
     });
-    std::fs::write(&config_path, serde_json::to_string(&updated_config).unwrap())
-        .unwrap();
+    std::fs::write(
+        &config_path,
+        serde_json::to_string(&updated_config).unwrap(),
+    )
+    .unwrap();
 
     let config_v2 = discover_config(temp.path()).unwrap();
     assert_eq!(config_v2.mcp_servers.len(), 1);
@@ -491,10 +477,8 @@ async fn test_mcp_tool_parameter_validation() {
         "arguments": {}
         // Missing required "path" parameter
     });
-    let request =
-        JsonRpcRequest::with_id("param-1", "tools/call", Some(params));
-    let json =
-        serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+    let request = JsonRpcRequest::with_id("param-1", "tools/call", Some(params));
+    let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
     client.send(&json).await;
 
     let received = server.receive().await.unwrap();
@@ -528,13 +512,8 @@ async fn test_mcp_tool_parameter_validation() {
         "arguments": { "path": 12345 }
         // "path" should be a string, not a number
     });
-    let request2 = JsonRpcRequest::with_id(
-        "param-2",
-        "tools/call",
-        Some(params_wrong_type),
-    );
-    let json2 =
-        serde_json::to_string(&JsonRpcMessage::Request(request2)).unwrap();
+    let request2 = JsonRpcRequest::with_id("param-2", "tools/call", Some(params_wrong_type));
+    let json2 = serde_json::to_string(&JsonRpcMessage::Request(request2)).unwrap();
     client.send(&json2).await;
 
     let received2 = server.receive().await.unwrap();
@@ -580,10 +559,8 @@ async fn test_mcp_server_list_tools() {
     let (client, server) = MockTransport::new_pair();
 
     // Client sends tools/list request.
-    let request =
-        JsonRpcRequest::with_id("list-1", "tools/list", None);
-    let json =
-        serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
+    let request = JsonRpcRequest::with_id("list-1", "tools/list", None);
+    let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
     client.send(&json).await;
 
     // Server receives the request.
@@ -661,8 +638,7 @@ async fn test_mcp_server_list_tools() {
             assert_eq!(res.id, "list-1");
             assert!(!res.is_error());
 
-            let tools: Vec<Tool> =
-                serde_json::from_value(res.result.unwrap()).unwrap();
+            let tools: Vec<Tool> = serde_json::from_value(res.result.unwrap()).unwrap();
             assert_eq!(tools.len(), 3);
 
             // Verify read_file tool and its annotations.

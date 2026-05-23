@@ -31,16 +31,16 @@ use dashmap::DashMap;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 use crate::auth::OAuth2Provider;
-use crate::config::{McpAuthConfig, HeaderSource};
+use crate::config::{HeaderSource, McpAuthConfig};
 use handle::McpServerHandle;
 use remote_handle::RemoteMcpServerHandle;
 use types::*;
@@ -48,10 +48,10 @@ use types::*;
 // Re-exports from submodules to maintain public API.
 pub use adapter::PooledMcpToolAdapter;
 pub use discovery::{
-    PooledDiscoveryResult, discover_pooled_tools, discover_pooled_remote_tools,
-    make_sampling_provider, make_elicitation_provider, UserPromptCallback,
+    PooledDiscoveryResult, UserPromptCallback, discover_pooled_remote_tools, discover_pooled_tools,
+    make_elicitation_provider, make_sampling_provider,
 };
-pub use types::{ServerState, ServerStatus, ChunkResult};
+pub use types::{ChunkResult, ServerState, ServerStatus};
 
 /// Type alias for the async sampling callback.
 ///
@@ -59,7 +59,8 @@ pub use types::{ServerState, ServerStatus, ChunkResult};
 pub(crate) type SamplingProvider = Arc<
     dyn Fn(
             crate::CreateMessageRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<crate::CreateMessageResult, String>> + Send>>
+        )
+            -> Pin<Box<dyn Future<Output = Result<crate::CreateMessageResult, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -71,7 +72,8 @@ pub(crate) type SamplingProvider = Arc<
 pub(crate) type ElicitationProvider = Arc<
     dyn Fn(
             crate::ElicitationRequest,
-        ) -> Pin<Box<dyn Future<Output = Result<crate::ElicitationResult, String>> + Send>>
+        )
+            -> Pin<Box<dyn Future<Output = Result<crate::ElicitationResult, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -109,7 +111,8 @@ pub struct McpProcessPool {
     ///
     /// Receives `(server_name, new_tool_adapters)` so the caller can hot-swap
     /// the tools in its registry without restarting the server.
-    on_tools_changed: Arc<Mutex<Option<Arc<dyn Fn(&str, Vec<PooledMcpToolAdapter>) + Send + Sync>>>>,
+    on_tools_changed:
+        Arc<Mutex<Option<Arc<dyn Fn(&str, Vec<PooledMcpToolAdapter>) + Send + Sync>>>>,
     /// Provider for filesystem roots. Called when a server sends `roots/list`.
     roots_provider: Arc<Mutex<Option<Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>>>>,
     /// Provider for LLM sampling. Called when a server sends `sampling/createMessage`.
@@ -122,7 +125,8 @@ pub struct McpProcessPool {
     cache_ttl: Duration,
     /// Callback invoked when an MCP server sends `notifications/progress`.
     /// Receives `(tool_name, progress, total)`.
-    pub(crate) progress_callback: Arc<Mutex<Option<Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>>>>,
+    pub(crate) progress_callback:
+        Arc<Mutex<Option<Arc<dyn Fn(&str, f64, Option<f64>) + Send + Sync>>>>,
     /// Glob patterns for tool allowlisting (from `allowedTools` config).
     /// Empty = all tools allowed. `!` prefix = deny.
     allowed_patterns: Arc<RwLock<Vec<String>>>,
@@ -243,12 +247,17 @@ impl McpProcessPool {
     /// Returns `None` if the tool has no stored schema (not an MCP tool, or
     /// deferred mode is off).
     pub fn get_deferred_schema(&self, tool_name: &str) -> Option<Value> {
-        self.deferred_schemas.get(tool_name).map(|v| v.value().clone())
+        self.deferred_schemas
+            .get(tool_name)
+            .map(|v| v.value().clone())
     }
 
     /// List all tool names that have deferred schemas stored.
     pub fn deferred_schema_tool_names(&self) -> Vec<String> {
-        self.deferred_schemas.iter().map(|e| e.key().clone()).collect()
+        self.deferred_schemas
+            .iter()
+            .map(|e| e.key().clone())
+            .collect()
     }
 
     /// Retrieve the full stored content for a truncated tool result.
@@ -352,7 +361,11 @@ impl McpProcessPool {
         let mut auth_provider: Option<Arc<OAuth2Provider>> = None;
 
         match auth {
-            Some(McpAuthConfig::ApiKey { key, header, prefix }) => {
+            Some(McpAuthConfig::ApiKey {
+                key,
+                header,
+                prefix,
+            }) => {
                 let header_name = header.as_deref().unwrap_or("X-API-Key");
                 let value = match prefix {
                     Some(p) => format!("{p} {key}"),
@@ -369,13 +382,8 @@ impl McpProcessPool {
                 redirect_url,
                 scopes,
             }) => {
-                let provider = OAuth2Provider::new(
-                    client_id,
-                    auth_url,
-                    token_url,
-                    redirect_url,
-                )
-                .with_scopes(scopes);
+                let provider = OAuth2Provider::new(client_id, auth_url, token_url, redirect_url)
+                    .with_scopes(scopes);
                 let provider = match client_secret {
                     Some(secret) => provider.with_client_secret(secret),
                     None => provider,
@@ -440,15 +448,19 @@ impl McpProcessPool {
     ) -> Result<(), String> {
         // Connect WebSocket transport.
         let mut ws = crate::WebSocketTransport::new(url);
-        ws.connect().await.map_err(|e| {
-            format!("WebSocket connect failed for '{name}': {e}")
-        })?;
+        ws.connect()
+            .await
+            .map_err(|e| format!("WebSocket connect failed for '{name}': {e}"))?;
 
         // Resolve auth into static headers (WebSocket doesn't use HTTP headers
         // natively, but we store them for any future subprotocol use).
         let mut resolved_headers = HashMap::new();
         let auth_provider: Option<Arc<OAuth2Provider>> = match auth {
-            Some(McpAuthConfig::ApiKey { key, header, prefix }) => {
+            Some(McpAuthConfig::ApiKey {
+                key,
+                header,
+                prefix,
+            }) => {
                 let header_name = header.as_deref().unwrap_or("X-API-Key");
                 let value = match prefix {
                     Some(p) => format!("{p} {key}"),
@@ -466,13 +478,8 @@ impl McpProcessPool {
                 redirect_url,
                 scopes,
             }) => {
-                let provider = OAuth2Provider::new(
-                    client_id,
-                    auth_url,
-                    token_url,
-                    redirect_url,
-                )
-                .with_scopes(scopes);
+                let provider = OAuth2Provider::new(client_id, auth_url, token_url, redirect_url)
+                    .with_scopes(scopes);
                 let provider = match client_secret {
                     Some(secret) => provider.with_client_secret(secret),
                     None => provider,
@@ -534,7 +541,8 @@ impl McpProcessPool {
         tool_name: &str,
         arguments: Value,
     ) -> shannon_tool_interface::ToolResult<shannon_tool_interface::ToolOutput> {
-        self.call_tool_with_limit(server_name, tool_name, arguments, self.max_output_chars).await
+        self.call_tool_with_limit(server_name, tool_name, arguments, self.max_output_chars)
+            .await
     }
 
     /// Call a tool with an explicit output limit (per-tool override).
@@ -573,13 +581,16 @@ impl McpProcessPool {
                 return match remote.call_tool(tool_name, arguments).await {
                     Ok(output) => {
                         let byte_count = output.content.len() as u64;
-                        let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                        let result = Ok(self.enforce_output_limit(
+                            output,
+                            max_chars,
+                            &format!("mcp__{server_name}__{tool_name}"),
+                        ));
                         self.track_result_bytes_for(server_name, byte_count);
                         result
                     }
                     Err(e) => {
-                        *remote.state.write().await =
-                            ServerState::Unhealthy(e.to_string());
+                        *remote.state.write().await = ServerState::Unhealthy(e.to_string());
                         let restarts = remote.restart_count.fetch_add(1, Ordering::Relaxed) as u32;
                         if restarts < remote.max_restarts {
                             remote.reset().await;
@@ -593,7 +604,11 @@ impl McpProcessPool {
                                 Ok(output) => {
                                     *remote.state.write().await = ServerState::Healthy;
                                     let byte_count = output.content.len() as u64;
-                                    let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                                    let result = Ok(self.enforce_output_limit(
+                                        output,
+                                        max_chars,
+                                        &format!("mcp__{server_name}__{tool_name}"),
+                                    ));
                                     self.track_result_bytes_for(server_name, byte_count);
                                     result
                                 }
@@ -612,10 +627,13 @@ impl McpProcessPool {
             // Try re-initializing.
             remote.reset().await;
             remote.start().await.map_err(|e| {
-                ToolError::ExecutionFailed(format!("Remote MCP server '{server_name}' restart failed: {e}"))
+                ToolError::ExecutionFailed(format!(
+                    "Remote MCP server '{server_name}' restart failed: {e}"
+                ))
             })?;
-            let output = remote.call_tool(tool_name, arguments).await
-                .map(|o| self.enforce_output_limit(o, max_chars, &format!("mcp__{server_name}__{tool_name}")))?;
+            let output = remote.call_tool(tool_name, arguments).await.map(|o| {
+                self.enforce_output_limit(o, max_chars, &format!("mcp__{server_name}__{tool_name}"))
+            })?;
             self.track_result_bytes_for(server_name, output.content.len() as u64);
             return Ok(output);
         }
@@ -624,9 +642,7 @@ impl McpProcessPool {
         let handle = self
             .handles
             .get(server_name)
-            .ok_or_else(|| {
-                ToolError::NotFound(format!("MCP server '{server_name}' not in pool"))
-            })?
+            .ok_or_else(|| ToolError::NotFound(format!("MCP server '{server_name}' not in pool")))?
             .clone();
 
         let _permit = handle.concurrency_semaphore.acquire().await.map_err(|e| {
@@ -680,20 +696,27 @@ impl McpProcessPool {
         match handle.call_tool(tool_name, arguments).await {
             Ok(output) => {
                 let byte_count = output.content.len() as u64;
-                let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                let result = Ok(self.enforce_output_limit(
+                    output,
+                    max_chars,
+                    &format!("mcp__{server_name}__{tool_name}"),
+                ));
                 self.track_result_bytes_for(server_name, byte_count);
                 result
             }
             Err(e) => {
-                *handle.state.write().await =
-                    ServerState::Unhealthy(e.to_string());
+                *handle.state.write().await = ServerState::Unhealthy(e.to_string());
                 // Auto-retry once: restart the server and try again
                 if let Ok(()) = self.restart_server(&handle).await {
                     warn!(server = %server_name, tool = %tool_name, "Retrying tool call after server restart");
                     match handle.call_tool(tool_name, args_clone).await {
                         Ok(output) => {
                             let byte_count = output.content.len() as u64;
-                            let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                            let result = Ok(self.enforce_output_limit(
+                                output,
+                                max_chars,
+                                &format!("mcp__{server_name}__{tool_name}"),
+                            ));
                             self.track_result_bytes_for(server_name, byte_count);
                             result
                         }
@@ -712,7 +735,12 @@ impl McpProcessPool {
 
     /// Enforce maximum output size by truncating oversized results.
     /// Stores the full content in the result store for later retrieval.
-    fn enforce_output_limit(&self, mut output: shannon_tool_interface::ToolOutput, max_chars: usize, tool_name: &str) -> shannon_tool_interface::ToolOutput {
+    fn enforce_output_limit(
+        &self,
+        mut output: shannon_tool_interface::ToolOutput,
+        max_chars: usize,
+        tool_name: &str,
+    ) -> shannon_tool_interface::ToolOutput {
         if output.content.len() > max_chars {
             let full_content = output.content.clone();
             let original_len = full_content.len();
@@ -801,8 +829,13 @@ impl McpProcessPool {
         on_progress: Arc<dyn Fn(f64, Option<f64>) + Send + Sync>,
     ) -> shannon_tool_interface::ToolResult<shannon_tool_interface::ToolOutput> {
         self.call_tool_with_progress_and_limit(
-            server_name, tool_name, arguments, on_progress, self.max_output_chars,
-        ).await
+            server_name,
+            tool_name,
+            arguments,
+            on_progress,
+            self.max_output_chars,
+        )
+        .await
     }
 
     /// Call a tool with progress reporting and an explicit output limit.
@@ -826,9 +859,7 @@ impl McpProcessPool {
         let handle = self
             .handles
             .get(server_name)
-            .ok_or_else(|| {
-                ToolError::NotFound(format!("MCP server '{server_name}' not in pool"))
-            })?
+            .ok_or_else(|| ToolError::NotFound(format!("MCP server '{server_name}' not in pool")))?
             .clone();
 
         let _permit = handle.concurrency_semaphore.acquire().await.map_err(|e| {
@@ -884,7 +915,11 @@ impl McpProcessPool {
         {
             Ok(output) => {
                 let byte_count = output.content.len() as u64;
-                let result = Ok(self.enforce_output_limit(output, max_chars, &format!("mcp__{server_name}__{tool_name}")));
+                let result = Ok(self.enforce_output_limit(
+                    output,
+                    max_chars,
+                    &format!("mcp__{server_name}__{tool_name}"),
+                ));
                 self.track_result_bytes_for(server_name, byte_count);
                 result
             }
@@ -1021,7 +1056,10 @@ impl McpProcessPool {
         let requests: Vec<(&str, Value)> = tool_calls
             .into_iter()
             .map(|(tool_name, args)| {
-                ("tools/call", serde_json::json!({ "name": tool_name, "arguments": args }))
+                (
+                    "tools/call",
+                    serde_json::json!({ "name": tool_name, "arguments": args }),
+                )
             })
             .collect();
 
@@ -1032,19 +1070,28 @@ impl McpProcessPool {
                     let value = result.map_err(ToolError::ExecutionFailed)?;
                     // Parse content the same way as RemoteMcpServerHandle::call_tool.
                     if let Some(result) = value.get("result") {
-                        if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
-                            let is_error = result.get("isError").and_then(|e| e.as_bool()).unwrap_or(false);
+                        if let Some(content_array) =
+                            result.get("content").and_then(|c| c.as_array())
+                        {
+                            let is_error = result
+                                .get("isError")
+                                .and_then(|e| e.as_bool())
+                                .unwrap_or(false);
                             let texts: Vec<String> = content_array
                                 .iter()
                                 .filter_map(|block| {
                                     if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                        block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                                        block
+                                            .get("text")
+                                            .and_then(|t| t.as_str())
+                                            .map(|s| s.to_string())
                                     } else {
                                         None
                                     }
                                 })
                                 .collect();
-                            let content = truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
+                            let content =
+                                truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
                             if is_error {
                                 return Ok(ToolOutput::error(content));
                             }
@@ -1054,21 +1101,20 @@ impl McpProcessPool {
                     Ok(ToolOutput::success(String::new()))
                 })
                 .collect(),
-            Err(e) => {
-                (0..count).map(|_| Err(ToolError::ExecutionFailed(e.clone()))).collect()
-            }
+            Err(e) => (0..count)
+                .map(|_| Err(ToolError::ExecutionFailed(e.clone())))
+                .collect(),
         }
     }
 
     /// List prompts from a specific server via `prompts/list`.
-    pub async fn list_prompts(
-        &self,
-        server_name: &str,
-    ) -> Result<Vec<crate::Prompt>, String> {
+    pub async fn list_prompts(&self, server_name: &str) -> Result<Vec<crate::Prompt>, String> {
         if !self.has_prompts(server_name).await {
             return Err(format!("Server '{server_name}' does not support prompts"));
         }
-        let response = self.send_server_request(server_name, "prompts/list", serde_json::json!({})).await?;
+        let response = self
+            .send_server_request(server_name, "prompts/list", serde_json::json!({}))
+            .await?;
         let prompts_value = response
             .get("result")
             .and_then(|r| r.get("prompts"))
@@ -1106,7 +1152,11 @@ impl McpProcessPool {
             let name = entry.key().clone();
             let remote = entry.value();
             if let Ok(response) = remote
-                .send_request_with_timeout("prompts/list", serde_json::json!({}), remote.request_timeout)
+                .send_request_with_timeout(
+                    "prompts/list",
+                    serde_json::json!({}),
+                    remote.request_timeout,
+                )
                 .await
             {
                 let prompts_value = response
@@ -1137,7 +1187,9 @@ impl McpProcessPool {
             "name": prompt_name,
             "arguments": arguments.unwrap_or_default(),
         });
-        let response = self.send_server_request(server_name, "prompts/get", params).await?;
+        let response = self
+            .send_server_request(server_name, "prompts/get", params)
+            .await?;
         response.get("result").cloned().ok_or_else(|| {
             format!("MCP server '{server_name}' returned no result for prompt '{prompt_name}'")
         })
@@ -1359,7 +1411,10 @@ impl McpProcessPool {
     ///
     /// The callback receives `(server_name, new_tool_adapters)` — the caller
     /// should replace all existing tools from that server with the new adapters.
-    pub async fn set_on_tools_changed(&self, callback: Arc<dyn Fn(&str, Vec<PooledMcpToolAdapter>) + Send + Sync>) {
+    pub async fn set_on_tools_changed(
+        &self,
+        callback: Arc<dyn Fn(&str, Vec<PooledMcpToolAdapter>) + Send + Sync>,
+    ) {
         *self.on_tools_changed.lock().await = Some(callback);
     }
 
@@ -1463,7 +1518,10 @@ impl McpProcessPool {
     /// When a server sends a `roots/list` request, this callback is invoked
     /// to obtain the filesystem roots to return. If not set, an empty list
     /// is returned.
-    pub async fn set_roots_provider(&self, provider: Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>) {
+    pub async fn set_roots_provider(
+        &self,
+        provider: Arc<dyn Fn() -> Vec<crate::Root> + Send + Sync>,
+    ) {
         *self.roots_provider.lock().await = Some(provider);
     }
 
@@ -1540,7 +1598,10 @@ impl McpProcessPool {
             .await?;
 
         serde_json::from_value::<crate::CompletionResult>(
-            response.get("result").cloned().unwrap_or(serde_json::json!({})),
+            response
+                .get("result")
+                .cloned()
+                .unwrap_or(serde_json::json!({})),
         )
         .map_err(|e| format!("Failed to parse completion result: {e}"))
     }
@@ -1563,7 +1624,9 @@ impl McpProcessPool {
 
         // For remote servers, send a notification (no id → no response expected).
         if let Some(remote) = self.remote_handles.get(server_name) {
-            remote.send_notification("notifications/cancelled", params).await?;
+            remote
+                .send_notification("notifications/cancelled", params)
+                .await?;
             return Ok(());
         }
 
@@ -1573,7 +1636,9 @@ impl McpProcessPool {
             .get(server_name)
             .ok_or_else(|| format!("MCP server '{server_name}' not in pool"))?;
 
-        handle.send_notification("notifications/cancelled", params).await
+        handle
+            .send_notification("notifications/cancelled", params)
+            .await
     }
 
     /// Clear all cached tool results.
@@ -1603,7 +1668,8 @@ impl McpProcessPool {
         if let Some(remote) = self.remote_handles.get(server_name) {
             Some(remote.total_result_bytes.load(Ordering::Relaxed))
         } else {
-            self.handles.get(server_name)
+            self.handles
+                .get(server_name)
                 .map(|h| h.total_result_bytes.load(Ordering::Relaxed))
         }
     }
@@ -1632,9 +1698,13 @@ impl McpProcessPool {
     /// Track result bytes for a server after a successful tool call.
     fn track_result_bytes_for(&self, server_name: &str, byte_count: u64) {
         if let Some(remote) = self.remote_handles.get(server_name) {
-            remote.total_result_bytes.fetch_add(byte_count, Ordering::Relaxed);
+            remote
+                .total_result_bytes
+                .fetch_add(byte_count, Ordering::Relaxed);
         } else if let Some(handle) = self.handles.get(server_name) {
-            handle.total_result_bytes.fetch_add(byte_count, Ordering::Relaxed);
+            handle
+                .total_result_bytes
+                .fetch_add(byte_count, Ordering::Relaxed);
         }
     }
 
@@ -1837,8 +1907,11 @@ impl McpProcessPool {
         // Collect current server names
         let current_stdio: std::collections::HashSet<String> =
             self.handles.iter().map(|e| e.key().clone()).collect();
-        let current_remote: std::collections::HashSet<String> =
-            self.remote_handles.iter().map(|e| e.key().clone()).collect();
+        let current_remote: std::collections::HashSet<String> = self
+            .remote_handles
+            .iter()
+            .map(|e| e.key().clone())
+            .collect();
 
         // Stop servers no longer in config
         for name in current_stdio.iter().chain(current_remote.iter()) {
@@ -1864,7 +1937,8 @@ impl McpProcessPool {
                 crate::config::McpServerConfig::Sse { url, headers, auth }
                 | crate::config::McpServerConfig::Http { url, headers, auth } => {
                     if !is_current {
-                        self.start_remote_server(name, url, headers.clone(), auth.clone()).await?;
+                        self.start_remote_server(name, url, headers.clone(), auth.clone())
+                            .await?;
                         changes.push(format!("Started remote server '{name}'"));
                     }
                 }
@@ -1879,7 +1953,8 @@ impl McpProcessPool {
 
         // Update allowed tools patterns
         if !config.allowed_tools.is_empty() {
-            self.set_allowed_patterns(config.allowed_tools.clone()).await;
+            self.set_allowed_patterns(config.allowed_tools.clone())
+                .await;
             changes.push(format!(
                 "Updated allowed tools: {} pattern(s)",
                 config.allowed_tools.len()
@@ -1979,14 +2054,11 @@ impl Drop for McpProcessPool {
                             task.abort();
                         }
 
-                        let _ = tokio::time::timeout(
-                            Duration::from_secs(5),
-                            async {
-                                for h in &handles {
-                                    h.shutdown().await;
-                                }
-                            },
-                        )
+                        let _ = tokio::time::timeout(Duration::from_secs(5), async {
+                            for h in &handles {
+                                h.shutdown().await;
+                            }
+                        })
                         .await;
                     });
                 });

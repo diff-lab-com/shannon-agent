@@ -3,12 +3,12 @@
 use crate::{
     theme::Theme,
     widgets::{
-        progress::{ProgressBarWidget, SpinnerWidget, MultiProgressWidget},
-        tool_approval::ToolApprovalWidget,
+        StreamingState,
         attachment_bar::AttachmentBarWidget,
         command_palette::CommandPaletteWidget,
+        progress::{MultiProgressWidget, ProgressBarWidget, SpinnerWidget},
         session_tab::SessionTabWidget,
-        StreamingState,
+        tool_approval::ToolApprovalWidget,
     },
 };
 
@@ -66,7 +66,8 @@ pub struct ReplState {
     /// Active permission dialog (if any)
     pub permission_dialog: Option<shannon_core::permissions::PermissionPrompt>,
     /// Permission response channel sender (if dialog is active)
-    pub permission_response_tx: Option<tokio::sync::mpsc::UnboundedSender<shannon_core::permissions::PermissionChoice>>,
+    pub permission_response_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<shannon_core::permissions::PermissionChoice>>,
     /// Active confirm/alert dialog (if any)
     pub active_dialog: Option<crate::widgets::dialog::DialogWidget>,
     /// Pending action to execute when dialog is confirmed
@@ -448,8 +449,12 @@ impl Default for ReplState {
             plan: PlanState::default(),
             sandbox_mode: shannon_tools::SandboxMode::Direct,
             theme: Theme::detect(),
-            accessibility_mode: std::env::var("NO_GRAPHICS").is_ok() || std::env::var("ACCESSIBILITY").is_ok(),
-            reduced_motion: std::env::var("NO_COLOR").is_ok() || std::env::var("REDUCED_MOTION").is_ok() || std::env::var("NO_GRAPHICS").is_ok() || std::env::var("ACCESSIBILITY").is_ok(),
+            accessibility_mode: std::env::var("NO_GRAPHICS").is_ok()
+                || std::env::var("ACCESSIBILITY").is_ok(),
+            reduced_motion: std::env::var("NO_COLOR").is_ok()
+                || std::env::var("REDUCED_MOTION").is_ok()
+                || std::env::var("NO_GRAPHICS").is_ok()
+                || std::env::var("ACCESSIBILITY").is_ok(),
             keybindings: crate::keybindings::load_keybindings(),
             sidebar_visible: true,
             diff_viewer: None,

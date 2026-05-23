@@ -1,6 +1,8 @@
 //! /commit command - Create git commits
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Git safety protocol text
 const GIT_SAFETY: &str = r##"
@@ -31,7 +33,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[optional instructions]".to_string()),
             when_to_use: Some(
-                "Use after making changes to stage and commit them with an appropriate message".to_string(),
+                "Use after making changes to stage and commit them with an appropriate message"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,

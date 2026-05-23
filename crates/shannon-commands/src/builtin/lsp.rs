@@ -5,7 +5,9 @@
 
 #![allow(dead_code)]
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// LSP prompt template
 const LSP_PROMPT: &str = r##"
@@ -51,7 +53,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[status|start|stop] [language]".to_string()),
             when_to_use: Some(
-                "To view or manage language server connections for code intelligence features".to_string(),
+                "To view or manage language server connections for code intelligence features"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
@@ -145,7 +148,10 @@ pub fn format_server_list(servers: &[(String, LspServerState)]) -> String {
             "  {:<name_width$}  {:<12}  {}\n",
             name,
             format!("{}", state.status),
-            state.command.clone().unwrap_or_else(|| "(default)".to_string()),
+            state
+                .command
+                .clone()
+                .unwrap_or_else(|| "(default)".to_string()),
             name_width = name_width,
         ));
     }
@@ -270,7 +276,10 @@ mod tests {
     #[test]
     fn test_get_default_server_command() {
         assert_eq!(get_default_server_command("rust"), Some("rust-analyzer"));
-        assert_eq!(get_default_server_command("typescript"), Some("typescript-language-server"));
+        assert_eq!(
+            get_default_server_command("typescript"),
+            Some("typescript-language-server")
+        );
         assert_eq!(get_default_server_command("python"), Some("pylsp"));
         assert_eq!(get_default_server_command("unknown"), None);
     }

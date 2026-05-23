@@ -29,11 +29,7 @@ pub trait ReplCommand: Send + Sync {
     }
 
     /// Execute the command with given arguments and context
-    async fn execute(
-        &self,
-        args: &str,
-        ctx: &CommandContext,
-    ) -> CommandResult<String>;
+    async fn execute(&self, args: &str, ctx: &CommandContext) -> CommandResult<String>;
 
     /// Get detailed help text for this command
     fn help(&self) -> Option<&str> {
@@ -75,18 +71,10 @@ impl ReplCommand for CommandAdapter {
     }
 
     fn aliases(&self) -> Vec<&str> {
-        self.inner
-            .aliases()
-            .iter()
-            .map(|s| s.as_str())
-            .collect()
+        self.inner.aliases().iter().map(|s| s.as_str()).collect()
     }
 
-    async fn execute(
-        &self,
-        args: &str,
-        ctx: &CommandContext,
-    ) -> CommandResult<String> {
+    async fn execute(&self, args: &str, ctx: &CommandContext) -> CommandResult<String> {
         match &self.inner {
             Command::Prompt(cmd) => {
                 // Prompt commands render their template and return it for AI processing
@@ -153,13 +141,9 @@ async fn execute_shell_command(
     })?
     .map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            CommandError::NotFound(format!(
-                "Shell not found when executing: {command}"
-            ))
+            CommandError::NotFound(format!("Shell not found when executing: {command}"))
         } else {
-            CommandError::ExecutionError(format!(
-                "Failed to execute command '{command}': {e}"
-            ))
+            CommandError::ExecutionError(format!("Failed to execute command '{command}': {e}"))
         }
     })?;
 
@@ -173,7 +157,10 @@ async fn execute_shell_command(
         } else if stderr.trim().is_empty() {
             Ok(stdout_trimmed.to_string())
         } else {
-            Ok(format!("{stdout_trimmed}\n{stderr}", stderr = stderr.trim()))
+            Ok(format!(
+                "{stdout_trimmed}\n{stderr}",
+                stderr = stderr.trim()
+            ))
         }
     } else {
         let code = output
@@ -191,7 +178,7 @@ async fn execute_shell_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::command::{CommandBase, PromptCommand, CommandSource, CommandAvailability};
+    use crate::command::{CommandAvailability, CommandBase, CommandSource, PromptCommand};
 
     fn create_test_command(name: &str, description: &str) -> crate::Command {
         crate::Command::Prompt(Box::new(PromptCommand {
@@ -315,15 +302,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_command_success() {
-        let result =
-            execute_shell_command("echo hello", std::path::Path::new("."), 5).await;
+        let result = execute_shell_command("echo hello", std::path::Path::new("."), 5).await;
         assert_eq!(result.unwrap(), "hello");
     }
 
     #[tokio::test]
     async fn test_shell_command_failure() {
-        let result =
-            execute_shell_command("false", std::path::Path::new("."), 5).await;
+        let result = execute_shell_command("false", std::path::Path::new("."), 5).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("exited with code"));
@@ -332,16 +317,14 @@ mod tests {
     #[tokio::test]
     async fn test_shell_command_timeout() {
         // Sleep longer than the timeout to trigger a timeout error
-        let result =
-            execute_shell_command("sleep 10", std::path::Path::new("."), 1).await;
+        let result = execute_shell_command("sleep 10", std::path::Path::new("."), 1).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("timed out"));
     }
 
     #[tokio::test]
     async fn test_shell_command_stderr_captured() {
-        let result =
-            execute_shell_command("echo err >&2", std::path::Path::new("."), 5).await;
+        let result = execute_shell_command("echo err >&2", std::path::Path::new("."), 5).await;
         // stderr-only output should still be captured
         assert!(result.is_ok());
         assert!(result.unwrap().contains("err"));
@@ -349,8 +332,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_command_no_output() {
-        let result =
-            execute_shell_command("true", std::path::Path::new("."), 5).await;
+        let result = execute_shell_command("true", std::path::Path::new("."), 5).await;
         assert!(result.is_ok());
         assert!(result.unwrap().contains("no output"));
     }

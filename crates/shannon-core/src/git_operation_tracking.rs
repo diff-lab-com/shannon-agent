@@ -75,10 +75,7 @@ impl GitOperationTracker {
 
     /// Get the full operation history.
     pub fn get_history(&self) -> Vec<GitOperation> {
-        self.history
-            .lock()
-            .map(|h| h.clone())
-            .unwrap_or_default()
+        self.history.lock().map(|h| h.clone()).unwrap_or_default()
     }
 
     /// Get the most recent operations, limited to `count`.
@@ -104,10 +101,7 @@ impl GitOperationTracker {
 
     /// Get the total number of recorded operations.
     pub fn len(&self) -> usize {
-        self.history
-            .lock()
-            .map(|h| h.len())
-            .unwrap_or(0)
+        self.history.lock().map(|h| h.len()).unwrap_or(0)
     }
 
     /// Check if no operations have been recorded.
@@ -157,7 +151,11 @@ mod tests {
 
         tracker.record(GitOperation::new("init", vec![], true));
         tracker.record(GitOperation::new("add", vec![".".to_string()], true));
-        tracker.record(GitOperation::new("commit", vec!["-m".to_string(), "first".to_string()], true));
+        tracker.record(GitOperation::new(
+            "commit",
+            vec!["-m".to_string(), "first".to_string()],
+            true,
+        ));
 
         assert_eq!(tracker.len(), 3);
     }
@@ -174,13 +172,20 @@ mod tests {
         tracker.record(op);
 
         let history = tracker.get_history();
-        assert_eq!(history[0].working_dir, Some("/home/user/project".to_string()));
+        assert_eq!(
+            history[0].working_dir,
+            Some("/home/user/project".to_string())
+        );
     }
 
     #[test]
     fn test_record_failure() {
         let tracker = GitOperationTracker::new();
-        let op = GitOperation::new("push", vec!["origin".to_string(), "main".to_string()], false);
+        let op = GitOperation::new(
+            "push",
+            vec!["origin".to_string(), "main".to_string()],
+            false,
+        );
         tracker.record(op);
 
         let history = tracker.get_history();

@@ -203,7 +203,9 @@ mod tests {
 
     impl CollectingSender {
         fn new() -> Self {
-            Self { lines: std::sync::Mutex::new(Vec::new()) }
+            Self {
+                lines: std::sync::Mutex::new(Vec::new()),
+            }
         }
         fn collected(&self) -> Vec<String> {
             self.lines.lock().unwrap().clone()
@@ -220,8 +222,12 @@ mod tests {
 
     #[async_trait]
     impl Tool for EchoTool {
-        fn name(&self) -> &str { "echo" }
-        fn description(&self) -> &str { "echo tool" }
+        fn name(&self) -> &str {
+            "echo"
+        }
+        fn description(&self) -> &str {
+            "echo tool"
+        }
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {"msg": {"type": "string"}}})
         }
@@ -235,7 +241,10 @@ mod tests {
     async fn test_execute_streaming_default_delegates_to_execute() {
         let tool = EchoTool;
         let sender = Arc::new(CollectingSender::new());
-        let result = tool.execute_streaming(json!({"msg": "hello"}), sender.clone()).await.unwrap();
+        let result = tool
+            .execute_streaming(json!({"msg": "hello"}), sender.clone())
+            .await
+            .unwrap();
         assert_eq!(result.content, "hello");
         assert!(!result.is_error);
         // Default implementation does NOT call the progress sender
@@ -295,8 +304,14 @@ mod tests {
         let cases = vec![
             (ToolError::NotFound("x".into()), "Tool not found: x"),
             (ToolError::InvalidInput("y".into()), "Invalid tool input: y"),
-            (ToolError::ExecutionFailed("z".into()), "Tool execution failed: z"),
-            (ToolError::RegistryError("w".into()), "Tool registry error: w"),
+            (
+                ToolError::ExecutionFailed("z".into()),
+                "Tool execution failed: z",
+            ),
+            (
+                ToolError::RegistryError("w".into()),
+                "Tool registry error: w",
+            ),
         ];
         for (err, expected) in cases {
             assert_eq!(err.to_string(), expected);
@@ -383,10 +398,18 @@ mod tests {
 
     #[async_trait]
     impl Tool for ReadOnlyTool {
-        fn name(&self) -> &str { "readonly" }
-        fn description(&self) -> &str { "read-only tool" }
-        fn input_schema(&self) -> Value { json!({"type": "object"}) }
-        fn is_read_only(&self) -> bool { true }
+        fn name(&self) -> &str {
+            "readonly"
+        }
+        fn description(&self) -> &str {
+            "read-only tool"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        fn is_read_only(&self) -> bool {
+            true
+        }
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
             Ok(ToolOutput::success("read".into()))
         }
@@ -406,10 +429,18 @@ mod tests {
 
     #[async_trait]
     impl Tool for DestructiveTool {
-        fn name(&self) -> &str { "rm_rf" }
-        fn description(&self) -> &str { "destructive tool" }
-        fn input_schema(&self) -> Value { json!({"type": "object"}) }
-        fn is_destructive(&self) -> bool { true }
+        fn name(&self) -> &str {
+            "rm_rf"
+        }
+        fn description(&self) -> &str {
+            "destructive tool"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        fn is_destructive(&self) -> bool {
+            true
+        }
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
             Ok(ToolOutput::success("deleted".into()))
         }
@@ -427,11 +458,21 @@ mod tests {
 
     #[async_trait]
     impl Tool for ConcurrentWriteTool {
-        fn name(&self) -> &str { "concurrent_write" }
-        fn description(&self) -> &str { "concurrent write tool" }
-        fn input_schema(&self) -> Value { json!({"type": "object"}) }
-        fn is_read_only(&self) -> bool { false }
-        fn is_concurrency_safe(&self) -> bool { true }
+        fn name(&self) -> &str {
+            "concurrent_write"
+        }
+        fn description(&self) -> &str {
+            "concurrent write tool"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        fn is_read_only(&self) -> bool {
+            false
+        }
+        fn is_concurrency_safe(&self) -> bool {
+            true
+        }
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
             Ok(ToolOutput::success("wrote".into()))
         }
@@ -448,9 +489,15 @@ mod tests {
 
     #[async_trait]
     impl Tool for StreamingTool {
-        fn name(&self) -> &str { "streaming" }
-        fn description(&self) -> &str { "streaming tool" }
-        fn input_schema(&self) -> Value { json!({"type": "object"}) }
+        fn name(&self) -> &str {
+            "streaming"
+        }
+        fn description(&self) -> &str {
+            "streaming tool"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
             Ok(ToolOutput::success("base".into()))
         }
@@ -469,7 +516,10 @@ mod tests {
     async fn test_streaming_tool_overrides_default() {
         let tool = StreamingTool;
         let sender = Arc::new(CollectingSender::new());
-        let result = tool.execute_streaming(json!({}), sender.clone()).await.unwrap();
+        let result = tool
+            .execute_streaming(json!({}), sender.clone())
+            .await
+            .unwrap();
         assert_eq!(result.content, "streamed");
         assert_eq!(sender.collected(), vec!["line 1", "line 2"]);
     }

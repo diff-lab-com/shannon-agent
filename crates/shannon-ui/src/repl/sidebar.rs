@@ -1,14 +1,18 @@
 //! Sidebar info, context pressure, agent refresh, and auto-compaction.
 
-use crate::widgets::ChatRole;
 use super::state::AgentDisplay;
+use crate::widgets::ChatRole;
 
 /// Read process RSS memory in KB from /proc/self/status (Linux).
 fn read_memory_rss_kb() -> u64 {
-    let Ok(data) = std::fs::read_to_string("/proc/self/status") else { return 0 };
+    let Ok(data) = std::fs::read_to_string("/proc/self/status") else {
+        return 0;
+    };
     for line in data.lines() {
         if let Some(rest) = line.strip_prefix("VmRSS:") {
-            return rest.split_whitespace().next()
+            return rest
+                .split_whitespace()
+                .next()
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(0);
         }
@@ -41,12 +45,15 @@ impl super::Repl {
                 }
             }
         }
-        let error_count = self.chat.iter_messages()
+        let error_count = self
+            .chat
+            .iter_messages()
             .filter(|(_, m)| m.role == ChatRole::Tool && m.is_error)
             .count();
 
         // Per-category tool breakdown
-        let mut cat_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut cat_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (_, m) in self.chat.iter_messages() {
             if m.role == ChatRole::Tool {
                 if let Some(ref name) = m.tool_name {
@@ -79,13 +86,20 @@ impl super::Repl {
             Vec::new()
         };
 
-        let diagnostics: Vec<_> = self.state.diagnostic_store.diagnostics.iter().take(50).map(|d| crate::lsp_bridge::Diagnostic {
-            severity: d.severity,
-            message: d.message.clone(),
-            file_path: d.file_path.clone(),
-            line: d.line,
-            source: d.source.clone(),
-        }).collect();
+        let diagnostics: Vec<_> = self
+            .state
+            .diagnostic_store
+            .diagnostics
+            .iter()
+            .take(50)
+            .map(|d| crate::lsp_bridge::Diagnostic {
+                severity: d.severity,
+                message: d.message.clone(),
+                file_path: d.file_path.clone(),
+                line: d.line,
+                source: d.source.clone(),
+            })
+            .collect();
 
         Some(crate::widgets::SidebarInfo {
             model: self.state.model.clone(),
@@ -100,13 +114,19 @@ impl super::Repl {
             context_window,
             active_agents,
             diagnostics,
-            session_duration_secs: self.state.session_start
+            session_duration_secs: self
+                .state
+                .session_start
                 .map(|t| t.elapsed().as_secs())
                 .unwrap_or(0),
             turn_count: self.current_turn,
             commands_run: self.commands_run,
             tokens_per_sec: {
-                let dur = self.state.session_start.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+                let dur = self
+                    .state
+                    .session_start
+                    .map(|t| t.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
                 if dur > 0.0 && self.state.tokens_used > 0 {
                     Some(self.state.tokens_used as f64 / dur)
                 } else {
@@ -161,7 +181,9 @@ impl super::Repl {
             let pct = (usage_ratio * 100.0) as u32;
             let remaining = context_window.saturating_sub(actual_tokens);
             self.state.toast = Some((
-                format!("  Context: {pct}% used ({remaining} tokens remaining) — /compact to reduce  "),
+                format!(
+                    "  Context: {pct}% used ({remaining} tokens remaining) — /compact to reduce  "
+                ),
                 std::time::Instant::now(),
             ));
         }
@@ -186,27 +208,39 @@ impl super::Repl {
             let agents = self.runtime.block_on(registry.list_agents());
 
             // Detect agents that transitioned from active to completed/failed
-            let prev_names: std::collections::HashSet<String> = self.state.active_agents
+            let prev_names: std::collections::HashSet<String> = self
+                .state
+                .active_agents
                 .iter()
                 .filter(|a| a.active)
                 .map(|a| a.name.clone())
                 .collect();
 
-            let new_agents: Vec<AgentDisplay> = agents.into_iter().map(|a| {
-                let active = matches!(a.status, shannon_agents::AgentStatus::Running | shannon_agents::AgentStatus::Spawning | shannon_agents::AgentStatus::Idle);
-                AgentDisplay {
-                    name: a.name,
-                    status: a.status.to_string(),
-                    active,
-                    team: a.team,
-                    turns_used: a.turns_used,
-                    max_turns: a.config.max_turns,
-                }
-            }).collect();
+            let new_agents: Vec<AgentDisplay> = agents
+                .into_iter()
+                .map(|a| {
+                    let active = matches!(
+                        a.status,
+                        shannon_agents::AgentStatus::Running
+                            | shannon_agents::AgentStatus::Spawning
+                            | shannon_agents::AgentStatus::Idle
+                    );
+                    AgentDisplay {
+                        name: a.name,
+                        status: a.status.to_string(),
+                        active,
+                        team: a.team,
+                        turns_used: a.turns_used,
+                        max_turns: a.config.max_turns,
+                    }
+                })
+                .collect();
 
             // Send desktop notification for newly completed agents
-            use shannon_core::notifier::{DesktopNotifier, NotificationHandler, Notification, NotificationLevel};
             use chrono::Utc;
+            use shannon_core::notifier::{
+                DesktopNotifier, Notification, NotificationHandler, NotificationLevel,
+            };
 
             for agent in &new_agents {
                 if !agent.active && prev_names.contains(&agent.name) {
@@ -325,13 +359,16 @@ impl super::Repl {
             // High: just prune stale tool results (no API call needed)
             CompactEngine::prune_stale_tool_results(&mut messages);
             engine.replace_conversation(messages);
-            toast_msg = Some(format!("  Context pruned: {before} messages (stale tool results removed)  "));
+            toast_msg = Some(format!(
+                "  Context pruned: {before} messages (stale tool results removed)  "
+            ));
         }
 
         if let Some(msg) = toast_msg {
             self.state.toast = Some((msg.clone(), std::time::Instant::now()));
             // Also add a system message to chat for persistent visibility
-            self.chat.add_message(ChatRole::System, msg.trim().to_string());
+            self.chat
+                .add_message(ChatRole::System, msg.trim().to_string());
         }
     }
 }

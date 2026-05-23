@@ -1,13 +1,13 @@
 //! Full-screen diff viewer overlay widget
 
-use crate::theme::Theme;
 use crate::repl_enhancement::{DiffData, FileChange};
+use crate::theme::Theme;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem},
-    Frame,
 };
 use std::collections::HashMap;
 
@@ -22,14 +22,17 @@ use std::collections::HashMap;
 /// - everything else           → dim (context)
 fn diff_line_style(line: &str, theme: &Theme) -> Style {
     if (line.starts_with("---") || line.starts_with("+++")) && line.len() > 3 {
-        Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.warning)
+            .add_modifier(Modifier::BOLD)
     } else if line.starts_with('+') {
         Style::default().fg(theme.diff_added)
     } else if line.starts_with('-') {
         Style::default().fg(theme.diff_removed)
     } else if line.starts_with('@') {
         Style::default().fg(theme.secondary)
-    } else if line.starts_with("diff ") || line.starts_with("index ") || line.starts_with("Binary ") {
+    } else if line.starts_with("diff ") || line.starts_with("index ") || line.starts_with("Binary ")
+    {
         Style::default().fg(theme.muted)
     } else {
         Style::default().fg(theme.text_dim)
@@ -78,8 +81,12 @@ impl DiffViewerWidget {
                 let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
                 let all_lines: Vec<&str> = stdout.lines().collect();
                 if all_lines.len() > 200 {
-                    let mut capped: Vec<String> = all_lines[..200].iter().map(|s| s.to_string()).collect();
-                    capped.push(format!("  ... diff truncated ({} more lines)", all_lines.len() - 200));
+                    let mut capped: Vec<String> =
+                        all_lines[..200].iter().map(|s| s.to_string()).collect();
+                    capped.push(format!(
+                        "  ... diff truncated ({} more lines)",
+                        all_lines.len() - 200
+                    ));
                     capped
                 } else {
                     all_lines.into_iter().map(String::from).collect()
@@ -95,8 +102,12 @@ impl DiffViewerWidget {
                         let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
                         let all_lines: Vec<&str> = stdout.lines().collect();
                         if all_lines.len() > 200 {
-                            let mut capped: Vec<String> = all_lines[..200].iter().map(|s| s.to_string()).collect();
-                            capped.push(format!("  ... diff truncated ({} more lines)", all_lines.len() - 200));
+                            let mut capped: Vec<String> =
+                                all_lines[..200].iter().map(|s| s.to_string()).collect();
+                            capped.push(format!(
+                                "  ... diff truncated ({} more lines)",
+                                all_lines.len() - 200
+                            ));
                             capped
                         } else {
                             all_lines.into_iter().map(String::from).collect()
@@ -171,7 +182,9 @@ impl DiffViewerWidget {
                 all_entries.push(Entry::Deleted(p.clone()));
             }
         }
-        all_entries.get(self.selected_index).and_then(|e| e.path().map(String::from))
+        all_entries
+            .get(self.selected_index)
+            .and_then(|e| e.path().map(String::from))
     }
 
     /// Render the diff viewer as a full-screen overlay
@@ -192,13 +205,20 @@ impl DiffViewerWidget {
         let total_adds = diff_data.total_additions();
         let total_dels = diff_data.total_deletions();
 
-        let title = format!(" Diff Viewer ({} files, +{} -{}) ", files.len(), total_adds, total_dels);
+        let title = format!(
+            " Diff Viewer ({} files, +{} -{}) ",
+            files.len(),
+            total_adds,
+            total_dels
+        );
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.border))
             .title(Line::from(Span::styled(
                 title,
-                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
             )))
             .title_bottom(Line::from(Span::styled(
                 " j/k: navigate | Enter: view diff | Esc: close ",
@@ -234,7 +254,11 @@ impl DiffViewerWidget {
                 let is_expanded = self.expanded.get(i).copied().unwrap_or(false);
                 let cursor = if is_selected { "▸" } else { " " };
                 let expand_icon = crate::a11y::expand_icon(is_expanded);
-                let sel_bg = if is_selected { theme.context_bar_bg } else { ratatui::style::Color::Reset };
+                let sel_bg = if is_selected {
+                    theme.context_bar_bg
+                } else {
+                    ratatui::style::Color::Reset
+                };
 
                 let line = match entry {
                     Entry::Modified(fc) => {
@@ -242,9 +266,22 @@ impl DiffViewerWidget {
                         let changes = format!("+{} -{}", fc.additions, fc.deletions);
                         let sel_style = Style::default().bg(sel_bg);
                         Line::from(vec![
-                            Span::styled(format!("{cursor} "), Style::default().fg(theme.primary).bg(sel_bg)),
-                            Span::styled(format!("{expand_icon} "), Style::default().fg(theme.muted).bg(sel_bg)),
-                            Span::styled(fname, sel_style.fg(if is_selected { theme.primary } else { theme.text })),
+                            Span::styled(
+                                format!("{cursor} "),
+                                Style::default().fg(theme.primary).bg(sel_bg),
+                            ),
+                            Span::styled(
+                                format!("{expand_icon} "),
+                                Style::default().fg(theme.muted).bg(sel_bg),
+                            ),
+                            Span::styled(
+                                fname,
+                                sel_style.fg(if is_selected {
+                                    theme.primary
+                                } else {
+                                    theme.text
+                                }),
+                            ),
                             Span::styled(" ", sel_style),
                             Span::styled(changes, Style::default().fg(theme.muted).bg(sel_bg)),
                         ])
@@ -252,18 +289,38 @@ impl DiffViewerWidget {
                     Entry::Created(p) => {
                         let fname = truncate_path(p, inner_width.saturating_sub(20));
                         Line::from(vec![
-                            Span::styled(format!("{cursor} "), Style::default().fg(theme.primary).bg(sel_bg)),
+                            Span::styled(
+                                format!("{cursor} "),
+                                Style::default().fg(theme.primary).bg(sel_bg),
+                            ),
                             Span::styled("+ ", Style::default().fg(theme.success).bg(sel_bg)),
-                            Span::styled(fname, Style::default().fg(if is_selected { theme.success } else { theme.text }).bg(sel_bg)),
+                            Span::styled(
+                                fname,
+                                Style::default()
+                                    .fg(if is_selected {
+                                        theme.success
+                                    } else {
+                                        theme.text
+                                    })
+                                    .bg(sel_bg),
+                            ),
                             Span::styled(" new", Style::default().fg(theme.success).bg(sel_bg)),
                         ])
                     }
                     Entry::Deleted(p) => {
                         let fname = truncate_path(p, inner_width.saturating_sub(20));
                         Line::from(vec![
-                            Span::styled(format!("{cursor} "), Style::default().fg(theme.primary).bg(sel_bg)),
+                            Span::styled(
+                                format!("{cursor} "),
+                                Style::default().fg(theme.primary).bg(sel_bg),
+                            ),
                             Span::styled("x ", Style::default().fg(theme.error).bg(sel_bg)),
-                            Span::styled(fname, Style::default().fg(if is_selected { theme.error } else { theme.text }).bg(sel_bg)),
+                            Span::styled(
+                                fname,
+                                Style::default()
+                                    .fg(if is_selected { theme.error } else { theme.text })
+                                    .bg(sel_bg),
+                            ),
                             Span::styled(" deleted", Style::default().fg(theme.error).bg(sel_bg)),
                         ])
                     }
@@ -307,7 +364,8 @@ impl DiffViewerWidget {
         } else {
             0
         };
-        let visible_items: Vec<ListItem> = items.into_iter().skip(start).take(visible_rows).collect();
+        let visible_items: Vec<ListItem> =
+            items.into_iter().skip(start).take(visible_rows).collect();
 
         let list = List::new(visible_items);
         frame.render_widget(list, inner);
@@ -323,7 +381,9 @@ impl DiffViewerWidget {
             .border_style(Style::default().fg(theme.border))
             .title(Line::from(Span::styled(
                 title,
-                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
             )))
             .title_bottom(Line::from(Span::styled(
                 " j/k: scroll | Backspace: back | Esc: close ",
@@ -365,7 +425,8 @@ impl DiffViewerWidget {
         } else {
             0
         };
-        let visible_items: Vec<ListItem> = items.into_iter().skip(start).take(visible_rows).collect();
+        let visible_items: Vec<ListItem> =
+            items.into_iter().skip(start).take(visible_rows).collect();
         frame.render_widget(List::new(visible_items), inner);
     }
 }
@@ -454,7 +515,10 @@ impl InteractiveHunk {
         self.lines
             .iter()
             .filter(|l| !l.starts_with('-') && !l.starts_with("@@"))
-            .map(|l| l.strip_prefix('+').unwrap_or(l.strip_prefix(' ').unwrap_or(l)))
+            .map(|l| {
+                l.strip_prefix('+')
+                    .unwrap_or(l.strip_prefix(' ').unwrap_or(l))
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -479,7 +543,9 @@ impl DiffViewerWidget {
             .border_style(Style::default().fg(theme.border))
             .title(Line::from(Span::styled(
                 title,
-                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
             )))
             .title_bottom(Line::from(Span::styled(
                 " a: accept | r: reject | A: accept all | Esc: cancel | Enter: apply ",
@@ -507,28 +573,40 @@ impl DiffViewerWidget {
 
             // Hunk header
             let header_style = if is_selected {
-                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.muted)
             };
             items.push(ListItem::new(Line::from(vec![
-                Span::styled(if is_selected { ">" } else { " " }.to_string(), header_style),
                 Span::styled(
-                    format!(" Hunk {}  ", i + 1),
+                    if is_selected { ">" } else { " " }.to_string(),
                     header_style,
                 ),
-                Span::styled(format!(" {action_label}"), Style::default().fg(action_color)),
+                Span::styled(format!(" Hunk {}  ", i + 1), header_style),
+                Span::styled(
+                    format!(" {action_label}"),
+                    Style::default().fg(action_color),
+                ),
             ])));
 
             // Hunk content lines
             for line in &hunk.lines {
                 let base_style = match hunk.action {
-                    HunkAction::Accepted if line.starts_with('+') => Style::default().fg(theme.success),
-                    HunkAction::Rejected if line.starts_with('-') => Style::default().fg(theme.error),
+                    HunkAction::Accepted if line.starts_with('+') => {
+                        Style::default().fg(theme.success)
+                    }
+                    HunkAction::Rejected if line.starts_with('-') => {
+                        Style::default().fg(theme.error)
+                    }
                     _ => diff_line_style(line, theme),
                 };
                 let display = truncate_to(&format!("  {line}"), inner_width);
-                let style = if hunk.action == HunkAction::Rejected && !line.starts_with('-') && !line.starts_with("@@") {
+                let style = if hunk.action == HunkAction::Rejected
+                    && !line.starts_with('-')
+                    && !line.starts_with("@@")
+                {
                     base_style.add_modifier(Modifier::CROSSED_OUT)
                 } else {
                     base_style
@@ -546,11 +624,13 @@ impl DiffViewerWidget {
 
         let visible_rows = inner.height as usize;
         let start = if items.len() > visible_rows {
-            self.scroll_offset.min(items.len().saturating_sub(visible_rows))
+            self.scroll_offset
+                .min(items.len().saturating_sub(visible_rows))
         } else {
             0
         };
-        let visible_items: Vec<ListItem> = items.into_iter().skip(start).take(visible_rows).collect();
+        let visible_items: Vec<ListItem> =
+            items.into_iter().skip(start).take(visible_rows).collect();
         frame.render_widget(List::new(visible_items), inner);
     }
 }
@@ -585,10 +665,16 @@ fn truncate_path(path: &str, max_chars: usize) -> String {
         if fname_w + 4 <= max_chars {
             let budget = max_chars - fname_w - 4;
             let mut len = 0;
-            let prefix: String = path.chars()
+            let prefix: String = path
+                .chars()
                 .take_while(|c| {
                     let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                    if len + cw > budget { false } else { len += cw; true }
+                    if len + cw > budget {
+                        false
+                    } else {
+                        len += cw;
+                        true
+                    }
                 })
                 .collect();
             return format!("{prefix}...{fname}");
@@ -604,10 +690,16 @@ fn truncate_to(s: &str, max_chars: usize) -> String {
         s.to_string()
     } else if max_chars > 1 {
         let mut len = 0;
-        let truncated: String = s.chars()
+        let truncated: String = s
+            .chars()
             .take_while(|c| {
                 let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                if len + cw > max_chars - 1 { false } else { len += cw; true }
+                if len + cw > max_chars - 1 {
+                    false
+                } else {
+                    len += cw;
+                    true
+                }
             })
             .collect();
         format!("{truncated}…")

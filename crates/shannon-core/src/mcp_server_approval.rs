@@ -72,7 +72,10 @@ impl std::fmt::Display for McpTransportType {
 impl McpTransportType {
     /// Check whether this transport type involves network access.
     pub fn is_network(&self) -> bool {
-        matches!(self, McpTransportType::Sse | McpTransportType::StreamableHttp)
+        matches!(
+            self,
+            McpTransportType::Sse | McpTransportType::StreamableHttp
+        )
     }
 
     /// Check whether this is a local-only transport.
@@ -163,11 +166,7 @@ impl McpServerApprovalRequest {
     }
 
     /// Create a new approval request with a URL.
-    pub fn with_url(
-        server_name: &str,
-        transport_type: McpTransportType,
-        server_url: &str,
-    ) -> Self {
+    pub fn with_url(server_name: &str, transport_type: McpTransportType, server_url: &str) -> Self {
         Self {
             server_name: server_name.to_string(),
             server_url: Some(server_url.to_string()),
@@ -180,27 +179,29 @@ impl McpServerApprovalRequest {
 
     /// Check whether the server requests write permissions.
     pub fn requests_write_access(&self) -> bool {
-        self.requested_permissions
-            .iter()
-            .any(|p| p.to_lowercase().contains("write")
+        self.requested_permissions.iter().any(|p| {
+            p.to_lowercase().contains("write")
                 || p.to_lowercase().contains("modify")
                 || p.to_lowercase().contains("delete")
-                || p.to_lowercase().contains("execute"))
+                || p.to_lowercase().contains("execute")
+        })
     }
 
     /// Check whether the server requests network access.
     pub fn requests_network_access(&self) -> bool {
-        self.requested_permissions
-            .iter()
-            .any(|p| p.to_lowercase().contains("network")
+        self.requested_permissions.iter().any(|p| {
+            p.to_lowercase().contains("network")
                 || p.to_lowercase().contains("http")
                 || p.to_lowercase().contains("fetch")
-                || p.to_lowercase().contains("url"))
+                || p.to_lowercase().contains("url")
+        })
     }
 
     /// Check whether the server provides tools.
     pub fn has_tools(&self) -> bool {
-        self.capabilities.iter().any(|c| c.to_lowercase() == "tools")
+        self.capabilities
+            .iter()
+            .any(|c| c.to_lowercase() == "tools")
     }
 }
 
@@ -229,10 +230,7 @@ impl std::fmt::Display for ApprovalDecision {
             ApprovalDecision::Deny => write!(f, "denied"),
             ApprovalDecision::ApproveWithRestrictions {
                 allowed_permissions,
-            } => write!(
-                f,
-                "approved with restrictions: {allowed_permissions:?}"
-            ),
+            } => write!(f, "approved with restrictions: {allowed_permissions:?}"),
         }
     }
 }
@@ -599,7 +597,10 @@ mod tests {
     fn test_transport_display() {
         assert_eq!(McpTransportType::Stdio.to_string(), "stdio");
         assert_eq!(McpTransportType::Sse.to_string(), "sse");
-        assert_eq!(McpTransportType::StreamableHttp.to_string(), "streamable-http");
+        assert_eq!(
+            McpTransportType::StreamableHttp.to_string(),
+            "streamable-http"
+        );
     }
 
     // ---------------------------------------------------------------------------
@@ -647,7 +648,10 @@ mod tests {
         let policy = McpApprovalPolicy::default();
         let json = serde_json::to_string(&policy).unwrap();
         let deserialized: McpApprovalPolicy = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.auto_approve_read_only, policy.auto_approve_read_only);
+        assert_eq!(
+            deserialized.auto_approve_read_only,
+            policy.auto_approve_read_only
+        );
     }
 
     // ---------------------------------------------------------------------------
@@ -681,7 +685,8 @@ mod tests {
         req.requested_permissions.push("write_files".to_string());
         assert!(req.requests_write_access());
 
-        req.requested_permissions.push("modify_database".to_string());
+        req.requested_permissions
+            .push("modify_database".to_string());
         assert!(req.requests_write_access());
     }
 
@@ -725,7 +730,11 @@ mod tests {
         let restricted = ApprovalDecision::ApproveWithRestrictions {
             allowed_permissions: vec!["read".to_string()],
         };
-        assert!(restricted.to_string().contains("approved with restrictions"));
+        assert!(
+            restricted
+                .to_string()
+                .contains("approved with restrictions")
+        );
     }
 
     #[test]
@@ -774,7 +783,8 @@ mod tests {
     fn make_write_request() -> McpServerApprovalRequest {
         let mut req = McpServerApprovalRequest::new("write-server", McpTransportType::Stdio);
         req.requested_permissions.push("write_files".to_string());
-        req.requested_permissions.push("modify_database".to_string());
+        req.requested_permissions
+            .push("modify_database".to_string());
         req
     }
 
@@ -856,7 +866,9 @@ mod tests {
         let decision = mgr.request_approval(req).unwrap();
         // Default policy requires approval for network
         match decision {
-            ApprovalDecision::ApproveWithRestrictions { allowed_permissions } => {
+            ApprovalDecision::ApproveWithRestrictions {
+                allowed_permissions,
+            } => {
                 assert!(allowed_permissions.is_empty());
             }
             _ => panic!("Expected ApproveWithRestrictions, got {decision:?}"),

@@ -27,10 +27,7 @@ pub enum RecordingEntry {
         timestamp: String,
     },
     /// User sent a message.
-    UserMessage {
-        content: String,
-        turn: usize,
-    },
+    UserMessage { content: String, turn: usize },
     /// LLM API request.
     LlmRequest {
         turn: usize,
@@ -38,14 +35,9 @@ pub enum RecordingEntry {
         body: Value,
     },
     /// LLM API response.
-    LlmResponse {
-        turn: usize,
-        body: Value,
-    },
+    LlmResponse { turn: usize, body: Value },
     /// Query engine event (text, tool use, progress, etc.).
-    QueryEvent {
-        event: crate::QueryEvent,
-    },
+    QueryEvent { event: crate::QueryEvent },
     /// Tool call with input, output, and timing.
     ToolCall {
         tool: String,

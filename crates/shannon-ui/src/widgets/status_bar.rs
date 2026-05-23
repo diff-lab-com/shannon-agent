@@ -4,14 +4,14 @@
 //! `[spinner] [model] [context bar] [progress] [padding] [cost] [git] [mode]`
 
 use crate::theme::Theme;
-use rust_i18n::t;
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
+use rust_i18n::t;
 use unicode_width::UnicodeWidthStr;
 
 /// Status bar widget
@@ -36,7 +36,13 @@ impl StatusBarWidget {
     ///
     /// Derives files/tools/duration from `sidebar_info` internally.
     pub fn render_from_ctx(frame: &mut Frame, area: Rect, ctx: &crate::widgets::RenderContext) {
-        let files_info = ctx.sidebar_info.map(|si| (si.modified_files.len(), si.total_additions, si.total_deletions));
+        let files_info = ctx.sidebar_info.map(|si| {
+            (
+                si.modified_files.len(),
+                si.total_additions,
+                si.total_deletions,
+            )
+        });
         let tools_invoked = ctx.sidebar_info.map(|si| si.tools_invoked);
         let session_duration = ctx.sidebar_info.map(|si| si.session_duration_secs);
         let status = if let Some(elapsed) = ctx.streaming_elapsed {
@@ -49,13 +55,31 @@ impl StatusBarWidget {
             ctx.status.to_string()
         };
         Self::render_with_spinner(
-            frame, area, &status, ctx.model, ctx.effort_level,
+            frame,
+            area,
+            &status,
+            ctx.model,
+            ctx.effort_level,
             ctx.tokens_used,
-            ctx.max_tokens, ctx.cost_usd, ctx.git_branch, ctx.spinner,
-            ctx.progress_bar, ctx.theme, ctx.approval_mode, ctx.token_breakdown,
-            ctx.cache_read_tokens, ctx.cache_creation_tokens, ctx.diag_counts, ctx.rate_limit,
-            files_info, tools_invoked, session_duration,
-            ctx.thinking_phase, ctx.thinking_chars, ctx.turn_count, ctx.memory_rss_kb,
+            ctx.max_tokens,
+            ctx.cost_usd,
+            ctx.git_branch,
+            ctx.spinner,
+            ctx.progress_bar,
+            ctx.theme,
+            ctx.approval_mode,
+            ctx.token_breakdown,
+            ctx.cache_read_tokens,
+            ctx.cache_creation_tokens,
+            ctx.diag_counts,
+            ctx.rate_limit,
+            files_info,
+            tools_invoked,
+            session_duration,
+            ctx.thinking_phase,
+            ctx.thinking_chars,
+            ctx.turn_count,
+            ctx.memory_rss_kb,
         );
     }
 
@@ -109,7 +133,9 @@ impl StatusBarWidget {
                 let frame_str = sp.current_char().to_string();
                 left.push(Span::styled(
                     frame_str,
-                    Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.primary)
+                        .add_modifier(Modifier::BOLD),
                 ));
                 left.push(Span::raw(" "));
             }
@@ -159,7 +185,9 @@ impl StatusBarWidget {
             };
             left.push(Span::styled(
                 label,
-                Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
             ));
         } else {
             left.push(Span::styled(" ", Style::default().fg(theme.border_dim)));
@@ -216,10 +244,23 @@ impl StatusBarWidget {
                 ));
                 // Warning indicator when context is running low
                 if pct >= 0.9 {
-                    left.push(Span::styled(" \u{26A0}", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)));
-                    left.push(Span::styled(" LOW", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)));
+                    left.push(Span::styled(
+                        " \u{26A0}",
+                        Style::default()
+                            .fg(theme.error)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    left.push(Span::styled(
+                        " LOW",
+                        Style::default()
+                            .fg(theme.error)
+                            .add_modifier(Modifier::BOLD),
+                    ));
                 } else if pct >= 0.8 {
-                    left.push(Span::styled(" \u{26A0}", Style::default().fg(theme.warning)));
+                    left.push(Span::styled(
+                        " \u{26A0}",
+                        Style::default().fg(theme.warning),
+                    ));
                 }
             } else {
                 left.push(Span::styled(
@@ -282,10 +323,7 @@ impl StatusBarWidget {
                     }
                 }
                 bar_str.push(']');
-                left.push(Span::styled(
-                    bar_str,
-                    Style::default().fg(theme.primary),
-                ));
+                left.push(Span::styled(bar_str, Style::default().fg(theme.primary)));
                 left.push(Span::styled(
                     format!(" {pct:.0}%"),
                     Style::default()
@@ -331,10 +369,7 @@ impl StatusBarWidget {
         // Tools invoked
         if let Some(tools) = tools_invoked {
             if tools > 0 {
-                left2.push(Span::styled(
-                    " · ",
-                    Style::default().fg(theme.border_dim),
-                ));
+                left2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
                 left2.push(Span::styled(
                     t!("ui.tool", n => tools).to_string(),
                     Style::default().fg(theme.secondary),
@@ -360,10 +395,7 @@ impl StatusBarWidget {
             } else {
                 theme.text_dim
             };
-            left2.push(Span::styled(
-                " · ",
-                Style::default().fg(theme.border_dim),
-            ));
+            left2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
             left2.push(Span::styled(
                 t!("ui.cache", pct => pct).to_string(),
                 Style::default().fg(color),
@@ -373,10 +405,7 @@ impl StatusBarWidget {
         // Turn count
         if let Some(turns) = turn_count {
             if turns > 0 {
-                left2.push(Span::styled(
-                    " · ",
-                    Style::default().fg(theme.border_dim),
-                ));
+                left2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
                 left2.push(Span::styled(
                     t!("ui.turn", n => turns).to_string(),
                     Style::default().fg(theme.text_dim),
@@ -394,15 +423,13 @@ impl StatusBarWidget {
                 } else {
                     format!("{rss_kb}K")
                 };
-                let mem_color = if rss_kb >= 1_048_576 { // >= 1GB
+                let mem_color = if rss_kb >= 1_048_576 {
+                    // >= 1GB
                     theme.warning
                 } else {
                     theme.text_dim
                 };
-                left2.push(Span::styled(
-                    " · ",
-                    Style::default().fg(theme.border_dim),
-                ));
+                left2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
                 left2.push(Span::styled(
                     t!("ui.mem", size => &mem_label).to_string(),
                     Style::default().fg(mem_color),
@@ -412,10 +439,7 @@ impl StatusBarWidget {
 
         // Session duration
         if let Some(secs) = session_duration {
-            left2.push(Span::styled(
-                " · ",
-                Style::default().fg(theme.border_dim),
-            ));
+            left2.push(Span::styled(" · ", Style::default().fg(theme.border_dim)));
             left2.push(Span::styled(
                 format_duration(secs).to_string(),
                 Style::default().fg(theme.text_dim),
@@ -442,8 +466,15 @@ impl StatusBarWidget {
                         Style::default().fg(theme.warning),
                     ));
                 }
-                let diag_color = if errors > 0 { theme.error } else { theme.warning };
-                right2.push(Span::styled(format!("{} ", t!("ui.status_diag")), Style::default().fg(diag_color)));
+                let diag_color = if errors > 0 {
+                    theme.error
+                } else {
+                    theme.warning
+                };
+                right2.push(Span::styled(
+                    format!("{} ", t!("ui.status_diag")),
+                    Style::default().fg(diag_color),
+                ));
                 right2.extend(diag_parts);
             }
         }
@@ -499,10 +530,16 @@ fn truncate_model(model: &str) -> String {
     let w = unicode_width::UnicodeWidthStr::width(model);
     if w > MAX_MODEL_LEN {
         let mut len = 0;
-        let truncated: String = model.chars()
+        let truncated: String = model
+            .chars()
             .take_while(|c| {
                 let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                if len + cw > MAX_MODEL_LEN - 1 { false } else { len += cw; true }
+                if len + cw > MAX_MODEL_LEN - 1 {
+                    false
+                } else {
+                    len += cw;
+                    true
+                }
             })
             .collect();
         format!("{truncated}…")
@@ -539,9 +576,21 @@ fn branch_icon() -> &'static str {
 }
 
 /// Render a single status line with left/right zones and padding.
-fn render_line(frame: &mut Frame, area: Rect, left: Vec<Span<'static>>, right: Vec<Span<'static>>, theme: &Theme) {
-    let left_w: usize = left.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
-    let right_w: usize = right.iter().map(|s| UnicodeWidthStr::width(s.content.as_ref())).sum();
+fn render_line(
+    frame: &mut Frame,
+    area: Rect,
+    left: Vec<Span<'static>>,
+    right: Vec<Span<'static>>,
+    theme: &Theme,
+) {
+    let left_w: usize = left
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
+    let right_w: usize = right
+        .iter()
+        .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+        .sum();
     let total = left_w + right_w;
     let available = area.width as usize;
     let padding = available.saturating_sub(total);

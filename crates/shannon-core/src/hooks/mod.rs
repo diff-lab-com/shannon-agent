@@ -67,18 +67,16 @@
 //! }
 //! ```
 
-mod types;
-mod events;
 mod config;
+mod events;
 mod manager;
+mod types;
 
 #[cfg(test)]
 mod tests;
 
 // Re-export all public types to maintain the same public API
-pub use types::HookError;
-pub use events::{HookEventType, HookEvent};
-pub use config::{
-    HookDecision, HookResult, HookType, HookDef, HookConfig, HooksFile,
-};
+pub use config::{HookConfig, HookDecision, HookDef, HookResult, HookType, HooksFile};
+pub use events::{HookEvent, HookEventType};
 pub use manager::HookManager;
+pub use types::HookError;

@@ -167,9 +167,7 @@ impl TipManager {
         let mut candidates: Vec<&Tip> = self
             .tips
             .iter()
-            .filter(|t| {
-                !self.shown_tips.contains(&t.id) && self.condition_matches(t, context)
-            })
+            .filter(|t| !self.shown_tips.contains(&t.id) && self.condition_matches(t, context))
             .collect();
 
         if candidates.is_empty() {
@@ -177,9 +175,17 @@ impl TipManager {
         }
 
         // Sort by priority descending (highest first).
-        candidates.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.sort_by(|a, b| {
+            b.priority
+                .partial_cmp(&a.priority)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
-        let tip = candidates.into_iter().next().expect("candidates checked non-empty above").clone();
+        let tip = candidates
+            .into_iter()
+            .next()
+            .expect("candidates checked non-empty above")
+            .clone();
         self.mark_shown(&tip.id);
         Some(tip)
     }
@@ -190,8 +196,7 @@ impl TipManager {
             TipCondition::Always => true,
             TipCondition::AfterCommand { command } => match context {
                 TipContext::AfterCommand { command: ctx_cmd } => {
-                    ctx_cmd.contains(command.as_str())
-                        || command.contains(ctx_cmd.as_str())
+                    ctx_cmd.contains(command.as_str()) || command.contains(ctx_cmd.as_str())
                 }
                 _ => false,
             },
@@ -537,9 +542,7 @@ mod tests {
             id: "session-tip".into(),
             message: "veteran tip".into(),
             category: TipCategory::Productivity,
-            condition: TipCondition::SessionCount {
-                min_sessions: 3,
-            },
+            condition: TipCondition::SessionCount { min_sessions: 3 },
             priority: 1.0,
         });
 
@@ -557,9 +560,7 @@ mod tests {
             id: "session-tip".into(),
             message: "veteran".into(),
             category: TipCategory::Productivity,
-            condition: TipCondition::SessionCount {
-                min_sessions: 10,
-            },
+            condition: TipCondition::SessionCount { min_sessions: 10 },
             priority: 1.0,
         });
 
@@ -731,9 +732,7 @@ mod tests {
             id: "sc".into(),
             message: "session".into(),
             category: TipCategory::Productivity,
-            condition: TipCondition::SessionCount {
-                min_sessions: 5,
-            },
+            condition: TipCondition::SessionCount { min_sessions: 5 },
             priority: 1.0,
         });
 

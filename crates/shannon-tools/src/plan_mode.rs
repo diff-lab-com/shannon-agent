@@ -9,7 +9,7 @@
 //! and planning workflows. Plans are tracked with rich state including
 //! content, approval status, and file-based persistence.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -44,15 +44,13 @@ pub struct PlanEntry {
 // ---------------------------------------------------------------------------
 
 /// Internal state for the plan mode system.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 struct PlanState {
     active: bool,
     current_plan: Option<PlanEntry>,
     plan_history: Vec<PlanEntry>,
     plan_file_path: Option<PathBuf>,
 }
-
 
 // ---------------------------------------------------------------------------
 // PlanManager — public API wrapping Arc<RwLock<PlanState>>
@@ -170,14 +168,18 @@ impl PlanManager {
             ToolError::ExecutionFailed(format!("Failed to acquire plan mode lock: {e}"))
         })?;
 
-        let plan = state.current_plan.as_mut().ok_or_else(|| {
-            ToolError::ExecutionFailed("No current plan to approve".to_string())
-        })?;
+        let plan = state
+            .current_plan
+            .as_mut()
+            .ok_or_else(|| ToolError::ExecutionFailed("No current plan to approve".to_string()))?;
 
         plan.approved = true;
         plan.approved_at = Some(Utc::now());
 
-        state.current_plan.clone().ok_or_else(|| ToolError::ExecutionFailed("No plan to approve".into()))
+        state
+            .current_plan
+            .clone()
+            .ok_or_else(|| ToolError::ExecutionFailed("No plan to approve".into()))
     }
 
     /// Reject the current plan, moving it to history as a rejected entry.
@@ -188,9 +190,10 @@ impl PlanManager {
             ToolError::ExecutionFailed(format!("Failed to acquire plan mode lock: {e}"))
         })?;
 
-        let plan = state.current_plan.take().ok_or_else(|| {
-            ToolError::ExecutionFailed("No current plan to reject".to_string())
-        })?;
+        let plan = state
+            .current_plan
+            .take()
+            .ok_or_else(|| ToolError::ExecutionFailed("No current plan to reject".to_string()))?;
 
         // The plan remains in history as not-approved (i.e. rejected).
         state.plan_history.push(plan.clone());
@@ -241,11 +244,7 @@ impl PlanManager {
             .trim_start_matches('#')
             .trim();
 
-        let status = if plan.approved {
-            "approved"
-        } else {
-            "pending"
-        };
+        let status = if plan.approved { "approved" } else { "pending" };
 
         let file_content = format!(
             "# Plan: {}\nCreated: {}\nStatus: {}\n\n{}",
@@ -256,9 +255,8 @@ impl PlanManager {
         );
 
         let file_path = plans_dir.join(format!("{}.md", plan.id));
-        fs::write(&file_path, file_content).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to write plan file: {e}"))
-        })?;
+        fs::write(&file_path, file_content)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write plan file: {e}")))?;
 
         Ok(file_path)
     }
@@ -268,9 +266,8 @@ impl PlanManager {
     /// Parses the file header for title, creation timestamp, and status, then
     /// reconstructs a `PlanEntry`.
     pub fn load_plan_from_file(&self, path: &Path) -> Result<PlanEntry, ToolError> {
-        let content = fs::read_to_string(path).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to read plan file: {e}"))
-        })?;
+        let content = fs::read_to_string(path)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read plan file: {e}")))?;
 
         let mut lines = content.lines();
 
@@ -372,7 +369,11 @@ impl PlanManager {
         match &state.current_plan {
             None => Ok("Plan mode is active. No plan has been created yet.".to_string()),
             Some(plan) => {
-                let status = if plan.approved { "APPROVED" } else { "PENDING APPROVAL" };
+                let status = if plan.approved {
+                    "APPROVED"
+                } else {
+                    "PENDING APPROVAL"
+                };
                 Ok(format!(
                     "Plan mode is active.\n\
                      Plan ID: {}\n\
@@ -443,7 +444,8 @@ impl EnterPlanModeTool {
 
     /// Create with a `PlanManager` for rich plan content tracking.
     pub fn with_manager(plan_manager: PlanManager) -> Self {
-        let state = plan_manager.is_active()
+        let state = plan_manager
+            .is_active()
             .ok()
             .map(|active| Arc::new(RwLock::new(active)))
             .unwrap_or_else(new_plan_mode_state);
@@ -489,17 +491,12 @@ impl Tool for EnterPlanModeTool {
             manager.enter_plan_mode()?;
         }
 
-        let reason = input
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let reason = input.get("reason").and_then(|v| v.as_str()).unwrap_or("");
 
         let content = if reason.is_empty() {
             "Entered plan mode. File modifications are disabled.".to_string()
         } else {
-            format!(
-                "Entered plan mode. File modifications are disabled. Reason: {reason}"
-            )
+            format!("Entered plan mode. File modifications are disabled. Reason: {reason}")
         };
 
         Ok(ToolOutput {
@@ -546,7 +543,8 @@ impl ExitPlanModeTool {
 
     /// Create with a `PlanManager` for rich plan content tracking.
     pub fn with_manager(plan_manager: PlanManager) -> Self {
-        let state = plan_manager.is_active()
+        let state = plan_manager
+            .is_active()
             .ok()
             .map(|active| Arc::new(RwLock::new(active)))
             .unwrap_or_else(new_plan_mode_state);
@@ -621,9 +619,7 @@ impl Tool for ExitPlanModeTool {
         }
 
         let content = match plan_id {
-            Some(ref id) => format!(
-                "Exited plan mode. Plan saved with ID: {id}"
-            ),
+            Some(ref id) => format!("Exited plan mode. Plan saved with ID: {id}"),
             None => "Exited plan mode.".to_string(),
         };
 
@@ -695,7 +691,10 @@ impl Tool for GetPlanStatusTool {
             Some(p) => {
                 metadata.insert("plan_id".to_string(), json!(p.id));
                 metadata.insert("plan_approved".to_string(), json!(p.approved));
-                metadata.insert("plan_created_at".to_string(), json!(p.created_at.to_rfc3339()));
+                metadata.insert(
+                    "plan_created_at".to_string(),
+                    json!(p.created_at.to_rfc3339()),
+                );
                 if let Some(approved_at) = &p.approved_at {
                     metadata.insert(
                         "plan_approved_at".to_string(),
@@ -858,7 +857,14 @@ mod tests {
         assert!(output.content.contains("Entered plan mode"));
 
         assert!(is_plan_mode_active(&state).unwrap());
-        assert!(output.metadata.get("plan_mode_active").unwrap().as_bool().unwrap());
+        assert!(
+            output
+                .metadata
+                .get("plan_mode_active")
+                .unwrap()
+                .as_bool()
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -881,7 +887,14 @@ mod tests {
         assert!(output.content.contains("Exited plan mode"));
 
         assert!(!is_plan_mode_active(&state).unwrap());
-        assert!(!output.metadata.get("plan_mode_active").unwrap().as_bool().unwrap());
+        assert!(
+            !output
+                .metadata
+                .get("plan_mode_active")
+                .unwrap()
+                .as_bool()
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -958,7 +971,11 @@ mod tests {
             .unwrap();
 
         assert!(!result.is_error);
-        assert!(result.content.contains("Analyzing architecture before refactoring"));
+        assert!(
+            result
+                .content
+                .contains("Analyzing architecture before refactoring")
+        );
         assert_eq!(
             result.metadata.get("reason").unwrap().as_str().unwrap(),
             "Analyzing architecture before refactoring"
@@ -1072,7 +1089,9 @@ mod tests {
         assert!(manager.is_active().unwrap());
 
         // Set a plan
-        let id = manager.set_plan("# Architecture Plan\n\n1. Step one\n2. Step two").unwrap();
+        let id = manager
+            .set_plan("# Architecture Plan\n\n1. Step one\n2. Step two")
+            .unwrap();
         let plan = manager.get_plan().unwrap().unwrap();
         assert_eq!(plan.id, id);
         assert!(!plan.approved);
@@ -1217,7 +1236,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let manager = PlanManager::new();
 
-        manager.set_plan("# Roundtrip Plan\n\n- Step 1\n- Step 2").unwrap();
+        manager
+            .set_plan("# Roundtrip Plan\n\n- Step 1\n- Step 2")
+            .unwrap();
 
         let path = manager.save_plan_to_file(tmp.path()).unwrap();
         let loaded = manager.load_plan_from_file(&path).unwrap();
@@ -1293,7 +1314,9 @@ mod tests {
         let manager = PlanManager::new();
 
         // Directory doesn't exist yet — should return empty, not error.
-        let plans = manager.list_plans(tmp.path().join("nonexistent").as_path()).unwrap();
+        let plans = manager
+            .list_plans(tmp.path().join("nonexistent").as_path())
+            .unwrap();
         assert!(plans.is_empty());
     }
 
@@ -1402,7 +1425,12 @@ mod tests {
         assert!(!result.is_error);
         assert!(result.content.contains("not active"));
         assert!(
-            !result.metadata.get("plan_mode_active").unwrap().as_bool().unwrap()
+            !result
+                .metadata
+                .get("plan_mode_active")
+                .unwrap()
+                .as_bool()
+                .unwrap()
         );
 
         // Activate and set a plan.
@@ -1414,7 +1442,12 @@ mod tests {
         assert!(result.content.contains("Test plan content"));
         assert!(result.content.contains("pending"));
         assert!(
-            result.metadata.get("plan_mode_active").unwrap().as_bool().unwrap()
+            result
+                .metadata
+                .get("plan_mode_active")
+                .unwrap()
+                .as_bool()
+                .unwrap()
         );
         assert!(result.metadata.contains_key("plan_id"));
     }

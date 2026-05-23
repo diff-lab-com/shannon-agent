@@ -85,18 +85,33 @@ mod tests {
     use tempfile::TempDir;
 
     fn make_entry_with_timestamps(
-        id: &str, project: &str, category: MemoryCategory, content: &str,
-        confidence: f64, created_at: DateTime<Utc>, accessed_at: DateTime<Utc>, access_count: u32,
+        id: &str,
+        project: &str,
+        category: MemoryCategory,
+        content: &str,
+        confidence: f64,
+        created_at: DateTime<Utc>,
+        accessed_at: DateTime<Utc>,
+        access_count: u32,
     ) -> MemoryEntry {
         MemoryEntry {
-            id: id.to_string(), project: project.to_string(), category,
-            content: content.to_string(), tags: vec![], confidence,
-            created_at, accessed_at, access_count,
+            id: id.to_string(),
+            project: project.to_string(),
+            category,
+            content: content.to_string(),
+            tags: vec![],
+            confidence,
+            created_at,
+            accessed_at,
+            access_count,
         }
     }
 
     fn make_entry_with_confidence(
-        project: &str, category: MemoryCategory, content: &str, confidence: f64,
+        project: &str,
+        category: MemoryCategory,
+        content: &str,
+        confidence: f64,
     ) -> MemoryEntry {
         MemoryEntry::with_confidence(project, category, content, confidence, vec![]).unwrap()
     }
@@ -129,8 +144,22 @@ mod tests {
     fn test_consolidate_merges_duplicates() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "always use tabs for indentation", 0.9)).unwrap();
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "always use tabs for indentation", 0.7)).unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+                0.9,
+            ))
+            .unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+                0.7,
+            ))
+            .unwrap();
         let config = SessionMemoryConfig::default();
         let consolidator = MemoryConsolidator::default();
         let result = consolidator.consolidate(&mut store, &config).unwrap();
@@ -144,12 +173,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         let old = make_entry_with_timestamps(
-            "1", "p", MemoryCategory::Context, "old entry", 1.0,
-            Utc::now() - Duration::days(100), Utc::now(), 0,
+            "1",
+            "p",
+            MemoryCategory::Context,
+            "old entry",
+            1.0,
+            Utc::now() - Duration::days(100),
+            Utc::now(),
+            0,
         );
         let fresh = make_entry_with_timestamps(
-            "2", "p", MemoryCategory::Context, "fresh entry", 1.0,
-            Utc::now(), Utc::now(), 0,
+            "2",
+            "p",
+            MemoryCategory::Context,
+            "fresh entry",
+            1.0,
+            Utc::now(),
+            Utc::now(),
+            0,
         );
         store.add(old).unwrap();
         store.add(fresh).unwrap();
@@ -166,12 +207,21 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         for i in 0..4u32 {
             let entry = make_entry_with_timestamps(
-                &format!("p{}", i), "proj", MemoryCategory::Preference,
-                &format!("preference entry {}", i), 0.8, Utc::now(), Utc::now(), i,
+                &format!("p{}", i),
+                "proj",
+                MemoryCategory::Preference,
+                &format!("preference entry {}", i),
+                0.8,
+                Utc::now(),
+                Utc::now(),
+                i,
             );
             store.add(entry).unwrap();
         }
-        let config = SessionMemoryConfig { max_memories_per_category: 2, ..SessionMemoryConfig::default() };
+        let config = SessionMemoryConfig {
+            max_memories_per_category: 2,
+            ..SessionMemoryConfig::default()
+        };
         let consolidator = MemoryConsolidator::default();
         let result = consolidator.consolidate(&mut store, &config).unwrap();
         assert!(result.after_count <= 2);
@@ -194,15 +244,45 @@ mod tests {
     fn test_consolidate_all_phases_combined() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "always use rust language", 0.9)).unwrap();
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "always use rust language", 0.6)).unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use rust language",
+                0.9,
+            ))
+            .unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use rust language",
+                0.6,
+            ))
+            .unwrap();
         let stale = make_entry_with_timestamps(
-            "stale", "p", MemoryCategory::Context, "stale data", 1.0,
-            Utc::now() - Duration::days(100), Utc::now(), 0,
+            "stale",
+            "p",
+            MemoryCategory::Context,
+            "stale data",
+            1.0,
+            Utc::now() - Duration::days(100),
+            Utc::now(),
+            0,
         );
         store.add(stale).unwrap();
-        store.add(make_entry_with_confidence("p", MemoryCategory::Decision, "use PostgreSQL", 0.85)).unwrap();
-        let config = SessionMemoryConfig { max_memories_per_category: 50, ..SessionMemoryConfig::default() };
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Decision,
+                "use PostgreSQL",
+                0.85,
+            ))
+            .unwrap();
+        let config = SessionMemoryConfig {
+            max_memories_per_category: 50,
+            ..SessionMemoryConfig::default()
+        };
         let consolidator = MemoryConsolidator::default();
         let result = consolidator.consolidate(&mut store, &config).unwrap();
         assert_eq!(result.before_count, 4);
@@ -214,7 +294,10 @@ mod tests {
     #[test]
     fn test_consolidation_result_serialization() {
         let result = ConsolidationResult {
-            duplicates_merged: 2, stale_removed: 1, before_count: 10, after_count: 7,
+            duplicates_merged: 2,
+            stale_removed: 1,
+            before_count: 10,
+            after_count: 7,
         };
         let json = serde_json::to_string(&result).unwrap();
         let deserialized: ConsolidationResult = serde_json::from_str(&json).unwrap();

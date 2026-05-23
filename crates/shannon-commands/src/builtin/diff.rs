@@ -1,6 +1,8 @@
 //! /diff command - Show git diff of changes
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Prompt template for the /diff command.
 ///
@@ -81,10 +83,7 @@ pub fn run_diff_analysis(args: &str) -> String {
 
     // Build and run git diff (using direct command, not sh -c, to avoid injection)
     let diff_args = build_diff_args(&options);
-    let diff_output = match std::process::Command::new("git")
-        .args(&diff_args)
-        .output()
-    {
+    let diff_output = match std::process::Command::new("git").args(&diff_args).output() {
         Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
         Err(e) => return format!("Failed to run git diff: {e}"),
     };
@@ -92,10 +91,7 @@ pub fn run_diff_analysis(args: &str) -> String {
     // Run git diff --stat for statistics
     let mut stat_args = diff_args.clone();
     stat_args.push("--stat".to_string());
-    let stat_output = match std::process::Command::new("git")
-        .args(&stat_args)
-        .output()
-    {
+    let stat_output = match std::process::Command::new("git").args(&stat_args).output() {
         Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
         Err(_) => String::new(),
     };
@@ -123,7 +119,10 @@ pub fn run_diff_analysis(args: &str) -> String {
         if !s.file_stats.is_empty() {
             result.push_str("### Changed Files\n\n");
             for f in &s.file_stats {
-                result.push_str(&format!("- `{}` (+{} / -{})\n", f.path, f.insertions, f.deletions));
+                result.push_str(&format!(
+                    "- `{}` (+{} / -{})\n",
+                    f.path, f.insertions, f.deletions
+                ));
             }
             result.push('\n');
         }
@@ -131,7 +130,10 @@ pub fn run_diff_analysis(args: &str) -> String {
 
     // Category breakdown
     if analysis.total() > 0 {
-        result.push_str(&format!("### Category Breakdown\n\n{}\n\n", analysis.summary()));
+        result.push_str(&format!(
+            "### Category Breakdown\n\n{}\n\n",
+            analysis.summary()
+        ));
 
         if analysis.has_test_changes() {
             result.push_str("**Test changes detected** — review test coverage.\n\n");
@@ -146,7 +148,9 @@ pub fn run_diff_analysis(args: &str) -> String {
             cut -= 1;
         }
         let truncated = &diff_output[..cut];
-        result.push_str(&format!("### Raw Diff (truncated)\n\n```\n{truncated}\n```\n"));
+        result.push_str(&format!(
+            "### Raw Diff (truncated)\n\n```\n{truncated}\n```\n"
+        ));
     } else {
         result.push_str(&format!("### Raw Diff\n\n```\n{diff_output}\n```\n"));
     }
@@ -155,8 +159,7 @@ pub fn run_diff_analysis(args: &str) -> String {
 }
 
 /// Diff scope
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DiffScope {
     /// Unstaged changes (default)
     Unstaged,
@@ -174,7 +177,6 @@ pub enum DiffScope {
     /// Between commits/branches
     Commits,
 }
-
 
 /// Diff options
 #[derive(Debug, Clone, Default)]
@@ -237,7 +239,11 @@ impl DiffOptions {
         // (contains `...` or `..` or is a known ref like HEAD).
         if !remaining.is_empty() {
             let first = remaining[0];
-            if first.contains("...") || first.contains("..") || first == "HEAD" || !first.starts_with('-') {
+            if first.contains("...")
+                || first.contains("..")
+                || first == "HEAD"
+                || !first.starts_with('-')
+            {
                 opts.revision_range = Some(first.to_string());
                 opts.scope = DiffScope::Commits;
                 remaining.remove(0);
@@ -435,8 +441,14 @@ pub fn parse_diff_stat(output: &str) -> Option<DiffStats> {
                 let mut deletions = 0;
 
                 if let Some(caps) = STATS_REGEX.captures(stats_part) {
-                    insertions = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
-                    deletions = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+                    insertions = caps
+                        .get(1)
+                        .and_then(|m| m.as_str().parse().ok())
+                        .unwrap_or(0);
+                    deletions = caps
+                        .get(2)
+                        .and_then(|m| m.as_str().parse().ok())
+                        .unwrap_or(0);
                 }
 
                 total_insertions += insertions;
@@ -460,33 +472,28 @@ pub fn parse_diff_stat(output: &str) -> Option<DiffStats> {
 }
 
 // Simple regex for parsing stat lines
-static STATS_REGEX: once_cell::sync::Lazy<regex::Regex> =
-    once_cell::sync::Lazy::new(|| {
-        regex::Regex::new(r"(\d+) insertion[s]?,?\s*(\d+) deletion[s]?")
-            .unwrap_or_else(|e| panic!("invalid STATS_REGEX pattern: {e}"))
-    });
+static STATS_REGEX: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| {
+    regex::Regex::new(r"(\d+) insertion[s]?,?\s*(\d+) deletion[s]?")
+        .unwrap_or_else(|e| panic!("invalid STATS_REGEX pattern: {e}"))
+});
 
 /// Common diff patterns
 pub mod patterns {
     /// Match function/method definitions (Rust, Kotlin, Python, TypeScript)
-    pub const FUNCTION_PATTERN: &str =
-        r"^[\+\-]\s*((pub\s+)?(async\s+)?fn\s+\w+|(public|private|protected|static|async)\s+fun\s+\w+|def\s+\w+)";
+    pub const FUNCTION_PATTERN: &str = r"^[\+\-]\s*((pub\s+)?(async\s+)?fn\s+\w+|(public|private|protected|static|async)\s+fun\s+\w+|def\s+\w+)";
 
     /// Match import statements
     pub const IMPORT_PATTERN: &str =
         r"^[\+\-]\s*(use\s+|import\s+|from\s+\S+\s+import|#include\s+)";
 
     /// Match struct/class/interface/enum definitions
-    pub const STRUCT_PATTERN: &str =
-        r"^[\+\-]\s*(pub\s+)?(struct|class|interface|enum|type)\s+\w+";
+    pub const STRUCT_PATTERN: &str = r"^[\+\-]\s*(pub\s+)?(struct|class|interface|enum|type)\s+\w+";
 
     /// Match test functions (Rust #[test], Python def test_, JS/TS test()/it())
-    pub const TEST_PATTERN: &str =
-        r"^[\+\-].*#\[test\]|^[\+\-].*#\[tokio::test\]|^[\+\-]\s*(fn|def|fun)\s+test_|^[\+\-].*\b(it|test|describe)\s*\(";
+    pub const TEST_PATTERN: &str = r"^[\+\-].*#\[test\]|^[\+\-].*#\[tokio::test\]|^[\+\-]\s*(fn|def|fun)\s+test_|^[\+\-].*\b(it|test|describe)\s*\(";
 
     /// Match doc comments (Rust ///, JS/Javadoc **, JS //@, Python """)
-    pub const DOC_COMMENT_PATTERN: &str =
-        r"^[\+\-]\s*///|^[\+\-]\s*\*\*|^[\+\-]\s*//\s*@";
+    pub const DOC_COMMENT_PATTERN: &str = r"^[\+\-]\s*///|^[\+\-]\s*\*\*|^[\+\-]\s*//\s*@";
 
     /// Match configuration changes (Cargo.toml, package.json, YAML, etc.)
     pub const CONFIG_PATTERN: &str =
@@ -730,55 +737,91 @@ mod tests {
     #[test]
     fn test_analyzer_categorizes_rust_fn() {
         let analyzer = DiffAnalyzer::new();
-        assert_eq!(analyzer.categorize_line("+pub fn hello() {}"), ChangeCategory::Function);
-        assert_eq!(analyzer.categorize_line("+async fn do_work() {}"), ChangeCategory::Function);
+        assert_eq!(
+            analyzer.categorize_line("+pub fn hello() {}"),
+            ChangeCategory::Function
+        );
+        assert_eq!(
+            analyzer.categorize_line("+async fn do_work() {}"),
+            ChangeCategory::Function
+        );
     }
 
     #[test]
     fn test_analyzer_categorizes_test_before_fn() {
         let analyzer = DiffAnalyzer::new();
         // Test pattern should take priority over function pattern
-        assert_eq!(analyzer.categorize_line("+    fn test_something() {"), ChangeCategory::Test);
+        assert_eq!(
+            analyzer.categorize_line("+    fn test_something() {"),
+            ChangeCategory::Test
+        );
     }
 
     #[test]
     fn test_analyzer_categorizes_import() {
         let analyzer = DiffAnalyzer::new();
-        assert_eq!(analyzer.categorize_line("+use std::collections::HashMap;"), ChangeCategory::Import);
-        assert_eq!(analyzer.categorize_line("+import React from 'react';"), ChangeCategory::Import);
+        assert_eq!(
+            analyzer.categorize_line("+use std::collections::HashMap;"),
+            ChangeCategory::Import
+        );
+        assert_eq!(
+            analyzer.categorize_line("+import React from 'react';"),
+            ChangeCategory::Import
+        );
     }
 
     #[test]
     fn test_analyzer_categorizes_struct() {
         let analyzer = DiffAnalyzer::new();
-        assert_eq!(analyzer.categorize_line("+pub struct MyStruct {"), ChangeCategory::TypeDefinition);
-        assert_eq!(analyzer.categorize_line("+enum Color {"), ChangeCategory::TypeDefinition);
+        assert_eq!(
+            analyzer.categorize_line("+pub struct MyStruct {"),
+            ChangeCategory::TypeDefinition
+        );
+        assert_eq!(
+            analyzer.categorize_line("+enum Color {"),
+            ChangeCategory::TypeDefinition
+        );
     }
 
     #[test]
     fn test_analyzer_categorizes_doc_comments() {
         let analyzer = DiffAnalyzer::new();
-        assert_eq!(analyzer.categorize_line("+/// This is a doc comment"), ChangeCategory::Documentation);
+        assert_eq!(
+            analyzer.categorize_line("+/// This is a doc comment"),
+            ChangeCategory::Documentation
+        );
     }
 
     #[test]
     fn test_analyzer_categorizes_config() {
         let analyzer = DiffAnalyzer::new();
-        assert_eq!(analyzer.categorize_line("+version = \"1.0\""), ChangeCategory::Configuration);
+        assert_eq!(
+            analyzer.categorize_line("+version = \"1.0\""),
+            ChangeCategory::Configuration
+        );
     }
 
     #[test]
     fn test_analyzer_categorizes_other() {
         let analyzer = DiffAnalyzer::new();
-        assert_eq!(analyzer.categorize_line("+    let x = 42;"), ChangeCategory::Other);
+        assert_eq!(
+            analyzer.categorize_line("+    let x = 42;"),
+            ChangeCategory::Other
+        );
     }
 
     #[test]
     fn test_analyzer_skips_file_headers() {
         let analyzer = DiffAnalyzer::new();
         // +++ and --- are file headers, not categorizable changes
-        assert_eq!(analyzer.categorize_line("+++ b/src/main.rs"), ChangeCategory::Other);
-        assert_eq!(analyzer.categorize_line("--- a/src/main.rs"), ChangeCategory::Other);
+        assert_eq!(
+            analyzer.categorize_line("+++ b/src/main.rs"),
+            ChangeCategory::Other
+        );
+        assert_eq!(
+            analyzer.categorize_line("--- a/src/main.rs"),
+            ChangeCategory::Other
+        );
     }
 
     // ── DiffAnalysis Tests ────────────────────────────────────────────
@@ -812,16 +855,31 @@ diff --git a/src/main.rs b/src/main.rs
 ";
 
         let analysis = analyzer.analyze(diff);
-        assert!(analysis.count(ChangeCategory::Import) >= 1, "should detect import");
-        assert!(analysis.count(ChangeCategory::Documentation) >= 1, "should detect doc");
-        assert!(analysis.count(ChangeCategory::TypeDefinition) >= 1, "should detect struct");
-        assert!(analysis.count(ChangeCategory::Function) >= 1, "should detect fn");
+        assert!(
+            analysis.count(ChangeCategory::Import) >= 1,
+            "should detect import"
+        );
+        assert!(
+            analysis.count(ChangeCategory::Documentation) >= 1,
+            "should detect doc"
+        );
+        assert!(
+            analysis.count(ChangeCategory::TypeDefinition) >= 1,
+            "should detect struct"
+        );
+        assert!(
+            analysis.count(ChangeCategory::Function) >= 1,
+            "should detect fn"
+        );
         assert!(analysis.has_test_changes(), "should detect test fn");
         assert!(analysis.total() >= 5, "should categorize at least 5 lines");
 
         let summary = analysis.summary();
         assert!(summary.contains("import"), "summary should mention import");
-        assert!(summary.contains("function"), "summary should mention function");
+        assert!(
+            summary.contains("function"),
+            "summary should mention function"
+        );
         assert!(summary.contains("test"), "summary should mention test");
     }
 }

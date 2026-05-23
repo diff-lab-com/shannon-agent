@@ -1,32 +1,33 @@
 //! Header bar widget showing session information and keyboard shortcuts
 
 use crate::theme::Theme;
-use rust_i18n::t;
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
+use rust_i18n::t;
 
 /// Header bar widget showing session information
 pub struct HeaderWidget;
 
 impl HeaderWidget {
     /// Render the header bar with welcome message and keyboard shortcuts
-    pub fn render(
-        frame: &mut Frame,
-        area: Rect,
-        theme: &Theme,
-    ) {
+    pub fn render(frame: &mut Frame, area: Rect, theme: &Theme) {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // Line 1: Branded welcome with accent bar
         lines.push(Line::from(vec![
             Span::styled("  ", Style::default()),
             Span::styled("\u{258F}", Style::default().fg(theme.primary)),
-            Span::styled(" Shannon", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " Shannon",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" \u{00B7} ", Style::default().fg(theme.border_dim)),
             Span::styled("AI code assistant", Style::default().fg(theme.text_dim)),
         ]));
@@ -72,7 +73,7 @@ impl HeaderWidget {
             .block(
                 Block::default()
                     .borders(Borders::TOP | Borders::BOTTOM)
-                    .border_style(Style::default().fg(theme.border))
+                    .border_style(Style::default().fg(theme.border)),
             )
             .alignment(Alignment::Left)
             .wrap(Wrap { trim: true });
@@ -88,7 +89,12 @@ impl HeaderWidget {
 
 /// Styled keyboard key label
 fn key(label: &str, theme: &Theme) -> Span<'static> {
-    Span::styled(label.to_string(), Style::default().fg(theme.secondary).add_modifier(Modifier::BOLD))
+    Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(theme.secondary)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 /// Styled description text after a key

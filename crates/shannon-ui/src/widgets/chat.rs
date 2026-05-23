@@ -1,21 +1,21 @@
 //! Chat message widget with markdown rendering and search highlighting
 
-use crate::tool_format::strip_ansi;
-use crate::theme::Theme;
 use crate::render::Renderer;
+use crate::theme::Theme;
+use crate::tool_format::strip_ansi;
+use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::LazyLock;
-use parking_lot::Mutex;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use syntect::parsing::SyntaxSet;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    Frame,
 };
 
 /// Lazy-initialized syntect state for diff syntax highlighting.
@@ -27,9 +27,7 @@ static DIFF_SYNTAX: LazyLock<(SyntaxSet, syntect::highlighting::Theme)> = LazyLo
 });
 
 /// Lazy-initialized renderer for code syntax highlighting.
-static CODE_RENDERER: LazyLock<Renderer> = LazyLock::new(|| {
-    Renderer::new()
-});
+static CODE_RENDERER: LazyLock<Renderer> = LazyLock::new(|| Renderer::new());
 
 /// Convert a syntect Color to a ratatui Color.
 fn syntect_to_ratatui(c: syntect::highlighting::Color) -> ratatui::style::Color {
@@ -55,8 +53,8 @@ impl SyntaxCache {
     }
 
     fn compute_key(lang: &str, code: &str) -> u64 {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
         lang.hash(&mut hasher);
         code.hash(&mut hasher);
@@ -79,12 +77,15 @@ impl SyntaxCache {
 }
 
 /// Lazy-initialized syntax highlighting cache.
-static SYNTAX_CACHE: LazyLock<Mutex<SyntaxCache>> = LazyLock::new(|| {
-    Mutex::new(SyntaxCache::new(256))
-});
+static SYNTAX_CACHE: LazyLock<Mutex<SyntaxCache>> =
+    LazyLock::new(|| Mutex::new(SyntaxCache::new(256)));
 
 /// Highlight code with caching. Returns cached result if available.
-pub(super) fn highlight_code_cached(code: &str, lang: &str, theme: &crate::theme::Theme) -> Vec<Line<'static>> {
+pub(super) fn highlight_code_cached(
+    code: &str,
+    lang: &str,
+    theme: &crate::theme::Theme,
+) -> Vec<Line<'static>> {
     let key = SyntaxCache::compute_key(lang, code);
 
     {
@@ -223,7 +224,10 @@ impl ChatWidget {
 
         let index = self.messages.len();
         self.messages.push_back(message.clone());
-        self.column.push(super::renderable::MessageCell::new(message, self.collapsed_tools));
+        self.column.push(super::renderable::MessageCell::new(
+            message,
+            self.collapsed_tools,
+        ));
         if let Some(msg) = self.messages.back() {
             self.mark_continuation(msg.role);
         }
@@ -267,7 +271,10 @@ impl ChatWidget {
 
         let index = self.messages.len();
         self.messages.push_back(message.clone());
-        self.column.push(super::renderable::MessageCell::new(message, self.collapsed_tools));
+        self.column.push(super::renderable::MessageCell::new(
+            message,
+            self.collapsed_tools,
+        ));
         if let Some(msg) = self.messages.back() {
             self.mark_continuation(msg.role);
         }
@@ -291,8 +298,15 @@ impl ChatWidget {
     }
 
     /// Set thinking content on a message (for AI reasoning display)
-    pub fn set_thinking_content(&mut self, index: usize, thinking: String, duration_secs: Option<f64>) {
-        if thinking.is_empty() { return; }
+    pub fn set_thinking_content(
+        &mut self,
+        index: usize,
+        thinking: String,
+        duration_secs: Option<f64>,
+    ) {
+        if thinking.is_empty() {
+            return;
+        }
         if let Some(msg) = self.messages.get_mut(index) {
             msg.thinking_content = Some(thinking);
             msg.thinking_duration_secs = duration_secs;
@@ -324,7 +338,10 @@ impl ChatWidget {
 
     /// Find the index of the most recent assistant message with thinking content
     pub fn last_assistant_with_thinking(&self) -> Option<usize> {
-        self.messages.iter().enumerate().rev()
+        self.messages
+            .iter()
+            .enumerate()
+            .rev()
             .find(|(_, msg)| msg.role == ChatRole::Assistant && msg.thinking_content.is_some())
             .map(|(i, _)| i)
     }
@@ -361,9 +378,7 @@ impl ChatWidget {
         start_time: Option<chrono::DateTime<chrono::Utc>>,
     ) -> usize {
         let now = chrono::Utc::now();
-        let duration_secs = start_time.map(|st| {
-            (now - st).num_milliseconds() as f64 / 1000.0
-        });
+        let duration_secs = start_time.map(|st| (now - st).num_milliseconds() as f64 / 1000.0);
         let message = ChatMessage {
             role: ChatRole::Tool,
             content,
@@ -384,7 +399,10 @@ impl ChatWidget {
         };
         let index = self.messages.len();
         self.messages.push_back(message.clone());
-        self.column.push(super::renderable::MessageCell::new(message, self.collapsed_tools));
+        self.column.push(super::renderable::MessageCell::new(
+            message,
+            self.collapsed_tools,
+        ));
         self.mark_continuation(ChatRole::Tool);
         if !self.messages.is_empty() {
             self.scroll_offset = self.messages.len() - 1;
@@ -398,7 +416,8 @@ impl ChatWidget {
         self.column.clear();
         self.scroll_offset = 0;
         self.committed_count = 0;
-        self.committed_width.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.committed_width
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Mark all current messages as committed (e.g., after session restore).
@@ -409,7 +428,8 @@ impl ChatWidget {
 
     /// Return the inner height of the chat area from the last render, with fallback.
     pub fn chat_viewport_height(&self) -> u16 {
-        self.last_render_area.lock()
+        self.last_render_area
+            .lock()
             .ok()
             .and_then(|ra| ra.map(|r| r.height.saturating_sub(2)))
             .unwrap_or(20)
@@ -438,16 +458,21 @@ impl ChatWidget {
 
         let scroll_y = self.column.cell_scroll(self.scroll_offset);
         if scroll_y > 0 {
-            self.column.set_cell_scroll(self.scroll_offset, scroll_y - 1);
+            self.column
+                .set_cell_scroll(self.scroll_offset, scroll_y - 1);
         } else if self.scroll_offset > 0 {
             self.scroll_offset -= 1;
             // Scroll the previous cell to its bottom for continuous scrolling
-            let width = self.last_inner_width.load(std::sync::atomic::Ordering::Relaxed) as u16;
+            let width = self
+                .last_inner_width
+                .load(std::sync::atomic::Ordering::Relaxed) as u16;
             let desired = self.column.cell_height(self.scroll_offset, width);
             let allocated = self.column.cell_allocated_height(self.scroll_offset);
             // If the cell was never rendered (allocated == 0), estimate from viewport
             let allocated = if allocated == 0 {
-                let vh = self.last_render_area.lock()
+                let vh = self
+                    .last_render_area
+                    .lock()
                     .ok()
                     .and_then(|guard| guard.map(|r| r.height))
                     .unwrap_or(24);
@@ -472,7 +497,9 @@ impl ChatWidget {
             return;
         }
 
-        let width = self.last_inner_width.load(std::sync::atomic::Ordering::Relaxed) as u16;
+        let width = self
+            .last_inner_width
+            .load(std::sync::atomic::Ordering::Relaxed) as u16;
         let desired = self.column.cell_height(self.scroll_offset, width);
         let scroll_y = self.column.cell_scroll(self.scroll_offset);
         let allocated = self.column.cell_allocated_height(self.scroll_offset);
@@ -491,7 +518,8 @@ impl ChatWidget {
         if desired > visible_h {
             let max_scroll = desired.saturating_sub(visible_h);
             if scroll_y < max_scroll {
-                self.column.set_cell_scroll(self.scroll_offset, scroll_y + 1);
+                self.column
+                    .set_cell_scroll(self.scroll_offset, scroll_y + 1);
                 return;
             }
         }
@@ -512,7 +540,9 @@ impl ChatWidget {
 
     /// Scroll to oldest message (index 0)
     pub fn scroll_to_top(&mut self) {
-        if self.messages.is_empty() { return; }
+        if self.messages.is_empty() {
+            return;
+        }
         self.scroll_offset = 0;
         self.column.set_cell_scroll(self.scroll_offset, 0);
     }
@@ -520,10 +550,14 @@ impl ChatWidget {
     /// Scroll to a fractional position (0.0 = top/oldest, 1.0 = bottom/latest).
     /// Uses height-weighted mapping so drag feels smooth regardless of message sizes.
     pub fn scroll_to_ratio(&mut self, ratio: f64) {
-        if self.messages.is_empty() { return; }
+        if self.messages.is_empty() {
+            return;
+        }
         let start = 0;
         let msg_count = self.messages.len();
-        if start >= msg_count { return; }
+        if start >= msg_count {
+            return;
+        }
         let visible_count = msg_count - start;
         if visible_count == 1 {
             self.scroll_offset = start;
@@ -534,13 +568,17 @@ impl ChatWidget {
         // No gap lines — ColumnRenderable::layout doesn't add gaps between cells.
         let mut cumulative: Vec<usize> = Vec::with_capacity(visible_count);
         let mut total_rows: usize = 0;
-        let width = self.last_inner_width.load(std::sync::atomic::Ordering::Relaxed) as u16;
+        let width = self
+            .last_inner_width
+            .load(std::sync::atomic::Ordering::Relaxed) as u16;
         for i in start..msg_count {
             total_rows += self.column.cell_height(i, width) as usize;
             cumulative.push(total_rows);
         }
 
-        if total_rows == 0 { return; }
+        if total_rows == 0 {
+            return;
+        }
 
         // ratio 0.0 = top (oldest message), 1.0 = bottom (newest)
         let target_row = (ratio * (total_rows as f64 - 1.0)).round() as usize;
@@ -575,7 +613,6 @@ impl ChatWidget {
         }
     }
 
-
     /// Render the chat widget using ColumnRenderable (exact-height virtual scrolling).
     pub fn render(
         &self,
@@ -587,11 +624,16 @@ impl ChatWidget {
     ) {
         tracing::debug!(
             "ChatWidget::render msgs={} committed={} scroll_offset={} area={}x{} streaming={}",
-            self.messages.len(), self.committed_count, self.scroll_offset,
-            area.width, area.height, self.streaming_active
+            self.messages.len(),
+            self.committed_count,
+            self.scroll_offset,
+            area.width,
+            area.height,
+            self.streaming_active
         );
         let inner_width = area.width as usize;
-        self.last_inner_width.store(inner_width, std::sync::atomic::Ordering::Relaxed);
+        self.last_inner_width
+            .store(inner_width, std::sync::atomic::Ordering::Relaxed);
 
         if let Ok(mut ra) = self.last_render_area.lock() {
             *ra = Some(area);
@@ -628,17 +670,26 @@ impl ChatWidget {
         frame.render_widget(sep_line, sep_area);
 
         // Content area starts below separator, uses full width (no side borders)
-        let inner = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
+        let inner = Rect::new(
+            area.x,
+            area.y + 1,
+            area.width,
+            area.height.saturating_sub(1),
+        );
 
         // Welcome screen when chat is empty
         if self.messages.is_empty() {
             let sep_w = 40.min(inner.width.saturating_sub(4) as usize);
             let b = ratatui::style::Style::default();
             let prim = b.fg(theme.primary);
-            let bold_prim = b.fg(theme.primary).add_modifier(ratatui::style::Modifier::BOLD);
+            let bold_prim = b
+                .fg(theme.primary)
+                .add_modifier(ratatui::style::Modifier::BOLD);
             let dim = b.fg(theme.text_dim);
             let muted = b.fg(theme.muted);
-            let accent = b.fg(theme.secondary).add_modifier(ratatui::style::Modifier::BOLD);
+            let accent = b
+                .fg(theme.secondary)
+                .add_modifier(ratatui::style::Modifier::BOLD);
             let border = b.fg(theme.border_dim);
             let sep = "\u{2500}".repeat(sep_w);
 
@@ -650,24 +701,33 @@ impl ChatWidget {
                     ratatui::text::Span::styled("\u{2584}", prim),
                     ratatui::text::Span::styled("  Shannon", bold_prim),
                 ]),
-                ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("      AI code assistant \u{00B7} multi-provider \u{00B7} MCP extensions", dim),
-                ]),
+                ratatui::text::Line::from(vec![ratatui::text::Span::styled(
+                    "      AI code assistant \u{00B7} multi-provider \u{00B7} MCP extensions",
+                    dim,
+                )]),
                 ratatui::text::Line::from(""),
-                ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled(format!("  {sep}"), border),
-                ]),
+                ratatui::text::Line::from(vec![ratatui::text::Span::styled(
+                    format!("  {sep}"),
+                    border,
+                )]),
                 ratatui::text::Line::from(""),
+                ratatui::text::Line::from(vec![ratatui::text::Span::styled(
+                    "  Try asking:",
+                    muted,
+                )]),
                 ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("  Try asking:", muted),
+                    ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
+                    ratatui::text::Span::styled(
+                        "\"Explain the architecture of this project\"",
+                        dim,
+                    ),
                 ]),
                 ratatui::text::Line::from(vec![
                     ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
-                    ratatui::text::Span::styled("\"Explain the architecture of this project\"", dim),
-                ]),
-                ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
-                    ratatui::text::Span::styled("\"Fix the failing tests in the auth module\"", dim),
+                    ratatui::text::Span::styled(
+                        "\"Fix the failing tests in the auth module\"",
+                        dim,
+                    ),
                 ]),
                 ratatui::text::Line::from(vec![
                     ratatui::text::Span::styled("    \u{25B8} ", b.fg(theme.primary)),
@@ -708,7 +768,15 @@ impl ChatWidget {
 
         // Render visible cells using ColumnRenderable
         let buf = frame.buffer_mut();
-        self.column.render(inner, buf, theme, self.scroll_offset, 0, search, self.streaming_active);
+        self.column.render(
+            inner,
+            buf,
+            theme,
+            self.scroll_offset,
+            0,
+            search,
+            self.streaming_active,
+        );
     }
 
     /// Render all messages including committed ones (used by transcript pager).
@@ -723,7 +791,8 @@ impl ChatWidget {
 
         let buf = frame.buffer_mut();
         // start=0 renders all messages including committed (for transcript pager)
-        self.column.render(inner, buf, theme, scroll, 0, None, false);
+        self.column
+            .render(inner, buf, theme, scroll, 0, None, false);
     }
 
     /// Find all occurrences of `query` in chat messages.
@@ -757,8 +826,14 @@ impl ChatWidget {
     /// Set continuation flag on the last-pushed cell based on previous message role.
     fn mark_continuation(&mut self, current_role: ChatRole) {
         let idx = self.messages.len().saturating_sub(1);
-        if idx == 0 { return; }
-        let prev_is_same_role = self.messages.get(idx - 1).map(|m| m.role == current_role).unwrap_or(false);
+        if idx == 0 {
+            return;
+        }
+        let prev_is_same_role = self
+            .messages
+            .get(idx - 1)
+            .map(|m| m.role == current_role)
+            .unwrap_or(false);
         if prev_is_same_role {
             if let Some(cell) = self.column.get_mut(idx) {
                 cell.set_continuation(true);
@@ -782,13 +857,21 @@ impl ChatWidget {
     }
 
     /// Get the rendered lines for a message cell at the given index.
-    pub fn cell_lines(&self, index: usize, width: u16, theme: &crate::theme::Theme) -> Option<Vec<ratatui::text::Line<'static>>> {
+    pub fn cell_lines(
+        &self,
+        index: usize,
+        width: u16,
+        theme: &crate::theme::Theme,
+    ) -> Option<Vec<ratatui::text::Line<'static>>> {
         self.column.get(index).map(|cell| cell.lines(width, theme))
     }
 
     /// Check if the message cell at the given index is a continuation.
     pub fn is_cell_continuation(&self, index: usize) -> bool {
-        self.column.get(index).map(|cell| cell.is_continuation()).unwrap_or(false)
+        self.column
+            .get(index)
+            .map(|cell| cell.is_continuation())
+            .unwrap_or(false)
     }
 
     /// Get the last message
@@ -798,7 +881,10 @@ impl ChatWidget {
 
     /// Get the last assistant message (searches backwards)
     pub fn last_assistant_message(&self) -> Option<&ChatMessage> {
-        self.messages.iter().rev().find(|m| m.role == ChatRole::Assistant)
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == ChatRole::Assistant)
     }
 
     /// Remove and return the last message
@@ -825,7 +911,8 @@ impl ChatWidget {
 
     /// Get the last rendered inner width of the chat area.
     pub fn last_inner_width(&self) -> u16 {
-        self.last_inner_width.load(std::sync::atomic::Ordering::Relaxed) as u16
+        self.last_inner_width
+            .load(std::sync::atomic::Ordering::Relaxed) as u16
     }
 
     /// Get a reference to the message deque for rendering.
@@ -856,7 +943,11 @@ impl ChatWidget {
     /// Returns (lines, total_height). Marks messages as committed.
     /// Skips the last message if streaming is active (it stays in viewport).
     /// Uses `MessageCell::lines()` for consistent markdown rendering with the viewport.
-    pub fn commit_to_lines(&mut self, width: u16, theme: &Theme) -> (Vec<ratatui::text::Line<'static>>, u16) {
+    pub fn commit_to_lines(
+        &mut self,
+        width: u16,
+        theme: &Theme,
+    ) -> (Vec<ratatui::text::Line<'static>>, u16) {
         if self.committed_count >= self.messages.len() {
             return (Vec::new(), 0);
         }
@@ -876,7 +967,10 @@ impl ChatWidget {
 
         tracing::debug!(
             "commit_to_lines: range={}..{} msgs={} streaming={}",
-            self.committed_count, commit_end, self.messages.len(), self.streaming_active
+            self.committed_count,
+            commit_end,
+            self.messages.len(),
+            self.streaming_active
         );
 
         let mut all_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
@@ -893,14 +987,17 @@ impl ChatWidget {
         }
 
         self.committed_count = commit_end;
-        self.committed_width.store(width, std::sync::atomic::Ordering::Relaxed);
+        self.committed_width
+            .store(width, std::sync::atomic::Ordering::Relaxed);
         let height = all_lines.len() as u16;
         (all_lines, height)
     }
 
     /// Check if committed content needs reflow due to terminal width change.
     pub fn needs_reflow(&self, current_width: u16) -> bool {
-        let cw = self.committed_width.load(std::sync::atomic::Ordering::Relaxed);
+        let cw = self
+            .committed_width
+            .load(std::sync::atomic::Ordering::Relaxed);
         cw > 0 && cw != current_width && self.committed_count > 0
     }
 
@@ -911,7 +1008,11 @@ impl ChatWidget {
 
     /// Re-render all committed messages at a new width for scrollback reflow.
     /// Returns (lines, height) suitable for `insert_before` to overwrite scrollback.
-    pub fn re_render_committed(&self, width: u16, theme: &Theme) -> (Vec<ratatui::text::Line<'static>>, u16) {
+    pub fn re_render_committed(
+        &self,
+        width: u16,
+        theme: &Theme,
+    ) -> (Vec<ratatui::text::Line<'static>>, u16) {
         if self.committed_count == 0 {
             return (Vec::new(), 0);
         }
@@ -955,7 +1056,8 @@ impl ChatWidget {
         }
         tracing::debug!(
             "trim_old_committed: removing {to_remove} oldest messages (total={}, committed={})",
-            self.messages.len(), self.committed_count
+            self.messages.len(),
+            self.committed_count
         );
         // Drain from front
         for _ in 0..to_remove {
@@ -1002,7 +1104,9 @@ impl ChatWidget {
         self.committed_count = self.committed_count.min(self.messages.len());
 
         // Fix scroll offset — clamp to valid range
-        self.scroll_offset = self.scroll_offset.min(self.messages.len().saturating_sub(1));
+        self.scroll_offset = self
+            .scroll_offset
+            .min(self.messages.len().saturating_sub(1));
 
         removed
     }
@@ -1029,7 +1133,10 @@ pub(super) enum MdSegment {
     /// Horizontal rule (thematic break)
     HorizontalRule,
     /// Table: (headers, rows)
-    Table { headers: Vec<String>, rows: Vec<Vec<String>> },
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
 }
 /// Try to detect and extract a markdown table wrapped inside a code fence.
 ///
@@ -1037,11 +1144,14 @@ pub(super) enum MdSegment {
 /// as plain code instead of proper tables. This detects that pattern and
 /// returns the parsed headers and rows.
 fn try_unwrap_table(code: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
-    let lines: Vec<&str> = code.lines()
+    let lines: Vec<&str> = code
+        .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
         .collect();
-    if lines.len() < 3 { return None; }
+    if lines.len() < 3 {
+        return None;
+    }
 
     // All lines must be pipe-delimited
     if !lines.iter().all(|l| l.starts_with('|') && l.ends_with('|')) {
@@ -1055,7 +1165,8 @@ fn try_unwrap_table(code: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
     }
 
     // Parse header (first line)
-    let headers: Vec<String> = lines[0].trim_matches('|')
+    let headers: Vec<String> = lines[0]
+        .trim_matches('|')
         .split('|')
         .map(|c| c.trim().to_string())
         .collect();
@@ -1065,7 +1176,8 @@ fn try_unwrap_table(code: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
     }
 
     // Parse data rows (skip header + separator)
-    let rows: Vec<Vec<String>> = lines[2..].iter()
+    let rows: Vec<Vec<String>> = lines[2..]
+        .iter()
         .map(|l| {
             l.trim_matches('|')
                 .split('|')
@@ -1127,7 +1239,11 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 in_code = true;
                 code_lang = match kind {
                     CodeBlockKind::Fenced(l) => {
-                        if l.is_empty() { None } else { Some(l.to_string()) }
+                        if l.is_empty() {
+                            None
+                        } else {
+                            Some(l.to_string())
+                        }
                     }
                     CodeBlockKind::Indented => None,
                 };
@@ -1194,7 +1310,10 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 // Detect task list pattern: [x] or [ ] at start of last item
                 if let Some(last) = list_items.last() {
                     let trimmed = last.trim_start();
-                    if let Some(rest) = trimmed.strip_prefix("[x] ").or_else(|| trimmed.strip_prefix("[X] ")) {
+                    if let Some(rest) = trimmed
+                        .strip_prefix("[x] ")
+                        .or_else(|| trimmed.strip_prefix("[X] "))
+                    {
                         is_task_list = true;
                         task_items.push((true, rest.to_string()));
                         list_items.pop();
@@ -1228,7 +1347,11 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 heading_text.push_str(&text);
             }
             Event::Text(text) if in_list => {
-                let text_str = if in_strikethrough { format!("~~{text}~~") } else { text.to_string() };
+                let text_str = if in_strikethrough {
+                    format!("~~{text}~~")
+                } else {
+                    text.to_string()
+                };
                 // Collect text into the last list item or a new one
                 let lines: Vec<&str> = text_str.lines().collect();
                 for (i, line) in lines.iter().enumerate() {
@@ -1247,13 +1370,21 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
                 }
             }
             Event::Text(text) if in_blockquote => {
-                let text_str = if in_strikethrough { format!("~~{text}~~") } else { text.to_string() };
+                let text_str = if in_strikethrough {
+                    format!("~~{text}~~")
+                } else {
+                    text.to_string()
+                };
                 for line in text_str.lines() {
                     blockquote_lines.push(line.to_string());
                 }
             }
             Event::Text(text) => {
-                let text_str = if in_strikethrough { format!("~~{text}~~") } else { text.to_string() };
+                let text_str = if in_strikethrough {
+                    format!("~~{text}~~")
+                } else {
+                    text.to_string()
+                };
                 current_text.extend(text_str.lines().map(|l| l.to_string()));
             }
             Event::SoftBreak | Event::HardBreak => {
@@ -1283,7 +1414,11 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 _in_link = true;
-                link_url = if dest_url.is_empty() { None } else { Some(dest_url.to_string()) };
+                link_url = if dest_url.is_empty() {
+                    None
+                } else {
+                    Some(dest_url.to_string())
+                };
             }
             Event::End(TagEnd::Link) => {
                 if let Some(url) = link_url.take() {
@@ -1357,7 +1492,11 @@ pub(super) fn parse_markdown_segments(content: &str) -> Vec<MdSegment> {
 }
 
 /// Parse inline markdown formatting (**bold**, *italic*, `code`) into styled Spans.
-pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Color, theme: &crate::theme::Theme) -> Vec<Span<'static>> {
+pub(super) fn parse_inline_formatting(
+    text: &str,
+    base_color: ratatui::style::Color,
+    theme: &crate::theme::Theme,
+) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut pos = 0;
     let bytes = text.as_bytes();
@@ -1373,7 +1512,9 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                         let link_text = &text[pos + 1..link_text_end];
                         spans.push(Span::styled(
                             link_text.to_string(),
-                            Style::default().fg(theme.link).add_modifier(Modifier::UNDERLINED),
+                            Style::default()
+                                .fg(theme.link)
+                                .add_modifier(Modifier::UNDERLINED),
                         ));
                         pos = url_start + 1 + close_paren + 1;
                         continue;
@@ -1395,7 +1536,9 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 let code_text = &text[search_start..close_start];
                 spans.push(Span::styled(
                     format!(" {code_text} "),
-                    Style::default().fg(theme.inline_code).bg(theme.inline_code_bg),
+                    Style::default()
+                        .fg(theme.inline_code)
+                        .bg(theme.inline_code_bg),
                 ));
                 pos = close_start + 1;
                 continue;
@@ -1408,14 +1551,14 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 let bold_text = &text[search_start..close_start];
                 spans.push(Span::styled(
                     bold_text.to_string(),
-                    Style::default().fg(theme.bold_text).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.bold_text)
+                        .add_modifier(Modifier::BOLD),
                 ));
                 pos = close_start + 2;
                 continue;
             }
-        } else if bytes[pos] == b'*'
-            && (pos + 1 >= text.len() || bytes[pos + 1] != b'*')
-        {
+        } else if bytes[pos] == b'*' && (pos + 1 >= text.len() || bytes[pos + 1] != b'*') {
             // *italic* (single star, not double)
             let search_start = pos + 1;
             if let Some(end) = text[search_start..].find('*') {
@@ -1423,7 +1566,9 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 let italic_text = &text[search_start..close_start];
                 spans.push(Span::styled(
                     italic_text.to_string(),
-                    Style::default().fg(theme.italic_text).add_modifier(Modifier::ITALIC),
+                    Style::default()
+                        .fg(theme.italic_text)
+                        .add_modifier(Modifier::ITALIC),
                 ));
                 pos = close_start + 1;
                 continue;
@@ -1436,7 +1581,9 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
                 let strike_text = &text[search_start..close_start];
                 spans.push(Span::styled(
                     strike_text.to_string(),
-                    Style::default().fg(theme.text_dim).add_modifier(Modifier::CROSSED_OUT),
+                    Style::default()
+                        .fg(theme.text_dim)
+                        .add_modifier(Modifier::CROSSED_OUT),
                 ));
                 pos = close_start + 2;
                 continue;
@@ -1466,7 +1613,10 @@ pub(super) fn parse_inline_formatting(text: &str, base_color: ratatui::style::Co
     }
 
     if spans.is_empty() {
-        spans.push(Span::styled(text.to_string(), Style::default().fg(base_color)));
+        spans.push(Span::styled(
+            text.to_string(),
+            Style::default().fg(base_color),
+        ));
     }
     spans
 }
@@ -1512,10 +1662,18 @@ fn merge_punctuation_tokens(words: &[&str]) -> Vec<String> {
 /// Word-boundary wrapping with mid-word fallback for long unbroken strings.
 pub(crate) fn wrap_line(s: &str, max_cols: usize) -> Vec<String> {
     if max_cols == 0 {
-        return if s.is_empty() { vec![String::new()] } else { vec![s.to_string()] };
+        return if s.is_empty() {
+            vec![String::new()]
+        } else {
+            vec![s.to_string()]
+        };
     }
     if unicode_width(s) <= max_cols {
-        return if s.is_empty() { vec![String::new()] } else { vec![s.to_string()] };
+        return if s.is_empty() {
+            vec![String::new()]
+        } else {
+            vec![s.to_string()]
+        };
     }
 
     let mut lines = Vec::new();
@@ -1598,7 +1756,6 @@ fn unicode_width_char(ch: char) -> usize {
     UnicodeWidthChar::width(ch).unwrap_or(0)
 }
 
-
 /// Truncate a string to fit within `max_cols` terminal columns (unicode display width),
 /// appending "…" if truncated.
 pub(crate) fn truncate_to(s: &str, max_cols: usize) -> String {
@@ -1620,7 +1777,6 @@ pub(crate) fn truncate_to(s: &str, max_cols: usize) -> String {
         "…".to_string()
     }
 }
-
 
 /// Detect the programming language from diff header lines.
 pub fn detect_diff_language(content: &str) -> Option<String> {
@@ -1648,7 +1804,10 @@ pub fn detect_diff_language(content: &str) -> Option<String> {
     };
 
     for line in content.lines().take(10) {
-        if let Some(path) = line.strip_prefix("--- a/").or_else(|| line.strip_prefix("+++ b/")) {
+        if let Some(path) = line
+            .strip_prefix("--- a/")
+            .or_else(|| line.strip_prefix("+++ b/"))
+        {
             if let Some(ext) = path.rsplit('.').next() {
                 return Some(ext_to_lang(ext));
             }
@@ -1684,7 +1843,10 @@ pub fn highlight_diff_line(
         ("", line)
     };
 
-    let mut spans = vec![Span::styled(prefix.to_string(), Style::default().fg(base_color))];
+    let mut spans = vec![Span::styled(
+        prefix.to_string(),
+        Style::default().fg(base_color),
+    )];
 
     if content.is_empty() {
         return spans;
@@ -1693,16 +1855,25 @@ pub fn highlight_diff_line(
     // Try syntax highlighting if we have a language
     if let Some(lang) = lang {
         let (ref ss, ref theme) = *DIFF_SYNTAX;
-        if let Some(syntax) = ss.find_syntax_by_token(lang).or_else(|| ss.find_syntax_by_extension(lang)) {
+        if let Some(syntax) = ss
+            .find_syntax_by_token(lang)
+            .or_else(|| ss.find_syntax_by_extension(lang))
+        {
             let mut highlighter = HighlightLines::new(syntax, theme);
             if let Ok(ranges) = highlighter.highlight_line(content, ss) {
                 for (style, text) in ranges {
                     let fg = syntect_to_ratatui(style.foreground);
                     let mut s = Style::default().fg(fg);
-                    if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+                    if style
+                        .font_style
+                        .contains(syntect::highlighting::FontStyle::BOLD)
+                    {
                         s = s.add_modifier(Modifier::BOLD);
                     }
-                    if style.font_style.contains(syntect::highlighting::FontStyle::ITALIC) {
+                    if style
+                        .font_style
+                        .contains(syntect::highlighting::FontStyle::ITALIC)
+                    {
                         s = s.add_modifier(Modifier::ITALIC);
                     }
                     spans.push(Span::styled(text.to_string(), s));
@@ -1717,7 +1888,10 @@ pub fn highlight_diff_line(
         let word_spans = highlight_diff_words(content, base_color, wc);
         spans.extend(word_spans);
     } else {
-        spans.push(Span::styled(content.to_string(), Style::default().fg(base_color)));
+        spans.push(Span::styled(
+            content.to_string(),
+            Style::default().fg(base_color),
+        ));
     }
     spans
 }
@@ -1725,7 +1899,11 @@ pub fn highlight_diff_line(
 /// Highlight individual changed words within a diff content line.
 /// Detects word boundaries (whitespace, punctuation transitions) and applies
 /// `word_color` to tokens that look like changed content (not whitespace).
-fn highlight_diff_words(content: &str, base_color: ratatui::style::Color, word_color: ratatui::style::Color) -> Vec<Span<'static>> {
+fn highlight_diff_words(
+    content: &str,
+    base_color: ratatui::style::Color,
+    word_color: ratatui::style::Color,
+) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut current = String::new();
     let mut in_word = false;
@@ -1734,7 +1912,10 @@ fn highlight_diff_words(content: &str, base_color: ratatui::style::Color, word_c
         let is_word_char = ch.is_alphanumeric() || ch == '_' || ch == '-';
         if is_word_char != in_word && !current.is_empty() {
             let color = if in_word { word_color } else { base_color };
-            spans.push(Span::styled(std::mem::take(&mut current), Style::default().fg(color)));
+            spans.push(Span::styled(
+                std::mem::take(&mut current),
+                Style::default().fg(color),
+            ));
         }
         current.push(ch);
         in_word = is_word_char;
@@ -1745,7 +1926,10 @@ fn highlight_diff_words(content: &str, base_color: ratatui::style::Color, word_c
     }
 
     if spans.is_empty() {
-        spans.push(Span::styled(content.to_string(), Style::default().fg(base_color)));
+        spans.push(Span::styled(
+            content.to_string(),
+            Style::default().fg(base_color),
+        ));
     }
     spans
 }
@@ -1803,7 +1987,11 @@ pub(super) fn highlight_search_in_text(
         let start = byte_offsets.get(*cs).copied().unwrap_or(text_byte_len);
         let end = byte_offsets.get(*ce).copied().unwrap_or(text_byte_len);
         if start > last_end {
-            spans.extend(parse_inline_formatting(&text[last_end..start], base_color, theme));
+            spans.extend(parse_inline_formatting(
+                &text[last_end..start],
+                base_color,
+                theme,
+            ));
         }
 
         let matched_text = &text[start..end];
@@ -1813,9 +2001,7 @@ pub(super) fn highlight_search_in_text(
                 .bg(theme.selection_bg)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default()
-                .fg(theme.primary)
-                .bg(theme.selection_bg)
+            Style::default().fg(theme.primary).bg(theme.selection_bg)
         };
         spans.push(Span::styled(matched_text.to_string(), highlight_style));
 
@@ -1824,7 +2010,11 @@ pub(super) fn highlight_search_in_text(
 
     // Remaining text after last match
     if last_end < text_byte_len {
-        spans.extend(parse_inline_formatting(&text[last_end..], base_color, theme));
+        spans.extend(parse_inline_formatting(
+            &text[last_end..],
+            base_color,
+            theme,
+        ));
     }
 
     spans
@@ -2024,7 +2214,10 @@ mod tests {
         let msg = widget.get_message(idx).unwrap();
         assert!(msg.duration_secs.is_some());
         let dur = msg.duration_secs.unwrap();
-        assert!(dur >= 1.9 && dur <= 3.0, "duration should be ~2s, got {dur}");
+        assert!(
+            dur >= 1.9 && dur <= 3.0,
+            "duration should be ~2s, got {dur}"
+        );
     }
 
     #[test]

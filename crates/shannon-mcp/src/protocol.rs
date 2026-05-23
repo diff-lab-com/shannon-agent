@@ -45,7 +45,11 @@ impl JsonRpcRequest {
         }
     }
 
-    pub fn with_id(id: impl Into<String>, method: impl Into<String>, params: Option<serde_json::Value>) -> Self {
+    pub fn with_id(
+        id: impl Into<String>,
+        method: impl Into<String>,
+        params: Option<serde_json::Value>,
+    ) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
             id: id.into(),
@@ -301,9 +305,18 @@ pub struct ToolContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum ContentBlock {
-    Text { text: String },
-    Image { data: String, mime_type: String },
-    Resource { uri: String, #[serde(skip_serializing_if = "Option::is_none")] text: Option<String> },
+    Text {
+        text: String,
+    },
+    Image {
+        data: String,
+        mime_type: String,
+    },
+    Resource {
+        uri: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
 }
 
 /// Resource content
@@ -749,7 +762,8 @@ mod tests {
 
     #[test]
     fn jsonrpc_request_with_id() {
-        let req = JsonRpcRequest::with_id("42", "tools/call", Some(serde_json::json!({"name": "x"})));
+        let req =
+            JsonRpcRequest::with_id("42", "tools/call", Some(serde_json::json!({"name": "x"})));
         assert_eq!(req.id, "42");
         assert_eq!(req.method, "tools/call");
         assert!(req.params.is_some());
@@ -877,7 +891,8 @@ mod tests {
     fn notification_method_camelcase() {
         let json = serde_json::to_string(&NotificationMethod::Progress).unwrap();
         assert_eq!(json, "\"progress\"");
-        let json = serde_json::to_string(&NotificationMethod::NotificationsToolsListChanged).unwrap();
+        let json =
+            serde_json::to_string(&NotificationMethod::NotificationsToolsListChanged).unwrap();
         assert!(json.contains("ToolsListChanged"));
     }
 
@@ -894,8 +909,14 @@ mod tests {
 
     #[test]
     fn tool_annotations_equality() {
-        let a = ToolAnnotations { read_only_hint: true, ..Default::default() };
-        let b = ToolAnnotations { read_only_hint: true, ..Default::default() };
+        let a = ToolAnnotations {
+            read_only_hint: true,
+            ..Default::default()
+        };
+        let b = ToolAnnotations {
+            read_only_hint: true,
+            ..Default::default()
+        };
         assert_eq!(a, b);
     }
 
@@ -922,7 +943,10 @@ mod tests {
             name: "fetch".to_string(),
             description: "Fetch URL".to_string(),
             input_schema: Some(serde_json::json!({"type": "object"})),
-            annotations: Some(ToolAnnotations { read_only_hint: true, ..Default::default() }),
+            annotations: Some(ToolAnnotations {
+                read_only_hint: true,
+                ..Default::default()
+            }),
         };
         let json = serde_json::to_string(&tool).unwrap();
         let de: Tool = serde_json::from_str(&json).unwrap();
@@ -963,7 +987,9 @@ mod tests {
 
     #[test]
     fn content_block_text() {
-        let block = ContentBlock::Text { text: "hello".to_string() };
+        let block = ContentBlock::Text {
+            text: "hello".to_string(),
+        };
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("\"type\":\"text\""));
         let de: ContentBlock = serde_json::from_str(&json).unwrap();
@@ -976,7 +1002,10 @@ mod tests {
 
     #[test]
     fn content_block_image() {
-        let block = ContentBlock::Image { data: "abc".to_string(), mime_type: "image/png".to_string() };
+        let block = ContentBlock::Image {
+            data: "abc".to_string(),
+            mime_type: "image/png".to_string(),
+        };
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains("\"type\":\"image\""));
     }
@@ -1014,7 +1043,10 @@ mod tests {
         let params = InitializeParams {
             protocol_version: "2024-11-05".to_string(),
             capabilities: ClientCapabilities::default(),
-            client_info: Some(ClientInfo { name: "shannon".to_string(), version: "0.1".to_string() }),
+            client_info: Some(ClientInfo {
+                name: "shannon".to_string(),
+                version: "0.1".to_string(),
+            }),
         };
         let json = serde_json::to_string(&params).unwrap();
         let de: InitializeParams = serde_json::from_str(&json).unwrap();
@@ -1027,7 +1059,10 @@ mod tests {
         let result = InitializeResult {
             protocol_version: "2024-11-05".to_string(),
             capabilities: ServerCapabilities::default(),
-            server_info: Some(ServerInfo { name: "test-server".to_string(), version: "1.0".to_string() }),
+            server_info: Some(ServerInfo {
+                name: "test-server".to_string(),
+                version: "1.0".to_string(),
+            }),
         };
         let json = serde_json::to_string(&result).unwrap();
         let de: InitializeResult = serde_json::from_str(&json).unwrap();
@@ -1046,7 +1081,9 @@ mod tests {
 
     #[test]
     fn sampling_content_text_roundtrip() {
-        let content = SamplingContent::Text { text: "hi".to_string() };
+        let content = SamplingContent::Text {
+            text: "hi".to_string(),
+        };
         let json = serde_json::to_string(&content).unwrap();
         let de: SamplingContent = serde_json::from_str(&json).unwrap();
         if let SamplingContent::Text { text } = de {
@@ -1058,7 +1095,11 @@ mod tests {
 
     #[test]
     fn stop_reason_roundtrip() {
-        let reasons = vec![StopReason::EndTurn, StopReason::StopSequence, StopReason::MaxTokens];
+        let reasons = vec![
+            StopReason::EndTurn,
+            StopReason::StopSequence,
+            StopReason::MaxTokens,
+        ];
         let json = serde_json::to_string(&reasons).unwrap();
         let de: Vec<StopReason> = serde_json::from_str(&json).unwrap();
         assert_eq!(de, reasons);
@@ -1130,7 +1171,10 @@ mod tests {
     #[test]
     fn list_roots_result_roundtrip() {
         let result = ListRootsResult {
-            roots: vec![Root { uri: "file:///home".to_string(), name: Some("home".to_string()) }],
+            roots: vec![Root {
+                uri: "file:///home".to_string(),
+                name: Some("home".to_string()),
+            }],
         };
         let json = serde_json::to_string(&result).unwrap();
         let de: ListRootsResult = serde_json::from_str(&json).unwrap();

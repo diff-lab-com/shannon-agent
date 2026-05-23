@@ -52,10 +52,7 @@ pub enum SelectionMethod {
 /// 1. Extract explicit file paths from the query
 /// 2. Search for code identifiers (CamelCase, snake_case patterns)
 /// 3. Fall back to keyword-based grep
-pub fn find_relevant_context(
-    query: &str,
-    working_dir: &Path,
-) -> SmartContextResult {
+pub fn find_relevant_context(query: &str, working_dir: &Path) -> SmartContextResult {
     // Strategy 1: Explicit file paths
     let explicit = extract_explicit_paths(query, working_dir);
     if !explicit.is_empty() {
@@ -124,8 +121,10 @@ pub fn format_context_for_prompt(result: &SmartContextResult) -> Option<String> 
         if total_chars + snippet.content.len() > MAX_CONTEXT_CHARS {
             break;
         }
-        output.push_str(&format!("### {}\n({})\n```\n{}\n```\n\n",
-            snippet.path, snippet.reason, snippet.content));
+        output.push_str(&format!(
+            "### {}\n({})\n```\n{}\n```\n\n",
+            snippet.path, snippet.reason, snippet.content
+        ));
         total_chars += snippet.content.len();
     }
 
@@ -139,7 +138,16 @@ fn extract_explicit_paths(query: &str, working_dir: &Path) -> Vec<String> {
 
     for word in words {
         // Strip surrounding punctuation
-        let cleaned = word.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == ',' || c == '.' || c == '(' || c == ')' || c == ';');
+        let cleaned = word.trim_matches(|c: char| {
+            c == '"'
+                || c == '\''
+                || c == '`'
+                || c == ','
+                || c == '.'
+                || c == '('
+                || c == ')'
+                || c == ';'
+        });
 
         // Check if it looks like a file path
         if looks_like_file_path(cleaned) {
@@ -184,10 +192,35 @@ fn looks_like_file_path(s: &str) -> bool {
     if let Some(ext) = s.rsplit('.').next() {
         // Common source code extensions
         let valid_extensions = [
-            "rs", "toml", "json", "yaml", "yml", "md", "txt",
-            "py", "js", "ts", "tsx", "jsx", "go", "java", "c", "h", "cpp",
-            "rb", "sh", "bash", "sql", "html", "css", "scss",
-            "cfg", "ini", "xml", "proto", "dockerfile",
+            "rs",
+            "toml",
+            "json",
+            "yaml",
+            "yml",
+            "md",
+            "txt",
+            "py",
+            "js",
+            "ts",
+            "tsx",
+            "jsx",
+            "go",
+            "java",
+            "c",
+            "h",
+            "cpp",
+            "rb",
+            "sh",
+            "bash",
+            "sql",
+            "html",
+            "css",
+            "scss",
+            "cfg",
+            "ini",
+            "xml",
+            "proto",
+            "dockerfile",
         ];
         if !valid_extensions.contains(&ext) {
             return false;
@@ -202,7 +235,18 @@ fn extract_identifiers(query: &str) -> Vec<String> {
     let mut identifiers = Vec::new();
 
     for word in query.split_whitespace() {
-        let cleaned = word.trim_matches(|c: char| c == '"' || c == '\'' || c == '`' || c == ',' || c == '.' || c == '(' || c == ')' || c == ';' || c == ':' || c == '!');
+        let cleaned = word.trim_matches(|c: char| {
+            c == '"'
+                || c == '\''
+                || c == '`'
+                || c == ','
+                || c == '.'
+                || c == '('
+                || c == ')'
+                || c == ';'
+                || c == ':'
+                || c == '!'
+        });
 
         // Skip common English words and short words
         if cleaned.len() < 3 {
@@ -210,15 +254,13 @@ fn extract_identifiers(query: &str) -> Vec<String> {
         }
 
         let common_words = [
-            "the", "and", "for", "but", "not", "you", "all", "can", "had",
-            "her", "was", "one", "our", "out", "are", "has", "been", "have",
-            "make", "like", "just", "over", "such", "take", "than", "them",
-            "very", "what", "when", "where", "which", "this", "that", "with",
-            "from", "they", "will", "would", "could", "should", "about",
-            "into", "then", "also", "some", "more", "want", "need", "does",
-            "help", "please", "code", "file", "files", "function", "class",
-            "method", "variable", "module", "change", "fix", "add", "remove",
-            "update", "create", "delete", "check", "show", "get", "set",
+            "the", "and", "for", "but", "not", "you", "all", "can", "had", "her", "was", "one",
+            "our", "out", "are", "has", "been", "have", "make", "like", "just", "over", "such",
+            "take", "than", "them", "very", "what", "when", "where", "which", "this", "that",
+            "with", "from", "they", "will", "would", "could", "should", "about", "into", "then",
+            "also", "some", "more", "want", "need", "does", "help", "please", "code", "file",
+            "files", "function", "class", "method", "variable", "module", "change", "fix", "add",
+            "remove", "update", "create", "delete", "check", "show", "get", "set",
         ];
 
         if common_words.contains(&cleaned.to_lowercase().as_str()) {
@@ -226,7 +268,8 @@ fn extract_identifiers(query: &str) -> Vec<String> {
         }
 
         // Identifier patterns: CamelCase or snake_case
-        let has_camel = cleaned.chars().any(|c| c.is_uppercase()) && cleaned.chars().any(|c| c.is_lowercase());
+        let has_camel =
+            cleaned.chars().any(|c| c.is_uppercase()) && cleaned.chars().any(|c| c.is_lowercase());
         let has_underscore = cleaned.contains('_');
         let is_long_enough = cleaned.len() >= 4;
 
@@ -253,11 +296,10 @@ fn extract_keywords(query: &str) -> Vec<String> {
         }
 
         let stop_words = [
-            "the", "and", "for", "but", "not", "you", "all", "can", "this",
-            "that", "with", "from", "they", "will", "would", "could", "should",
-            "about", "into", "then", "also", "some", "more", "want", "need",
-            "help", "please", "just", "like", "have", "been", "does", "what",
-            "when", "where", "which", "there", "their", "than", "make",
+            "the", "and", "for", "but", "not", "you", "all", "can", "this", "that", "with", "from",
+            "they", "will", "would", "could", "should", "about", "into", "then", "also", "some",
+            "more", "want", "need", "help", "please", "just", "like", "have", "been", "does",
+            "what", "when", "where", "which", "there", "their", "than", "make",
         ];
 
         if stop_words.contains(&lower.as_str()) {
@@ -360,8 +402,13 @@ fn read_snippets(paths: &[String], working_dir: &Path) -> Vec<FileSnippet> {
             Ok(content) => {
                 let lines: Vec<&str> = content.lines().collect();
                 let snippet_content = if lines.len() > MAX_SNIPPET_LINES {
-                    let truncated: Vec<&str> = lines.iter().take(MAX_SNIPPET_LINES).copied().collect();
-                    format!("{}\n... ({} more lines)", truncated.join("\n"), lines.len() - MAX_SNIPPET_LINES)
+                    let truncated: Vec<&str> =
+                        lines.iter().take(MAX_SNIPPET_LINES).copied().collect();
+                    format!(
+                        "{}\n... ({} more lines)",
+                        truncated.join("\n"),
+                        lines.len() - MAX_SNIPPET_LINES
+                    )
                 } else {
                     content.clone()
                 };
@@ -457,7 +504,10 @@ mod tests {
         let dir = std::env::current_dir().unwrap();
         // This test runs in the shannon-code repo, so Cargo.toml should exist
         let paths = extract_explicit_paths("check Cargo.toml and src/main.rs", &dir);
-        assert!(paths.contains(&"Cargo.toml".to_string()), "Should find Cargo.toml");
+        assert!(
+            paths.contains(&"Cargo.toml".to_string()),
+            "Should find Cargo.toml"
+        );
     }
 
     #[test]
@@ -481,7 +531,10 @@ mod tests {
     fn test_snippet_truncation() {
         let dir = tempfile::tempdir().unwrap();
         let long_file = dir.path().join("long.rs");
-        let content = (0..100).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let content = (0..100)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         fs::write(&long_file, &content).unwrap();
 
         let snippets = read_snippets(&["long.rs".to_string()], dir.path());

@@ -512,7 +512,8 @@ mod tests {
     #[test]
     fn test_create_estimate_precise_mode() {
         let est = TokenEstimator::new();
-        let estimate = est.create_estimate("Hello world, this is a test.", EstimationMethod::Precise);
+        let estimate =
+            est.create_estimate("Hello world, this is a test.", EstimationMethod::Precise);
         assert!(estimate.estimated_tokens > 0);
         assert!(estimate.bytes_per_token > 0);
     }
@@ -520,7 +521,10 @@ mod tests {
     #[test]
     fn test_detect_model_family() {
         assert_eq!(detect_model_family("claude-3-opus"), ModelFamily::Claude);
-        assert_eq!(detect_model_family("claude-3-sonnet-20240229"), ModelFamily::Claude);
+        assert_eq!(
+            detect_model_family("claude-3-sonnet-20240229"),
+            ModelFamily::Claude
+        );
         assert_eq!(detect_model_family("Claude-3-Haiku"), ModelFamily::Claude);
 
         assert_eq!(detect_model_family("gpt-4"), ModelFamily::Gpt);

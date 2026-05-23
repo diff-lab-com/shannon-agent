@@ -4,14 +4,13 @@
 //! - JSON-RPC message serialization/deserialization
 //! - Large batch (100, 1000) of concurrent request/response pairs
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use shannon_mcp::{
-    JsonRpcRequest, JsonRpcResponse, JsonRpcNotification,
-    Tool, ToolAnnotations, ServerCapabilities, ClientCapabilities,
-    InitializeParams, ClientInfo,
-};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use shannon_mcp::protocol::{
-    ToolsCapability, ResourcesCapability, PromptsCapability, LoggingCapability,
+    LoggingCapability, PromptsCapability, ResourcesCapability, ToolsCapability,
+};
+use shannon_mcp::{
+    ClientCapabilities, ClientInfo, InitializeParams, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, ServerCapabilities, Tool, ToolAnnotations,
 };
 
 // ============================================================================
@@ -22,10 +21,7 @@ fn bench_jsonrpc_serialize(c: &mut Criterion) {
     let mut group = c.benchmark_group("jsonrpc_serialize");
 
     // Request serialization
-    let request = JsonRpcRequest::new(
-        "tools/list",
-        Some(serde_json::json!({"cursor": null})),
-    );
+    let request = JsonRpcRequest::new("tools/list", Some(serde_json::json!({"cursor": null})));
 
     group.bench_function("request_serialize", |b| {
         b.iter(|| {
@@ -62,10 +58,7 @@ fn bench_jsonrpc_serialize(c: &mut Criterion) {
     });
 
     // Notification serialization
-    let notification = JsonRpcNotification::new(
-        "notifications/tools/list_changed",
-        None,
-    );
+    let notification = JsonRpcNotification::new("notifications/tools/list_changed", None);
 
     group.bench_function("notification_serialize", |b| {
         b.iter(|| {
@@ -79,7 +72,8 @@ fn bench_jsonrpc_serialize(c: &mut Criterion) {
 fn bench_jsonrpc_deserialize(c: &mut Criterion) {
     let mut group = c.benchmark_group("jsonrpc_deserialize");
 
-    let request_json = r#"{"jsonrpc":"2.0","id":"abc-123","method":"tools/list","params":{"cursor":null}}"#;
+    let request_json =
+        r#"{"jsonrpc":"2.0","id":"abc-123","method":"tools/list","params":{"cursor":null}}"#;
     let response_json = r#"{"jsonrpc":"2.0","id":"abc-123","result":{"tools":[{"name":"Read","description":"Read file"}]}}"#;
     let notification_json = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"hello"}}"#;
 
@@ -97,7 +91,8 @@ fn bench_jsonrpc_deserialize(c: &mut Criterion) {
 
     group.bench_function("notification_deserialize", |b| {
         b.iter(|| {
-            let _: JsonRpcNotification = serde_json::from_str(black_box(notification_json)).unwrap();
+            let _: JsonRpcNotification =
+                serde_json::from_str(black_box(notification_json)).unwrap();
         })
     });
 
@@ -162,8 +157,7 @@ fn bench_batch_request_response(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     for json in &serialized_requests {
-                        let _: JsonRpcRequest =
-                            serde_json::from_str(black_box(json)).unwrap();
+                        let _: JsonRpcRequest = serde_json::from_str(black_box(json)).unwrap();
                     }
                 })
             },
@@ -187,8 +181,7 @@ fn bench_batch_request_response(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     for json in &serialized_responses {
-                        let _: JsonRpcResponse =
-                            serde_json::from_str(black_box(json)).unwrap();
+                        let _: JsonRpcResponse = serde_json::from_str(black_box(json)).unwrap();
                     }
                 })
             },
@@ -232,7 +225,9 @@ fn bench_complex_types(c: &mut Criterion) {
             subscribe: true,
             list_changed: true,
         }),
-        prompts: Some(PromptsCapability { list_changed: false }),
+        prompts: Some(PromptsCapability {
+            list_changed: false,
+        }),
         logging: Some(LoggingCapability {
             level: "info".to_string(),
         }),

@@ -1,6 +1,8 @@
 //! /debug command - Developer tools for debugging, logging, and profiling
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Debug prompt template
 ///
@@ -158,7 +160,9 @@ pub fn format_log_response(level: Option<LogLevel>) -> String {
 /// Format profile response
 pub fn format_profile_response(action: &str) -> String {
     match action {
-        "start" => "Profiling started. Use '/debug profile stop' to end and view results.".to_string(),
+        "start" => {
+            "Profiling started. Use '/debug profile stop' to end and view results.".to_string()
+        }
         "stop" => {
             let mut output = "Profiling Results:\n\n".to_string();
             output.push_str("  Duration: N/A (profiling not instrumented yet)\n");

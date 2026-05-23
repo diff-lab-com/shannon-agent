@@ -114,7 +114,8 @@ impl Default for ToolUseSummaryGenerator {
     }
 }
 
-type ApiClientFn = dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>>;
+type ApiClientFn =
+    dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>>;
 
 impl ToolUseSummaryGenerator {
     pub fn new() -> Self {
@@ -129,10 +130,7 @@ impl ToolUseSummaryGenerator {
 
     /// Check if AI summarization is configured and enabled.
     pub fn ai_enabled(&self) -> bool {
-        self.ai_config
-            .as_ref()
-            .map(|c| c.enabled)
-            .unwrap_or(false)
+        self.ai_config.as_ref().map(|c| c.enabled).unwrap_or(false)
     }
 
     /// Generate a short summary label for a batch of tool calls using rules.
@@ -220,7 +218,9 @@ impl ToolUseSummaryGenerator {
             .iter()
             .map(|tool| {
                 let input_summary = summarize_value(&tool.input, 200);
-                let output_summary = if tool.output.is_null() || tool.output.as_object().is_none_or(|o| o.is_empty()) {
+                let output_summary = if tool.output.is_null()
+                    || tool.output.as_object().is_none_or(|o| o.is_empty())
+                {
                     String::new()
                 } else {
                     let s = summarize_value(&tool.output, 100);
@@ -382,7 +382,10 @@ mod tests {
     #[test]
     fn test_bash_tool() {
         let generator = ToolUseSummaryGenerator::new();
-        let tools = vec![make_tool("Bash", json!({"command": "cargo test --workspace"}))];
+        let tools = vec![make_tool(
+            "Bash",
+            json!({"command": "cargo test --workspace"}),
+        )];
         let summary = generator.generate(&tools).unwrap();
         assert!(summary.label.starts_with("Ran:"));
     }
@@ -479,8 +482,8 @@ mod tests {
 
     #[test]
     fn test_generator_with_ai_config() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
+        let generator =
+            ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
         assert!(generator.ai_enabled());
     }
 
@@ -499,16 +502,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_ai_summary_fallback_on_error() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
+        let generator =
+            ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
 
         let tools = vec![make_tool("Read", json!({"file_path": "src/main.rs"}))];
 
-        let error_client = |_prompt: String| -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>> {
-            Box::pin(async { Err("API error".into()) })
-        };
+        let error_client = |_prompt: String| -> Pin<
+            Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>,
+        > { Box::pin(async { Err("API error".into()) }) };
 
-        let summary = generator.generate_ai_summary(&tools, &error_client).await.unwrap();
+        let summary = generator
+            .generate_ai_summary(&tools, &error_client)
+            .await
+            .unwrap();
         // Should fall back to rule-based
         assert_eq!(summary.source, SummarySource::RuleBased);
         assert_eq!(summary.tools_processed, 1);
@@ -516,16 +522,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_ai_summary_uses_api_response() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
+        let generator =
+            ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
 
         let tools = vec![make_tool("Edit", json!({"file_path": "src/lib.rs"}))];
 
-        let success_client = |_prompt: String| -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>> {
+        let success_client = |_prompt: String| -> Pin<
+            Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>,
+        > {
             Box::pin(async { Ok("Fixed authentication bug".to_string()) })
         };
 
-        let summary = generator.generate_ai_summary(&tools, &success_client).await.unwrap();
+        let summary = generator
+            .generate_ai_summary(&tools, &success_client)
+            .await
+            .unwrap();
         assert_eq!(summary.source, SummarySource::AiGenerated);
         assert_eq!(summary.label, "Fixed authentication bug");
         assert_eq!(summary.tools_processed, 1);
@@ -533,12 +544,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_ai_summary_empty_tools() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
+        let generator =
+            ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
 
-        let client = |_prompt: String| -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>> {
-            Box::pin(async { Ok("should not be called".to_string()) })
-        };
+        let client = |_prompt: String| -> Pin<
+            Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>,
+        > { Box::pin(async { Ok("should not be called".to_string()) }) };
 
         let result = generator.generate_ai_summary(&[], &client).await;
         assert!(result.is_none());
@@ -546,16 +557,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_ai_summary_not_enabled_falls_back() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::default()); // enabled: false
+        let generator = ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::default()); // enabled: false
 
         let tools = vec![make_tool("Bash", json!({"command": "cargo test"}))];
 
-        let client = |_prompt: String| -> Pin<Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>> {
+        let client = |_prompt: String| -> Pin<
+            Box<dyn Future<Output = Result<String, Box<dyn std::error::Error>>>>,
+        > {
             Box::pin(async { panic!("Should not be called when AI is disabled") })
         };
 
-        let summary = generator.generate_ai_summary(&tools, &client).await.unwrap();
+        let summary = generator
+            .generate_ai_summary(&tools, &client)
+            .await
+            .unwrap();
         assert_eq!(summary.source, SummarySource::RuleBased);
     }
 
@@ -568,7 +583,10 @@ mod tests {
 
         let tools = vec![
             make_tool("Read", json!({"file_path": "src/main.rs"})),
-            make_tool("Edit", json!({"file_path": "src/main.rs", "old_string": "foo", "new_string": "bar"})),
+            make_tool(
+                "Edit",
+                json!({"file_path": "src/main.rs", "old_string": "foo", "new_string": "bar"}),
+            ),
         ];
 
         let prompt = generator.build_ai_prompt(&tools);
@@ -581,8 +599,8 @@ mod tests {
 
     #[test]
     fn test_build_ai_prompt_includes_output() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
+        let generator =
+            ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("claude-haiku-4-5"));
 
         let tools = vec![make_tool_with_output(
             "Bash",
@@ -598,8 +616,7 @@ mod tests {
 
     #[test]
     fn test_parse_ai_response_clean() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("test"));
+        let generator = ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("test"));
         assert_eq!(
             generator.parse_ai_response("Fixed authentication bug", 80),
             "Fixed authentication bug"
@@ -608,8 +625,7 @@ mod tests {
 
     #[test]
     fn test_parse_ai_response_strips_code_fences() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("test"));
+        let generator = ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("test"));
         assert_eq!(
             generator.parse_ai_response("```Fixed auth```", 80),
             "Fixed auth"
@@ -618,8 +634,7 @@ mod tests {
 
     #[test]
     fn test_parse_ai_response_strips_quotes() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("test"));
+        let generator = ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("test"));
         assert_eq!(
             generator.parse_ai_response("\"Fixed auth bug\"", 80),
             "Fixed auth bug"
@@ -628,8 +643,7 @@ mod tests {
 
     #[test]
     fn test_parse_ai_response_truncates_long() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("test"));
+        let generator = ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("test"));
         let long = "This is a very long summary that exceeds the maximum length";
         let result = generator.parse_ai_response(long, 20);
         assert!(result.len() <= 20);
@@ -638,19 +652,14 @@ mod tests {
 
     #[test]
     fn test_parse_ai_response_multiline() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("test"));
+        let generator = ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("test"));
         let response = "Fixed auth bug\n\nAdditional explanation here";
-        assert_eq!(
-            generator.parse_ai_response(response, 80),
-            "Fixed auth bug"
-        );
+        assert_eq!(generator.parse_ai_response(response, 80), "Fixed auth bug");
     }
 
     #[test]
     fn test_parse_ai_response_whitespace() {
-        let generator = ToolUseSummaryGenerator::new()
-            .with_ai_config(AiSummaryConfig::new("test"));
+        let generator = ToolUseSummaryGenerator::new().with_ai_config(AiSummaryConfig::new("test"));
         assert_eq!(
             generator.parse_ai_response("  Fixed auth bug  ", 80),
             "Fixed auth bug"

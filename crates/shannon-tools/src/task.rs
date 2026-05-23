@@ -6,7 +6,7 @@
 //! - TaskGet: Fetch task details
 //! - TaskList: List all tasks
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -513,7 +513,10 @@ mod tests {
     #[tokio::test]
     async fn test_create_task() {
         let tool = TaskTool::new();
-        let output = tool.execute(create_input("Fix bug", "Fix the auth bug")).await.unwrap();
+        let output = tool
+            .execute(create_input("Fix bug", "Fix the auth bug"))
+            .await
+            .unwrap();
         assert!(!output.is_error);
         assert!(output.content.contains("Created task"));
         assert!(output.metadata.contains_key("task"));
@@ -523,7 +526,10 @@ mod tests {
     async fn test_create_multiple_tasks_increments_id() {
         let tool = TaskTool::new();
         let out1 = tool.execute(create_input("Task 1", "First")).await.unwrap();
-        let out2 = tool.execute(create_input("Task 2", "Second")).await.unwrap();
+        let out2 = tool
+            .execute(create_input("Task 2", "Second"))
+            .await
+            .unwrap();
         let task1 = out1.metadata.get("task").unwrap().as_object().unwrap();
         let task2 = out2.metadata.get("task").unwrap().as_object().unwrap();
         let id1 = task1.get("id").unwrap().as_str().unwrap();
@@ -551,22 +557,36 @@ mod tests {
     async fn test_get_task_found() {
         let tool = TaskTool::new();
         let created = tool.execute(create_input("Find me", "desc")).await.unwrap();
-        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+        let task_id = created
+            .metadata
+            .get("task")
+            .unwrap()
+            .get("id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
 
-        let output = tool.execute(json!({
-            "operation": "Get",
-            "task_id": task_id
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "Get",
+                "task_id": task_id
+            }))
+            .await
+            .unwrap();
         assert!(output.metadata.get("found").unwrap().as_bool().unwrap());
     }
 
     #[tokio::test]
     async fn test_get_task_not_found() {
         let tool = TaskTool::new();
-        let output = tool.execute(json!({
-            "operation": "Get",
-            "task_id": "999"
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "Get",
+                "task_id": "999"
+            }))
+            .await
+            .unwrap();
         assert!(!output.metadata.get("found").unwrap().as_bool().unwrap());
         assert!(output.is_error);
     }
@@ -574,14 +594,28 @@ mod tests {
     #[tokio::test]
     async fn test_update_task_status() {
         let tool = TaskTool::new();
-        let created = tool.execute(create_input("Update me", "desc")).await.unwrap();
-        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+        let created = tool
+            .execute(create_input("Update me", "desc"))
+            .await
+            .unwrap();
+        let task_id = created
+            .metadata
+            .get("task")
+            .unwrap()
+            .get("id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
 
-        let output = tool.execute(json!({
-            "operation": "Update",
-            "task_id": task_id,
-            "status": "inprogress"
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "Update",
+                "task_id": task_id,
+                "status": "inprogress"
+            }))
+            .await
+            .unwrap();
         assert!(!output.is_error);
         let task = output.metadata.get("task").unwrap();
         assert_eq!(task.get("status").unwrap(), "inprogress");
@@ -591,13 +625,24 @@ mod tests {
     async fn test_update_task_owner() {
         let tool = TaskTool::new();
         let created = tool.execute(create_input("Own me", "desc")).await.unwrap();
-        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+        let task_id = created
+            .metadata
+            .get("task")
+            .unwrap()
+            .get("id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
 
-        let output = tool.execute(json!({
-            "operation": "Update",
-            "task_id": task_id,
-            "owner": "agent-1"
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "Update",
+                "task_id": task_id,
+                "owner": "agent-1"
+            }))
+            .await
+            .unwrap();
         let task = output.metadata.get("task").unwrap();
         assert_eq!(task.get("owner").unwrap(), "agent-1");
     }
@@ -605,14 +650,28 @@ mod tests {
     #[tokio::test]
     async fn test_update_task_adds_blocks() {
         let tool = TaskTool::new();
-        let created = tool.execute(create_input("Block test", "desc")).await.unwrap();
-        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+        let created = tool
+            .execute(create_input("Block test", "desc"))
+            .await
+            .unwrap();
+        let task_id = created
+            .metadata
+            .get("task")
+            .unwrap()
+            .get("id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
 
-        let output = tool.execute(json!({
-            "operation": "Update",
-            "task_id": task_id,
-            "add_blocks": ["2", "3"]
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "Update",
+                "task_id": task_id,
+                "add_blocks": ["2", "3"]
+            }))
+            .await
+            .unwrap();
         let task = output.metadata.get("task").unwrap();
         let blocks = task.get("blocks").unwrap().as_array().unwrap();
         assert_eq!(blocks.len(), 2);
@@ -621,11 +680,13 @@ mod tests {
     #[tokio::test]
     async fn test_update_task_not_found() {
         let tool = TaskTool::new();
-        let result = tool.execute(json!({
-            "operation": "Update",
-            "task_id": "999",
-            "status": "completed"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "operation": "Update",
+                "task_id": "999",
+                "status": "completed"
+            }))
+            .await;
         assert!(result.is_err());
     }
 
@@ -643,27 +704,43 @@ mod tests {
         // Create two tasks
         tool.execute(create_input("Task A", "desc")).await.unwrap();
         let created = tool.execute(create_input("Task B", "desc")).await.unwrap();
-        let task_id = created.metadata.get("task").unwrap().get("id").unwrap().as_str().unwrap().to_string();
+        let task_id = created
+            .metadata
+            .get("task")
+            .unwrap()
+            .get("id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
         // Complete one
         tool.execute(json!({
             "operation": "Update",
             "task_id": task_id,
             "status": "completed"
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
 
         // List only pending
-        let output = tool.execute(json!({
-            "operation": "List",
-            "status_filter": "pending"
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "List",
+                "status_filter": "pending"
+            }))
+            .await
+            .unwrap();
         let count = output.metadata.get("count").unwrap().as_u64().unwrap();
         assert_eq!(count, 1);
 
         // List only completed
-        let output = tool.execute(json!({
-            "operation": "List",
-            "status_filter": "completed"
-        })).await.unwrap();
+        let output = tool
+            .execute(json!({
+                "operation": "List",
+                "status_filter": "completed"
+            }))
+            .await
+            .unwrap();
         let count = output.metadata.get("count").unwrap().as_u64().unwrap();
         assert_eq!(count, 1);
     }

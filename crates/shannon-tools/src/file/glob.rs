@@ -102,13 +102,11 @@ fn build_result(path: &Path) -> Option<GlobResult> {
 /// Sort results by modification time descending (most recent first), with an
 /// alphabetical-path fallback.
 fn sort_results(results: &mut [GlobResult]) {
-    results.sort_by(|a, b| {
-        match (&a.modified, &b.modified) {
-            (Some(ma), Some(mb)) => mb.cmp(ma).then_with(|| a.path.cmp(&b.path)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.path.cmp(&b.path),
-        }
+    results.sort_by(|a, b| match (&a.modified, &b.modified) {
+        (Some(ma), Some(mb)) => mb.cmp(ma).then_with(|| a.path.cmp(&b.path)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.path.cmp(&b.path),
     });
 }
 
@@ -126,7 +124,9 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
                 let cwd = std::env::current_dir().unwrap_or_default();
                 if !canonical.starts_with(&cwd) {
                     return Ok(ToolOutput {
-                        content: format!("Path traversal blocked: '{base_path}' resolves outside project"),
+                        content: format!(
+                            "Path traversal blocked: '{base_path}' resolves outside project"
+                        ),
                         is_error: true,
                         metadata: HashMap::new(),
                     });
@@ -154,10 +154,10 @@ pub async fn execute(input: GlobInput) -> Result<ToolOutput, ToolError> {
 
     // Use `ignore::WalkBuilder` for .gitignore-aware traversal.
     let mut builder = ignore::WalkBuilder::new(&base);
-    builder.hidden(true);       // skip hidden files
-    builder.git_ignore(true);   // respect .gitignore
-    builder.git_global(true);   // respect global gitignore
-    builder.git_exclude(true);  // respect .git/info/exclude
+    builder.hidden(true); // skip hidden files
+    builder.git_ignore(true); // respect .gitignore
+    builder.git_global(true); // respect global gitignore
+    builder.git_exclude(true); // respect .git/info/exclude
 
     let mut results: Vec<GlobResult> = Vec::new();
 
@@ -437,9 +437,8 @@ mod tests {
         let files = extract_paths(&output);
 
         // Helper: check that the last path component of `f` equals `name`.
-        let filename_is = |f: &str, name: &str| -> bool {
-            Path::new(f).file_name().is_some_and(|n| n == name)
-        };
+        let filename_is =
+            |f: &str, name: &str| -> bool { Path::new(f).file_name().is_some_and(|n| n == name) };
 
         assert!(files.iter().any(|f| filename_is(f, "mod.rs")));
         assert!(files.iter().any(|f| filename_is(f, "lib.rs")));

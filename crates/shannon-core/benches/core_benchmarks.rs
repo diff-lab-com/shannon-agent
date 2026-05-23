@@ -3,12 +3,10 @@
 //! Benchmarks message serialization, token estimation, compaction,
 //! and system prompt construction.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde_json::json;
 
-use shannon_core::api::{
-    ContentBlock, Message, MessageContent, ToolDefinition, ToolResultContent,
-};
+use shannon_core::api::{ContentBlock, Message, MessageContent, ToolDefinition, ToolResultContent};
 use shannon_core::compact::{CompactConfig, CompactEngine, RuleBasedSummarizer};
 use shannon_core::token_estimation::{ConversationMessageSummary, TokenEstimator};
 
@@ -67,7 +65,9 @@ fn build_conversation(turns: usize) -> Vec<Message> {
         ));
         messages.push(make_text_message(
             "assistant",
-            &format!("I've analyzed module {i}. The code looks good but consider adding error handling."),
+            &format!(
+                "I've analyzed module {i}. The code looks good but consider adding error handling."
+            ),
         ));
     }
     messages
@@ -128,7 +128,11 @@ fn bench_context_estimation(c: &mut Criterion) {
     for &msg_count in &[5, 20, 100] {
         let messages: Vec<ConversationMessageSummary> = (0..msg_count)
             .map(|i| ConversationMessageSummary {
-                role: if i % 2 == 0 { "user".into() } else { "assistant".into() },
+                role: if i % 2 == 0 {
+                    "user".into()
+                } else {
+                    "assistant".into()
+                },
                 content: format!(
                     "This is message number {i} with some typical content about code analysis."
                 ),
@@ -316,10 +320,14 @@ fn bench_cache_token_extraction_from_sse(c: &mut Criterion) {
             let mut total_read: u64 = 0;
             for event in &parsed {
                 if let Some(usage) = event.get("message").and_then(|m| m.get("usage")) {
-                    total_creation += usage.get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_u64()).unwrap_or(0);
-                    total_read += usage.get("cache_read_input_tokens")
-                        .and_then(|v| v.as_u64()).unwrap_or(0);
+                    total_creation += usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    total_read += usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                 }
             }
             (total_creation, total_read)

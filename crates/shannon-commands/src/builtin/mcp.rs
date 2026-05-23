@@ -5,7 +5,9 @@
 
 #![allow(dead_code)]
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// MCP prompt template
 const MCP_PROMPT: &str = r##"
@@ -144,13 +146,19 @@ pub fn format_server_status(name: &str, status: &ServerStatusInfo) -> String {
 
     output.push_str(&format!("  State:             {}\n", status.state));
     if let Some(ref uptime) = status.uptime {
-        output.push_str(&format!("  Uptime:            {}\n", format_duration(uptime)));
+        output.push_str(&format!(
+            "  Uptime:            {}\n",
+            format_duration(uptime)
+        ));
     }
     output.push_str(&format!("  Requests:          {}\n", status.request_count));
     output.push_str(&format!("  Errors:            {}\n", status.error_count));
     output.push_str(&format!("  Restarts:          {}\n", status.restart_count));
     if let Some(ref last_check) = status.last_health_check {
-        output.push_str(&format!("  Last health check: {} ago\n", format_duration(last_check)));
+        output.push_str(&format!(
+            "  Last health check: {} ago\n",
+            format_duration(last_check)
+        ));
     }
 
     output
@@ -169,7 +177,10 @@ pub fn format_tool_list(tools: &[ToolInfo]) -> String {
         if annotations.is_empty() {
             output.push_str(&format!("  {} — {}\n", tool.name, tool.description));
         } else {
-            output.push_str(&format!("  {} [{}] — {}\n", tool.name, annotations, tool.description));
+            output.push_str(&format!(
+                "  {} [{}] — {}\n",
+                tool.name, annotations, tool.description
+            ));
         }
     }
 
@@ -391,7 +402,10 @@ mod tests {
     #[test]
     fn test_format_duration() {
         assert_eq!(format_duration(&std::time::Duration::from_secs(45)), "45s");
-        assert_eq!(format_duration(&std::time::Duration::from_secs(125)), "2m 5s");
+        assert_eq!(
+            format_duration(&std::time::Duration::from_secs(125)),
+            "2m 5s"
+        );
         assert_eq!(
             format_duration(&std::time::Duration::from_secs(3661)),
             "1h 1m"

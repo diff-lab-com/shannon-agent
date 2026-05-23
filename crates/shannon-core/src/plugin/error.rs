@@ -56,14 +56,46 @@ mod tests {
     #[test]
     fn plugin_error_display_variants() {
         assert!(PluginError::NotFound("x".into()).to_string().contains("x"));
-        assert!(PluginError::AlreadyInstalled("p".into()).to_string().contains("p"));
-        assert!(PluginError::InvalidManifest("bad".into()).to_string().contains("bad"));
-        assert!(PluginError::InvalidDirectory(PathBuf::from("/tmp")).to_string().contains("/tmp"));
-        assert!(PluginError::GitFailed("clone".into()).to_string().contains("clone"));
-        assert!(PluginError::Generic("msg".into()).to_string().contains("msg"));
-        assert!(PluginError::Network("timeout".into()).to_string().contains("timeout"));
-        assert!(PluginError::PermissionDenied("denied".into()).to_string().contains("denied"));
-        assert!(PluginError::IndexRefreshFailed("err".into()).to_string().contains("err"));
+        assert!(
+            PluginError::AlreadyInstalled("p".into())
+                .to_string()
+                .contains("p")
+        );
+        assert!(
+            PluginError::InvalidManifest("bad".into())
+                .to_string()
+                .contains("bad")
+        );
+        assert!(
+            PluginError::InvalidDirectory(PathBuf::from("/tmp"))
+                .to_string()
+                .contains("/tmp")
+        );
+        assert!(
+            PluginError::GitFailed("clone".into())
+                .to_string()
+                .contains("clone")
+        );
+        assert!(
+            PluginError::Generic("msg".into())
+                .to_string()
+                .contains("msg")
+        );
+        assert!(
+            PluginError::Network("timeout".into())
+                .to_string()
+                .contains("timeout")
+        );
+        assert!(
+            PluginError::PermissionDenied("denied".into())
+                .to_string()
+                .contains("denied")
+        );
+        assert!(
+            PluginError::IndexRefreshFailed("err".into())
+                .to_string()
+                .contains("err")
+        );
     }
 
     #[test]

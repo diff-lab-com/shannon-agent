@@ -4,18 +4,20 @@
 // for different communication protocols: stdio, SSE, HTTP, and WebSocket.
 
 use async_trait::async_trait;
-use futures_util::{StreamExt, SinkExt};
+use futures_util::{SinkExt, StreamExt};
 use std::io;
 use std::pin::Pin;
 use std::process::Stdio;
 use thiserror::Error;
-use tokio_tungstenite::tungstenite::protocol::{Message, CloseFrame};
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Message};
 use tracing::{debug, info};
 
 /// Validate a URL string has the expected scheme.
 fn validate_url(url: &str, expected_scheme: &str) -> Result<(), TransportError> {
     if url.is_empty() {
-        return Err(TransportError::Http(format!("empty URL for {expected_scheme} transport")));
+        return Err(TransportError::Http(format!(
+            "empty URL for {expected_scheme} transport"
+        )));
     }
     if !url.starts_with(expected_scheme) {
         return Err(TransportError::Http(format!(
@@ -91,13 +93,15 @@ impl StdioTransport {
             .spawn()
             .map_err(|e| TransportError::Process(format!("Failed to spawn process: {e}")))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            TransportError::Process("Failed to open stdin".to_string())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| TransportError::Process("Failed to open stdin".to_string()))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            TransportError::Process("Failed to open stdout".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| TransportError::Process("Failed to open stdout".to_string()))?;
 
         let stdout_reader = tokio::io::BufReader::new(stdout);
 
@@ -110,13 +114,15 @@ impl StdioTransport {
 
     /// Create from an already spawned child process
     pub fn from_child(mut child: tokio::process::Child) -> Result<Self, TransportError> {
-        let stdin = child.stdin.take().ok_or_else(|| {
-            TransportError::Process("Failed to open stdin".to_string())
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| TransportError::Process("Failed to open stdin".to_string()))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            TransportError::Process("Failed to open stdout".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| TransportError::Process("Failed to open stdout".to_string()))?;
 
         let stdout_reader = tokio::io::BufReader::new(stdout);
 
@@ -210,7 +216,8 @@ impl Drop for StdioTransport {
 ///
 /// Note: This transport is NOT Sync due to the nature of streaming connections.
 /// It should be used within a single async context or wrapped in a mutex if needed.
-type ByteStream = Pin<Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>;
+type ByteStream =
+    Pin<Box<dyn futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send>>;
 
 pub struct SseTransport {
     client: reqwest::Client,
@@ -347,7 +354,6 @@ impl SseTransport {
         self.reconnecting = false;
         Err(last_err)
     }
-
 }
 
 #[async_trait]
@@ -565,7 +571,11 @@ impl Transport for HttpTransport {
         if content_type.contains("text/event-stream") {
             // SSE response — extract first JSON-RPC payload from events.
             let body = Self::extract_sse_payload(response).await?;
-            debug!("HTTP sent+received (SSE): {} bytes request, {} bytes response", message.len(), body.len());
+            debug!(
+                "HTTP sent+received (SSE): {} bytes request, {} bytes response",
+                message.len(),
+                body.len()
+            );
             self.pending_response = Some(body);
         } else {
             // Standard JSON response.
@@ -573,7 +583,11 @@ impl Transport for HttpTransport {
                 .text()
                 .await
                 .map_err(|e| TransportError::Http(format!("Failed to read response: {e}")))?;
-            debug!("HTTP sent+received: {} bytes request, {} bytes response", message.len(), body.len());
+            debug!(
+                "HTTP sent+received: {} bytes request, {} bytes response",
+                message.len(),
+                body.len()
+            );
             self.pending_response = Some(body);
         }
 
@@ -589,12 +603,7 @@ impl Transport for HttpTransport {
         self.pending_response = None;
         // Send DELETE to terminate session if we have a session ID.
         if self.session_id.is_some() {
-            if let Err(e) = self
-                .client
-                .delete(&self.endpoint)
-                .send()
-                .await
-            {
+            if let Err(e) = self.client.delete(&self.endpoint).send().await {
                 tracing::debug!("Failed to clean up MCP HTTP session: {e}");
             }
             self.session_id = None;
@@ -641,16 +650,20 @@ impl HttpTransport {
             return Ok(event_data);
         }
 
-        Err(TransportError::Sse("SSE stream ended without data payload".to_string()))
+        Err(TransportError::Sse(
+            "SSE stream ended without data payload".to_string(),
+        ))
     }
 }
 
 /// WebSocket transport for real-time bidirectional communication
 pub struct WebSocketTransport {
     endpoint: String,
-    stream: Option<tokio_tungstenite::WebSocketStream<
-        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-    >>,
+    stream: Option<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
 }
 
 impl WebSocketTransport {
@@ -708,14 +721,22 @@ impl Transport for WebSocketTransport {
                                     debug!("WebSocket received: {} bytes", s.len());
                                     return Ok(Some(s.to_string()));
                                 }
-                                Err(_) => return Err(TransportError::InvalidMessage("Invalid UTF-8 in text message".to_string()))
+                                Err(_) => {
+                                    return Err(TransportError::InvalidMessage(
+                                        "Invalid UTF-8 in text message".to_string(),
+                                    ));
+                                }
                             }
                         }
                         Message::Binary(data) => {
                             // Try to convert binary to string
                             return std::str::from_utf8(&data)
                                 .map(|s| Some(s.to_string()))
-                                .map_err(|_| TransportError::InvalidMessage("Invalid UTF-8 in binary message".to_string()));
+                                .map_err(|_| {
+                                    TransportError::InvalidMessage(
+                                        "Invalid UTF-8 in binary message".to_string(),
+                                    )
+                                });
                         }
                         Message::Close(_) => return Ok(None),
                         Message::Ping(data) => {
@@ -726,8 +747,10 @@ impl Transport for WebSocketTransport {
                             continue;
                         }
                         _ => continue,
+                    },
+                    Some(Err(e)) => {
+                        return Err(TransportError::WebSocket(format!("Receive error: {e}")));
                     }
-                    Some(Err(e)) => return Err(TransportError::WebSocket(format!("Receive error: {e}"))),
                     None => return Ok(None),
                 }
             }
@@ -738,10 +761,13 @@ impl Transport for WebSocketTransport {
 
     async fn close(&mut self) -> Result<(), TransportError> {
         if let Some(stream) = &mut self.stream {
-            let _ = stream.close(Some(CloseFrame {
-                code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
-                reason: "".into(),
-            })).await;
+            let _ = stream
+                .close(Some(CloseFrame {
+                    code:
+                        tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
+                    reason: "".into(),
+                }))
+                .await;
             self.stream = None;
             debug!("WebSocket connection closed");
         }
@@ -799,7 +825,8 @@ mod tests {
 
     #[test]
     fn test_transport_error_variants() {
-        let io_err = TransportError::Io(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe"));
+        let io_err =
+            TransportError::Io(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "pipe"));
         assert!(io_err.to_string().contains("pipe"));
 
         let http_err = TransportError::Http("bad request".into());
@@ -811,7 +838,11 @@ mod tests {
         let sse_err = TransportError::Sse("stream ended".into());
         assert!(sse_err.to_string().contains("stream ended"));
 
-        assert!(TransportError::ConnectionClosed.to_string().contains("closed"));
+        assert!(
+            TransportError::ConnectionClosed
+                .to_string()
+                .contains("closed")
+        );
         assert!(TransportError::Timeout.to_string().contains("timeout"));
 
         let invalid = TransportError::InvalidMessage("bad json".into());
@@ -820,8 +851,7 @@ mod tests {
 
     #[test]
     fn test_sse_transport_max_reconnects() {
-        let transport = SseTransport::new("http://localhost/events")
-            .with_max_reconnects(5);
+        let transport = SseTransport::new("http://localhost/events").with_max_reconnects(5);
         assert_eq!(transport.max_reconnects, 5);
     }
 
@@ -889,14 +919,22 @@ mod tests {
             .unwrap();
         // Take stdin to simulate closed connection
         let _ = child.stdin.take();
-        let mut transport = StdioTransport { child: Some(child), stdin: None, stdout_reader: None };
+        let mut transport = StdioTransport {
+            child: Some(child),
+            stdin: None,
+            stdout_reader: None,
+        };
         let result = transport.send("test").await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn test_stdio_transport_receive_without_connection() {
-        let mut transport = StdioTransport { child: None, stdin: None, stdout_reader: None };
+        let mut transport = StdioTransport {
+            child: None,
+            stdin: None,
+            stdout_reader: None,
+        };
         let result = transport.receive().await;
         assert!(result.is_err());
     }

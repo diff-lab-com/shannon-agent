@@ -4,9 +4,8 @@
 //! and built-in command registration.
 
 use shannon_commands::{
-    CommandParser, ParsedCommand, CommandRegistry, CommandSource, CommandAvailability,
-    Command, CommandBase, PromptCommand, LocalCommand,
-    LocalJSXCommand,
+    Command, CommandAvailability, CommandBase, CommandParser, CommandRegistry, CommandSource,
+    LocalCommand, LocalJSXCommand, ParsedCommand, PromptCommand,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -160,7 +159,11 @@ fn test_args_split() {
 
 #[test]
 fn test_parsed_command_flags_empty() {
-    let cmd = ParsedCommand::new("test".to_string(), "arg1 arg2".to_string(), "/test arg1 arg2".to_string());
+    let cmd = ParsedCommand::new(
+        "test".to_string(),
+        "arg1 arg2".to_string(),
+        "/test arg1 arg2".to_string(),
+    );
     assert!(!cmd.has_flag("verbose"));
     assert_eq!(cmd.flag_value("verbose"), None);
 }
@@ -212,9 +215,18 @@ async fn test_alias_resolution() {
 #[tokio::test]
 async fn test_list_names_includes_all_registered() {
     let registry = CommandRegistry::new();
-    registry.register(make_prompt_command("a", "Cmd A")).await.unwrap();
-    registry.register(make_local_command("b", "Cmd B")).await.unwrap();
-    registry.register(make_jsx_command("c", "Cmd C")).await.unwrap();
+    registry
+        .register(make_prompt_command("a", "Cmd A"))
+        .await
+        .unwrap();
+    registry
+        .register(make_local_command("b", "Cmd B"))
+        .await
+        .unwrap();
+    registry
+        .register(make_jsx_command("c", "Cmd C"))
+        .await
+        .unwrap();
 
     let names = registry.list_names().await;
     assert_eq!(names.len(), 3);
@@ -226,9 +238,18 @@ async fn test_list_names_includes_all_registered() {
 #[tokio::test]
 async fn test_search_finds_matching_commands() {
     let registry = CommandRegistry::new();
-    registry.register(make_prompt_command("commit", "Commit changes")).await.unwrap();
-    registry.register(make_prompt_command("compact", "Compact context")).await.unwrap();
-    registry.register(make_prompt_command("deploy", "Deploy application")).await.unwrap();
+    registry
+        .register(make_prompt_command("commit", "Commit changes"))
+        .await
+        .unwrap();
+    registry
+        .register(make_prompt_command("compact", "Compact context"))
+        .await
+        .unwrap();
+    registry
+        .register(make_prompt_command("deploy", "Deploy application"))
+        .await
+        .unwrap();
 
     let results = registry.search("comp").await;
     assert_eq!(results.len(), 1);
@@ -238,7 +259,10 @@ async fn test_search_finds_matching_commands() {
 #[tokio::test]
 async fn test_search_returns_empty_for_no_match() {
     let registry = CommandRegistry::new();
-    registry.register(make_prompt_command("commit", "Commit changes")).await.unwrap();
+    registry
+        .register(make_prompt_command("commit", "Commit changes"))
+        .await
+        .unwrap();
 
     let results = registry.search("nonexistent").await;
     assert!(results.is_empty());
@@ -247,8 +271,14 @@ async fn test_search_returns_empty_for_no_match() {
 #[tokio::test]
 async fn test_duplicate_registration_overwrites() {
     let registry = CommandRegistry::new();
-    registry.register(make_prompt_command("test", "Original")).await.unwrap();
-    registry.register(make_prompt_command("test", "Updated")).await.unwrap();
+    registry
+        .register(make_prompt_command("test", "Original"))
+        .await
+        .unwrap();
+    registry
+        .register(make_prompt_command("test", "Updated"))
+        .await
+        .unwrap();
 
     let retrieved = registry.get("test").await.unwrap();
     assert_eq!(retrieved.description(), "Updated");
@@ -275,7 +305,11 @@ fn test_command_source_serialization() {
 
 #[test]
 fn test_command_availability_serialization() {
-    for avail in [CommandAvailability::ClaudeAI, CommandAvailability::Console, CommandAvailability::All] {
+    for avail in [
+        CommandAvailability::ClaudeAI,
+        CommandAvailability::Console,
+        CommandAvailability::All,
+    ] {
         let json = serde_json::to_string(&avail).unwrap();
         let parsed: CommandAvailability = serde_json::from_str(&json).unwrap();
         assert_eq!(avail, parsed);
@@ -287,7 +321,10 @@ fn test_command_availability_serialization() {
 #[tokio::test]
 async fn test_parse_then_lookup() {
     let registry = CommandRegistry::new();
-    registry.register(make_prompt_command("review", "Review code")).await.unwrap();
+    registry
+        .register(make_prompt_command("review", "Review code"))
+        .await
+        .unwrap();
 
     let parser = CommandParser::new();
     let parsed = parser.parse("/review 42").unwrap();
@@ -320,8 +357,14 @@ async fn test_create_registry_includes_builtins() {
     assert!(!names.is_empty(), "Built-in registry should not be empty");
 
     // Should contain common commands
-    assert!(names.contains(&"commit".to_string()), "Should have /commit command");
-    assert!(names.contains(&"help".to_string()), "Should have /help command");
+    assert!(
+        names.contains(&"commit".to_string()),
+        "Should have /commit command"
+    );
+    assert!(
+        names.contains(&"help".to_string()),
+        "Should have /help command"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -114,7 +114,10 @@ fn test_jsonrpc_response_success() {
     let parsed: JsonRpcResponse = serde_json::from_str(&json).unwrap();
 
     assert_eq!(parsed.id, "req-1");
-    assert_eq!(parsed.result, Some(serde_json::json!({"result": "success"})));
+    assert_eq!(
+        parsed.result,
+        Some(serde_json::json!({"result": "success"}))
+    );
     assert!(parsed.error.is_none());
     assert!(!parsed.is_error());
 }
@@ -139,7 +142,8 @@ fn test_jsonrpc_response_error() {
 
 #[test]
 fn test_jsonrpc_notification() {
-    let notification = JsonRpcNotification::new("test/event", Some(serde_json::json!({"data": 123})));
+    let notification =
+        JsonRpcNotification::new("test/event", Some(serde_json::json!({"data": 123})));
 
     let json = serde_json::to_string(&notification).unwrap();
     let parsed: JsonRpcNotification = serde_json::from_str(&json).unwrap();
@@ -382,13 +386,11 @@ fn test_prompt_definition() {
     let prompt = Prompt {
         name: "test_prompt".to_string(),
         description: "A test prompt".to_string(),
-        arguments: Some(vec![
-            PromptArgument {
-                name: "topic".to_string(),
-                description: "The topic to write about".to_string(),
-                required: Some(true),
-            }
-        ]),
+        arguments: Some(vec![PromptArgument {
+            name: "topic".to_string(),
+            description: "The topic to write about".to_string(),
+            required: Some(true),
+        }]),
     };
 
     let json = serde_json::to_string(&prompt).unwrap();
@@ -459,11 +461,9 @@ fn test_content_block_resource() {
 #[test]
 fn test_tool_content() {
     let content = ToolContent {
-        content: vec![
-            ContentBlock::Text {
-                text: "Result text".to_string(),
-            },
-        ],
+        content: vec![ContentBlock::Text {
+            text: "Result text".to_string(),
+        }],
         is_error: Some(false),
     };
 
@@ -479,11 +479,9 @@ fn test_resource_content() {
     let content = ResourceContent {
         uri: "file:///example.txt".to_string(),
         mime_type: Some("text/plain".to_string()),
-        contents: vec![
-            ContentBlock::Text {
-                text: "File content".to_string(),
-            },
-        ],
+        contents: vec![ContentBlock::Text {
+            text: "File content".to_string(),
+        }],
     };
 
     let json = serde_json::to_value(&content).unwrap();
@@ -512,9 +510,7 @@ fn test_server_capabilities_default() {
 #[test]
 fn test_server_capabilities_with_tools() {
     let caps = ServerCapabilities {
-        tools: Some(ToolsCapability {
-            list_changed: true
-        }),
+        tools: Some(ToolsCapability { list_changed: true }),
         ..Default::default()
     };
 
@@ -529,18 +525,14 @@ fn test_server_capabilities_with_tools() {
 #[test]
 fn test_server_capabilities_full() {
     let caps = ServerCapabilities {
-        tools: Some(ToolsCapability {
-            list_changed: true
-        }),
+        tools: Some(ToolsCapability { list_changed: true }),
         resources: Some(ResourcesCapability {
             subscribe: true,
             list_changed: false,
         }),
-        prompts: Some(PromptsCapability {
-            list_changed: true
-        }),
+        prompts: Some(PromptsCapability { list_changed: true }),
         logging: Some(LoggingCapability {
-            level: "info".to_string()
+            level: "info".to_string(),
         }),
         ..Default::default()
     };
@@ -589,7 +581,7 @@ fn test_initialize_result() {
         protocol_version: "2024-11-05".to_string(),
         capabilities: ServerCapabilities {
             tools: Some(ToolsCapability {
-                list_changed: false
+                list_changed: false,
             }),
             ..Default::default()
         },
@@ -644,7 +636,9 @@ async fn test_request_response_correlation() {
     };
 
     // Server sends response with same ID
-    server.send_response(&req_id, serde_json::json!({"status": "ok"})).await;
+    server
+        .send_response(&req_id, serde_json::json!({"status": "ok"}))
+        .await;
 
     // Client receives response
     let response_json = client.receive().await.unwrap();
@@ -664,7 +658,9 @@ async fn test_error_response_handling() {
     let (client, server) = MockTransport::new_pair();
 
     // Send request
-    client.send(r#"{"jsonrpc":"2.0","id":"err-1","method":"unknown"}"#).await;
+    client
+        .send(r#"{"jsonrpc":"2.0","id":"err-1","method":"unknown"}"#)
+        .await;
 
     // Server receives
     let received = server.receive().await.unwrap();
@@ -676,7 +672,9 @@ async fn test_error_response_handling() {
     };
 
     // Server sends error
-    server.send_error_response(&req_id, JsonRpcError::method_not_found()).await;
+    server
+        .send_error_response(&req_id, JsonRpcError::method_not_found())
+        .await;
 
     // Client receives error
     let response_json = client.receive().await.unwrap();
@@ -698,13 +696,15 @@ async fn test_notification_handling() {
     let (client, server) = MockTransport::new_pair();
 
     // Server sends notification
-    server.send_notification(
-        "notifications/message",
-        Some(serde_json::json!({
-            "level": "info",
-            "data": "Test notification"
-        }))
-    ).await;
+    server
+        .send_notification(
+            "notifications/message",
+            Some(serde_json::json!({
+                "level": "info",
+                "data": "Test notification"
+            })),
+        )
+        .await;
 
     // Client receives notification
     let received = client.receive().await.unwrap();
@@ -728,7 +728,7 @@ async fn test_concurrent_requests() {
         let request = JsonRpcRequest::with_id(
             format!("req-{i}"),
             "test_method",
-            Some(serde_json::json!({"index": i}))
+            Some(serde_json::json!({"index": i})),
         );
         let json = serde_json::to_string(&JsonRpcMessage::Request(request)).unwrap();
         client.send(&json).await;
@@ -741,7 +741,9 @@ async fn test_concurrent_requests() {
         let parsed: JsonRpcMessage = serde_json::from_str(&received).unwrap();
 
         if let JsonRpcMessage::Request(req) = parsed {
-            server.send_response(&req.id, serde_json::json!({"received": req.id})).await;
+            server
+                .send_response(&req.id, serde_json::json!({"received": req.id}))
+                .await;
             received_ids.push(req.id);
         }
     }
@@ -765,10 +767,7 @@ async fn test_concurrent_requests() {
 #[test]
 fn test_unicode_in_params() {
     let emoji = "🔥 Fire emoji";
-    let request = JsonRpcRequest::new(
-        "test",
-        Some(serde_json::json!({"message": emoji}))
-    );
+    let request = JsonRpcRequest::new("test", Some(serde_json::json!({"message": emoji})));
 
     let json = serde_json::to_string(&request).unwrap();
     let parsed: JsonRpcRequest = serde_json::from_str(&json).unwrap();
@@ -877,15 +876,17 @@ fn test_request_method_enum() {
         let json = serde_json::to_string(&method).unwrap();
         let parsed: RequestMethod = serde_json::from_str(&json).unwrap();
         // Should round-trip (though exact variant may differ due to camelCase)
-        assert!(matches!(parsed, RequestMethod::Initialize
-            | RequestMethod::ToolsList
-            | RequestMethod::ToolsCall
-            | RequestMethod::ResourcesList
-            | RequestMethod::ResourcesRead
-            | RequestMethod::ResourcesTemplatesList
-            | RequestMethod::PromptsList
-            | RequestMethod::PromptsGet
-            | RequestMethod::PromptsArgumentsList
+        assert!(matches!(
+            parsed,
+            RequestMethod::Initialize
+                | RequestMethod::ToolsList
+                | RequestMethod::ToolsCall
+                | RequestMethod::ResourcesList
+                | RequestMethod::ResourcesRead
+                | RequestMethod::ResourcesTemplatesList
+                | RequestMethod::PromptsList
+                | RequestMethod::PromptsGet
+                | RequestMethod::PromptsArgumentsList
         ));
     }
 }
@@ -968,9 +969,16 @@ fn test_logging_level_enum() {
     for level in levels {
         let json = serde_json::to_string(&level).unwrap();
         // Should serialize to lowercase string
-        assert!(json == "\"debug\"" || json == "\"info\"" || json == "\"notice\""
-            || json == "\"warning\"" || json == "\"error\"" || json == "\"critical\""
-            || json == "\"alert\"" || json == "\"emergency\"");
+        assert!(
+            json == "\"debug\""
+                || json == "\"info\""
+                || json == "\"notice\""
+                || json == "\"warning\""
+                || json == "\"error\""
+                || json == "\"critical\""
+                || json == "\"alert\""
+                || json == "\"emergency\""
+        );
 
         let parsed: LoggingLevel = serde_json::from_str(&json).unwrap();
         let _ = parsed;
@@ -991,9 +999,7 @@ fn test_subscribe_request() {
 
 #[test]
 fn test_subscribe_result() {
-    let result = SubscribeResult {
-        subscribed: true,
-    };
+    let result = SubscribeResult { subscribed: true };
 
     let json = serde_json::to_string(&result).unwrap();
     let parsed: SubscribeResult = serde_json::from_str(&json).unwrap();

@@ -115,10 +115,7 @@ pub enum AnalyticsEventType {
         tool_name: Option<String>,
     },
     /// A permission was requested from the user.
-    PermissionRequest {
-        tool_name: String,
-        approved: bool,
-    },
+    PermissionRequest { tool_name: String, approved: bool },
 }
 
 // ---------------------------------------------------------------------------
@@ -317,8 +314,8 @@ impl AnalyticsStore {
     /// The event is assigned a UUID, the current timestamp, and the current
     /// session ID.
     pub fn record(&mut self, event_type: AnalyticsEventType, properties: HashMap<String, Value>) {
-        let event = AnalyticsEvent::new(event_type, self.session_id.clone())
-            .with_properties(properties);
+        let event =
+            AnalyticsEvent::new(event_type, self.session_id.clone()).with_properties(properties);
         self.events.push(event);
     }
 
@@ -376,22 +373,24 @@ impl AnalyticsStore {
 
         let mut result: Vec<ToolStats> = stats
             .into_iter()
-            .map(|(tool_name, (total_calls, successful_calls, total_duration_ms))| {
-                let failed_calls = total_calls - successful_calls;
-                let avg_duration_ms = if total_calls > 0 {
-                    total_duration_ms as f64 / total_calls as f64
-                } else {
-                    0.0
-                };
-                ToolStats {
-                    tool_name,
-                    total_calls,
-                    successful_calls,
-                    failed_calls,
-                    avg_duration_ms,
-                    total_duration_ms,
-                }
-            })
+            .map(
+                |(tool_name, (total_calls, successful_calls, total_duration_ms))| {
+                    let failed_calls = total_calls - successful_calls;
+                    let avg_duration_ms = if total_calls > 0 {
+                        total_duration_ms as f64 / total_calls as f64
+                    } else {
+                        0.0
+                    };
+                    ToolStats {
+                        tool_name,
+                        total_calls,
+                        successful_calls,
+                        failed_calls,
+                        avg_duration_ms,
+                        total_duration_ms,
+                    }
+                },
+            )
             .collect();
 
         result.sort_by(|a, b| b.total_calls.cmp(&a.total_calls));
@@ -409,9 +408,7 @@ impl AnalyticsStore {
             let sid = &event.session_id;
             match &event.event_type {
                 AnalyticsEventType::SessionStart => {
-                    session_starts
-                        .entry(sid.clone())
-                        .or_insert(event.timestamp);
+                    session_starts.entry(sid.clone()).or_insert(event.timestamp);
                 }
                 AnalyticsEventType::SessionEnd => {
                     session_ends.insert(sid.clone(), event.timestamp);
@@ -439,9 +436,8 @@ impl AnalyticsStore {
                 let ended_at = session_ends.get(&session_id).copied();
                 let tool_calls = session_tool_calls.get(&session_id).copied().unwrap_or(0);
                 let errors = session_errors.get(&session_id).copied().unwrap_or(0);
-                let duration_ms = ended_at.map(|end| {
-                    (end - started_at).num_milliseconds().unsigned_abs()
-                });
+                let duration_ms =
+                    ended_at.map(|end| (end - started_at).num_milliseconds().unsigned_abs());
                 SessionStats {
                     session_id,
                     started_at,
@@ -464,7 +460,9 @@ impl AnalyticsStore {
 
         for event in &self.events {
             let date = event.date();
-            let entry = daily.entry(date).or_insert_with(|| (HashMap::new(), 0, 0, 0));
+            let entry = daily
+                .entry(date)
+                .or_insert_with(|| (HashMap::new(), 0, 0, 0));
             entry.1 += 1; // total events (for counting tool calls below)
             if let AnalyticsEventType::ToolExecution { duration_ms, .. } = &event.event_type {
                 entry.3 += duration_ms;
@@ -721,10 +719,7 @@ mod tests {
 
     #[test]
     fn test_analytics_event_new() {
-        let event = AnalyticsEvent::new(
-            AnalyticsEventType::SessionStart,
-            "sess-1".to_string(),
-        );
+        let event = AnalyticsEvent::new(AnalyticsEventType::SessionStart, "sess-1".to_string());
         assert!(!event.id.is_empty());
         assert!(event.properties.is_empty());
         assert_eq!(event.session_id, "sess-1");
@@ -732,11 +727,8 @@ mod tests {
 
     #[test]
     fn test_analytics_event_with_property() {
-        let event = AnalyticsEvent::new(
-            AnalyticsEventType::SessionStart,
-            "sess-1".to_string(),
-        )
-        .with_property("key", Value::String("val".into()));
+        let event = AnalyticsEvent::new(AnalyticsEventType::SessionStart, "sess-1".to_string())
+            .with_property("key", Value::String("val".into()));
 
         assert_eq!(event.properties.get("key").unwrap(), "val");
     }
@@ -747,11 +739,8 @@ mod tests {
         props.insert("a".to_string(), Value::Number(1.into()));
         props.insert("b".to_string(), Value::Bool(true));
 
-        let event = AnalyticsEvent::new(
-            AnalyticsEventType::SessionStart,
-            "sess-1".to_string(),
-        )
-        .with_properties(props);
+        let event = AnalyticsEvent::new(AnalyticsEventType::SessionStart, "sess-1".to_string())
+            .with_properties(props);
 
         assert_eq!(event.properties.len(), 2);
     }
@@ -782,10 +771,7 @@ mod tests {
 
     #[test]
     fn test_analytics_event_date() {
-        let event = AnalyticsEvent::new(
-            AnalyticsEventType::SessionStart,
-            "s1".into(),
-        );
+        let event = AnalyticsEvent::new(AnalyticsEventType::SessionStart, "s1".into());
         assert_eq!(event.date(), Utc::now().date_naive());
     }
 
@@ -1027,10 +1013,7 @@ mod tests {
         store.record(AnalyticsEventType::SessionStart, empty_props());
 
         // Simulate an end event 5 seconds later by constructing manually.
-        let end_event = AnalyticsEvent::new(
-            AnalyticsEventType::SessionEnd,
-            "test-session".into(),
-        );
+        let end_event = AnalyticsEvent::new(AnalyticsEventType::SessionEnd, "test-session".into());
         store.events.push(end_event);
 
         let stats = store.get_session_stats();
@@ -1253,7 +1236,9 @@ mod tests {
         let types = vec![
             AnalyticsEventType::SessionStart,
             AnalyticsEventType::SessionEnd,
-            AnalyticsEventType::PromptSubmitted { token_count: Some(50) },
+            AnalyticsEventType::PromptSubmitted {
+                token_count: Some(50),
+            },
             AnalyticsEventType::PromptSubmitted { token_count: None },
             AnalyticsEventType::ResponseReceived {
                 token_count: Some(100),

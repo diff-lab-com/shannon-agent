@@ -278,10 +278,7 @@ impl McpResourceManager {
     // -----------------------------------------------------------------------
 
     /// Read a specific resource from a named MCP server.
-    pub async fn read_resource(
-        &self,
-        input: ReadResourceInput,
-    ) -> McpResult<ReadResourceOutput> {
+    pub async fn read_resource(&self, input: ReadResourceInput) -> McpResult<ReadResourceOutput> {
         let readers = self.inner.read().await;
 
         let client = readers.get(&input.server_name).ok_or_else(|| {
@@ -316,9 +313,9 @@ impl McpResourceManager {
                 let text = match block {
                     ContentBlock::Text { text } => text.clone(),
                     ContentBlock::Image { .. } => "[binary image data]".to_string(),
-                    ContentBlock::Resource { text, .. } => {
-                        text.clone().unwrap_or_else(|| "[embedded resource]".to_string())
-                    }
+                    ContentBlock::Resource { text, .. } => text
+                        .clone()
+                        .unwrap_or_else(|| "[embedded resource]".to_string()),
                 };
                 ResourceReadContent {
                     uri: resource_content.uri.clone(),
@@ -554,7 +551,10 @@ mod tests {
         }
 
         async fn subscribe_resource(&self, uri: &str) -> McpResult<bool> {
-            let mut uris = self.subscribed_uris.lock().map_err(|e| McpError::Server(e.to_string()))?;
+            let mut uris = self
+                .subscribed_uris
+                .lock()
+                .map_err(|e| McpError::Server(e.to_string()))?;
             if !uris.contains(&uri.to_string()) {
                 uris.push(uri.to_string());
             }
@@ -562,7 +562,10 @@ mod tests {
         }
 
         async fn unsubscribe_resource(&self, uri: &str) -> McpResult<bool> {
-            let mut uris = self.subscribed_uris.lock().map_err(|e| McpError::Server(e.to_string()))?;
+            let mut uris = self
+                .subscribed_uris
+                .lock()
+                .map_err(|e| McpError::Server(e.to_string()))?;
             uris.retain(|u| u != uri);
             Ok(true)
         }
@@ -574,10 +577,16 @@ mod tests {
     async fn test_list_all_resources() {
         let manager = McpResourceManager::new();
 
-        let client_a = MockResourceClient::new("server-a", true, true)
-            .with_resource("file:///a/readme", "Readme", "Project readme");
-        let client_b = MockResourceClient::new("server-b", true, true)
-            .with_resource("db:///users", "Users", "User database");
+        let client_a = MockResourceClient::new("server-a", true, true).with_resource(
+            "file:///a/readme",
+            "Readme",
+            "Project readme",
+        );
+        let client_b = MockResourceClient::new("server-b", true, true).with_resource(
+            "db:///users",
+            "Users",
+            "User database",
+        );
 
         manager.register(Arc::new(client_a)).await;
         manager.register(Arc::new(client_b)).await;
@@ -594,10 +603,16 @@ mod tests {
     async fn test_list_resources_filtered_by_server() {
         let manager = McpResourceManager::new();
 
-        let client_a = MockResourceClient::new("server-a", true, true)
-            .with_resource("file:///a/readme", "Readme", "Project readme");
-        let client_b = MockResourceClient::new("server-b", true, true)
-            .with_resource("db:///users", "Users", "User database");
+        let client_a = MockResourceClient::new("server-a", true, true).with_resource(
+            "file:///a/readme",
+            "Readme",
+            "Project readme",
+        );
+        let client_b = MockResourceClient::new("server-b", true, true).with_resource(
+            "db:///users",
+            "Users",
+            "User database",
+        );
 
         manager.register(Arc::new(client_a)).await;
         manager.register(Arc::new(client_b)).await;
@@ -618,10 +633,16 @@ mod tests {
     async fn test_list_resources_skips_disconnected() {
         let manager = McpResourceManager::new();
 
-        let client_offline = MockResourceClient::new("offline", false, true)
-            .with_resource("file:///x", "X", "Should not appear");
-        let client_online = MockResourceClient::new("online", true, true)
-            .with_resource("file:///y", "Y", "Should appear");
+        let client_offline = MockResourceClient::new("offline", false, true).with_resource(
+            "file:///x",
+            "X",
+            "Should not appear",
+        );
+        let client_online = MockResourceClient::new("online", true, true).with_resource(
+            "file:///y",
+            "Y",
+            "Should appear",
+        );
 
         manager.register(Arc::new(client_offline)).await;
         manager.register(Arc::new(client_online)).await;
@@ -720,10 +741,12 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not support resources"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not support resources")
+        );
     }
 
     #[tokio::test]
@@ -792,8 +815,7 @@ mod tests {
     #[tokio::test]
     async fn test_subscribe_resource() {
         let manager = McpResourceManager::new();
-        let client = MockResourceClient::new("my-server", true, true)
-            .with_subscribe();
+        let client = MockResourceClient::new("my-server", true, true).with_subscribe();
         manager.register(Arc::new(client)).await;
 
         let output = manager
@@ -822,14 +844,18 @@ mod tests {
             .await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("does not support resource subscriptions"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not support resource subscriptions")
+        );
     }
 
     #[tokio::test]
     async fn test_unsubscribe_resource() {
         let manager = McpResourceManager::new();
-        let client = MockResourceClient::new("my-server", true, true)
-            .with_subscribe();
+        let client = MockResourceClient::new("my-server", true, true).with_subscribe();
         manager.register(Arc::new(client)).await;
 
         // Subscribe first

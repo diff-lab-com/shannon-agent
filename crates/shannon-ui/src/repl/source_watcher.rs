@@ -6,16 +6,24 @@
 
 /// File extensions considered source code worth watching.
 const SOURCE_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "kt", "swift",
-    "c", "cpp", "h", "hpp", "cs", "rb", "sh", "toml", "yaml", "yml",
-    "json", "html", "css", "scss", "md",
+    "rs", "ts", "tsx", "js", "jsx", "py", "go", "java", "kt", "swift", "c", "cpp", "h", "hpp",
+    "cs", "rb", "sh", "toml", "yaml", "yml", "json", "html", "css", "scss", "md",
 ];
 
 /// Directories to skip when watching.
 #[cfg(test)]
 const SKIP_DIRS: &[&str] = &[
-    "target", "node_modules", ".git", "dist", "build", "__pycache__",
-    ".next", ".nuxt", "vendor", ".venv", "venv",
+    "target",
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    "vendor",
+    ".venv",
+    "venv",
 ];
 
 /// Watches project source files for changes using filesystem events.
@@ -140,7 +148,9 @@ mod tests {
 
     #[test]
     fn test_should_skip_target() {
-        assert!(should_skip_path(std::path::Path::new("/project/target/debug/foo.rs")));
+        assert!(should_skip_path(std::path::Path::new(
+            "/project/target/debug/foo.rs"
+        )));
     }
 
     #[test]
@@ -157,7 +167,9 @@ mod tests {
 
     #[test]
     fn test_should_not_skip_src() {
-        assert!(!should_skip_path(std::path::Path::new("/project/src/main.rs")));
+        assert!(!should_skip_path(std::path::Path::new(
+            "/project/src/main.rs"
+        )));
     }
 
     #[test]

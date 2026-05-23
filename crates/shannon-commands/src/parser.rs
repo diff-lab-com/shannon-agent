@@ -2,12 +2,12 @@
 
 use crate::command::CommandError;
 use nom::{
+    IResult,
     branch::alt,
     bytes::complete::{tag, take_while1},
-    character::complete::{space1},
+    character::complete::space1,
     combinator::{map, opt, rest},
     sequence::{preceded, tuple},
-    IResult,
 };
 use std::collections::HashMap;
 
@@ -55,9 +55,7 @@ impl ParsedCommand {
 
     /// Split args by whitespace
     pub fn args_split(&self) -> Vec<&str> {
-        self.args
-            .split_whitespace()
-            .collect()
+        self.args.split_whitespace().collect()
     }
 }
 
@@ -120,15 +118,19 @@ impl CommandParser {
                     results.push(cmd);
                     remaining = remaining[consumed_len..].trim();
                 }
-                Err(_) if results.is_empty() => return Err(CommandError::ParseError(
-                    "No valid commands found".to_string(),
-                )),
+                Err(_) if results.is_empty() => {
+                    return Err(CommandError::ParseError(
+                        "No valid commands found".to_string(),
+                    ));
+                }
                 Err(_) => break,
             }
         }
 
         if results.is_empty() {
-            Err(CommandError::ParseError("No commands to execute".to_string()))
+            Err(CommandError::ParseError(
+                "No commands to execute".to_string(),
+            ))
         } else {
             Ok(results)
         }
@@ -152,10 +154,7 @@ fn parse_command(input: &str) -> IResult<&str, (&str, &str)> {
     let name = take_while1(|c: char| c.is_alphanumeric() || c == '-' || c == '_');
 
     // Optional space followed by arguments (defaults to empty string)
-    let args = opt(preceded(
-        space1,
-        alt((rest, map(tag(""), |_| ""))),
-    ));
+    let args = opt(preceded(space1, alt((rest, map(tag(""), |_| "")))));
 
     map(tuple((name, args)), |(n, a)| (n, a.unwrap_or("")))(input)
 }
@@ -341,7 +340,10 @@ mod tests {
     fn test_parse_flag_with_url_value() {
         let parser = CommandParser::new();
         let result = parser.parse("/set --url=https://example.com").unwrap();
-        assert_eq!(result.flag_value("url"), Some(&"https://example.com".to_string()));
+        assert_eq!(
+            result.flag_value("url"),
+            Some(&"https://example.com".to_string())
+        );
     }
 
     #[test]
@@ -477,7 +479,7 @@ mod tests {
     fn test_is_command_true() {
         let parser = CommandParser::new();
         assert!(parser.is_command("/help"));
-        }
+    }
 
     #[test]
     fn test_is_command_false() {

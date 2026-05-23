@@ -49,8 +49,12 @@ impl SkillTemplate {
             serde_yaml::from_str(frontmatter_str).map_err(|e| format!("YAML parse error: {e}"))?;
 
         let name = frontmatter.name.ok_or("missing required field: name")?;
-        let description = frontmatter.description.ok_or("missing required field: description")?;
-        let trigger = frontmatter.trigger.ok_or("missing required field: trigger")?;
+        let description = frontmatter
+            .description
+            .ok_or("missing required field: description")?;
+        let trigger = frontmatter
+            .trigger
+            .ok_or("missing required field: trigger")?;
 
         let variables = Self::extract_variables(&template);
 
@@ -201,7 +205,11 @@ trigger: /test
 Body"#;
         let result = SkillTemplate::from_markdown(md);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("missing required field: description"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("missing required field: description")
+        );
     }
 
     #[test]
@@ -213,7 +221,11 @@ description: Test
 Body"#;
         let result = SkillTemplate::from_markdown(md);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("missing required field: trigger"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("missing required field: trigger")
+        );
     }
 
     #[test]
@@ -359,7 +371,10 @@ Please provide feedback on:
 
         let template = SkillTemplate::from_markdown(md).unwrap();
         let mut vars = HashMap::new();
-        vars.insert("focus_areas".to_string(), "security, performance".to_string());
+        vars.insert(
+            "focus_areas".to_string(),
+            "security, performance".to_string(),
+        );
         vars.insert("files".to_string(), "src/main.rs, src/lib.rs".to_string());
 
         let rendered = template.render(&vars);

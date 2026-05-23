@@ -89,9 +89,7 @@ pub struct ReleaseInfo {
 #[derive(Debug, Clone)]
 pub enum UpdateStatus {
     /// The running version is already the latest.
-    UpToDate {
-        current: String,
-    },
+    UpToDate { current: String },
     /// A newer version is available.
     UpdateAvailable {
         current: String,
@@ -99,9 +97,7 @@ pub enum UpdateStatus {
         release: ReleaseInfo,
     },
     /// The check itself failed (network, API, etc.).
-    CheckFailed {
-        error: String,
-    },
+    CheckFailed { error: String },
 }
 
 /// Configuration for the auto-updater.
@@ -210,10 +206,7 @@ impl AutoUpdater {
 
                 match Self::compare_versions(CURRENT_VERSION, latest_clean) {
                     Ordering::Less => {
-                        info!(
-                            "update available: {} -> {}",
-                            CURRENT_VERSION, latest_tag
-                        );
+                        info!("update available: {} -> {}", CURRENT_VERSION, latest_tag);
                         UpdateStatus::UpdateAvailable {
                             current: CURRENT_VERSION.to_string(),
                             latest: latest_tag,
@@ -258,9 +251,7 @@ impl AutoUpdater {
 
         // Handle rate limiting
         if status.as_u16() == 403 && body.contains("rate limit exceeded") {
-            let retry_after = self
-                .extract_retry_after(&body)
-                .unwrap_or(3600);
+            let retry_after = self.extract_retry_after(&body).unwrap_or(3600);
             return Err(UpdateError::RateLimited {
                 retry_after_secs: retry_after,
             });
@@ -362,7 +353,10 @@ impl AutoUpdater {
 
     /// Strip a leading `v` or `V` from a version tag.
     fn strip_version_prefix(version: &str) -> &str {
-        version.strip_prefix('v').or_else(|| version.strip_prefix('V')).unwrap_or(version)
+        version
+            .strip_prefix('v')
+            .or_else(|| version.strip_prefix('V'))
+            .unwrap_or(version)
     }
 
     /// Human-readable summary suitable for printing to the terminal.
@@ -373,9 +367,8 @@ impl AutoUpdater {
                 latest,
                 release,
             } => {
-                let mut msg = format!(
-                    "A new version of Shannon Code is available: {current} -> {latest}\n"
-                );
+                let mut msg =
+                    format!("A new version of Shannon Code is available: {current} -> {latest}\n");
                 if let Some(ref name) = release.name {
                     msg.push_str(&format!("  Release: {name}\n"));
                 }
@@ -493,10 +486,7 @@ mod tests {
     #[test]
     fn compare_invalid_falls_back_to_lexicographic() {
         // Neither parses as semver, so we get lexicographic order
-        assert_eq!(
-            AutoUpdater::compare_versions("abc", "def"),
-            Ordering::Less
-        );
+        assert_eq!(AutoUpdater::compare_versions("abc", "def"), Ordering::Less);
     }
 
     // -- Config defaults and serialization -----------------------------------
@@ -518,10 +508,7 @@ mod tests {
         assert_eq!(deserialized.repo, config.repo);
         assert_eq!(deserialized.check_interval, config.check_interval);
         assert_eq!(deserialized.enabled, config.enabled);
-        assert_eq!(
-            deserialized.include_prereleases,
-            config.include_prereleases
-        );
+        assert_eq!(deserialized.include_prereleases, config.include_prereleases);
     }
 
     #[test]
@@ -550,8 +537,7 @@ mod tests {
                 name: Some("Shannon v0.2.0".to_string()),
                 body: Some("Bug fixes".to_string()),
                 published_at: "2026-01-01T00:00:00Z".to_string(),
-                html_url: "https://github.com/shannon-code/shannon/releases/tag/v0.2.0"
-                    .to_string(),
+                html_url: "https://github.com/shannon-code/shannon/releases/tag/v0.2.0".to_string(),
                 prerelease: false,
             },
         };

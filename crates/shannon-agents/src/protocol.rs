@@ -290,7 +290,8 @@ mod tests {
                 description: "Fix the login bug".to_string(),
                 priority: "High".to_string(),
                 active_form: Some("Fixing login bug".to_string()),
-            }).unwrap(),
+            })
+            .unwrap(),
             1,
         );
         let json = serde_json::to_string(&msg).unwrap();
@@ -309,7 +310,8 @@ mod tests {
             serde_json::to_value(AgentReadyParams {
                 agent_name: "worker-1".to_string(),
                 capabilities: vec!["rust".to_string()],
-            }).unwrap(),
+            })
+            .unwrap(),
         );
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"agent_ready\""));
@@ -334,10 +336,8 @@ mod tests {
 
     #[test]
     fn test_error_response() {
-        let msg = JsonRpcMessage::error_response(
-            JsonRpcId::Number(42),
-            JsonRpcError::not_found("bogus"),
-        );
+        let msg =
+            JsonRpcMessage::error_response(JsonRpcId::Number(42), JsonRpcError::not_found("bogus"));
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"error\""));
         assert!(json.contains("-32601"));

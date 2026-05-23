@@ -32,11 +32,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tokio::sync::{mpsc, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, mpsc};
 
 use crate::tools::ToolOutput;
 
@@ -170,11 +170,7 @@ impl TrackedTool {
             is_error: true,
             metadata: Value::Object(Default::default())
                 .as_object()
-                .map(|m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
-                })
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
                 .unwrap_or_default(),
         });
         self.completed_at = Some(Instant::now());
@@ -312,7 +308,11 @@ impl StreamingToolExecutor {
     }
 
     /// Mark a tool as completed with a successful output.
-    pub async fn complete_tool(&self, tool_id: &str, output: ToolOutput) -> Result<(), ExecutorError> {
+    pub async fn complete_tool(
+        &self,
+        tool_id: &str,
+        output: ToolOutput,
+    ) -> Result<(), ExecutorError> {
         let mut tools = self.tools.lock().await;
         if let Some(tool) = tools.iter_mut().find(|t| t.id == tool_id) {
             tool.complete(output);
@@ -509,9 +509,9 @@ impl StreamingToolExecutor {
     /// is currently in `Executing` state.
     pub async fn can_execute_non_concurrent(&self) -> bool {
         let tools = self.tools.lock().await;
-        !tools.iter().any(|t| {
-            t.status == ToolStatus::Executing && !t.is_concurrency_safe
-        })
+        !tools
+            .iter()
+            .any(|t| t.status == ToolStatus::Executing && !t.is_concurrency_safe)
     }
 
     /// Get all tools currently in `Queued` state.
@@ -588,13 +588,8 @@ mod tests {
 
     #[test]
     fn test_tracked_tool_state_transitions() {
-        let mut tool = TrackedTool::new(
-            "id-1".to_string(),
-            "Read".to_string(),
-            Value::Null,
-            true,
-            0,
-        );
+        let mut tool =
+            TrackedTool::new("id-1".to_string(), "Read".to_string(), Value::Null, true, 0);
 
         assert_eq!(tool.status, ToolStatus::Queued);
         tool.start();
@@ -629,13 +624,8 @@ mod tests {
 
     #[test]
     fn test_tracked_tool_execution_duration() {
-        let mut tool = TrackedTool::new(
-            "id-1".to_string(),
-            "Bash".to_string(),
-            Value::Null,
-            true,
-            0,
-        );
+        let mut tool =
+            TrackedTool::new("id-1".to_string(), "Bash".to_string(), Value::Null, true, 0);
         assert!(tool.execution_duration().is_none());
 
         tool.start();
@@ -647,13 +637,7 @@ mod tests {
 
     #[test]
     fn test_tracked_tool_concurrency_safe_flag() {
-        let safe = TrackedTool::new(
-            "id-1".to_string(),
-            "Read".to_string(),
-            Value::Null,
-            true,
-            0,
-        );
+        let safe = TrackedTool::new("id-1".to_string(), "Read".to_string(), Value::Null, true, 0);
         assert!(safe.is_concurrency_safe);
 
         let unsafe_tool = TrackedTool::new(
@@ -737,9 +721,18 @@ mod tests {
         let id_c = executor.submit_tool("C", Value::Null, true).await.unwrap();
 
         // Complete them out of order: C, A, B
-        executor.complete_tool(&id_c, make_output("C")).await.unwrap();
-        executor.complete_tool(&id_a, make_output("A")).await.unwrap();
-        executor.complete_tool(&id_b, make_output("B")).await.unwrap();
+        executor
+            .complete_tool(&id_c, make_output("C"))
+            .await
+            .unwrap();
+        executor
+            .complete_tool(&id_a, make_output("A"))
+            .await
+            .unwrap();
+        executor
+            .complete_tool(&id_b, make_output("B"))
+            .await
+            .unwrap();
 
         // Results should come back in submission order: A, B, C
         let r1 = executor.get_remaining_results().await.unwrap();
@@ -836,14 +829,8 @@ mod tests {
     async fn test_executor_status_counts() {
         let executor = StreamingToolExecutor::new(32);
 
-        let id1 = executor
-            .submit_tool("A", Value::Null, true)
-            .await
-            .unwrap();
-        let _id2 = executor
-            .submit_tool("B", Value::Null, true)
-            .await
-            .unwrap();
+        let id1 = executor.submit_tool("A", Value::Null, true).await.unwrap();
+        let _id2 = executor.submit_tool("B", Value::Null, true).await.unwrap();
 
         executor.start_tool(&id1).await.unwrap();
         executor
@@ -860,14 +847,8 @@ mod tests {
     async fn test_executor_queued_and_executing_filters() {
         let executor = StreamingToolExecutor::new(32);
 
-        let id1 = executor
-            .submit_tool("A", Value::Null, true)
-            .await
-            .unwrap();
-        let _id2 = executor
-            .submit_tool("B", Value::Null, true)
-            .await
-            .unwrap();
+        let id1 = executor.submit_tool("A", Value::Null, true).await.unwrap();
+        let _id2 = executor.submit_tool("B", Value::Null, true).await.unwrap();
 
         executor.start_tool(&id1).await.unwrap();
 
@@ -884,10 +865,7 @@ mod tests {
         let executor = StreamingToolExecutor::new(32);
         assert!(executor.is_drained().await);
 
-        let id_a = executor
-            .submit_tool("A", Value::Null, true)
-            .await
-            .unwrap();
+        let id_a = executor.submit_tool("A", Value::Null, true).await.unwrap();
         assert!(!executor.is_drained().await);
 
         // Complete A and yield it
@@ -923,10 +901,7 @@ mod tests {
     #[tokio::test]
     async fn test_executor_reset() {
         let executor = StreamingToolExecutor::new(32);
-        executor
-            .submit_tool("A", Value::Null, true)
-            .await
-            .unwrap();
+        executor.submit_tool("A", Value::Null, true).await.unwrap();
         executor.abort();
         assert!(executor.is_aborted());
 
@@ -939,10 +914,7 @@ mod tests {
     #[tokio::test]
     async fn test_executor_wait_for_result() {
         let executor = StreamingToolExecutor::new(32);
-        let id = executor
-            .submit_tool("A", Value::Null, true)
-            .await
-            .unwrap();
+        let id = executor.submit_tool("A", Value::Null, true).await.unwrap();
 
         // Complete the tool in a background task after a delay
         let tools = executor.tools.clone();

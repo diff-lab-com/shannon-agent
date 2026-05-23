@@ -43,7 +43,10 @@ pub enum TeamMemorySyncError {
     SecretsDetected(usize),
 
     #[error("Secret blocked from upload: {rule_id} in {source_desc}")]
-    SecretBlocked { rule_id: String, source_desc: String },
+    SecretBlocked {
+        rule_id: String,
+        source_desc: String,
+    },
 
     #[error("Invalid path: {0}")]
     InvalidPath(String),
@@ -58,11 +61,7 @@ pub enum TeamMemorySyncError {
     Conflict { local: PathBuf, team: PathBuf },
 
     #[error("File too large: {path} ({size} bytes, max {max} bytes)")]
-    FileTooLarge {
-        path: PathBuf,
-        size: u64,
-        max: u64,
-    },
+    FileTooLarge { path: PathBuf, size: u64, max: u64 },
 }
 
 // ============================================================================
@@ -142,7 +141,10 @@ impl SecretRule {
             })?;
             self.compiled = Some(re);
         }
-        Ok(self.compiled.as_ref().expect("compiled must be set after successful compilation above"))
+        Ok(self
+            .compiled
+            .as_ref()
+            .expect("compiled must be set after successful compilation above"))
     }
 }
 
@@ -236,12 +238,7 @@ impl SecretScanner {
                 r"sk-[A-Za-z0-9]{48}",
                 true,
             ),
-            (
-                "slack-token",
-                "Slack token",
-                r"xox[baprs]-[0-9]{10,}",
-                true,
-            ),
+            ("slack-token", "Slack token", r"xox[baprs]-[0-9]{10,}", true),
             (
                 "stripe-key",
                 "Stripe live key",
@@ -598,11 +595,9 @@ impl TeamMemorySync {
             let dst_path = dst_dir.join(relative);
 
             // Skip if destination is newer or equal
-            if let (Ok(src_meta), Ok(dst_meta)) = (fs::metadata(src_path), fs::metadata(&dst_path)) {
-                if let (Ok(src_time), Ok(dst_time)) = (
-                    src_meta.modified(),
-                    dst_meta.modified(),
-                ) {
+            if let (Ok(src_meta), Ok(dst_meta)) = (fs::metadata(src_path), fs::metadata(&dst_path))
+            {
+                if let (Ok(src_time), Ok(dst_time)) = (src_meta.modified(), dst_meta.modified()) {
                     if src_time <= dst_time {
                         continue;
                     }
@@ -618,9 +613,7 @@ impl TeamMemorySync {
                         continue;
                     }
                     Err(e) => {
-                        errors.push(format!(
-                            "Failed to scan {src_path:?} for secrets: {e}"
-                        ));
+                        errors.push(format!("Failed to scan {src_path:?} for secrets: {e}"));
                         continue;
                     }
                 }
@@ -667,11 +660,9 @@ impl TeamMemorySync {
             let dst_path = dst_dir.join(relative);
 
             // Skip if destination is newer or equal
-            if let (Ok(src_meta), Ok(dst_meta)) = (fs::metadata(src_path), fs::metadata(&dst_path)) {
-                if let (Ok(src_time), Ok(dst_time)) = (
-                    src_meta.modified(),
-                    dst_meta.modified(),
-                ) {
+            if let (Ok(src_meta), Ok(dst_meta)) = (fs::metadata(src_path), fs::metadata(&dst_path))
+            {
+                if let (Ok(src_time), Ok(dst_time)) = (src_meta.modified(), dst_meta.modified()) {
                     if src_time <= dst_time {
                         continue;
                     }
@@ -725,7 +716,11 @@ impl TeamMemorySync {
     }
 
     /// Walk memory files and collect relative path strings.
-    fn walk_memory_files(&self, dir: &Path, entries: &mut Vec<String>) -> Result<(), TeamMemorySyncError> {
+    fn walk_memory_files(
+        &self,
+        dir: &Path,
+        entries: &mut Vec<String>,
+    ) -> Result<(), TeamMemorySyncError> {
         let files = self.collect_memory_files(dir)?;
         for file in files {
             if let Ok(relative) = file.strip_prefix(dir) {
@@ -761,7 +756,10 @@ impl TeamMemoryGuard {
     }
 
     /// Create a guard with a custom scanner and explicit blocked categories.
-    pub fn with_blocked_categories(scanner: SecretScanner, blocked_categories: Vec<String>) -> Self {
+    pub fn with_blocked_categories(
+        scanner: SecretScanner,
+        blocked_categories: Vec<String>,
+    ) -> Self {
         Self {
             scanner,
             blocked_categories: blocked_categories.into_iter().collect(),
@@ -771,7 +769,11 @@ impl TeamMemoryGuard {
     /// Check content for blocked secrets. Returns all matches from blocked rules.
     ///
     /// If the result is non-empty, the content should not be persisted or shared.
-    pub fn check_content(&self, content: &str, _source: &str) -> Result<Vec<SecretMatch>, TeamMemorySyncError> {
+    pub fn check_content(
+        &self,
+        content: &str,
+        _source: &str,
+    ) -> Result<Vec<SecretMatch>, TeamMemorySyncError> {
         let all_matches = self.scanner.scan(content);
         let blocked: Vec<SecretMatch> = all_matches
             .into_iter()
@@ -963,7 +965,8 @@ mod tests {
     #[test]
     fn test_scanner_detects_openai_key() {
         let scanner = SecretScanner::new();
-        let content = "OPENAI_API_KEY=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz12345678";
+        let content =
+            "OPENAI_API_KEY=sk-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz12345678";
         let matches = scanner.scan(content);
         assert!(matches.iter().any(|m| m.rule_id == "openai-api-key"));
     }
@@ -1006,7 +1009,10 @@ mod tests {
     #[test]
     fn test_scanner_line_numbers() {
         let scanner = SecretScanner::new();
-        let content = format!("line one\nline two\nsk-ant-api03-{}\nline four", "A".repeat(95));
+        let content = format!(
+            "line one\nline two\nsk-ant-api03-{}\nline four",
+            "A".repeat(95)
+        );
         let matches = scanner.scan(&content);
         assert_eq!(matches[0].line_number, 3);
     }
@@ -1029,7 +1035,11 @@ mod tests {
     fn test_scanner_scan_file() {
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("test.md");
-        fs::write(&file_path, "GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\n").unwrap();
+        fs::write(
+            &file_path,
+            "GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij\n",
+        )
+        .unwrap();
 
         let scanner = SecretScanner::new();
         let matches = scanner.scan_file(&file_path).unwrap();
@@ -1045,7 +1055,10 @@ mod tests {
             ..Default::default()
         };
         let sync = TeamMemorySync::new(config).unwrap();
-        assert!(matches!(sync.sync(), Err(TeamMemorySyncError::SyncDisabled)));
+        assert!(matches!(
+            sync.sync(),
+            Err(TeamMemorySyncError::SyncDisabled)
+        ));
     }
 
     #[test]
@@ -1089,8 +1102,18 @@ mod tests {
         let result = sync.sync().unwrap();
 
         // Both should have been synced
-        assert!(result.uploaded.iter().any(|p| p.to_string_lossy() == "feature.md"));
-        assert!(result.downloaded.iter().any(|p| p.to_string_lossy() == "shared.md"));
+        assert!(
+            result
+                .uploaded
+                .iter()
+                .any(|p| p.to_string_lossy() == "feature.md")
+        );
+        assert!(
+            result
+                .downloaded
+                .iter()
+                .any(|p| p.to_string_lossy() == "shared.md")
+        );
         assert!(result.is_clean());
 
         // Verify files exist in both dirs
@@ -1107,10 +1130,7 @@ mod tests {
         fs::create_dir_all(&team).unwrap();
 
         // Write a file with a secret
-        let secret_content = format!(
-            "API_KEY=sk-ant-api03-{}\n",
-            "A".repeat(90)
-        );
+        let secret_content = format!("API_KEY=sk-ant-api03-{}\n", "A".repeat(90));
         fs::write(local.join("secret.md"), &secret_content).unwrap();
 
         let config = TeamMemoryConfig {
@@ -1135,10 +1155,7 @@ mod tests {
         fs::create_dir_all(&local).unwrap();
         fs::create_dir_all(&team).unwrap();
 
-        let secret_content = format!(
-            "API_KEY=sk-ant-api03-{}\n",
-            "A".repeat(90)
-        );
+        let secret_content = format!("API_KEY=sk-ant-api03-{}\n", "A".repeat(90));
         fs::write(local.join("bad.md"), &secret_content).unwrap();
 
         let config = TeamMemoryConfig {
@@ -1150,7 +1167,10 @@ mod tests {
         };
         let sync = TeamMemorySync::new(config).unwrap();
         let result = sync.upload_memory(&local.join("bad.md"));
-        assert!(matches!(result, Err(TeamMemorySyncError::SecretsDetected(_))));
+        assert!(matches!(
+            result,
+            Err(TeamMemorySyncError::SecretsDetected(_))
+        ));
     }
 
     #[test]
@@ -1302,10 +1322,7 @@ mod tests {
     #[test]
     fn test_guard_find_blocked() {
         let guard = TeamMemoryGuard::new();
-        let content = format!(
-            "KEY=sk-ant-api03-{}\nSAFE=line\n",
-            "A".repeat(90)
-        );
+        let content = format!("KEY=sk-ant-api03-{}\nSAFE=line\n", "A".repeat(90));
         let blocked = guard.find_blocked(&content);
         assert_eq!(blocked.len(), 1);
         assert_eq!(blocked[0].rule_id, "anthropic-api-key");
@@ -1331,10 +1348,7 @@ mod tests {
     #[test]
     fn test_guard_sanitize_content() {
         let guard = TeamMemoryGuard::new();
-        let content = format!(
-            "KEY=sk-ant-api03-{}\nSAFE=line\n",
-            "A".repeat(90)
-        );
+        let content = format!("KEY=sk-ant-api03-{}\nSAFE=line\n", "A".repeat(90));
         let sanitized = guard.sanitize_content(&content);
         assert!(sanitized.contains("[REDACTED:anthropic-api-key]"));
         assert!(sanitized.contains("SAFE=line"));
@@ -1463,7 +1477,12 @@ mod tests {
 
         // Step 5: Sync again (team -> local for the new file)
         let result2 = sync.sync().unwrap();
-        assert!(result2.downloaded.iter().any(|p| p.to_string_lossy() == "shared.md"));
+        assert!(
+            result2
+                .downloaded
+                .iter()
+                .any(|p| p.to_string_lossy() == "shared.md")
+        );
         assert!(local.join("shared.md").exists());
     }
 

@@ -1,6 +1,5 @@
 //! REPL AI query handling and streaming display
 
-
 /// Rotating phrases shown during the thinking phase, cycled every 2 seconds.
 /// Returns translated phrases based on current locale.
 fn thinking_phrases() -> Vec<String> {
@@ -65,7 +64,9 @@ fn extract_tool_preview(tool_name: &str, input: &serde_json::Value) -> String {
         input.get(key).and_then(|v| v.as_str()).map(|s| {
             if s.len() > 120 {
                 let mut end = 120;
-                while !s.is_char_boundary(end) { end -= 1; }
+                while !s.is_char_boundary(end) {
+                    end -= 1;
+                }
                 format!("{}…", &s[..end])
             } else {
                 s.to_string()
@@ -77,7 +78,9 @@ fn extract_tool_preview(tool_name: &str, input: &serde_json::Value) -> String {
         "read" | "cat" | "head" | "tail" | "view" => get_str("file_path").unwrap_or_default(),
         "write" | "edit" | "create" => {
             let path = get_str("file_path").unwrap_or_default();
-            let lines = input.get("content").map(|c| c.as_str().map(|s| s.lines().count()).unwrap_or(0));
+            let lines = input
+                .get("content")
+                .map(|c| c.as_str().map(|s| s.lines().count()).unwrap_or(0));
             match lines {
                 Some(n) if n > 0 => format!("{path} ({n} lines)"),
                 _ => path,
@@ -86,36 +89,39 @@ fn extract_tool_preview(tool_name: &str, input: &serde_json::Value) -> String {
         "grep" | "search" => {
             let pattern = get_str("pattern").unwrap_or_default();
             let path = get_str("path").unwrap_or_default();
-            if path.is_empty() { pattern } else { format!("{pattern} in {path}") }
+            if path.is_empty() {
+                pattern
+            } else {
+                format!("{pattern} in {path}")
+            }
         }
-        "glob" | "find" => get_str("pattern").or_else(|| get_str("path")).unwrap_or_default(),
+        "glob" | "find" => get_str("pattern")
+            .or_else(|| get_str("path"))
+            .unwrap_or_default(),
         _ => {
             // Default: first string value found
-            input.as_object()
+            input
+                .as_object()
                 .and_then(|obj| obj.values().find_map(|v| v.as_str().map(|s| s.to_string())))
                 .unwrap_or_default()
         }
     }
 }
 
-use crate::{
-    stream_buffer::StreamBuffer,
-    widgets::ChatRole,
-    Result,
-};
-use rust_i18n::t;
-use shannon_types::recover_lock;
-use ratatui::backend::CrosstermBackend;
+use crate::{Result, stream_buffer::StreamBuffer, widgets::ChatRole};
 use futures::StreamExt;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use rust_i18n::t;
+use shannon_types::recover_lock;
 use std::collections::HashMap;
 use std::io;
 use std::time::Instant;
 use uuid::Uuid;
 
 use crate::repl_enhancement::TurnDiff;
-use shannon_core::query_engine::{QueryContext, QueryEvent};
 use shannon_core::MessageContent;
+use shannon_core::query_engine::{QueryContext, QueryEvent};
 
 use super::Repl;
 
@@ -191,14 +197,16 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     repl.state.progress_bar_visible = false;
     repl.state.progress_bar.set_progress(0.0);
 
-
     let assistant_msg_index = repl.chat.add_message(ChatRole::Assistant, String::new());
 
     // Take the query engine out — spawn requires 'static ownership
     let mut query_engine = match repl.query_engine.take() {
         Some(e) => e,
         None => {
-            repl.chat.add_message(ChatRole::System, t!("ui.query_engine_unavailable").to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                t!("ui.query_engine_unavailable").to_string(),
+            );
             repl.state.status = t!("status.ready").to_string();
             return Ok(());
         }
@@ -233,18 +241,27 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         metadata: shannon_core::query_engine::QueryMetadata {
             timestamp: chrono::Utc::now(),
             tools_allowed: {
-                let is_ollama = repl.state.selected_provider == Some(shannon_core::api::LlmProvider::Ollama)
-                    || repl.query_engine.as_ref().is_some_and(|qe| *qe.client().provider() == shannon_core::api::LlmProvider::Ollama);
-                if is_ollama { false } else { repl.state.tools_enabled }
+                let is_ollama = repl.state.selected_provider
+                    == Some(shannon_core::api::LlmProvider::Ollama)
+                    || repl.query_engine.as_ref().is_some_and(|qe| {
+                        *qe.client().provider() == shannon_core::api::LlmProvider::Ollama
+                    });
+                if is_ollama {
+                    false
+                } else {
+                    repl.state.tools_enabled
+                }
             },
             max_tokens: Some(4096),
             model: {
                 // Check model routing rules first
                 let input_lower = input.to_lowercase();
-                let routed = repl.model_routes.iter().find(|(pattern, _)| {
-                    input_lower.starts_with(pattern)
-                });
-                routed.map(|(_, m)| m.clone())
+                let routed = repl
+                    .model_routes
+                    .iter()
+                    .find(|(pattern, _)| input_lower.starts_with(pattern));
+                routed
+                    .map(|(_, m)| m.clone())
                     .or_else(|| repl.state.model.clone())
                     .unwrap_or_else(|| "claude-3-5-sonnet".to_string())
             },
@@ -719,8 +736,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             if buffer.needs_render() {
                 let has_newline = buffer.has_newline_since_drain();
                 let _ = buffer.drain_for_render();
-                let rendered = repl.output_renderer.render_streaming(buffer.accumulated_text());
-                repl.chat.update_streaming_message(assistant_msg_index, rendered, has_newline);
+                let rendered = repl
+                    .output_renderer
+                    .render_streaming(buffer.accumulated_text());
+                repl.chat
+                    .update_streaming_message(assistant_msg_index, rendered, has_newline);
                 buffer.take_newline_flag();
                 if repl.state.auto_follow {
                     repl.chat.scroll_to_latest();
@@ -728,8 +748,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
 
             // Thinking indicator: rotating phrases with animated dots
-            let (is_thinking, thinking_len, thinking_text) = streaming.lock()
-                .map(|s| (s.thinking_phase, s.thinking_content.chars().count(), s.thinking_content.clone()))
+            let (is_thinking, thinking_len, thinking_text) = streaming
+                .lock()
+                .map(|s| {
+                    (
+                        s.thinking_phase,
+                        s.thinking_content.chars().count(),
+                        s.thinking_content.clone(),
+                    )
+                })
                 .unwrap_or((false, 0, String::new()));
             repl.state.thinking_phase = is_thinking;
             if is_thinking {
@@ -755,11 +782,21 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         format!("{} chars", char_count)
                     };
                     let dot = if std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default()
-                        .as_millis() / 500 % 2 == 0 { "●" } else { "○" };
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()
+                        / 500
+                        % 2
+                        == 0
+                    {
+                        "●"
+                    } else {
+                        "○"
+                    };
                     let display = format!("  ╭─ {dot} thinking ({size_label}) ─");
                     let rendered = repl.output_renderer.render_streaming(&display);
-                    repl.chat.update_streaming_message(assistant_msg_index, rendered, true);
+                    repl.chat
+                        .update_streaming_message(assistant_msg_index, rendered, true);
                     if repl.state.auto_follow {
                         repl.chat.scroll_to_latest();
                     }
@@ -773,15 +810,22 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             // Toast for long operations (>5s)
             let elapsed = stream_start.elapsed();
             if elapsed.as_secs() >= 5 && repl.state.toast.is_none() {
-                let tool_name = streaming.lock().ok()
+                let tool_name = streaming
+                    .lock()
+                    .ok()
                     .and_then(|s| s.multi_progress.last().map(|(n, _, _)| n.clone()))
                     .unwrap_or_else(|| "query".to_string());
-                repl.state.toast = Some((t!("ui.tool_running", name => &tool_name).to_string(), stream_start));
+                repl.state.toast = Some((
+                    t!("ui.tool_running", name => &tool_name).to_string(),
+                    stream_start,
+                ));
             }
 
             {
                 let s = recover_lock(streaming.lock());
-                if s.cost > 0.0 { repl.state.total_cost_usd = pre_stream_cost + s.cost; }
+                if s.cost > 0.0 {
+                    repl.state.total_cost_usd = pre_stream_cost + s.cost;
+                }
 
                 // Update token display in real-time during streaming
                 let (input, output) = s.tokens;
@@ -804,7 +848,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             if let Some(last_time) = repl.state.streaming_output_start {
                                 let delta_secs = now.duration_since(last_time).as_secs_f64();
                                 if delta_secs > 0.1 && delta_tokens > 0 {
-                                    repl.state.streaming_token_rate = delta_tokens as f64 / delta_secs;
+                                    repl.state.streaming_token_rate =
+                                        delta_tokens as f64 / delta_secs;
                                 }
                             }
                         }
@@ -866,64 +911,80 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             let sidebar_info = repl.sidebar_info();
 
             if let Some(term) = terminal.as_deref_mut() {
-            term.draw(|f| {
-                let spinner = &state.spinner;
-                let pb = if state.progress_bar_visible { Some(&state.progress_bar) } else { None };
-                let mut render_ctx = crate::widgets::RenderContext::new(chat, prompt, &state.theme, &state.status);
-                render_ctx.model = state.model.as_deref();
-                render_ctx.tokens_used = Some(state.tokens_used);
-                render_ctx.max_tokens = Some(state.context_window as u64);
-                render_ctx.cost_usd = Some(state.total_cost_usd);
-                render_ctx.token_breakdown = Some((state.input_tokens, state.output_tokens));
-                render_ctx.diag_counts = Some((state.diagnostic_store.error_count(), state.diagnostic_store.warning_count()));
-                render_ctx.rate_limit = state.rate_limit_5h;
-                render_ctx.git_branch = state.git_branch.as_deref();
-                render_ctx.spinner = Some(spinner);
-                render_ctx.progress_bar = pb;
-                render_ctx.sidebar_info = sidebar_info.as_ref();
-                render_ctx.sidebar_tab = state.sidebar_tab;
-                render_ctx.approval_mode = Some(&state.approval_mode_label);
-                render_ctx.focus_mode = state.focus_mode;
-                render_ctx.fullscreen_mode = state.fullscreen_mode;
-                render_ctx.auto_follow = state.auto_follow;
-                render_ctx.effort_level = state.effort_level.as_deref();
-                render_ctx.cached_tokens = Some(state.cache_read_tokens + state.cache_creation_tokens);
-                render_ctx.cache_read_tokens = Some(state.cache_read_tokens);
-                render_ctx.cache_creation_tokens = Some(state.cache_creation_tokens);
-                render_ctx.turn_count = sidebar_info.as_ref().map(|si| si.turn_count);
-                render_ctx.memory_rss_kb = sidebar_info.as_ref().map(|si| si.memory_rss_kb);
-                // Pass thinking phase and char count from streaming state
-                if let Ok(s) = streaming.lock() {
-                    render_ctx.thinking_phase = s.thinking_phase;
-                    if s.thinking_phase {
-                        render_ctx.thinking_chars = s.thinking_content.chars().count();
-                    }
-                }
-                crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
-                // Render queue indicator overlay during streaming
-                super::render::render_queue_indicator(f, state, false);
-                if state.multi_progress_visible {
-                    let mp_height = 3u16.min(f.area().height.saturating_sub(10));
-                    let mp_area = ratatui::layout::Rect {
-                        x: f.area().x + 2,
-                        y: f.area().bottom().saturating_sub(mp_height + 3),
-                        width: f.area().width.saturating_sub(4),
-                        height: mp_height,
+                term.draw(|f| {
+                    let spinner = &state.spinner;
+                    let pb = if state.progress_bar_visible {
+                        Some(&state.progress_bar)
+                    } else {
+                        None
                     };
-                    state.multi_progress.render(f, mp_area, &state.theme);
-                }
-            })?;
+                    let mut render_ctx = crate::widgets::RenderContext::new(
+                        chat,
+                        prompt,
+                        &state.theme,
+                        &state.status,
+                    );
+                    render_ctx.model = state.model.as_deref();
+                    render_ctx.tokens_used = Some(state.tokens_used);
+                    render_ctx.max_tokens = Some(state.context_window as u64);
+                    render_ctx.cost_usd = Some(state.total_cost_usd);
+                    render_ctx.token_breakdown = Some((state.input_tokens, state.output_tokens));
+                    render_ctx.diag_counts = Some((
+                        state.diagnostic_store.error_count(),
+                        state.diagnostic_store.warning_count(),
+                    ));
+                    render_ctx.rate_limit = state.rate_limit_5h;
+                    render_ctx.git_branch = state.git_branch.as_deref();
+                    render_ctx.spinner = Some(spinner);
+                    render_ctx.progress_bar = pb;
+                    render_ctx.sidebar_info = sidebar_info.as_ref();
+                    render_ctx.sidebar_tab = state.sidebar_tab;
+                    render_ctx.approval_mode = Some(&state.approval_mode_label);
+                    render_ctx.focus_mode = state.focus_mode;
+                    render_ctx.fullscreen_mode = state.fullscreen_mode;
+                    render_ctx.auto_follow = state.auto_follow;
+                    render_ctx.effort_level = state.effort_level.as_deref();
+                    render_ctx.cached_tokens =
+                        Some(state.cache_read_tokens + state.cache_creation_tokens);
+                    render_ctx.cache_read_tokens = Some(state.cache_read_tokens);
+                    render_ctx.cache_creation_tokens = Some(state.cache_creation_tokens);
+                    render_ctx.turn_count = sidebar_info.as_ref().map(|si| si.turn_count);
+                    render_ctx.memory_rss_kb = sidebar_info.as_ref().map(|si| si.memory_rss_kb);
+                    // Pass thinking phase and char count from streaming state
+                    if let Ok(s) = streaming.lock() {
+                        render_ctx.thinking_phase = s.thinking_phase;
+                        if s.thinking_phase {
+                            render_ctx.thinking_chars = s.thinking_content.chars().count();
+                        }
+                    }
+                    crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
+                    // Render queue indicator overlay during streaming
+                    super::render::render_queue_indicator(f, state, false);
+                    if state.multi_progress_visible {
+                        let mp_height = 3u16.min(f.area().height.saturating_sub(10));
+                        let mp_area = ratatui::layout::Rect {
+                            x: f.area().x + 2,
+                            y: f.area().bottom().saturating_sub(mp_height + 3),
+                            width: f.area().width.saturating_sub(4),
+                            height: mp_height,
+                        };
+                        state.multi_progress.render(f, mp_area, &state.theme);
+                    }
+                })?;
             } // end if let Some(ref mut term) = terminal
 
-            if query_finished { break; }
+            if query_finished {
+                break;
+            }
 
             // Handle key events during streaming: cancel, scroll, and input
             if crossterm::event::poll(std::time::Duration::ZERO).unwrap_or(false) {
                 if let Ok(crossterm::event::Event::Key(key)) = crossterm::event::read() {
-                    let is_cancel = matches!(key.code,
-                        crossterm::event::KeyCode::Esc
-                    ) || (key.code == crossterm::event::KeyCode::Char('c')
-                        && key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL));
+                    let is_cancel = matches!(key.code, crossterm::event::KeyCode::Esc)
+                        || (key.code == crossterm::event::KeyCode::Char('c')
+                            && key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL));
 
                     if is_cancel {
                         // ESC with queued messages: pop last back to prompt for editing.
@@ -939,8 +1000,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                                 } else {
                                     t!("ui.removed_last").to_string()
                                 };
-                                repl.state.toast =
-                                    Some((t!("ui.removed_edit").to_string(), std::time::Instant::now()));
+                                repl.state.toast = Some((
+                                    t!("ui.removed_edit").to_string(),
+                                    std::time::Instant::now(),
+                                ));
                             }
                             continue;
                         }
@@ -981,7 +1044,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             repl.chat.scroll_to_latest();
                             repl.state.auto_follow = true;
                         }
-                        crossterm::event::KeyCode::Up if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        crossterm::event::KeyCode::Up
+                            if key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
                             let step = (repl.chat.chat_viewport_height() as usize / 4).max(3);
                             repl.chat.scroll_up_by(step);
                             if repl.state.auto_follow {
@@ -989,7 +1056,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             }
                             repl.state.auto_follow = false;
                         }
-                        crossterm::event::KeyCode::Down if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        crossterm::event::KeyCode::Down
+                            if key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
                             let step = (repl.chat.chat_viewport_height() as usize / 4).max(3);
                             repl.chat.scroll_down_by(step);
                             if repl.chat.is_at_bottom() {
@@ -1017,7 +1088,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         }
                         crossterm::event::KeyCode::Down => {
                             if !repl.state.completion_suggestions.is_empty() {
-                                if repl.state.completion_suggestion_index + 1 < repl.state.completion_suggestions.len() {
+                                if repl.state.completion_suggestion_index + 1
+                                    < repl.state.completion_suggestions.len()
+                                {
                                     repl.state.completion_suggestion_index += 1;
                                 }
                             } else if repl.prompt.input().contains('\n') {
@@ -1034,7 +1107,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             }
                         }
                         // Allow typing in the prompt during streaming
-                        crossterm::event::KeyCode::Char(c) if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) => {
+                        crossterm::event::KeyCode::Char(c)
+                            if !key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL)
+                                && !key.modifiers.contains(crossterm::event::KeyModifiers::ALT) =>
+                        {
                             repl.prompt.add_char(c);
                         }
                         crossterm::event::KeyCode::Backspace => {
@@ -1050,15 +1128,18 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             repl.prompt.cursor_right();
                         }
                         // Enter during streaming queues the message (consistent with input.rs behavior)
-                        crossterm::event::KeyCode::Enter if !key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) => {
+                        crossterm::event::KeyCode::Enter
+                            if !key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::SHIFT) =>
+                        {
                             let input = repl.prompt.input().trim().to_string();
-                            if !input.is_empty()
-                                && repl.state.queued_messages.len() < 50
-                            {
+                            if !input.is_empty() && repl.state.queued_messages.len() < 50 {
                                 let count = repl.state.queued_messages.len() + 1;
                                 repl.state.queued_messages.push(input);
                                 repl.prompt.clear();
-                                repl.state.status = t!("ui.message_queued", count => count).to_string();
+                                repl.state.status =
+                                    t!("ui.message_queued", count => count).to_string();
                             }
                         }
                         crossterm::event::KeyCode::Enter => {
@@ -1067,9 +1148,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         }
                         crossterm::event::KeyCode::Tab => {
                             let input = repl.prompt.input().trim().to_string();
-                            if !input.is_empty()
-                                && repl.state.queued_messages.len() < 50
-                            {
+                            if !input.is_empty() && repl.state.queued_messages.len() < 50 {
                                 let count = repl.state.queued_messages.len() + 1;
                                 repl.state.queued_messages.push(input);
                                 repl.prompt.clear();
@@ -1123,7 +1202,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         }
 
         // Commit completed turns to terminal scrollback
-        let width = repl.chat.last_render_area.lock()
+        let width = repl
+            .chat
+            .last_render_area
+            .lock()
             .ok()
             .and_then(|ra| ra.map(|r| r.width))
             .unwrap_or(80);
@@ -1144,7 +1226,19 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
     });
 
     match query_result {
-        Ok((mut engine, mut response, mut thinking, thinking_duration, conversation_messages, tokens, tools, turn, _final_status, steps, stats_summary)) => {
+        Ok((
+            mut engine,
+            mut response,
+            mut thinking,
+            thinking_duration,
+            conversation_messages,
+            tokens,
+            tools,
+            turn,
+            _final_status,
+            steps,
+            stats_summary,
+        )) => {
             // Post-process <think/> tags for models that embed thinking in regular text (GLM, etc.)
             if thinking.is_empty() {
                 if let Some(pos) = response.find("<think/>") {
@@ -1205,7 +1299,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     perms.approval_mode().short_label().to_string()
                 };
                 if engine_label != repl.state.approval_mode_label {
-                    if let Some(mode) = shannon_core::permissions::ApprovalMode::from_label(&repl.state.approval_mode_label) {
+                    if let Some(mode) = shannon_core::permissions::ApprovalMode::from_label(
+                        &repl.state.approval_mode_label,
+                    ) {
                         let mut perms = shannon_types::recover_lock(engine.permissions().write());
                         perms.set_approval_mode(mode);
                     }
@@ -1215,7 +1311,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             let rendered = repl.output_renderer.render_output(&response, "assistant");
             repl.chat.update_message(assistant_msg_index, rendered);
             if !thinking.is_empty() {
-                repl.chat.set_thinking_content(assistant_msg_index, thinking, thinking_duration);
+                repl.chat
+                    .set_thinking_content(assistant_msg_index, thinking, thinking_duration);
             }
             if let Some(stats) = stats_summary {
                 repl.chat.set_stats_line(assistant_msg_index, stats);
@@ -1237,9 +1334,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             if turn_cost > 0.0 {
                 let model_name = repl.state.model.as_deref().unwrap_or("unknown");
                 let record = shannon_core::billing::UsageRecord::new(
-                    model_name,
-                    tokens,
-                    0, // output tokens not separately tracked per turn
+                    model_name, tokens, 0, // output tokens not separately tracked per turn
                     turn_cost,
                 );
                 if let Err(e) = repl.state.billing_manager.record_usage(record) {
@@ -1248,7 +1343,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
 
             // Collect turn file info before move
-            let turn_files: Vec<String> = turn.files_modified.iter()
+            let turn_files: Vec<String> = turn
+                .files_modified
+                .iter()
                 .map(|f| f.path.clone())
                 .chain(turn.files_created.iter().cloned())
                 .chain(turn.files_deleted.iter().cloned())
@@ -1263,10 +1360,16 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             // Record per-turn checkpoint with file change tracking
             let prompt_preview = if unicode_width::UnicodeWidthStr::width(input) > 80 {
                 let mut len = 0;
-                let truncated: String = input.chars()
+                let truncated: String = input
+                    .chars()
                     .take_while(|c| {
                         let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                        if len + cw > 77 { false } else { len += cw; true }
+                        if len + cw > 77 {
+                            false
+                        } else {
+                            len += cw;
+                            true
+                        }
                     })
                     .collect();
                 format!("{truncated}...")
@@ -1314,7 +1417,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     parent_session_id: None,
                     branch_point_message_index: None,
                 };
-                if let Err(e) = repl.state_manager.save_session(&engine.session_id(), &messages, &metadata) {
+                if let Err(e) =
+                    repl.state_manager
+                        .save_session(&engine.session_id(), &messages, &metadata)
+                {
                     tracing::debug!("Auto-save session error: {e}");
                 }
 
@@ -1327,12 +1433,12 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     let sr = &repl.session_recovery;
 
                     // Ensure a recovery session exists for this engine session.
-                    let log_path = sr.session_log_path(
-                        &sr.project_session_dir(&project_dir),
-                        &session_id_str,
-                    );
+                    let log_path =
+                        sr.session_log_path(&sr.project_session_dir(&project_dir), &session_id_str);
                     if !log_path.exists() {
-                        if let Err(e) = sr.create_session_with_id(&project_dir, &session_id_str, &model) {
+                        if let Err(e) =
+                            sr.create_session_with_id(&project_dir, &session_id_str, &model)
+                        {
                             tracing::debug!("Recovery session create error: {e}");
                         }
                     }
@@ -1351,12 +1457,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                             tracing::debug!("Recovery append error: {e}");
                         }
                     } else if messages.len() == 1 {
-                        if let Err(e) = sr.append_message(
-                            &project_dir,
-                            &session_id_str,
-                            seq,
-                            &messages[0],
-                        ) {
+                        if let Err(e) =
+                            sr.append_message(&project_dir, &session_id_str, seq, &messages[0])
+                        {
                             tracing::debug!("Recovery append error: {e}");
                         }
                     }
@@ -1407,8 +1510,11 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         perms.approval_mode().short_label().to_string()
                     };
                     if engine_label != repl.state.approval_mode_label {
-                        if let Some(mode) = shannon_core::permissions::ApprovalMode::from_label(&repl.state.approval_mode_label) {
-                            let mut perms = shannon_types::recover_lock(engine.permissions().write());
+                        if let Some(mode) = shannon_core::permissions::ApprovalMode::from_label(
+                            &repl.state.approval_mode_label,
+                        ) {
+                            let mut perms =
+                                shannon_types::recover_lock(engine.permissions().write());
                             perms.set_approval_mode(mode);
                         }
                     }
@@ -1417,7 +1523,8 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             let is_cancelled = e == "cancelled";
 
             if is_cancelled {
-                let (current, thinking, cancel_thinking_dur) = streaming.lock()
+                let (current, thinking, cancel_thinking_dur) = streaming
+                    .lock()
                     .map(|s| {
                         let dur = s.thinking_start.map(|t| t.elapsed().as_secs_f64());
                         (s.buffer.clone(), s.thinking_content.clone(), dur)
@@ -1429,20 +1536,34 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                 } else {
                     format!("{current}\n\n\u{26A0} {}", t!("ui.cancelled_partial"))
                 };
-                let rendered = repl.output_renderer.render_output(&partial_display, "assistant");
+                let rendered = repl
+                    .output_renderer
+                    .render_output(&partial_display, "assistant");
                 repl.chat.update_message(assistant_msg_index, rendered);
                 // Preserve any thinking content that was accumulated before cancellation
                 if !thinking.is_empty() {
-                    repl.chat.set_thinking_content(assistant_msg_index, thinking, cancel_thinking_dur);
+                    repl.chat.set_thinking_content(
+                        assistant_msg_index,
+                        thinking,
+                        cancel_thinking_dur,
+                    );
                 }
                 repl.state.status = t!("status.ready").to_string();
             } else {
-                repl.chat.update_message(assistant_msg_index, format!("❌ Error: {e}"));
+                repl.chat
+                    .update_message(assistant_msg_index, format!("❌ Error: {e}"));
 
                 let err_lower = e.to_lowercase();
                 if err_lower.contains("api key") || err_lower.contains("api_key") {
-                    repl.show_input_dialog("API Key Required", "Enter your API key...", "set_api_key");
-                } else if err_lower.contains("authentication") || err_lower.contains("unauthorized") || err_lower.contains("forbidden") {
+                    repl.show_input_dialog(
+                        "API Key Required",
+                        "Enter your API key...",
+                        "set_api_key",
+                    );
+                } else if err_lower.contains("authentication")
+                    || err_lower.contains("unauthorized")
+                    || err_lower.contains("forbidden")
+                {
                     repl.show_alert_dialog("Query Error", &e.to_string(), true);
                 }
             }
@@ -1518,7 +1639,7 @@ fn auto_save_memory(repl: &mut Repl, response: &str) {
     };
     let project = repl.state.working_directory.clone();
 
-    use shannon_core::memory::{MemoryEntry, MemoryCategory};
+    use shannon_core::memory::{MemoryCategory, MemoryEntry};
     let entry = MemoryEntry {
         id: uuid::Uuid::new_v4().to_string(),
         content: content.clone(),
@@ -1544,11 +1665,7 @@ fn auto_save_memory(repl: &mut Repl, response: &str) {
 
     // Also save as file for Claude Code-compatible persistence
     let project_path = std::path::PathBuf::from(&project);
-    if let Err(e) = shannon_core::project_memory::save_memory_file(
-        &project_path,
-        &id,
-        &content,
-    ) {
+    if let Err(e) = shannon_core::project_memory::save_memory_file(&project_path, &id, &content) {
         tracing::debug!("Auto-memory file save skipped: {e}");
     }
 
@@ -1590,7 +1707,9 @@ fn extract_memory_content(response: &str) -> String {
     // Cap at 500 chars
     if content.len() > 500 {
         let mut end = 500;
-        while !content.is_char_boundary(end) { end -= 1; }
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
         content.truncate(end);
         content.push_str("...");
     }
@@ -1602,7 +1721,9 @@ fn extract_memory_content(response: &str) -> String {
 /// Shows a collapsible-style header with character count, then the last
 /// Escape HTML special characters so pulldown-cmark doesn't interpret them as tags.
 fn escape_html_simple(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Format thinking content for display in the streaming message area.
@@ -1622,7 +1743,11 @@ fn format_thinking_for_streaming(content: &str) -> String {
     // Show the tail of thinking content (last ~500 chars, ~10 lines)
     // so the user sees what the model is currently reasoning about.
     let tail = if char_count > 500 {
-        let mut start = content.char_indices().nth(char_count - 500).map(|(i, _)| i).unwrap_or(0);
+        let mut start = content
+            .char_indices()
+            .nth(char_count - 500)
+            .map(|(i, _)| i)
+            .unwrap_or(0);
         // Align to a line boundary for clean display
         if start > 0 {
             if let Some(pos) = content[start..].find('\n') {
@@ -1647,7 +1772,9 @@ fn format_thinking_for_streaming(content: &str) -> String {
         // Truncate very long lines for display
         let truncated = if line.chars().count() > 120 {
             let mut end = 117;
-            while end > 0 && !line.is_char_boundary(end) { end -= 1; }
+            while end > 0 && !line.is_char_boundary(end) {
+                end -= 1;
+            }
             format!("{}...", &line[..end])
         } else {
             line.to_string()
@@ -1672,10 +1799,10 @@ mod tests {
     //! Fix: Changed the error type from `String` to `(Option<QueryEngine>, String)`
     //! so the engine is carried back to the caller even on error paths.
 
-    use shannon_core::query_engine::QueryEngine;
     use shannon_core::api::LlmClientConfig;
     use shannon_core::api::LlmProvider;
     use shannon_core::permissions::PermissionManager;
+    use shannon_core::query_engine::QueryEngine;
     use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
     use std::collections::HashMap;
@@ -1705,10 +1832,8 @@ mod tests {
     }
 
     /// Type alias matching the fixed error type in the async task.
-    type QueryTaskResult = Result<
-        (QueryEngine, String, u64, usize, (), String, usize),
-        (Option<QueryEngine>, String),
-    >;
+    type QueryTaskResult =
+        Result<(QueryEngine, String, u64, usize, (), String, usize), (Option<QueryEngine>, String)>;
 
     /// Simulate the success path: engine is returned in Ok variant.
     #[test]
@@ -1745,15 +1870,16 @@ mod tests {
         let engine = create_test_engine();
         let session_id = engine.session_id();
 
-        let result: QueryTaskResult = Err((
-            Some(engine),
-            "Query failed: malformed output".to_string(),
-        ));
+        let result: QueryTaskResult =
+            Err((Some(engine), "Query failed: malformed output".to_string()));
 
         match result {
             Err((Some(engine), error_msg)) => {
-                assert_eq!(engine.session_id(), session_id,
-                    "Engine must survive query failures");
+                assert_eq!(
+                    engine.session_id(),
+                    session_id,
+                    "Engine must survive query failures"
+                );
                 assert!(error_msg.contains("malformed output"));
             }
             Err((None, _)) => panic!("Engine should be Some for query failures"),
@@ -1767,15 +1893,16 @@ mod tests {
         let engine = create_test_engine();
         let session_id = engine.session_id();
 
-        let result: QueryTaskResult = Err((
-            Some(engine),
-            "Stream error: connection reset".to_string(),
-        ));
+        let result: QueryTaskResult =
+            Err((Some(engine), "Stream error: connection reset".to_string()));
 
         match result {
             Err((Some(engine), error_msg)) => {
-                assert_eq!(engine.session_id(), session_id,
-                    "Engine must survive stream errors");
+                assert_eq!(
+                    engine.session_id(),
+                    session_id,
+                    "Engine must survive stream errors"
+                );
                 assert!(error_msg.contains("connection reset"));
             }
             Err((None, _)) => panic!("Engine should be Some for stream errors"),
@@ -1786,10 +1913,7 @@ mod tests {
     /// Simulate the JoinError (task panic/cancel) path: engine is None.
     #[test]
     fn test_engine_none_on_task_panic() {
-        let result: QueryTaskResult = Err((
-            None,
-            "Query task panicked".to_string(),
-        ));
+        let result: QueryTaskResult = Err((None, "Query task panicked".to_string()));
 
         match result {
             Err((None, error_msg)) => {
@@ -1814,16 +1938,17 @@ mod tests {
 
         // Step 2: Simulate some work then an error
         engine.add_user_message("test query".to_string());
-        let error_result: QueryTaskResult = Err((
-            Some(engine),
-            "Query failed: test error".to_string(),
-        ));
+        let error_result: QueryTaskResult =
+            Err((Some(engine), "Query failed: test error".to_string()));
 
         // Step 3: Restore engine from error result (the fix)
         match error_result {
             Err((Some(recovered_engine), error_msg)) => {
-                assert_eq!(recovered_engine.session_id(), original_session,
-                    "Recovered engine should be the same instance");
+                assert_eq!(
+                    recovered_engine.session_id(),
+                    original_session,
+                    "Recovered engine should be the same instance"
+                );
                 stored_engine = Some(recovered_engine);
                 assert!(error_msg.contains("test error"));
             }
@@ -1831,12 +1956,24 @@ mod tests {
         }
 
         // Step 4: Verify engine is restored and usable
-        assert!(stored_engine.is_some(), "Engine must be restored after error");
-        assert_eq!(stored_engine.as_ref().unwrap().session_id(), original_session);
+        assert!(
+            stored_engine.is_some(),
+            "Engine must be restored after error"
+        );
+        assert_eq!(
+            stored_engine.as_ref().unwrap().session_id(),
+            original_session
+        );
 
         // Engine should accept new operations
-        stored_engine.as_mut().unwrap().add_user_message("after recovery".to_string());
-        assert_eq!(stored_engine.as_ref().unwrap().conversation_history().len(), 2);
+        stored_engine
+            .as_mut()
+            .unwrap()
+            .add_user_message("after recovery".to_string());
+        assert_eq!(
+            stored_engine.as_ref().unwrap().conversation_history().len(),
+            2
+        );
     }
 
     /// Verify that the old pattern (plain String error) would NOT work.
@@ -1853,8 +1990,10 @@ mod tests {
         let _old_error: Result<String, String> = Err("Query failed".to_string());
 
         // With old pattern, stored_engine is still None — the bug!
-        assert!(stored_engine.is_none(),
-            "Old pattern leaves engine as None — this is the bug");
+        assert!(
+            stored_engine.is_none(),
+            "Old pattern leaves engine as None — this is the bug"
+        );
     }
 
     /// Verify that BackTab (Shift+Tab) is handled in the streaming key path.

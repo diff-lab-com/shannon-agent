@@ -10,28 +10,25 @@
 //! - Request/response models compatible with common LLM APIs
 
 pub mod adapter;
-pub mod error;
-pub mod types;
-pub mod streaming;
 pub mod client;
+pub mod error;
 pub mod retry;
+pub mod streaming;
+pub mod types;
 
 // Re-export all public types so that `crate::api::X` paths continue to work.
 pub use error::ApiError;
 
 pub use types::{
-    LlmProvider, LlmClientConfig, ClaudeClientConfig,
-    MessageContent, ContentBlock, ImageSource, ToolResultContent,
-    Message,
-    MessageRequest, ToolDefinition, Usage, MessageResponse,
-    StreamEvent, ContentDelta, MessageDeltaDelta,
-    SystemContentBlock,
+    ClaudeClientConfig, ContentBlock, ContentDelta, ImageSource, LlmClientConfig, LlmProvider,
+    Message, MessageContent, MessageDeltaDelta, MessageRequest, MessageResponse, StreamEvent,
+    SystemContentBlock, ToolDefinition, ToolResultContent, Usage,
 };
 
-pub use streaming::MessageStream;
 pub use retry::RetryConfig;
+pub use streaming::MessageStream;
 
-pub use client::{LlmClient, ClaudeClient};
+pub use client::{ClaudeClient, LlmClient};
 
 // Tests from the original flat module
 #[cfg(test)]
@@ -210,7 +207,10 @@ mod tests {
             ..Default::default()
         });
         client.add_header("X-Custom".to_string(), "value".to_string());
-        assert_eq!(client.config().extra_headers.get("X-Custom"), Some(&"value".to_string()));
+        assert_eq!(
+            client.config().extra_headers.get("X-Custom"),
+            Some(&"value".to_string())
+        );
     }
 
     // --- Auth Headers Tests ---
@@ -224,8 +224,16 @@ mod tests {
             ..Default::default()
         });
         let headers = client.auth_headers();
-        assert!(headers.iter().any(|(k, v)| k == "x-api-key" && v == "sk-ant-test"));
-        assert!(headers.iter().any(|(k, v)| k == "anthropic-version" && v == "2023-06-01"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "x-api-key" && v == "sk-ant-test")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "anthropic-version" && v == "2023-06-01")
+        );
     }
 
     #[test]
@@ -236,7 +244,11 @@ mod tests {
             ..Default::default()
         });
         let headers = client.auth_headers();
-        assert!(headers.iter().any(|(k, v)| k == "Authorization" && v == "Bearer sk-oai-test"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v == "Bearer sk-oai-test")
+        );
     }
 
     #[test]
@@ -256,7 +268,11 @@ mod tests {
             ..Default::default()
         });
         let headers = client.auth_headers();
-        assert!(headers.iter().any(|(k, v)| k == "X-Auth" && v == "token123"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "X-Auth" && v == "token123")
+        );
     }
 
     // --- Endpoint URL Tests ---
@@ -268,7 +284,10 @@ mod tests {
             provider: LlmProvider::Anthropic,
             ..Default::default()
         });
-        assert_eq!(client.endpoint_url(), "https://api.anthropic.com/v1/messages");
+        assert_eq!(
+            client.endpoint_url(),
+            "https://api.anthropic.com/v1/messages"
+        );
     }
 
     #[test]
@@ -278,7 +297,10 @@ mod tests {
             provider: LlmProvider::OpenAI,
             ..Default::default()
         });
-        assert_eq!(client.endpoint_url(), "https://api.openai.com/v1/chat/completions");
+        assert_eq!(
+            client.endpoint_url(),
+            "https://api.openai.com/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -401,7 +423,12 @@ mod tests {
 
     #[test]
     fn test_all_providers_serde() {
-        for provider in &[LlmProvider::Anthropic, LlmProvider::OpenAI, LlmProvider::Ollama, LlmProvider::Custom] {
+        for provider in &[
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::Ollama,
+            LlmProvider::Custom,
+        ] {
             let json = serde_json::to_string(provider).unwrap();
             let parsed: LlmProvider = serde_json::from_str(&json).unwrap();
             assert_eq!(&parsed, provider);

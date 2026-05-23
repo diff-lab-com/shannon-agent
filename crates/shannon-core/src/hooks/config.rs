@@ -344,13 +344,11 @@ impl HookConfig {
 }
 
 /// Top-level hooks configuration file structure
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HooksFile {
     /// Map of event type to list of hook configs
     pub hooks: HashMap<String, Vec<HookConfig>>,
 }
-
 
 impl HooksFile {
     /// Create an empty hooks file
@@ -391,10 +389,7 @@ impl HooksFile {
     /// Entries from `other` are appended to existing entries for the same event type.
     pub fn merge(&mut self, other: HooksFile) {
         for (event_type, configs) in other.hooks {
-            self.hooks
-                .entry(event_type)
-                .or_default()
-                .extend(configs);
+            self.hooks.entry(event_type).or_default().extend(configs);
         }
     }
 }
@@ -415,7 +410,9 @@ mod tests {
 
     #[test]
     fn test_decision_deny_serialization() {
-        let d = HookDecision::Deny { reason: "bad".into() };
+        let d = HookDecision::Deny {
+            reason: "bad".into(),
+        };
         let json = serde_json::to_string(&d).unwrap();
         assert!(json.contains("Deny"));
         assert!(json.contains("bad"));
@@ -453,9 +450,7 @@ mod tests {
 
     #[test]
     fn test_parse_decision_modify_json() {
-        let d = HookResult::parse_decision(
-            r#"{"decision":"modify","modified_input":{"x":1}}"#,
-        );
+        let d = HookResult::parse_decision(r#"{"decision":"modify","modified_input":{"x":1}}"#);
         assert!(matches!(d, HookDecision::Modify { .. }));
     }
 
@@ -466,12 +461,18 @@ mod tests {
 
     #[test]
     fn test_parse_decision_non_json_returns_allow() {
-        assert_eq!(HookResult::parse_decision("just some text"), HookDecision::Allow);
+        assert_eq!(
+            HookResult::parse_decision("just some text"),
+            HookDecision::Allow
+        );
     }
 
     #[test]
     fn test_parse_decision_invalid_json_returns_allow() {
-        assert_eq!(HookResult::parse_decision("{not valid}"), HookDecision::Allow);
+        assert_eq!(
+            HookResult::parse_decision("{not valid}"),
+            HookDecision::Allow
+        );
     }
 
     // ── HookResult helpers ─────────────────────────────────────────────────
@@ -479,8 +480,12 @@ mod tests {
     #[test]
     fn test_is_denied() {
         let r = HookResult {
-            exit_code: 2, stdout: String::new(), stderr: "blocked".into(),
-            decision: HookDecision::Deny { reason: "nope".into() },
+            exit_code: 2,
+            stdout: String::new(),
+            stderr: "blocked".into(),
+            decision: HookDecision::Deny {
+                reason: "nope".into(),
+            },
             command: "test".into(),
         };
         assert!(r.is_denied());
@@ -489,8 +494,13 @@ mod tests {
     #[test]
     fn test_has_modifications() {
         let r = HookResult {
-            exit_code: 0, stdout: String::new(), stderr: String::new(),
-            decision: HookDecision::Modify { modified_input: None, modified_output: None },
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            decision: HookDecision::Modify {
+                modified_input: None,
+                modified_output: None,
+            },
             command: "test".into(),
         };
         assert!(r.has_modifications());
@@ -499,7 +509,9 @@ mod tests {
     #[test]
     fn test_allow_result_not_denied_no_mods() {
         let r = HookResult {
-            exit_code: 0, stdout: String::new(), stderr: String::new(),
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
             decision: HookDecision::Allow,
             command: "test".into(),
         };
@@ -511,12 +523,24 @@ mod tests {
 
     #[test]
     fn test_hook_type_serialization() {
-        assert_eq!(serde_json::to_string(&HookType::Command).unwrap(), "\"command\"");
+        assert_eq!(
+            serde_json::to_string(&HookType::Command).unwrap(),
+            "\"command\""
+        );
         assert_eq!(serde_json::to_string(&HookType::Http).unwrap(), "\"http\"");
         assert_eq!(serde_json::to_string(&HookType::Llm).unwrap(), "\"llm\"");
-        assert_eq!(serde_json::to_string(&HookType::Prompt).unwrap(), "\"prompt\"");
-        assert_eq!(serde_json::to_string(&HookType::McpTool).unwrap(), "\"mcptool\"");
-        assert_eq!(serde_json::to_string(&HookType::Agent).unwrap(), "\"agent\"");
+        assert_eq!(
+            serde_json::to_string(&HookType::Prompt).unwrap(),
+            "\"prompt\""
+        );
+        assert_eq!(
+            serde_json::to_string(&HookType::McpTool).unwrap(),
+            "\"mcptool\""
+        );
+        assert_eq!(
+            serde_json::to_string(&HookType::Agent).unwrap(),
+            "\"agent\""
+        );
     }
 
     #[test]
@@ -553,7 +577,10 @@ mod tests {
     fn test_hook_def_new_llm() {
         let def = HookDef::new_llm("Check if {{tool_name}} is safe");
         assert_eq!(def.r#type, HookType::Llm);
-        assert_eq!(def.prompt_template.unwrap(), "Check if {{tool_name}} is safe");
+        assert_eq!(
+            def.prompt_template.unwrap(),
+            "Check if {{tool_name}} is safe"
+        );
     }
 
     #[test]
@@ -626,7 +653,8 @@ mod tests {
     fn test_hooks_file_merge() {
         let mut hf1 = HooksFile::new();
         let mut hf2 = HooksFile::new();
-        hf2.hooks.insert("PreToolUse".into(), vec![HookConfig::new("Bash")]);
+        hf2.hooks
+            .insert("PreToolUse".into(), vec![HookConfig::new("Bash")]);
         hf1.merge(hf2);
         assert!(hf1.hooks.contains_key("PreToolUse"));
     }
@@ -634,7 +662,8 @@ mod tests {
     #[test]
     fn test_hooks_file_to_json_roundtrip() {
         let mut hf = HooksFile::new();
-        hf.hooks.insert("PostToolUse".into(), vec![HookConfig::new("Write")]);
+        hf.hooks
+            .insert("PostToolUse".into(), vec![HookConfig::new("Write")]);
         let json = hf.to_json().unwrap();
         let hf2 = HooksFile::from_json(&json).unwrap();
         assert!(hf2.hooks.contains_key("PostToolUse"));

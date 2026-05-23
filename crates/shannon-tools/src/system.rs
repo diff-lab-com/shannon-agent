@@ -4,7 +4,7 @@
 //! - Bash: Execute shell commands on Unix-like systems
 //! - PowerShell: Execute commands on Windows systems
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput, BoxedProgressSender};
+use crate::{BoxedProgressSender, Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -61,45 +61,45 @@ pub struct SecurityAnalysis {
 
 /// Dangerous command patterns that should trigger warnings
 const DESTRUCTIVE_PATTERNS: &[&str] = &[
-    "rm -rf /",           // Delete root filesystem
-    "rm -rf /*",          // Delete all files
-    ":>",                  // Zero out files
-    "dd if=/dev/zero",    // Disk destruction
-    "dd if=",             // Disk destruction (any input)
-    "mkfs",               // Format filesystem
-    "fdisk",              // Partition manipulation
-    "shutdown",           // System shutdown
-    "reboot",             // System reboot
-    "init 0",             // Switch to runlevel 0
-    "kill -9",            // Force kill processes
-    "chmod 000",          // Remove all permissions
-    "chmod -r 777 /",     // Open up root permissions
-    "chmod -r 777",       // Recursive permission change
-    "chown -r",           // Recursive ownership change
+    "rm -rf /",        // Delete root filesystem
+    "rm -rf /*",       // Delete all files
+    ":>",              // Zero out files
+    "dd if=/dev/zero", // Disk destruction
+    "dd if=",          // Disk destruction (any input)
+    "mkfs",            // Format filesystem
+    "fdisk",           // Partition manipulation
+    "shutdown",        // System shutdown
+    "reboot",          // System reboot
+    "init 0",          // Switch to runlevel 0
+    "kill -9",         // Force kill processes
+    "chmod 000",       // Remove all permissions
+    "chmod -r 777 /",  // Open up root permissions
+    "chmod -r 777",    // Recursive permission change
+    "chown -r",        // Recursive ownership change
 ];
 
 /// Confirmation-required patterns
 const CONFIRMATION_PATTERNS: &[&str] = &[
-    "rm -rf",             // Recursive force delete
-    "del /q",             // Windows quiet delete
-    "format",             // Windows format
-    "shred",              // Secure delete
+    "rm -rf", // Recursive force delete
+    "del /q", // Windows quiet delete
+    "format", // Windows format
+    "shred",  // Secure delete
 ];
 
 /// Path traversal patterns
 const PATH_TRAVERSAL_PATTERNS: &[&str] = &[
-    "../",                  // Parent directory traversal
-    "./../",                // Multiple parent traversal
-    "~/../",                // From home parent traversal
-    "/../",                 // Root parent traversal
-    "..\\",                 // Windows-style traversal
+    "../",   // Parent directory traversal
+    "./../", // Multiple parent traversal
+    "~/../", // From home parent traversal
+    "/../",  // Root parent traversal
+    "..\\",  // Windows-style traversal
 ];
 
 /// Sed injection patterns (command injection through sed)
 const SED_INJECTION_PATTERNS: &[&str] = &[
-    "sed.*e.*;",          // Command execution via sed
-    "sed.*s/.*/[command]",  // Replace with command
-    "sed.*y/.*/[command]",  // Translate with command
+    "sed.*e.*;",           // Command execution via sed
+    "sed.*s/.*/[command]", // Replace with command
+    "sed.*y/.*/[command]", // Translate with command
     "|.*sh",               // Pipe to shell
     "|.*bash",             // Pipe to bash
     "|.*python",           // Pipe to python
@@ -111,73 +111,83 @@ const SED_INJECTION_PATTERNS: &[&str] = &[
 
 /// Read-only command patterns
 const READ_ONLY_PATTERNS: &[&str] = &[
-    "ls", "ll", "la",       // List operations
-    "cat", "head", "tail",  // File reading
-    "grep", "egrep", "fgrep", // Search
-    "find", "locate",      // File search
-    "file", "stat", "du",    // File info
-    "echo", "pwd", "whoami", // System info
-    "git status", "git log", // Git read ops
-    "git diff",            // Git diff
+    "ls",
+    "ll",
+    "la", // List operations
+    "cat",
+    "head",
+    "tail", // File reading
+    "grep",
+    "egrep",
+    "fgrep", // Search
+    "find",
+    "locate", // File search
+    "file",
+    "stat",
+    "du", // File info
+    "echo",
+    "pwd",
+    "whoami", // System info
+    "git status",
+    "git log",  // Git read ops
+    "git diff", // Git diff
 ];
 
 /// PowerShell-specific destructive patterns
 const PS_DESTRUCTIVE_PATTERNS: &[&str] = &[
-    "Remove-Item -Recurse -Force",  // Recursive force delete
-    "rm -Recurse -Force",           // Alias recursive delete
-    "ri -Recurse -Force",           // Alias recursive delete
-    "Remove-Item * -Recurse",       // Delete all in dir
-    "Format-Volume",                // Format volume
-    "Stop-Computer",                // Shutdown
-    "Restart-Computer",             // Reboot
-    "Clear-Content",                // Clear file contents
-    "Remove-Service",               // Remove service
-    "Set-ExecutionPolicy Unrestricted", // Lower security policy
+    "Remove-Item -Recurse -Force",           // Recursive force delete
+    "rm -Recurse -Force",                    // Alias recursive delete
+    "ri -Recurse -Force",                    // Alias recursive delete
+    "Remove-Item * -Recurse",                // Delete all in dir
+    "Format-Volume",                         // Format volume
+    "Stop-Computer",                         // Shutdown
+    "Restart-Computer",                      // Reboot
+    "Clear-Content",                         // Clear file contents
+    "Remove-Service",                        // Remove service
+    "Set-ExecutionPolicy Unrestricted",      // Lower security policy
     "Invoke-WebRequest | Invoke-Expression", // Download & execute
-    "iex",                          // Invoke-Expression (code execution)
-    "IEX",                          // Invoke-Expression variant
-    "Invoke-Expression",            // Direct code execution
-    "& 'cmd.exe /c'",               // Cmd bypass
-    "Start-Process -Verb RunAs",    // Privilege escalation
-    "net user",                     // User manipulation
-    "net localgroup",               // Group manipulation
-    "reg delete",                   // Registry deletion
-    "reg add HKLM",                 // Registry modification (system)
+    "iex",                                   // Invoke-Expression (code execution)
+    "IEX",                                   // Invoke-Expression variant
+    "Invoke-Expression",                     // Direct code execution
+    "& 'cmd.exe /c'",                        // Cmd bypass
+    "Start-Process -Verb RunAs",             // Privilege escalation
+    "net user",                              // User manipulation
+    "net localgroup",                        // Group manipulation
+    "reg delete",                            // Registry deletion
+    "reg add HKLM",                          // Registry modification (system)
 ];
 
 /// PowerShell confirmation-required patterns
 const PS_CONFIRMATION_PATTERNS: &[&str] = &[
-    "Remove-Item",          // Delete files
-    "Move-Item",            // Move files
-    "Copy-Item -Force",     // Force copy
-    "Set-Content",          // Overwrite file content
-    "New-Item -Force",      // Force create
-    "Stop-Process",         // Kill process
-    "taskkill",             // Kill process
+    "Remove-Item",      // Delete files
+    "Move-Item",        // Move files
+    "Copy-Item -Force", // Force copy
+    "Set-Content",      // Overwrite file content
+    "New-Item -Force",  // Force create
+    "Stop-Process",     // Kill process
+    "taskkill",         // Kill process
 ];
 
 /// Shell variable expansion patterns used for bypass detection
 const SHELL_EXPANSION_PATTERNS: &[&str] = &[
-    "$'",                  // ANSI-C quoting
-    "$(",                  // Command substitution
-    "${",                  // Parameter expansion
-    "`",                   // Backtick command substitution
-    "$((",                 // Arithmetic expansion
-    "$[",                  // Legacy arithmetic expansion
+    "$'",  // ANSI-C quoting
+    "$(",  // Command substitution
+    "${",  // Parameter expansion
+    "`",   // Backtick command substitution
+    "$((", // Arithmetic expansion
+    "$[",  // Legacy arithmetic expansion
 ];
 
 /// Sensitive system paths that should never be accessed
 const SENSITIVE_PATHS: &[&str] = &[
-    "/etc/passwd",         // Password database
-    "/etc/shadow",         // Shadow password file
-    "/etc/sudoers",        // Sudo configuration
-    "/root/",              // Root home directory
-    "/boot/",              // Boot files
-    "/sys/",               // System filesystem
-    "/proc/sys/",          // System configuration
+    "/etc/passwd",  // Password database
+    "/etc/shadow",  // Shadow password file
+    "/etc/sudoers", // Sudo configuration
+    "/root/",       // Root home directory
+    "/boot/",       // Boot files
+    "/sys/",        // System filesystem
+    "/proc/sys/",   // System configuration
 ];
-
-
 
 /// Analyze a bash command for security risks
 pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
@@ -199,17 +209,23 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
 
             // Check if it contains ANSI-C quoting (common bypass technique)
             if command.contains("$'") {
-                warnings.push("ANSI-C quoting detected: Can encode dangerous commands as hex escapes".to_string());
+                warnings.push(
+                    "ANSI-C quoting detected: Can encode dangerous commands as hex escapes"
+                        .to_string(),
+                );
             }
 
             // Check for command substitution
             if command.contains("$(") || command.contains('`') {
-                warnings.push("Command substitution detected: Can execute arbitrary commands".to_string());
+                warnings.push(
+                    "Command substitution detected: Can execute arbitrary commands".to_string(),
+                );
             }
 
             // Check for parameter expansion
             if command.contains("${") {
-                warnings.push("Parameter expansion detected: Can be used for obfuscation".to_string());
+                warnings
+                    .push("Parameter expansion detected: Can be used for obfuscation".to_string());
             }
 
             is_destructive = true;
@@ -231,17 +247,24 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
     // Used to bypass word splitting detection
     if lower_command.contains("${ifs}") || lower_command.contains("ifs=") {
         risk_level = SecurityLevel::Critical;
-        warnings.push("IFS manipulation detected: Common technique to bypass security checks".to_string());
+        warnings.push(
+            "IFS manipulation detected: Common technique to bypass security checks".to_string(),
+        );
         is_destructive = true;
     }
 
     // Check for base64/xxd encoding bypasses
-    if (lower_command.contains("base64") || lower_command.contains("xxd") || lower_command.contains("od "))
-        && (lower_command.contains("|") || lower_command.contains("$(")) {
-            risk_level = SecurityLevel::Critical;
-            warnings.push("Encoded command execution detected: base64/xxd used to hide commands".to_string());
-            is_destructive = true;
-        }
+    if (lower_command.contains("base64")
+        || lower_command.contains("xxd")
+        || lower_command.contains("od "))
+        && (lower_command.contains("|") || lower_command.contains("$("))
+    {
+        risk_level = SecurityLevel::Critical;
+        warnings.push(
+            "Encoded command execution detected: base64/xxd used to hide commands".to_string(),
+        );
+        is_destructive = true;
+    }
 
     // Check for destructive patterns (including the newly added ones)
     for pattern in DESTRUCTIVE_PATTERNS {
@@ -325,11 +348,15 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
                     || part_lower.trim().starts_with("perl")
                     || part_lower.trim().starts_with("ruby")
                     || part_lower.trim().starts_with("node")
-                    || part_lower.trim().starts_with("eval") {
+                    || part_lower.trim().starts_with("eval")
+                {
                     if risk_level < SecurityLevel::Critical {
                         risk_level = SecurityLevel::Critical;
                     }
-                    warnings.push(format!("Dangerous pipe-to-shell detected: | {}", part.trim()));
+                    warnings.push(format!(
+                        "Dangerous pipe-to-shell detected: | {}",
+                        part.trim()
+                    ));
                     is_destructive = true;
                 }
             }
@@ -350,8 +377,7 @@ pub fn analyze_command_security(command: &str) -> SecurityAnalysis {
     }
 
     // Redirects that overwrite files are medium risk
-    if command.contains(">") && !is_read_only
-        && risk_level < SecurityLevel::Medium {
+    if command.contains(">") && !is_read_only && risk_level < SecurityLevel::Medium {
         risk_level = SecurityLevel::Medium;
     }
 
@@ -395,9 +421,9 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), PathVal
 
     // Check against allowed paths if provided
     if !allowed_paths.is_empty() {
-        let is_allowed = allowed_paths.iter().any(|allowed| {
-            normalized.starts_with(allowed) || normalized == *allowed
-        });
+        let is_allowed = allowed_paths
+            .iter()
+            .any(|allowed| normalized.starts_with(allowed) || normalized == *allowed);
 
         if !is_allowed {
             return Err(PathValidationError::NotAllowed(path.to_string()));
@@ -406,9 +432,17 @@ pub fn validate_path(path: &str, allowed_paths: &[String]) -> Result<(), PathVal
 
     // Check for dangerous system paths
     let dangerous_prefixes = &[
-        "/bin/", "/sbin/", "/usr/bin/", "/usr/sbin/",
-        "/etc/", "/boot/", "/sys/", "/dev/",
-        "/proc/", "/root/", "/var/run/",
+        "/bin/",
+        "/sbin/",
+        "/usr/bin/",
+        "/usr/sbin/",
+        "/etc/",
+        "/boot/",
+        "/sys/",
+        "/dev/",
+        "/proc/",
+        "/root/",
+        "/var/run/",
     ];
 
     for prefix in dangerous_prefixes {
@@ -477,10 +511,18 @@ pub struct DockerSandboxConfig {
 }
 
 impl DockerSandboxConfig {
-    fn default_image() -> String { "ubuntu:22.04".to_string() }
-    fn default_workdir() -> String { "/workspace".to_string() }
-    fn default_network() -> String { "none".to_string() }
-    fn default_readonly() -> bool { true }
+    fn default_image() -> String {
+        "ubuntu:22.04".to_string()
+    }
+    fn default_workdir() -> String {
+        "/workspace".to_string()
+    }
+    fn default_network() -> String {
+        "none".to_string()
+    }
+    fn default_readonly() -> bool {
+        true
+    }
 }
 
 impl Default for DockerSandboxConfig {
@@ -535,10 +577,7 @@ impl DockerSandbox {
         cwd: Option<&str>,
         env: Option<&std::collections::HashMap<String, String>>,
     ) -> Vec<String> {
-        let mut args = vec![
-            "run".to_string(),
-            "--rm".to_string(),
-        ];
+        let mut args = vec!["run".to_string(), "--rm".to_string()];
 
         // Mount workspace: resolve cwd or use current directory
         let workspace = cwd.unwrap_or(".");
@@ -617,10 +656,12 @@ impl DockerSandbox {
             let duration = std::time::Duration::from_millis(timeout);
             tokio::time::timeout(duration, cmd.output())
                 .await
-                .map_err(|_| std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("Docker command timed out after {timeout}ms"),
-                ))?
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("Docker command timed out after {timeout}ms"),
+                    )
+                })?
                 .map_err(|e| std::io::Error::other(format!("Docker execution failed: {e}")))?
         } else {
             cmd.output()
@@ -885,7 +926,12 @@ impl BashTool {
             let duration = std::time::Duration::from_millis(timeout);
             tokio::time::timeout(duration, cmd.output())
                 .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("Command timed out after {timeout}ms")))?
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("Command timed out after {timeout}ms"),
+                    )
+                })?
                 .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
         } else {
             cmd.output()
@@ -942,14 +988,19 @@ impl Tool for BashTool {
         })
     }
 
-    async fn execute(&self, input: serde_json::Value) -> Result<ToolOutput, shannon_core::tools::ToolError> {
+    async fn execute(
+        &self,
+        input: serde_json::Value,
+    ) -> Result<ToolOutput, shannon_core::tools::ToolError> {
         let bash_input: BashInput = match serde_json::from_value(input) {
             Ok(input) => input,
-            Err(e) => return Ok(ToolOutput {
-                content: format!("Invalid bash input: {e}"),
-                is_error: true,
-                metadata: HashMap::new(),
-            })
+            Err(e) => {
+                return Ok(ToolOutput {
+                    content: format!("Invalid bash input: {e}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                });
+            }
         };
 
         // Perform security analysis before execution
@@ -995,12 +1046,7 @@ impl Tool for BashTool {
             let env = bash_input.env.clone();
             let timeout = bash_input.timeout;
             tokio::task::spawn_blocking(move || {
-                match crate::pty::execute_in_pty(
-                    &cmd,
-                    cwd.as_deref(),
-                    env.as_ref(),
-                    timeout,
-                ) {
+                match crate::pty::execute_in_pty(&cmd, cwd.as_deref(), env.as_ref(), timeout) {
                     Ok(pty_out) => Ok(CommandOutput {
                         stdout: pty_out.stdout,
                         stderr: String::new(),
@@ -1013,13 +1059,14 @@ impl Tool for BashTool {
             .await
             .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string())))
         } else if let Some(ref sandbox) = self.sandbox {
-            sandbox.execute(
-                &bash_input.command,
-                bash_input.cwd.as_deref(),
-                bash_input.env.as_ref(),
-                bash_input.timeout,
-            )
-            .await
+            sandbox
+                .execute(
+                    &bash_input.command,
+                    bash_input.cwd.as_deref(),
+                    bash_input.env.as_ref(),
+                    bash_input.timeout,
+                )
+                .await
         } else if let Some(ref ps) = self.process_sandbox {
             Self::execute_command_sandboxed(
                 &bash_input.command,
@@ -1053,11 +1100,17 @@ impl Tool for BashTool {
         let content = if output.success {
             format!("{}{}", output.stdout, command_description)
         } else {
-            format!("{}Command failed with exit code {}: {}{}",
+            format!(
+                "{}Command failed with exit code {}: {}{}",
                 command_description,
                 output.exit_code,
                 output.stderr,
-                if command_description.is_empty() { "\n" } else { "" })
+                if command_description.is_empty() {
+                    "\n"
+                } else {
+                    ""
+                }
+            )
         };
 
         Ok(ToolOutput {
@@ -1107,11 +1160,13 @@ impl BashTool {
     ) -> ToolResult<ToolOutput> {
         let bash_input: BashInput = match serde_json::from_value(input) {
             Ok(input) => input,
-            Err(e) => return Ok(ToolOutput {
-                content: format!("Invalid bash input: {e}"),
-                is_error: true,
-                metadata: HashMap::new(),
-            })
+            Err(e) => {
+                return Ok(ToolOutput {
+                    content: format!("Invalid bash input: {e}"),
+                    is_error: true,
+                    metadata: HashMap::new(),
+                });
+            }
         };
 
         let analysis = analyze_command_security(&bash_input.command);
@@ -1149,14 +1204,15 @@ impl BashTool {
 
         // Only stream direct (non-PTY, non-sandbox) commands.
         // PTY and sandbox modes fall back to blocking execute().
-        let use_streaming = !bash_input.use_pty
-            && self.sandbox.is_none()
-            && self.process_sandbox.is_none();
+        let use_streaming =
+            !bash_input.use_pty && self.sandbox.is_none() && self.process_sandbox.is_none();
 
         if !use_streaming {
             // Delegate to blocking execute — wraps in a helper to reuse
             // the same logic. We call execute() directly to avoid duplicating.
-            return self.execute(serde_json::to_value(&bash_input).unwrap_or_default()).await;
+            return self
+                .execute(serde_json::to_value(&bash_input).unwrap_or_default())
+                .await;
         }
 
         // Streaming path: spawn the process and read stdout line-by-line.
@@ -1176,12 +1232,17 @@ impl BashTool {
             }
         }
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn command: {e}")))?;
 
-        let stdout = child.stdout.take()
+        let stdout = child
+            .stdout
+            .take()
             .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stdout".to_string()))?;
-        let stderr = child.stderr.take()
+        let stderr = child
+            .stderr
+            .take()
             .ok_or_else(|| ToolError::ExecutionFailed("Failed to capture stderr".to_string()))?;
 
         let mut stdout_lines = BufReader::new(stdout).lines();
@@ -1270,7 +1331,9 @@ impl BashTool {
             stderr_buf.push('\n');
         }
 
-        let status = child.wait().await
+        let status = child
+            .wait()
+            .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to wait for command: {e}")))?;
 
         let exit_code = status.code().unwrap_or(-1);
@@ -1279,11 +1342,17 @@ impl BashTool {
         let content = if success {
             format!("{stdout_buf}{command_description}")
         } else {
-            format!("{}Command failed with exit code {}: {}{}",
+            format!(
+                "{}Command failed with exit code {}: {}{}",
                 command_description,
                 exit_code,
                 stderr_buf,
-                if command_description.is_empty() { "\n" } else { "" })
+                if command_description.is_empty() {
+                    "\n"
+                } else {
+                    ""
+                }
+            )
         };
 
         Ok(ToolOutput {
@@ -1352,7 +1421,12 @@ impl PowerShellTool {
             let duration = std::time::Duration::from_millis(timeout);
             tokio::time::timeout(duration, cmd.output())
                 .await
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, format!("Command timed out after {timeout}ms")))?
+                .map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!("Command timed out after {timeout}ms"),
+                    )
+                })?
                 .map_err(|e| std::io::Error::other(format!("Failed to execute command: {e}")))?
         } else {
             cmd.output()
@@ -1466,7 +1540,10 @@ impl Tool for PowerShellTool {
         let content = if output.success {
             output.stdout
         } else {
-            format!("Command failed with exit code {}: {}", output.exit_code, output.stderr)
+            format!(
+                "Command failed with exit code {}: {}",
+                output.exit_code, output.stderr
+            )
         };
 
         Ok(ToolOutput {
@@ -1528,7 +1605,8 @@ impl Default for SleepTool {
 impl SleepTool {
     pub fn new() -> Self {
         Self {
-            description: "Wait for a specified duration without holding a shell process".to_string(),
+            description: "Wait for a specified duration without holding a shell process"
+                .to_string(),
         }
     }
 
@@ -1578,7 +1656,9 @@ impl Tool for SleepTool {
             ));
         }
 
-        let output = self.execute_sleep(sleep_input.duration_ms).await
+        let output = self
+            .execute_sleep(sleep_input.duration_ms)
+            .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Sleep failed: {e}")))?;
 
         Ok(ToolOutput {
@@ -1591,7 +1671,9 @@ impl Tool for SleepTool {
             },
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -1777,249 +1859,304 @@ mod tests {
     }
 }
 
-    // ── Security bypass detection tests ─────────────────────────────────────
+// ── Security bypass detection tests ─────────────────────────────────────
 
-    #[test]
-    fn test_shell_expansion_bypass_detection() {
-        // ANSI-C quoting bypass
-        let analysis = analyze_command_security("$'rm\\x20-rf\\x20/'");
-        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
-        assert!(analysis.warnings.iter().any(|w| w.contains("ANSI-C quoting")));
+#[test]
+fn test_shell_expansion_bypass_detection() {
+    // ANSI-C quoting bypass
+    let analysis = analyze_command_security("$'rm\\x20-rf\\x20/'");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("ANSI-C quoting"))
+    );
 
-        // Command substitution bypass
-        let analysis = analyze_command_security("echo $(rm -rf /)");
-        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
-        assert!(analysis.warnings.iter().any(|w| w.contains("Command substitution")));
+    // Command substitution bypass
+    let analysis = analyze_command_security("echo $(rm -rf /)");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("Command substitution"))
+    );
 
-        // Parameter expansion bypass
-        let analysis = analyze_command_security("echo ${HOME}/../../etc/passwd");
-        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
-        assert!(analysis.warnings.iter().any(|w| w.contains("Parameter expansion")));
+    // Parameter expansion bypass
+    let analysis = analyze_command_security("echo ${HOME}/../../etc/passwd");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("Parameter expansion"))
+    );
+}
+
+#[test]
+fn test_ifs_manipulation_detection() {
+    let analysis = analyze_command_security("IFS=/; echo rm");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("IFS manipulation"))
+    );
+
+    let analysis2 = analyze_command_security("cat ${IFS}etc${IFS}passwd");
+    assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
+}
+
+#[test]
+fn test_base64_encoding_bypass_detection() {
+    let analysis = analyze_command_security("echo 'cm0gLXJmIC8=' | base64 -d | bash");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("Encoded command"))
+    );
+}
+
+#[test]
+fn test_sensitive_path_detection() {
+    let analysis = analyze_command_security("cat /etc/passwd");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(analysis.warnings.iter().any(|w| w.contains("/etc/passwd")));
+
+    let analysis2 = analyze_command_security("cat /etc/shadow");
+    assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
+}
+
+#[test]
+fn test_pipe_to_shell_detection() {
+    let analysis = analyze_command_security("cat file | sh");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+    assert!(
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("pipe-to-shell"))
+    );
+
+    let analysis2 = analyze_command_security("ls | bash");
+    assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
+}
+
+#[test]
+fn test_encoded_path_traversal_detection() {
+    let analysis = analyze_command_security("cat %2e%2e/%2e%2e/etc/passwd");
+    assert!(analysis.contains_path_traversal);
+    assert!(analysis.warnings.iter().any(|w| w.contains("Encoded")));
+
+    let analysis2 = analyze_command_security("cat ..\\..\\windows\\system32");
+    assert!(analysis2.contains_path_traversal);
+}
+
+#[test]
+fn test_new_destructive_patterns() {
+    // dd if= pattern
+    let analysis = analyze_command_security("dd if=/dev/zero of=file");
+    assert_eq!(analysis.risk_level, SecurityLevel::Critical);
+
+    // chmod -r 777 pattern
+    let analysis2 = analyze_command_security("chmod -r 777 /etc");
+    assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
+
+    // chown -r pattern
+    let analysis3 = analyze_command_security("chown -r user file");
+    assert_eq!(analysis3.risk_level, SecurityLevel::Critical);
+}
+
+// ── BashTool streaming tests ──────────────────────────────────────────
+
+#[allow(dead_code)]
+struct CollectSender {
+    lines: std::sync::Mutex<Vec<String>>,
+}
+
+impl crate::ProgressSender for CollectSender {
+    fn send(&self, line: &str) {
+        self.lines.lock().unwrap().push(line.to_string());
     }
+}
 
-    #[test]
-    fn test_ifs_manipulation_detection() {
-        let analysis = analyze_command_security("IFS=/; echo rm");
-        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
-        assert!(analysis.warnings.iter().any(|w| w.contains("IFS manipulation")));
+#[tokio::test]
+async fn test_bash_streaming_fast_command_no_streaming_events() {
+    // Fast commands finish within the 500ms buffer window, so no
+    // streaming progress events should be emitted.
+    let tool = BashTool::new();
+    let sender = std::sync::Arc::new(CollectSender {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
 
-        let analysis2 = analyze_command_security("cat ${IFS}etc${IFS}passwd");
-        assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
-    }
-
-    #[test]
-    fn test_base64_encoding_bypass_detection() {
-        let analysis = analyze_command_security("echo 'cm0gLXJmIC8=' | base64 -d | bash");
-        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
-        assert!(analysis.warnings.iter().any(|w| w.contains("Encoded command")));
-    }
-
-    #[test]
-    fn test_sensitive_path_detection() {
-        let analysis = analyze_command_security("cat /etc/passwd");
-        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
-        assert!(analysis.warnings.iter().any(|w| w.contains("/etc/passwd")));
-
-        let analysis2 = analyze_command_security("cat /etc/shadow");
-        assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
-    }
-
-    #[test]
-    fn test_pipe_to_shell_detection() {
-        let analysis = analyze_command_security("cat file | sh");
-        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
-        assert!(analysis.warnings.iter().any(|w| w.contains("pipe-to-shell")));
-
-        let analysis2 = analyze_command_security("ls | bash");
-        assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
-    }
-
-    #[test]
-    fn test_encoded_path_traversal_detection() {
-        let analysis = analyze_command_security("cat %2e%2e/%2e%2e/etc/passwd");
-        assert!(analysis.contains_path_traversal);
-        assert!(analysis.warnings.iter().any(|w| w.contains("Encoded")));
-
-        let analysis2 = analyze_command_security("cat ..\\..\\windows\\system32");
-        assert!(analysis2.contains_path_traversal);
-    }
-
-    #[test]
-    fn test_new_destructive_patterns() {
-        // dd if= pattern
-        let analysis = analyze_command_security("dd if=/dev/zero of=file");
-        assert_eq!(analysis.risk_level, SecurityLevel::Critical);
-
-        // chmod -r 777 pattern
-        let analysis2 = analyze_command_security("chmod -r 777 /etc");
-        assert_eq!(analysis2.risk_level, SecurityLevel::Critical);
-
-        // chown -r pattern
-        let analysis3 = analyze_command_security("chown -r user file");
-        assert_eq!(analysis3.risk_level, SecurityLevel::Critical);
-    }
-
-    // ── BashTool streaming tests ──────────────────────────────────────────
-
-    #[allow(dead_code)]
-    struct CollectSender {
-        lines: std::sync::Mutex<Vec<String>>,
-    }
-
-    impl crate::ProgressSender for CollectSender {
-        fn send(&self, line: &str) {
-            self.lines.lock().unwrap().push(line.to_string());
-        }
-    }
-
-    #[tokio::test]
-    async fn test_bash_streaming_fast_command_no_streaming_events() {
-        // Fast commands finish within the 500ms buffer window, so no
-        // streaming progress events should be emitted.
-        let tool = BashTool::new();
-        let sender = std::sync::Arc::new(CollectSender {
-            lines: std::sync::Mutex::new(Vec::new()),
-        });
-
-        let result = tool.execute_streaming(
+    let result = tool
+        .execute_streaming(
             json!({"command": "echo line1; echo line2; echo line3"}),
             sender.clone(),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
-        assert!(!result.is_error);
-        assert!(result.content.contains("line1"));
-        assert!(result.content.contains("line2"));
-        assert!(result.content.contains("line3"));
+    assert!(!result.is_error);
+    assert!(result.content.contains("line1"));
+    assert!(result.content.contains("line2"));
+    assert!(result.content.contains("line3"));
 
-        let lines = sender.lines.lock().unwrap();
-        assert!(lines.is_empty(), "fast command should not emit streaming events, got {:?}", *lines);
-    }
+    let lines = sender.lines.lock().unwrap();
+    assert!(
+        lines.is_empty(),
+        "fast command should not emit streaming events, got {:?}",
+        *lines
+    );
+}
 
-    #[tokio::test]
-    async fn test_bash_streaming_slow_command_emits_lines() {
-        // A slow command (sleep > 500ms) should flush the buffer and stream.
-        let tool = BashTool::new();
-        let sender = std::sync::Arc::new(CollectSender {
-            lines: std::sync::Mutex::new(Vec::new()),
-        });
+#[tokio::test]
+async fn test_bash_streaming_slow_command_emits_lines() {
+    // A slow command (sleep > 500ms) should flush the buffer and stream.
+    let tool = BashTool::new();
+    let sender = std::sync::Arc::new(CollectSender {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
 
-        let result = tool.execute_streaming(
+    let result = tool
+        .execute_streaming(
             json!({"command": "echo line1; sleep 0.6; echo line2; echo line3"}),
             sender.clone(),
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
 
-        assert!(!result.is_error);
-        assert!(result.content.contains("line1"));
-        assert!(result.content.contains("line2"));
-        assert!(result.content.contains("line3"));
+    assert!(!result.is_error);
+    assert!(result.content.contains("line1"));
+    assert!(result.content.contains("line2"));
+    assert!(result.content.contains("line3"));
 
-        let lines = sender.lines.lock().unwrap();
-        assert!(!lines.is_empty(), "slow command should emit streaming events");
-        // After 500ms buffer, all buffered lines + subsequent lines should stream
-        assert!(lines.contains(&"line1".to_string()), "line1 should be streamed after buffer flush");
-        assert!(lines.contains(&"line2".to_string()), "line2 should be streamed");
-        assert!(lines.contains(&"line3".to_string()), "line3 should be streamed");
-    }
+    let lines = sender.lines.lock().unwrap();
+    assert!(
+        !lines.is_empty(),
+        "slow command should emit streaming events"
+    );
+    // After 500ms buffer, all buffered lines + subsequent lines should stream
+    assert!(
+        lines.contains(&"line1".to_string()),
+        "line1 should be streamed after buffer flush"
+    );
+    assert!(
+        lines.contains(&"line2".to_string()),
+        "line2 should be streamed"
+    );
+    assert!(
+        lines.contains(&"line3".to_string()),
+        "line3 should be streamed"
+    );
+}
 
-    #[tokio::test]
-    async fn test_bash_streaming_captures_exit_code() {
-        let tool = BashTool::new();
-        let sender = std::sync::Arc::new(CollectSender {
-            lines: std::sync::Mutex::new(Vec::new()),
-        });
+#[tokio::test]
+async fn test_bash_streaming_captures_exit_code() {
+    let tool = BashTool::new();
+    let sender = std::sync::Arc::new(CollectSender {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
 
-        let result = tool.execute_streaming(
-            json!({"command": "echo ok; exit 42"}),
-            sender,
-        ).await.unwrap();
+    let result = tool
+        .execute_streaming(json!({"command": "echo ok; exit 42"}), sender)
+        .await
+        .unwrap();
 
-        assert!(result.is_error);
-        assert_eq!(result.metadata.get("exit_code"), Some(&json!(42)));
-    }
+    assert!(result.is_error);
+    assert_eq!(result.metadata.get("exit_code"), Some(&json!(42)));
+}
 
-    #[tokio::test]
-    async fn test_bash_streaming_rejects_critical_commands() {
-        let tool = BashTool::new();
-        let sender = std::sync::Arc::new(CollectSender {
-            lines: std::sync::Mutex::new(Vec::new()),
-        });
+#[tokio::test]
+async fn test_bash_streaming_rejects_critical_commands() {
+    let tool = BashTool::new();
+    let sender = std::sync::Arc::new(CollectSender {
+        lines: std::sync::Mutex::new(Vec::new()),
+    });
 
-        let result = tool.execute_streaming(
-            json!({"command": "rm -rf /"}),
-            sender.clone(),
-        ).await.unwrap();
+    let result = tool
+        .execute_streaming(json!({"command": "rm -rf /"}), sender.clone())
+        .await
+        .unwrap();
 
-        assert!(result.is_error);
-        assert!(result.content.contains("rejected"));
-        // No lines streamed for rejected commands
-        assert!(sender.lines.lock().unwrap().is_empty());
-    }
+    assert!(result.is_error);
+    assert!(result.content.contains("rejected"));
+    // No lines streamed for rejected commands
+    assert!(sender.lines.lock().unwrap().is_empty());
+}
 
-    #[test]
-    fn test_strip_ansi_preserves_colors_removes_control() {
-        // Color codes (SGR) are preserved
-        let colored = "\x1b[32mok\x1b[0m done";
-        assert_eq!(strip_ansi(colored), "\x1b[32mok\x1b[0m done");
+#[test]
+fn test_strip_ansi_preserves_colors_removes_control() {
+    // Color codes (SGR) are preserved
+    let colored = "\x1b[32mok\x1b[0m done";
+    assert_eq!(strip_ansi(colored), "\x1b[32mok\x1b[0m done");
 
-        let no_ansi = "plain text";
-        assert_eq!(strip_ansi(no_ansi), "plain text");
+    let no_ansi = "plain text";
+    assert_eq!(strip_ansi(no_ansi), "plain text");
 
-        let multi = "\x1b[1;34mheader\x1b[0m\n\x1b[31merror\x1b[0m";
-        assert_eq!(strip_ansi(multi), "\x1b[1;34mheader\x1b[0m\n\x1b[31merror\x1b[0m");
+    let multi = "\x1b[1;34mheader\x1b[0m\n\x1b[31merror\x1b[0m";
+    assert_eq!(
+        strip_ansi(multi),
+        "\x1b[1;34mheader\x1b[0m\n\x1b[31merror\x1b[0m"
+    );
 
-        // Cursor movement and clear screen are stripped
-        let cursor = "\x1b[2J\x1b[H\x1b[1mbold\x1b[0m";
-        assert_eq!(strip_ansi(cursor), "\x1b[1mbold\x1b[0m");
+    // Cursor movement and clear screen are stripped
+    let cursor = "\x1b[2J\x1b[H\x1b[1mbold\x1b[0m";
+    assert_eq!(strip_ansi(cursor), "\x1b[1mbold\x1b[0m");
 
-        // Cursor up/down are stripped
-        let movement = "line1\x1b[A\x1b[2Kline2";
-        assert_eq!(strip_ansi(movement), "line1line2");
-    }
+    // Cursor up/down are stripped
+    let movement = "line1\x1b[A\x1b[2Kline2";
+    assert_eq!(strip_ansi(movement), "line1line2");
+}
 
-    // ── SecurityLevel and PathValidation tests ────────────────────────────
+// ── SecurityLevel and PathValidation tests ────────────────────────────
 
-    #[test]
-    fn test_security_level_ordering() {
-        assert!(SecurityLevel::Safe < SecurityLevel::Low);
-        assert!(SecurityLevel::Low < SecurityLevel::Medium);
-        assert!(SecurityLevel::Medium < SecurityLevel::High);
-        assert!(SecurityLevel::High < SecurityLevel::Critical);
-        assert_eq!(SecurityLevel::Safe, SecurityLevel::Safe);
-    }
+#[test]
+fn test_security_level_ordering() {
+    assert!(SecurityLevel::Safe < SecurityLevel::Low);
+    assert!(SecurityLevel::Low < SecurityLevel::Medium);
+    assert!(SecurityLevel::Medium < SecurityLevel::High);
+    assert!(SecurityLevel::High < SecurityLevel::Critical);
+    assert_eq!(SecurityLevel::Safe, SecurityLevel::Safe);
+}
 
-    #[test]
-    fn test_security_level_ord_values() {
-        assert_eq!(SecurityLevel::Safe as u8, 0);
-        assert_eq!(SecurityLevel::Low as u8, 1);
-        assert_eq!(SecurityLevel::Medium as u8, 2);
-        assert_eq!(SecurityLevel::High as u8, 3);
-        assert_eq!(SecurityLevel::Critical as u8, 4);
-    }
+#[test]
+fn test_security_level_ord_values() {
+    assert_eq!(SecurityLevel::Safe as u8, 0);
+    assert_eq!(SecurityLevel::Low as u8, 1);
+    assert_eq!(SecurityLevel::Medium as u8, 2);
+    assert_eq!(SecurityLevel::High as u8, 3);
+    assert_eq!(SecurityLevel::Critical as u8, 4);
+}
 
-    #[test]
-    fn test_path_validation_error_display() {
-        let err = PathValidationError::Traversal("../etc/passwd".into());
-        assert!(err.to_string().contains("../etc/passwd"));
+#[test]
+fn test_path_validation_error_display() {
+    let err = PathValidationError::Traversal("../etc/passwd".into());
+    assert!(err.to_string().contains("../etc/passwd"));
 
-        let err = PathValidationError::NotAllowed("/root".into());
-        assert!(err.to_string().contains("/root"));
+    let err = PathValidationError::NotAllowed("/root".into());
+    assert!(err.to_string().contains("/root"));
 
-        let err = PathValidationError::SystemPath("/etc/shadow".into());
-        assert!(err.to_string().contains("/etc/shadow"));
-    }
+    let err = PathValidationError::SystemPath("/etc/shadow".into());
+    assert!(err.to_string().contains("/etc/shadow"));
+}
 
-    #[test]
-    fn test_security_analysis_default_fields() {
-        let analysis = SecurityAnalysis {
-            risk_level: SecurityLevel::Safe,
-            warnings: vec![],
-            is_destructive: false,
-            is_read_only: true,
-            contains_path_traversal: false,
-            requires_confirmation: false,
-        };
-        assert!(analysis.is_read_only);
-        assert!(!analysis.is_destructive);
-        assert!(!analysis.requires_confirmation);
-        assert!(analysis.warnings.is_empty());
-    }
+#[test]
+fn test_security_analysis_default_fields() {
+    let analysis = SecurityAnalysis {
+        risk_level: SecurityLevel::Safe,
+        warnings: vec![],
+        is_destructive: false,
+        is_read_only: true,
+        contains_path_traversal: false,
+        requires_confirmation: false,
+    };
+    assert!(analysis.is_read_only);
+    assert!(!analysis.is_destructive);
+    assert!(!analysis.requires_confirmation);
+    assert!(analysis.warnings.is_empty());
+}

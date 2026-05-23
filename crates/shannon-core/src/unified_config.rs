@@ -402,8 +402,14 @@ mod tests {
 
     #[test]
     fn test_merge_debug_or_logic() {
-        let a = ShannonConfig { debug: true, ..Default::default() };
-        let b = ShannonConfig { debug: false, ..Default::default() };
+        let a = ShannonConfig {
+            debug: true,
+            ..Default::default()
+        };
+        let b = ShannonConfig {
+            debug: false,
+            ..Default::default()
+        };
         // a.debug || b.debug when b overrides
         let merged = a.merge(&b);
         // b.debug is false, but a.debug was true — since merge uses `other.debug || self.debug`

@@ -4,8 +4,8 @@
 //! resource operations, server capability negotiation, timeout handling,
 //! and error handling for malformed responses.
 
-use shannon_mcp::protocol::*;
 use shannon_mcp::McpError;
+use shannon_mcp::protocol::*;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
@@ -85,9 +85,7 @@ async fn test_request_response_id_correlation() {
     assert_eq!(req_id, "correlate-42");
 
     // Server responds with matching ID.
-    server
-        .send_response(&req_id, serde_json::json!([]))
-        .await;
+    server.send_response(&req_id, serde_json::json!([])).await;
 
     // Client receives the correlated response.
     let resp_json = client.receive().await.unwrap();
@@ -226,8 +224,7 @@ async fn test_tool_invocation_with_arguments() {
     let response: JsonRpcMessage = serde_json::from_str(&resp_json).unwrap();
     match response {
         JsonRpcMessage::Response(res) => {
-            let content: ToolContent =
-                serde_json::from_value(res.result.unwrap()).unwrap();
+            let content: ToolContent = serde_json::from_value(res.result.unwrap()).unwrap();
             assert_eq!(content.content.len(), 1);
             assert_eq!(content.is_error, Some(false));
             match &content.content[0] {
@@ -263,8 +260,7 @@ async fn test_tool_invocation_error_response() {
     let response: JsonRpcMessage = serde_json::from_str(&resp_json).unwrap();
     match response {
         JsonRpcMessage::Response(res) => {
-            let content: ToolContent =
-                serde_json::from_value(res.result.unwrap()).unwrap();
+            let content: ToolContent = serde_json::from_value(res.result.unwrap()).unwrap();
             assert_eq!(content.is_error, Some(true));
         }
         _ => panic!("Expected response"),

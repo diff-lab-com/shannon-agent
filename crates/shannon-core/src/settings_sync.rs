@@ -169,14 +169,21 @@ impl DeviceRegistry {
     }
 
     /// Register a new device.
-    pub fn register(&mut self, device_id: &str, device_name: &str) -> Result<&DeviceInfo, SyncError> {
+    pub fn register(
+        &mut self,
+        device_id: &str,
+        device_name: &str,
+    ) -> Result<&DeviceInfo, SyncError> {
         if self.devices.contains_key(device_id) {
             return Err(SyncError::DeviceAlreadyExists(device_id.to_string()));
         }
 
         let info = DeviceInfo::new(device_id, device_name);
         self.devices.insert(device_id.to_string(), info);
-        Ok(self.devices.get(device_id).expect("device was just inserted after contains_key check"))
+        Ok(self
+            .devices
+            .get(device_id)
+            .expect("device was just inserted after contains_key check"))
     }
 
     /// Unregister a device.
@@ -280,10 +287,7 @@ impl SettingsSyncService {
         let mut service = Self::new(device_id);
 
         for (id, name) in devices {
-            service
-                .device_registry
-                .register(id, name)
-                .ok(); // Ignore duplicates
+            service.device_registry.register(id, name).ok(); // Ignore duplicates
         }
 
         service
@@ -424,8 +428,7 @@ impl SettingsSyncService {
             match self.records.get(&record.key) {
                 None => {
                     // Pure new record
-                    self.records
-                        .insert(record.key.clone(), record.clone());
+                    self.records.insert(record.key.clone(), record.clone());
                 }
                 Some(local) => {
                     if record.version >= local.version {
@@ -527,16 +530,15 @@ impl SettingsSyncService {
     /// Export all records as a JSON string for persistence or transport.
     pub fn export_records(&self) -> Result<String, SyncError> {
         let records: Vec<&SyncRecord> = self.records.values().collect();
-        serde_json::to_string(&records)
-            .map_err(|e| SyncError::Serialization(e.to_string()))
+        serde_json::to_string(&records).map_err(|e| SyncError::Serialization(e.to_string()))
     }
 
     /// Import records from a JSON string, merging with existing records.
     ///
     /// Uses last-write-wins: higher version always wins.
     pub fn import_records(&mut self, json: &str) -> Result<Vec<SyncStatus>, SyncError> {
-        let incoming: Vec<SyncRecord> = serde_json::from_str(json)
-            .map_err(|e| SyncError::Serialization(e.to_string()))?;
+        let incoming: Vec<SyncRecord> =
+            serde_json::from_str(json).map_err(|e| SyncError::Serialization(e.to_string()))?;
 
         let statuses = self.receive_remote_records(incoming);
         Ok(statuses.into_iter().map(|(_, s)| s).collect())
@@ -652,8 +654,12 @@ mod tests {
         let mut service = SettingsSyncService::new("device-1");
 
         // Manually inject pending downloads
-        service.pending_downloads.push(SyncRecord::new("model", "claude-opus-4-6", "device-2", 5));
-        service.pending_downloads.push(SyncRecord::new("theme", "light", "device-2", 6));
+        service
+            .pending_downloads
+            .push(SyncRecord::new("model", "claude-opus-4-6", "device-2", 5));
+        service
+            .pending_downloads
+            .push(SyncRecord::new("theme", "light", "device-2", 6));
 
         let applied = service.apply_pending_downloads();
 
@@ -679,7 +685,9 @@ mod tests {
         assert_eq!(service.sync_status("model"), SyncStatus::UpToDate);
 
         // Remote record pending
-        service.pending_downloads.push(SyncRecord::new("theme", "light", "device-2", 1));
+        service
+            .pending_downloads
+            .push(SyncRecord::new("theme", "light", "device-2", 1));
         assert_eq!(service.sync_status("theme"), SyncStatus::PendingDownload);
     }
 
@@ -756,7 +764,9 @@ mod tests {
         let mut service = SettingsSyncService::new("device-1");
 
         service.upsert("model", "claude-opus-4-6");
-        service.pending_downloads.push(SyncRecord::new("theme", "light", "device-2", 1));
+        service
+            .pending_downloads
+            .push(SyncRecord::new("theme", "light", "device-2", 1));
 
         let statuses = service.all_sync_statuses();
         assert_eq!(statuses.get("model"), Some(&SyncStatus::PendingUpload));
@@ -778,8 +788,10 @@ mod tests {
 
     #[test]
     fn test_with_devices_constructor() {
-        let service =
-            SettingsSyncService::with_devices("dev-1", vec![("dev-2", "Desktop"), ("dev-3", "Phone")]);
+        let service = SettingsSyncService::with_devices(
+            "dev-1",
+            vec![("dev-2", "Desktop"), ("dev-3", "Phone")],
+        );
 
         assert_eq!(service.device_registry().count(), 3);
         assert!(service.device_registry().get("dev-2").is_ok());

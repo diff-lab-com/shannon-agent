@@ -7,10 +7,10 @@ use crate::theme::Theme;
 use crate::widgets;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    Frame,
 };
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write;
@@ -146,7 +146,7 @@ impl Renderer {
             .margin(1)
             .constraints(
                 [
-                    Constraint::Min(0),   // Main content
+                    Constraint::Min(0),    // Main content
                     Constraint::Length(3), // Status bar
                 ]
                 .as_ref(),
@@ -186,7 +186,10 @@ impl Renderer {
         let language = language.trim().to_lowercase();
 
         if let Some(syntax) = self.syntax_set.find_syntax_by_token(&language) {
-            let syntect_theme = self.theme_set.themes.get(self.syntect_theme_name.as_str())
+            let syntect_theme = self
+                .theme_set
+                .themes
+                .get(self.syntect_theme_name.as_str())
                 .unwrap_or_else(|| &self.theme_set.themes["base16-eighties.dark"]);
 
             let mut highlighter = HighlightLines::new(syntax, syntect_theme);
@@ -220,12 +223,7 @@ impl Renderer {
         } else {
             // Unknown language -- render as plain text
             code.lines()
-                .map(|l| {
-                    Line::from(Span::styled(
-                        l.to_string(),
-                        Style::default().fg(theme.text),
-                    ))
-                })
+                .map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(theme.text))))
                 .collect()
         }
     }
@@ -243,7 +241,8 @@ impl Renderer {
         }
 
         let mut output: Vec<Line<'static>> = Vec::new();
-        let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+        let opts =
+            Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
         let parser = Parser::new_ext(text, opts);
 
         let mut inline_spans: Vec<Span<'static>> = Vec::new();
@@ -271,9 +270,15 @@ impl Renderer {
                 }
                 Event::End(TagEnd::Heading(level)) => {
                     let style = match level {
-                        HeadingLevel::H1 => Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
-                        HeadingLevel::H2 => Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
-                        HeadingLevel::H3 => Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
+                        HeadingLevel::H1 => Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                        HeadingLevel::H2 => Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                        HeadingLevel::H3 => Style::default()
+                            .fg(theme.warning)
+                            .add_modifier(Modifier::BOLD),
                         _ => Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
                     };
                     let text = spans_to_string(&inline_spans);
@@ -285,10 +290,7 @@ impl Renderer {
                         HeadingLevel::H3 => "▎ ",
                         _ => "",
                     };
-                    output.push(Line::from(Span::styled(
-                        format!("{prefix}{text}"),
-                        style,
-                    )));
+                    output.push(Line::from(Span::styled(format!("{prefix}{text}"), style)));
                     output.push(Line::from(""));
                 }
                 Event::Start(Tag::Paragraph) => {}
@@ -354,10 +356,14 @@ impl Renderer {
                         if let Some(idx) = list_item_counters.last_mut() {
                             *idx += 1;
                             let prefix = format!("{indent}{}. ", *idx - 1);
-                            inline_spans.push(Span::styled(prefix, Style::default().fg(theme.accent)));
+                            inline_spans
+                                .push(Span::styled(prefix, Style::default().fg(theme.accent)));
                         }
                     } else {
-                        inline_spans.push(Span::styled(format!("{indent}• "), Style::default().fg(theme.accent)));
+                        inline_spans.push(Span::styled(
+                            format!("{indent}• "),
+                            Style::default().fg(theme.accent),
+                        ));
                     }
                 }
                 Event::End(TagEnd::Item) => {
@@ -418,10 +424,7 @@ impl Renderer {
                 Event::End(TagEnd::Link) => {
                     link_depth = link_depth.saturating_sub(1);
                     // OSC 8 hyperlink close sequence
-                    inline_spans.push(Span::styled(
-                        "\x1b]8;;\x1b\\".to_string(),
-                        Style::default(),
-                    ));
+                    inline_spans.push(Span::styled("\x1b]8;;\x1b\\".to_string(), Style::default()));
                 }
                 Event::Start(Tag::Strikethrough) => {}
                 Event::End(TagEnd::Strikethrough) => {}
@@ -438,10 +441,16 @@ impl Renderer {
                     emphasis_depth = emphasis_depth.saturating_sub(1);
                 }
                 Event::Code(code) => {
-                    let target = if in_table { &mut current_cell_spans } else { &mut inline_spans };
+                    let target = if in_table {
+                        &mut current_cell_spans
+                    } else {
+                        &mut inline_spans
+                    };
                     target.push(Span::styled(
                         format!("`{code}`"),
-                        Style::default().fg(theme.inline_code).bg(theme.inline_code_bg),
+                        Style::default()
+                            .fg(theme.inline_code)
+                            .bg(theme.inline_code_bg),
                     ));
                 }
                 Event::Text(text) => {
@@ -610,7 +619,8 @@ fn render_aligned_table(
     let mut col_widths = vec![0usize; col_count];
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
-            let w = unicode_width::UnicodeWidthStr::width(spans_to_string(cell).as_str()).min(TABLE_MAX_COL_WIDTH);
+            let w = unicode_width::UnicodeWidthStr::width(spans_to_string(cell).as_str())
+                .min(TABLE_MAX_COL_WIDTH);
             col_widths[i] = col_widths[i].max(w);
         }
     }
@@ -638,15 +648,15 @@ fn render_aligned_table(
             let text = spans_to_string(cell);
             let truncated = truncate_chars(&text, TABLE_MAX_COL_WIDTH);
             let style = if ri == 0 {
-                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.text)
             };
             let width = col_widths.get(ci).copied().unwrap_or(0);
             let aligned = match alignments.get(ci) {
-                Some(pulldown_cmark::Alignment::Center) => {
-                    pad_center(&truncated, width)
-                }
+                Some(pulldown_cmark::Alignment::Center) => pad_center(&truncated, width),
                 Some(pulldown_cmark::Alignment::Right) => {
                     format!("{truncated:>width$}")
                 }
@@ -722,14 +732,20 @@ fn render_code_block_with_border(
     let title_line = match filename_hint {
         Some(fname) => vec![
             Span::styled(format!("{bq_prefix}╭─ "), border_style),
-            Span::styled(display_lang.to_string(), Style::default().fg(theme.secondary)),
+            Span::styled(
+                display_lang.to_string(),
+                Style::default().fg(theme.secondary),
+            ),
             Span::styled(" ─ ", border_style),
             Span::styled(fname.to_string(), Style::default().fg(theme.text_dim)),
             Span::styled(" ─╮", border_style),
         ],
         None => vec![
             Span::styled(format!("{bq_prefix}╭─ "), border_style),
-            Span::styled(display_lang.to_string(), Style::default().fg(theme.secondary)),
+            Span::styled(
+                display_lang.to_string(),
+                Style::default().fg(theme.secondary),
+            ),
             Span::styled(" ─╮", border_style),
         ],
     };
@@ -740,46 +756,58 @@ fn render_code_block_with_border(
     if total_lines > CODE_FOLD_THRESHOLD {
         // Show first CODE_FOLD_HEAD lines
         for line in highlighted_lines.iter().take(CODE_FOLD_HEAD) {
-            let mut line_spans = vec![
-                Span::styled(format!("{bq_prefix}│ "), border_style),
-            ];
-            line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
+            let mut line_spans = vec![Span::styled(format!("{bq_prefix}│ "), border_style)];
+            line_spans.extend(
+                line.spans
+                    .iter()
+                    .map(|s| Span::styled(s.content.to_string(), s.style)),
+            );
             output.push(Line::from(line_spans));
         }
 
         // Fold indicator
-        let folded_count = total_lines.saturating_sub(CODE_FOLD_HEAD).saturating_sub(CODE_FOLD_TAIL);
+        let folded_count = total_lines
+            .saturating_sub(CODE_FOLD_HEAD)
+            .saturating_sub(CODE_FOLD_TAIL);
         output.push(Line::from(vec![
             Span::styled(format!("{bq_prefix}│ "), border_style),
             Span::styled(
                 format!("... {} lines folded ...", folded_count.max(1)),
-                Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(theme.text_dim)
+                    .add_modifier(Modifier::ITALIC),
             ),
         ]));
 
         // Show last CODE_FOLD_TAIL lines
         let tail_start = total_lines.saturating_sub(CODE_FOLD_TAIL);
         for line in &highlighted_lines[tail_start..] {
-            let mut line_spans = vec![
-                Span::styled(format!("{bq_prefix}│ "), border_style),
-            ];
-            line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
+            let mut line_spans = vec![Span::styled(format!("{bq_prefix}│ "), border_style)];
+            line_spans.extend(
+                line.spans
+                    .iter()
+                    .map(|s| Span::styled(s.content.to_string(), s.style)),
+            );
             output.push(Line::from(line_spans));
         }
     } else {
         // Show all lines
         for line in highlighted_lines {
-            let mut line_spans = vec![
-                Span::styled(format!("{bq_prefix}│ "), border_style),
-            ];
-            line_spans.extend(line.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)));
+            let mut line_spans = vec![Span::styled(format!("{bq_prefix}│ "), border_style)];
+            line_spans.extend(
+                line.spans
+                    .iter()
+                    .map(|s| Span::styled(s.content.to_string(), s.style)),
+            );
             output.push(Line::from(line_spans));
         }
     }
 
     // Footer: ╰──────────────────────╯
     let label_width = unicode_width::UnicodeWidthStr::width(display_lang)
-        + filename_hint.map(|f| unicode_width::UnicodeWidthStr::width(f) + 3).unwrap_or(0);
+        + filename_hint
+            .map(|f| unicode_width::UnicodeWidthStr::width(f) + 3)
+            .unwrap_or(0);
     let footer_width = label_width + 4; // +4 for ── flanking dashes
     let footer = format!("{bq_prefix}╰{:─>width$}╯", "", width = footer_width);
     output.push(Line::from(Span::styled(footer, border_style)));
@@ -808,7 +836,8 @@ fn find_diff_region(old: &str, new: &str) -> (usize, usize, usize, usize) {
     let mut common_suffix = 0;
     while common_suffix < old_chars.len().saturating_sub(common_prefix)
         && common_suffix < new_chars.len().saturating_sub(common_prefix)
-        && old_chars[old_chars.len() - 1 - common_suffix] == new_chars[new_chars.len() - 1 - common_suffix]
+        && old_chars[old_chars.len() - 1 - common_suffix]
+            == new_chars[new_chars.len() - 1 - common_suffix]
     {
         common_suffix += 1;
     }
@@ -843,9 +872,12 @@ fn render_diff_line_with_word_highlight(
 
         if is_addition {
             // For additions: prefix (normal green) + unchanged (green) + changed (bright green) + unchanged (green)
-            let mut spans = vec![
-                Span::styled(prefix.to_string(), Style::default().fg(theme.diff_added).add_modifier(Modifier::BOLD)),
-            ];
+            let mut spans = vec![Span::styled(
+                prefix.to_string(),
+                Style::default()
+                    .fg(theme.diff_added)
+                    .add_modifier(Modifier::BOLD),
+            )];
 
             let content_chars: Vec<char> = content.chars().collect();
 
@@ -861,7 +893,9 @@ fn render_diff_line_with_word_highlight(
             if new_start < new_end {
                 spans.push(Span::styled(
                     content_chars[new_start..new_end].iter().collect::<String>(),
-                    Style::default().fg(theme.diff_added_word).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.diff_added_word)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
 
@@ -876,9 +910,12 @@ fn render_diff_line_with_word_highlight(
             Line::from(spans)
         } else {
             // For removals: prefix (normal red) + unchanged (red) + changed (bright red) + unchanged (red)
-            let mut spans = vec![
-                Span::styled(prefix.to_string(), Style::default().fg(theme.diff_removed).add_modifier(Modifier::BOLD)),
-            ];
+            let mut spans = vec![Span::styled(
+                prefix.to_string(),
+                Style::default()
+                    .fg(theme.diff_removed)
+                    .add_modifier(Modifier::BOLD),
+            )];
 
             let content_chars: Vec<char> = content.chars().collect();
 
@@ -894,7 +931,9 @@ fn render_diff_line_with_word_highlight(
             if new_start < new_end {
                 spans.push(Span::styled(
                     content_chars[new_start..new_end].iter().collect::<String>(),
-                    Style::default().fg(theme.diff_removed_word).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.diff_removed_word)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
 
@@ -910,9 +949,16 @@ fn render_diff_line_with_word_highlight(
         }
     } else {
         // No corresponding line, use line-level coloring as fallback
-        let color = if is_addition { theme.diff_added } else { theme.diff_removed };
+        let color = if is_addition {
+            theme.diff_added
+        } else {
+            theme.diff_removed
+        };
         Line::from(vec![
-            Span::styled(prefix.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                prefix.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
             Span::styled(content.to_string(), Style::default().fg(color)),
         ])
     }
@@ -942,9 +988,13 @@ pub fn render_diff(diff_text: &str, theme: &Theme) -> Vec<Line<'static>> {
             let inner = trimmed.strip_prefix("@@").unwrap_or(trimmed);
             let inner = inner.strip_suffix("@@").unwrap_or(inner);
             lines.push(Line::from(vec![
-                Span::styled("@@", Style::default().fg(theme.diff_header).add_modifier(Modifier::BOLD)),
-                Span::styled(inner.to_string(),
-                    Style::default().fg(theme.diff_header)),
+                Span::styled(
+                    "@@",
+                    Style::default()
+                        .fg(theme.diff_header)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(inner.to_string(), Style::default().fg(theme.diff_header)),
             ]));
         } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
             // Added line - check if there's a corresponding removed line
@@ -975,7 +1025,12 @@ pub fn render_diff(diff_text: &str, theme: &Theme) -> Vec<Line<'static>> {
                 None
             };
 
-            lines.push(render_diff_line_with_word_highlight(raw_line, true, corresponding, theme));
+            lines.push(render_diff_line_with_word_highlight(
+                raw_line,
+                true,
+                corresponding,
+                theme,
+            ));
         } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
             // Removed line - check if there's a corresponding added line
             let corresponding = if i > 0 {
@@ -997,7 +1052,12 @@ pub fn render_diff(diff_text: &str, theme: &Theme) -> Vec<Line<'static>> {
                 None
             };
 
-            lines.push(render_diff_line_with_word_highlight(raw_line, false, corresponding, theme));
+            lines.push(render_diff_line_with_word_highlight(
+                raw_line,
+                false,
+                corresponding,
+                theme,
+            ));
         } else if trimmed.starts_with("+++") {
             // New file header
             lines.push(Line::from(Span::styled(
@@ -1014,7 +1074,9 @@ pub fn render_diff(diff_text: &str, theme: &Theme) -> Vec<Line<'static>> {
             // Diff git header
             lines.push(Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
             )));
         } else if trimmed.starts_with("index ")
             || trimmed.starts_with("new file")
@@ -1081,7 +1143,14 @@ pub fn truncate_output(lines: &[Line<'_>], max_lines: usize, theme: &Theme) -> V
     if lines.len() <= max_lines {
         return lines
             .iter()
-            .map(|l| Line::from(l.spans.iter().map(|s| Span::styled(s.content.to_string(), s.style)).collect::<Vec<_>>()))
+            .map(|l| {
+                Line::from(
+                    l.spans
+                        .iter()
+                        .map(|s| Span::styled(s.content.to_string(), s.style))
+                        .collect::<Vec<_>>(),
+                )
+            })
             .collect();
     }
 
@@ -1150,11 +1219,15 @@ fn parse_inline_fragments(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                     }
                     if found_close {
                         if !current.is_empty() {
-                            spans.push(Span::styled(std::mem::take(&mut current),
-                                Style::default().fg(theme.text)));
+                            spans.push(Span::styled(
+                                std::mem::take(&mut current),
+                                Style::default().fg(theme.text),
+                            ));
                         }
-                        spans.push(Span::styled(bold_text,
-                            Style::default().fg(theme.text).add_modifier(Modifier::BOLD)));
+                        spans.push(Span::styled(
+                            bold_text,
+                            Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                        ));
                     } else {
                         // Not a valid bold -- treat as literal
                         current.push_str("**");
@@ -1177,11 +1250,12 @@ fn parse_inline_fragments(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                 }
                 if found_close {
                     if !current.is_empty() {
-                        spans.push(Span::styled(std::mem::take(&mut current),
-                            Style::default().fg(theme.text)));
+                        spans.push(Span::styled(
+                            std::mem::take(&mut current),
+                            Style::default().fg(theme.text),
+                        ));
                     }
-                    spans.push(Span::styled(code_text,
-                        Style::default().fg(theme.accent)));
+                    spans.push(Span::styled(code_text, Style::default().fg(theme.accent)));
                 } else {
                     current.push('`');
                     current.push_str(&code_text);
@@ -1343,7 +1417,10 @@ mod tests {
             let lines = renderer.render_markdown(&md, &Theme::default_dark());
             assert!(!lines.is_empty(), "Heading level {level}");
             let text = spans_to_string(&lines[0].spans);
-            assert!(text.contains(&format!("Heading {level}")), "Heading level {level}");
+            assert!(
+                text.contains(&format!("Heading {level}")),
+                "Heading level {level}"
+            );
         }
     }
 
@@ -1353,12 +1430,18 @@ mod tests {
         let lines = renderer.render_markdown("# Hello", &Theme::default_dark());
         let text = spans_to_string(&lines[0].spans);
         // H1 should have "█ " prefix
-        assert!(text.starts_with("█ "), "H1 heading should have █ prefix: got {text}");
+        assert!(
+            text.starts_with("█ "),
+            "H1 heading should have █ prefix: got {text}"
+        );
 
         let lines = renderer.render_markdown("## Hello", &Theme::default_dark());
         let text = spans_to_string(&lines[0].spans);
         // H2 should have "▌ " prefix
-        assert!(text.starts_with("▌ "), "H2 heading should have ▌ prefix: got {text}");
+        assert!(
+            text.starts_with("▌ "),
+            "H2 heading should have ▌ prefix: got {text}"
+        );
     }
 
     #[test]
@@ -1368,7 +1451,10 @@ mod tests {
         let lines = renderer.render_markdown(md, &Theme::default_dark());
         assert!(!lines.is_empty());
         // Should have title bar, code line, footer, and trailing empty
-        assert!(lines.len() >= 3, "Code block should have title, code, and footer");
+        assert!(
+            lines.len() >= 3,
+            "Code block should have title, code, and footer"
+        );
     }
 
     #[test]
@@ -1378,8 +1464,14 @@ mod tests {
         let lines = renderer.render_markdown(md, &Theme::default_dark());
         // First line should be title bar starting with ╭
         let first_text = spans_to_string(&lines[0].spans);
-        assert!(first_text.starts_with("╭"), "Code block should start with ╭: got {first_text}");
-        assert!(first_text.contains("rust"), "Title bar should contain language: got {first_text}");
+        assert!(
+            first_text.starts_with("╭"),
+            "Code block should start with ╭: got {first_text}"
+        );
+        assert!(
+            first_text.contains("rust"),
+            "Title bar should contain language: got {first_text}"
+        );
     }
 
     #[test]
@@ -1389,13 +1481,17 @@ mod tests {
         let lines = renderer.render_markdown(md, &Theme::default_dark());
         let first_text = spans_to_string(&lines[0].spans);
         assert!(first_text.contains("rust"), "Title should contain language");
-        assert!(first_text.contains("src/main.rs"), "Title should contain filename: got {first_text}");
+        assert!(
+            first_text.contains("src/main.rs"),
+            "Title should contain filename: got {first_text}"
+        );
     }
 
     #[test]
     fn test_render_markdown_inline_code() {
         let renderer = Renderer::new();
-        let lines = renderer.render_markdown("Use `cargo build` to compile.", &Theme::default_dark());
+        let lines =
+            renderer.render_markdown("Use `cargo build` to compile.", &Theme::default_dark());
         assert_eq!(lines.len(), 1);
     }
 
@@ -1439,8 +1535,14 @@ mod tests {
         assert!(!lines.is_empty());
         // Find the ☑ character in the output
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
-        assert!(all_text.contains('☑'), "Should contain checked checkbox: got {all_text}");
-        assert!(all_text.contains('☐'), "Should contain unchecked checkbox: got {all_text}");
+        assert!(
+            all_text.contains('☑'),
+            "Should contain checked checkbox: got {all_text}"
+        );
+        assert!(
+            all_text.contains('☐'),
+            "Should contain unchecked checkbox: got {all_text}"
+        );
     }
 
     #[test]
@@ -1448,7 +1550,10 @@ mod tests {
         let renderer = Renderer::new();
         let md = "- Item 1\n  - Nested 1\n  - Nested 2\n- Item 2\n";
         let lines = renderer.render_markdown(md, &Theme::default_dark());
-        assert!(lines.len() >= 2, "Nested list should produce multiple lines");
+        assert!(
+            lines.len() >= 2,
+            "Nested list should produce multiple lines"
+        );
         // Check that nested items have indentation
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         assert!(all_text.contains("Item 1"), "Should contain Item 1");
@@ -1463,7 +1568,10 @@ mod tests {
         assert!(lines.len() >= 2);
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         assert!(all_text.contains("1."), "Should contain ordered marker");
-        assert!(all_text.contains("Nested bullet"), "Should contain nested item");
+        assert!(
+            all_text.contains("Nested bullet"),
+            "Should contain nested item"
+        );
     }
 
     #[test]
@@ -1474,8 +1582,14 @@ mod tests {
         assert!(!lines.is_empty());
         // Should contain blockquote bar
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
-        assert!(all_text.contains('│'), "Blockquote should contain │ bar: got {all_text}");
-        assert!(all_text.contains("Quoted text"), "Should contain quoted text");
+        assert!(
+            all_text.contains('│'),
+            "Blockquote should contain │ bar: got {all_text}"
+        );
+        assert!(
+            all_text.contains("Quoted text"),
+            "Should contain quoted text"
+        );
     }
 
     #[test]
@@ -1487,7 +1601,10 @@ mod tests {
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         // Should have at least 2 bar characters for nested blockquote
         let bar_count = all_text.chars().filter(|c| *c == '│').count();
-        assert!(bar_count >= 2, "Nested blockquote should have multiple bars: got {bar_count} bars");
+        assert!(
+            bar_count >= 2,
+            "Nested blockquote should have multiple bars: got {bar_count} bars"
+        );
     }
 
     #[test]
@@ -1500,8 +1617,14 @@ mod tests {
         // Should have box-drawing characters for borders
         assert!(all_text.contains('┌'), "Table should have top-left corner");
         assert!(all_text.contains('┐'), "Table should have top-right corner");
-        assert!(all_text.contains('└'), "Table should have bottom-left corner");
-        assert!(all_text.contains('┘'), "Table should have bottom-right corner");
+        assert!(
+            all_text.contains('└'),
+            "Table should have bottom-left corner"
+        );
+        assert!(
+            all_text.contains('┘'),
+            "Table should have bottom-right corner"
+        );
     }
 
     #[test]
@@ -1523,8 +1646,14 @@ mod tests {
         assert!(!lines.is_empty());
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
         // Should contain OSC 8 escape sequences
-        assert!(all_text.contains("\x1b]8;;https://example.com\x1b\\"), "Should have OSC 8 open");
-        assert!(all_text.contains("\x1b]8;;\x1b\\"), "Should have OSC 8 close");
+        assert!(
+            all_text.contains("\x1b]8;;https://example.com\x1b\\"),
+            "Should have OSC 8 open"
+        );
+        assert!(
+            all_text.contains("\x1b]8;;\x1b\\"),
+            "Should have OSC 8 close"
+        );
         assert!(all_text.contains("here"), "Should contain link text");
     }
 
@@ -1542,7 +1671,10 @@ mod tests {
         // Should have title + 10 head lines + fold indicator + 5 tail lines + footer
         // That's about 18 lines, not 25+ lines of code
         let all_text: String = lines.iter().map(|l| spans_to_string(&l.spans)).collect();
-        assert!(all_text.contains("lines folded"), "Long code block should be folded: got {all_text}");
+        assert!(
+            all_text.contains("lines folded"),
+            "Long code block should be folded: got {all_text}"
+        );
     }
 
     #[test]
@@ -1591,7 +1723,8 @@ mod tests {
         // << and >> should not be silently dropped (regression test for Event::Html fix)
         let renderer = Renderer::new();
         let lines = renderer.render_markdown("result << 5 >> 3", &Theme::default_dark());
-        let text: String = lines.iter()
+        let text: String = lines
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.clone()))
             .collect();
         assert!(

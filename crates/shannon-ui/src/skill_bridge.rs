@@ -6,14 +6,13 @@
 //!   and registers each user-invocable one as a tool in the `ToolRegistry`
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
 use shannon_skills::{
-    Skill, SkillContext, SkillExecutor, SkillPermissions,
-    SkillRegistry,
-    loader::load_skills_from_directory,
-    definition::SkillSource,
+    Skill, SkillContext, SkillExecutor, SkillPermissions, SkillRegistry,
     bundled::{BundledSkills, init_bundled_skills},
+    definition::SkillSource,
+    loader::load_skills_from_directory,
 };
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
@@ -74,18 +73,12 @@ impl Tool for SkillToolAdapter {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         // Extract arguments from the input JSON.
-        let args_str = input
-            .get("args")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let args_str = input.get("args").and_then(|v| v.as_str()).unwrap_or("");
 
         let arguments: Vec<String> = if args_str.is_empty() {
             Vec::new()
         } else {
-            args_str
-                .split_whitespace()
-                .map(|s| s.to_string())
-                .collect()
+            args_str.split_whitespace().map(|s| s.to_string()).collect()
         };
 
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -111,8 +104,7 @@ impl Tool for SkillToolAdapter {
             }
             Err(e) => Ok(ToolOutput::error(format!(
                 "Skill '{}' execution failed: {}",
-                self.skill.name,
-                e
+                self.skill.name, e
             ))),
         }
     }
@@ -177,8 +169,14 @@ pub fn register_skills_as_tools(registry: &mut ToolRegistry) -> (usize, String) 
         let adapter = SkillToolAdapter::new(skill);
         match registry.register(Box::new(adapter)) {
             Ok(()) => {
-                debug!("Registered bundled skill as tool: skill_{}",
-                    registry.list().last().map(|n| n.strip_prefix("skill_").unwrap_or(n)).unwrap_or("?"));
+                debug!(
+                    "Registered bundled skill as tool: skill_{}",
+                    registry
+                        .list()
+                        .last()
+                        .map(|n| n.strip_prefix("skill_").unwrap_or(n))
+                        .unwrap_or("?")
+                );
                 count += 1;
             }
             Err(e) => {

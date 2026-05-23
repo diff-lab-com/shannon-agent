@@ -294,8 +294,10 @@ impl McpServerConfig {
             ));
         }
 
-        if matches!(self.transport_type, TransportType::Http | TransportType::Sse)
-            && self.url.is_none()
+        if matches!(
+            self.transport_type,
+            TransportType::Http | TransportType::Sse
+        ) && self.url.is_none()
         {
             return Err(McpAdvancedError::InvalidConfig(format!(
                 "{:?} transport requires a URL",
@@ -568,7 +570,10 @@ impl McpChannelManager {
         let id = channel.id.clone();
         self.name_index.insert(name.to_string(), id.clone());
         self.channels.insert(id.clone(), channel);
-        Ok(self.channels.get(&id).expect("channel was just inserted after contains_key check"))
+        Ok(self
+            .channels
+            .get(&id)
+            .expect("channel was just inserted after contains_key check"))
     }
 
     /// Get a channel by ID.
@@ -671,11 +676,13 @@ impl ElicitationHandler {
         requested_schema: serde_json::Value,
         source_channel_id: &str,
     ) -> ElicitationRequest {
-        let request =
-            ElicitationRequest::new(message, requested_schema, source_channel_id);
+        let request = ElicitationRequest::new(message, requested_schema, source_channel_id);
         let id = request.id.clone();
         self.requests.insert(id.clone(), request);
-        self.requests.get(&id).cloned().expect("request was just inserted")
+        self.requests
+            .get(&id)
+            .cloned()
+            .expect("request was just inserted")
     }
 
     /// Get an elicitation request by ID.
@@ -714,8 +721,7 @@ impl ElicitationHandler {
         let now = Utc::now();
         let mut expired = 0;
         for request in self.requests.values_mut() {
-            if request.status == ElicitationStatus::Pending
-                && now - request.created_at > threshold
+            if request.status == ElicitationStatus::Pending && now - request.created_at > threshold
             {
                 request.expire();
                 expired += 1;
@@ -793,7 +799,8 @@ impl McpServerRegistry {
         if self.signatures.contains(&sig) {
             tracing::debug!(
                 "Skipping MCP server '{}': content signature already registered ({})",
-                config.name, sig
+                config.name,
+                sig
             );
             return Ok(());
         }
@@ -804,7 +811,8 @@ impl McpServerRegistry {
 
     /// Unregister an MCP server by name.
     pub fn unregister(&mut self, name: &str) -> Result<McpServerConfig, McpAdvancedError> {
-        let config = self.servers
+        let config = self
+            .servers
             .remove(name)
             .ok_or_else(|| McpAdvancedError::ServerNotFound(name.to_string()))?;
         self.signatures.remove(&config.content_signature());
@@ -826,11 +834,7 @@ impl McpServerRegistry {
     }
 
     /// Update an existing server configuration.
-    pub fn update(
-        &mut self,
-        name: &str,
-        config: McpServerConfig,
-    ) -> Result<(), McpAdvancedError> {
+    pub fn update(&mut self, name: &str, config: McpServerConfig) -> Result<(), McpAdvancedError> {
         config.validate()?;
         if !self.servers.contains_key(name) {
             return Err(McpAdvancedError::ServerNotFound(name.to_string()));
@@ -957,7 +961,10 @@ impl McpServerRegistry {
             }
         };
 
-        let command = val.get("command").and_then(|v| v.as_str()).map(String::from);
+        let command = val
+            .get("command")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let args = val
             .get("args")
             .and_then(|v| v.as_array())
@@ -1219,7 +1226,10 @@ mod tests {
         assert_eq!(channel.status, ChannelStatus::Active);
 
         channel.set_error("connection lost");
-        assert_eq!(channel.status, ChannelStatus::Error("connection lost".to_string()));
+        assert_eq!(
+            channel.status,
+            ChannelStatus::Error("connection lost".to_string())
+        );
 
         channel.close();
         assert_eq!(channel.status, ChannelStatus::Closed);
@@ -1265,7 +1275,10 @@ mod tests {
 
         let result = manager.create_channel("ch1", "srv2");
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), McpAdvancedError::ChannelAlreadyExists(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            McpAdvancedError::ChannelAlreadyExists(_)
+        ));
     }
 
     #[test]
@@ -1419,13 +1432,19 @@ mod tests {
     fn test_content_signature_stdio() {
         let mut config = McpServerConfig::new_stdio("test", "npx");
         config.args = vec!["-y".to_string(), "@modelcontextprotocol/server".to_string()];
-        assert_eq!(config.content_signature(), "stdio:npx -y @modelcontextprotocol/server");
+        assert_eq!(
+            config.content_signature(),
+            "stdio:npx -y @modelcontextprotocol/server"
+        );
     }
 
     #[test]
     fn test_content_signature_http() {
         let config = McpServerConfig::new_http("test", "https://api.example.com/mcp");
-        assert_eq!(config.content_signature(), "http:https://api.example.com/mcp");
+        assert_eq!(
+            config.content_signature(),
+            "http:https://api.example.com/mcp"
+        );
     }
 
     #[test]
@@ -1434,13 +1453,19 @@ mod tests {
 
         // Register a manual config
         let mut manual = McpServerConfig::new_stdio("manual-fetch", "npx");
-        manual.args = vec!["-y".to_string(), "@modelcontextprotocol/server-fetch".to_string()];
+        manual.args = vec![
+            "-y".to_string(),
+            "@modelcontextprotocol/server-fetch".to_string(),
+        ];
         registry.register(manual).unwrap();
         assert_eq!(registry.count(), 1);
 
         // Plugin provides same server under different name — should be silently skipped
         let mut plugin = McpServerConfig::new_stdio("plugin-fetch", "npx");
-        plugin.args = vec!["-y".to_string(), "@modelcontextprotocol/server-fetch".to_string()];
+        plugin.args = vec![
+            "-y".to_string(),
+            "@modelcontextprotocol/server-fetch".to_string(),
+        ];
         let result = registry.register(plugin);
         assert!(result.is_ok()); // not an error, just skipped
         assert_eq!(registry.count(), 1); // still only 1
@@ -1494,9 +1519,15 @@ mod tests {
     #[test]
     fn test_registry_filter_by_transport() {
         let mut registry = McpServerRegistry::new();
-        registry.register(McpServerConfig::new_stdio("s1", "node")).unwrap();
-        registry.register(McpServerConfig::new_stdio("s2", "python")).unwrap();
-        registry.register(McpServerConfig::new_http("s3", "https://example.com/mcp")).unwrap();
+        registry
+            .register(McpServerConfig::new_stdio("s1", "node"))
+            .unwrap();
+        registry
+            .register(McpServerConfig::new_stdio("s2", "python"))
+            .unwrap();
+        registry
+            .register(McpServerConfig::new_http("s3", "https://example.com/mcp"))
+            .unwrap();
 
         let stdio = registry.servers_by_transport(&TransportType::Stdio);
         assert_eq!(stdio.len(), 2);
@@ -1558,7 +1589,9 @@ mod tests {
     #[test]
     fn test_load_from_json_merges_existing() {
         let mut registry = McpServerRegistry::new();
-        registry.register(McpServerConfig::new_stdio("existing", "python")).unwrap();
+        registry
+            .register(McpServerConfig::new_stdio("existing", "python"))
+            .unwrap();
 
         let json = serde_json::json!([
             {
@@ -1571,7 +1604,10 @@ mod tests {
         registry.load_from_json(json).unwrap();
         // Should update, not duplicate
         assert_eq!(registry.count(), 1);
-        assert_eq!(registry.get("existing").unwrap().command, Some("node".to_string()));
+        assert_eq!(
+            registry.get("existing").unwrap().command,
+            Some("node".to_string())
+        );
     }
 
     // ---- Claude Code compatibility tests ----
@@ -1593,7 +1629,10 @@ mod tests {
         let config = registry.get("filesystem").unwrap();
         assert_eq!(config.transport_type, TransportType::Stdio);
         assert_eq!(config.command.as_deref(), Some("npx"));
-        assert_eq!(config.args, vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]);
+        assert_eq!(
+            config.args,
+            vec!["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+        );
     }
 
     #[test]
@@ -1615,7 +1654,10 @@ mod tests {
         let config = registry.get("remote-api").unwrap();
         assert_eq!(config.transport_type, TransportType::Http);
         assert_eq!(config.url.as_deref(), Some("https://mcp.example.com/api"));
-        assert_eq!(config.headers.get("Authorization").unwrap(), "Bearer token123");
+        assert_eq!(
+            config.headers.get("Authorization").unwrap(),
+            "Bearer token123"
+        );
     }
 
     #[test]
@@ -1667,15 +1709,21 @@ mod tests {
 
     #[test]
     fn test_expand_env_vars_simple() {
-        unsafe { std::env::set_var("SHANNON_TEST_VAR", "hello"); }
+        unsafe {
+            std::env::set_var("SHANNON_TEST_VAR", "hello");
+        }
         let result = expand_env_vars("prefix_${SHANNON_TEST_VAR}_suffix");
         assert_eq!(result, "prefix_hello_suffix");
-        unsafe { std::env::remove_var("SHANNON_TEST_VAR"); }
+        unsafe {
+            std::env::remove_var("SHANNON_TEST_VAR");
+        }
     }
 
     #[test]
     fn test_expand_env_vars_with_default() {
-        unsafe { std::env::remove_var("SHANNON_NONEXISTENT_VAR"); }
+        unsafe {
+            std::env::remove_var("SHANNON_NONEXISTENT_VAR");
+        }
         let result = expand_env_vars("${SHANNON_NONEXISTENT_VAR:-fallback}");
         assert_eq!(result, "fallback");
     }
@@ -1688,17 +1736,27 @@ mod tests {
 
     #[test]
     fn test_expand_env_vars_multiple() {
-        unsafe { std::env::set_var("SHANNON_HOST", "example.com"); }
-        unsafe { std::env::set_var("SHANNON_PORT", "8080"); }
+        unsafe {
+            std::env::set_var("SHANNON_HOST", "example.com");
+        }
+        unsafe {
+            std::env::set_var("SHANNON_PORT", "8080");
+        }
         let result = expand_env_vars("https://${SHANNON_HOST}:${SHANNON_PORT}/path");
         assert_eq!(result, "https://example.com:8080/path");
-        unsafe { std::env::remove_var("SHANNON_HOST"); }
-        unsafe { std::env::remove_var("SHANNON_PORT"); }
+        unsafe {
+            std::env::remove_var("SHANNON_HOST");
+        }
+        unsafe {
+            std::env::remove_var("SHANNON_PORT");
+        }
     }
 
     #[test]
     fn test_expand_env_vars_in_config() {
-        unsafe { std::env::set_var("SHANNON_API_KEY", "secret123"); }
+        unsafe {
+            std::env::set_var("SHANNON_API_KEY", "secret123");
+        }
         let mut config = McpServerConfig {
             name: "test".to_string(),
             transport_type: TransportType::Http,
@@ -1706,17 +1764,23 @@ mod tests {
             args: vec![],
             env: HashMap::new(),
             url: Some("https://api.example.com/mcp".to_string()),
-            headers: HashMap::from([
-                ("Authorization".to_string(), "Bearer ${SHANNON_API_KEY}".to_string()),
-            ]),
+            headers: HashMap::from([(
+                "Authorization".to_string(),
+                "Bearer ${SHANNON_API_KEY}".to_string(),
+            )]),
             enabled: true,
             timeout_secs: None,
             discovery_timeout_secs: None,
             oauth_scopes: Vec::new(),
         };
         expand_env_vars_in_config(&mut config);
-        assert_eq!(config.headers.get("Authorization").unwrap(), "Bearer secret123");
-        unsafe { std::env::remove_var("SHANNON_API_KEY"); }
+        assert_eq!(
+            config.headers.get("Authorization").unwrap(),
+            "Bearer secret123"
+        );
+        unsafe {
+            std::env::remove_var("SHANNON_API_KEY");
+        }
     }
 
     #[test]
@@ -1736,7 +1800,8 @@ mod tests {
         std::fs::write(
             dir.path().join(".mcp.json"),
             serde_json::to_string_pretty(&mcp_json).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let loaded = registry.load_from_default_paths_with_base(dir.path().to_path_buf());
         assert_eq!(loaded, 1);

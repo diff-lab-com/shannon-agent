@@ -15,8 +15,10 @@
 //! - The tool is not in the known safe list
 
 use crate::api::LlmClient;
-use crate::api::types::{Message, MessageContent, ContentBlock};
-use crate::permission_classifier::{ClassificationResult, PermissionClassifier, RiskLevel, RuleDecision};
+use crate::api::types::{ContentBlock, Message, MessageContent};
+use crate::permission_classifier::{
+    ClassificationResult, PermissionClassifier, RiskLevel, RuleDecision,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -108,7 +110,10 @@ impl LlmPermissionClassifier {
         // Step 2: Check if LLM consultation is needed
         let needs_llm = self.enabled
             && rule_result.confidence < self.confidence_threshold
-            && matches!(rule_result.risk_level, RiskLevel::Medium | RiskLevel::High | RiskLevel::Critical)
+            && matches!(
+                rule_result.risk_level,
+                RiskLevel::Medium | RiskLevel::High | RiskLevel::Critical
+            )
             && !matches!(tier, LlmTier::HardDeny);
 
         if !needs_llm {
@@ -164,9 +169,7 @@ impl LlmPermissionClassifier {
              Rule-based assessment: {} (confidence: {:.2}, risk: {})\n\n\
              Respond with JSON: {{\"decision\": \"allow\"|\"ask\"|\"deny\", \
              \"confidence\": 0.0-1.0, \"reason\": \"...\"}}",
-            rule_result.decision,
-            rule_result.confidence,
-            rule_result.risk_level,
+            rule_result.decision, rule_result.confidence, rule_result.risk_level,
         );
 
         let messages = vec![Message {
@@ -215,12 +218,14 @@ impl LlmPermissionClassifier {
             _ => return fallback.clone(),
         };
 
-        let confidence = parsed.get("confidence")
+        let confidence = parsed
+            .get("confidence")
             .and_then(|v| v.as_f64())
             .map(|v| v as f32)
             .unwrap_or(fallback.confidence);
 
-        let reason = parsed.get("reason")
+        let reason = parsed
+            .get("reason")
             .and_then(|v| v.as_str())
             .unwrap_or(&fallback.reason)
             .to_string();
@@ -352,7 +357,8 @@ mod tests {
             matched_rule: None,
             risk_level: RiskLevel::High,
         };
-        let response = r#"{"decision": "deny", "confidence": 0.85, "reason": "destructive command"}"#;
+        let response =
+            r#"{"decision": "deny", "confidence": 0.85, "reason": "destructive command"}"#;
         let result = classifier.parse_llm_response(response, &fallback);
         assert_eq!(result.decision, RuleDecision::Deny);
     }
@@ -382,7 +388,8 @@ mod tests {
             matched_rule: None,
             risk_level: RiskLevel::Medium,
         };
-        let response = "```json\n{\"decision\": \"allow\", \"confidence\": 0.8, \"reason\": \"ok\"}\n```";
+        let response =
+            "```json\n{\"decision\": \"allow\", \"confidence\": 0.8, \"reason\": \"ok\"}\n```";
         let result = classifier.parse_llm_response(response, &fallback);
         assert_eq!(result.decision, RuleDecision::Allow);
     }
@@ -390,7 +397,9 @@ mod tests {
     #[tokio::test]
     async fn test_classify_without_llm_returns_rule_result() {
         let classifier = make_classifier();
-        let result = classifier.classify("Read", &serde_json::json!({"path": "/tmp/test"})).await;
+        let result = classifier
+            .classify("Read", &serde_json::json!({"path": "/tmp/test"}))
+            .await;
         assert!(!result.llm_consulted);
         assert_eq!(result.tier, LlmTier::Allow);
     }

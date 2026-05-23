@@ -4,11 +4,11 @@
 
 use crate::theme::Theme;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
-    Frame,
 };
 
 /// Selection item for lists
@@ -167,18 +167,18 @@ impl MultiSelectWidget {
                     Span::styled(
                         format!("[{check_mark}]"),
                         Style::default()
-                            .fg(if is_selected { theme.success } else { theme.text })
+                            .fg(if is_selected {
+                                theme.success
+                            } else {
+                                theme.text
+                            })
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::raw(" "),
                     Span::styled(
                         &item.label,
                         Style::default()
-                            .fg(if is_focused {
-                                theme.accent
-                            } else {
-                                theme.text
-                            })
+                            .fg(if is_focused { theme.accent } else { theme.text })
                             .add_modifier(if is_focused {
                                 Modifier::BOLD | Modifier::UNDERLINED
                             } else {
@@ -189,10 +189,7 @@ impl MultiSelectWidget {
 
                 if let Some(desc) = &item.description {
                     spans.push(Span::raw(" "));
-                    spans.push(Span::styled(
-                        desc,
-                        Style::default().fg(theme.text_dim),
-                    ));
+                    spans.push(Span::styled(desc, Style::default().fg(theme.text_dim)));
                 }
 
                 ListItem::new(Line::from(spans))
@@ -204,7 +201,7 @@ impl MultiSelectWidget {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.accent))
-                    .title(format!(" {} ", self.title))
+                    .title(format!(" {} ", self.title)),
             )
             .highlight_style(
                 Style::default()
@@ -269,7 +266,11 @@ impl FileSelectorWidget {
 
     /// Update filter and refresh file list
     pub fn set_filter_pattern(&mut self, pattern: &str) {
-        self.filter = if pattern.is_empty() { None } else { Some(pattern.to_string()) };
+        self.filter = if pattern.is_empty() {
+            None
+        } else {
+            Some(pattern.to_string())
+        };
         self.focused_index = 0;
         let _ = self.refresh();
     }
@@ -409,9 +410,14 @@ impl FileSelectorWidget {
                     Span::styled("Filter: ", Style::default().fg(theme.accent)),
                     Span::styled(
                         f.as_str(),
-                        Style::default().fg(theme.warning).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.warning)
+                            .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(" (type to filter, Backspace to clear)", Style::default().fg(theme.text_dim)),
+                    Span::styled(
+                        " (type to filter, Backspace to clear)",
+                        Style::default().fg(theme.text_dim),
+                    ),
                 ]));
             }
         }
@@ -419,9 +425,10 @@ impl FileSelectorWidget {
         // Show directories
         if !self.directories.is_empty() {
             content.push(Line::from(""));
-            content.push(Line::from(vec![
-                Span::styled("Directories:", Style::default().fg(theme.accent)),
-            ]));
+            content.push(Line::from(vec![Span::styled(
+                "Directories:",
+                Style::default().fg(theme.accent),
+            )]));
 
             for (i, dir) in self.directories.iter().enumerate() {
                 let prefix = if !self.is_focused_on_files && i == self.focused_index {
@@ -433,7 +440,9 @@ impl FileSelectorWidget {
                     Span::styled(prefix, Style::default().fg(theme.warning)),
                     Span::styled(
                         format!("{dir}/"),
-                        Style::default().fg(theme.primary).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.primary)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]));
             }
@@ -442,9 +451,10 @@ impl FileSelectorWidget {
         // Show files
         if !self.files.is_empty() {
             content.push(Line::from(""));
-            content.push(Line::from(vec![
-                Span::styled("Files:", Style::default().fg(theme.accent)),
-            ]));
+            content.push(Line::from(vec![Span::styled(
+                "Files:",
+                Style::default().fg(theme.accent),
+            )]));
 
             for (i, file) in self.files.iter().enumerate() {
                 let prefix = if self.is_focused_on_files && i == self.focused_index {
@@ -474,7 +484,7 @@ impl FileSelectorWidget {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.accent))
-                    .title(format!(" {} ", self.title))
+                    .title(format!(" {} ", self.title)),
             )
             .wrap(Wrap { trim: false });
 
@@ -556,9 +566,7 @@ impl FuzzyPickerWidget {
                 .items
                 .iter()
                 .enumerate()
-                .filter(|(_, item)| {
-                    item.label.to_lowercase().contains(&query)
-                })
+                .filter(|(_, item)| item.label.to_lowercase().contains(&query))
                 .map(|(i, _)| i)
                 .collect();
         }
@@ -591,8 +599,7 @@ impl FuzzyPickerWidget {
 
     /// Get selected value
     pub fn selected_value(&self) -> Option<&str> {
-        self.current_selection()
-            .map(|item| item.value.as_str())
+        self.current_selection().map(|item| item.value.as_str())
     }
 
     /// Render the fuzzy picker
@@ -619,7 +626,11 @@ impl FuzzyPickerWidget {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                if self.state == PickerState::Searching { "█" } else { "" },
+                if self.state == PickerState::Searching {
+                    "█"
+                } else {
+                    ""
+                },
                 Style::default().fg(theme.warning),
             ),
         ]));
@@ -660,10 +671,7 @@ impl FuzzyPickerWidget {
                     if let Some(desc) = &item.description {
                         content.push(Line::from(vec![
                             Span::raw("    "),
-                            Span::styled(
-                                desc,
-                                Style::default().fg(theme.text_dim),
-                            ),
+                            Span::styled(desc, Style::default().fg(theme.text_dim)),
                         ]));
                     }
                 }
@@ -671,22 +679,16 @@ impl FuzzyPickerWidget {
 
             // Show pagination indicator
             if self.filtered_items.len() > max_items {
-                content.push(Line::from(vec![
-                    Span::styled(
-                        format!(
-                            "({}-{} of {})",
-                            start + 1,
-                            end,
-                            self.filtered_items.len()
-                        ),
-                        Style::default().fg(theme.text_dim),
-                    ),
-                ]));
+                content.push(Line::from(vec![Span::styled(
+                    format!("({}-{} of {})", start + 1, end, self.filtered_items.len()),
+                    Style::default().fg(theme.text_dim),
+                )]));
             }
         } else {
-            content.push(Line::from(vec![
-                Span::styled("No results", Style::default().fg(theme.text_dim)),
-            ]));
+            content.push(Line::from(vec![Span::styled(
+                "No results",
+                Style::default().fg(theme.text_dim),
+            )]));
         }
 
         let paragraph = Paragraph::new(content)
@@ -694,7 +696,7 @@ impl FuzzyPickerWidget {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.accent))
-                    .title(format!(" {} ", self.title))
+                    .title(format!(" {} ", self.title)),
             )
             .wrap(Wrap { trim: true });
 
@@ -719,8 +721,7 @@ mod tests {
             SelectItem::new("Option 1", "val1".to_string()),
             SelectItem::new("Option 2", "val2".to_string()),
         ];
-        let widget = MultiSelectWidget::new("Test".to_string())
-            .with_items(items);
+        let widget = MultiSelectWidget::new("Test".to_string()).with_items(items);
 
         assert_eq!(widget.items.len(), 2);
         assert_eq!(widget.focused_index, 0);
@@ -732,8 +733,7 @@ mod tests {
             SelectItem::new("Option 1", "val1".to_string()),
             SelectItem::new("Option 2", "val2".to_string()),
         ];
-        let mut widget = MultiSelectWidget::new("Test".to_string())
-            .with_items(items);
+        let mut widget = MultiSelectWidget::new("Test".to_string()).with_items(items);
 
         widget.state.select(Some(0));
         widget.toggle_current();
@@ -745,8 +745,7 @@ mod tests {
 
     #[test]
     fn test_file_selector_refresh() {
-        let widget = FileSelectorWidget::new("Select File".to_string())
-            .with_path(".");
+        let widget = FileSelectorWidget::new("Select File".to_string()).with_path(".");
 
         // This will work in actual tests with proper directory setup
         // For now just verify the structure
@@ -813,7 +812,10 @@ impl ModelPickerWidget {
         // Find the provider of the current model to open the right tab
         if let Some(model_id) = current_model {
             if let Some(idx) = picker.providers.iter().position(|p| {
-                picker.models_for(p.clone()).iter().any(|m| m.id == model_id)
+                picker
+                    .models_for(p.clone())
+                    .iter()
+                    .any(|m| m.id == model_id)
             }) {
                 picker.current_provider_idx = idx;
             }
@@ -840,10 +842,7 @@ impl ModelPickerWidget {
             // Return detected local models, or empty vec (render shows "No local models detected")
             self.local_models.clone()
         } else {
-            models_for_provider(provider)
-                .into_iter()
-                .cloned()
-                .collect()
+            models_for_provider(provider).into_iter().cloned().collect()
         }
     }
 
@@ -952,7 +951,9 @@ impl ModelPickerWidget {
         };
         lines.push(Line::from(Span::styled(
             format!(" Select {provider_name} Model "),
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
 
@@ -965,7 +966,10 @@ impl ModelPickerWidget {
                 .flat_map(|(i, p)| {
                     let name = provider_display_name(p);
                     let style = if i == self.current_provider_idx {
-                        Style::default().fg(theme.context_bar_bg).bg(theme.accent).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(theme.context_bar_bg)
+                            .bg(theme.accent)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(theme.text_dim)
                     };
@@ -985,7 +989,9 @@ impl ModelPickerWidget {
         if self.models.is_empty() {
             lines.push(Line::from(Span::styled(
                 "  No local models detected",
-                Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
+                Style::default()
+                    .fg(theme.text_dim)
+                    .add_modifier(Modifier::ITALIC),
             )));
             lines.push(Line::from(Span::styled(
                 "  Install Ollama and run: ollama pull llama3",
@@ -1008,10 +1014,16 @@ impl ModelPickerWidget {
                 let truncated = if label_w > max_w {
                     let end = max_w.saturating_sub(3);
                     let mut len = 0;
-                    let t: String = label.chars()
+                    let t: String = label
+                        .chars()
                         .take_while(|c| {
                             let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                            if len + cw > end { false } else { len += cw; true }
+                            if len + cw > end {
+                                false
+                            } else {
+                                len += cw;
+                                true
+                            }
                         })
                         .collect();
                     format!("{t}...")
@@ -1022,12 +1034,17 @@ impl ModelPickerWidget {
                 if i == self.selected_idx {
                     lines.push(Line::from(Span::styled(
                         format!("{marker}▸ {truncated}"),
-                        Style::default().fg(theme.context_bar_bg).bg(theme.accent).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.context_bar_bg)
+                            .bg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
                     )));
                 } else if is_current {
                     lines.push(Line::from(Span::styled(
                         format!("{marker}  {truncated}"),
-                        Style::default().fg(theme.success).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme.success)
+                            .add_modifier(Modifier::BOLD),
                     )));
                 } else {
                     lines.push(Line::from(Span::styled(

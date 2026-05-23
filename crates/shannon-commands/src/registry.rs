@@ -103,19 +103,18 @@ impl CommandRegistry {
 
     /// List all registered command names
     pub async fn list_names(&self) -> Vec<String> {
-        self.commands
-            .read()
-            .await
-            .keys()
-            .cloned()
-            .collect()
+        self.commands.read().await.keys().cloned().collect()
     }
 
     /// List all command names including aliases
     pub async fn list_names_with_aliases(&self) -> Vec<String> {
         let commands = self.commands.read().await;
         let aliases = self.aliases.read().await;
-        let mut names: Vec<String> = commands.keys().cloned().chain(aliases.keys().cloned()).collect();
+        let mut names: Vec<String> = commands
+            .keys()
+            .cloned()
+            .chain(aliases.keys().cloned())
+            .collect();
         names.sort();
         names.dedup();
         names
@@ -197,10 +196,7 @@ impl CommandRegistry {
             .values()
             .filter(|cmd| {
                 let name_matches = cmd.name().to_lowercase().contains(&pattern_lower);
-                let desc_matches = cmd
-                    .description()
-                    .to_lowercase()
-                    .contains(&pattern_lower);
+                let desc_matches = cmd.description().to_lowercase().contains(&pattern_lower);
                 let alias_matches = cmd
                     .aliases()
                     .iter()
@@ -225,9 +221,7 @@ impl CommandRegistry {
         let _command = self.get(name).await?;
         // For now, return a simple success message
         // In a full implementation, this would execute the command
-        Ok(format!(
-            "Command '{name}' dispatched with args: '{args}'"
-        ))
+        Ok(format!("Command '{name}' dispatched with args: '{args}'"))
     }
 
     /// Generate help text for all commands or a specific command
@@ -290,7 +284,9 @@ impl CommandRegistry {
                 ));
             }
 
-            output.push_str("\nUse `/help <command>` for detailed information about a specific command.\n");
+            output.push_str(
+                "\nUse `/help <command>` for detailed information about a specific command.\n",
+            );
             output
         }
     }

@@ -42,7 +42,10 @@ pub trait AuthProvider: Send + Sync {
     async fn is_valid(&self) -> bool;
 
     /// Add authentication headers to a request
-    async fn add_auth_headers(&self, headers: &mut HashMap<String, String>) -> Result<(), AuthError>;
+    async fn add_auth_headers(
+        &self,
+        headers: &mut HashMap<String, String>,
+    ) -> Result<(), AuthError>;
 }
 
 /// OAuth 2.0 PKCE authentication provider
@@ -65,14 +68,12 @@ pub struct OAuth2Provider {
 }
 
 /// Internal token storage with expiry
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 struct OAuth2Tokens {
     access_token: Option<String>,
     refresh_token: Option<String>,
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
-
 
 /// OAuth 2.0 token response from server
 #[derive(Debug, Deserialize)]
@@ -190,12 +191,13 @@ impl OAuth2Provider {
         // Validate CSRF state
         {
             let stored_state = self.csrf_state.read().await;
-            let expected = stored_state.as_ref()
-                .ok_or_else(|| AuthError::OAuth("No state stored. Call get_authorization_url first.".to_string()))?;
+            let expected = stored_state.as_ref().ok_or_else(|| {
+                AuthError::OAuth("No state stored. Call get_authorization_url first.".to_string())
+            })?;
             if state != expected {
-                return Err(AuthError::OAuth(
-                    format!("CSRF state mismatch: expected {expected}, got {state}")
-                ));
+                return Err(AuthError::OAuth(format!(
+                    "CSRF state mismatch: expected {expected}, got {state}"
+                )));
             }
         }
         // Clear state after validation (one-time use)
@@ -203,8 +205,13 @@ impl OAuth2Provider {
 
         // Retrieve the stored code verifier
         let verifier_guard = self.code_verifier.read().await;
-        let verifier = verifier_guard.as_ref()
-            .ok_or_else(|| AuthError::OAuth("No code verifier stored. Call get_authorization_url first.".to_string()))?
+        let verifier = verifier_guard
+            .as_ref()
+            .ok_or_else(|| {
+                AuthError::OAuth(
+                    "No code verifier stored. Call get_authorization_url first.".to_string(),
+                )
+            })?
             .clone();
         drop(verifier_guard);
 
@@ -254,9 +261,9 @@ impl OAuth2Provider {
         }
 
         // Calculate expiry time
-        let expires_at = token_response.expires_in.map(|seconds| {
-            chrono::Utc::now() + chrono::Duration::seconds(seconds as i64)
-        });
+        let expires_at = token_response
+            .expires_in
+            .map(|seconds| chrono::Utc::now() + chrono::Duration::seconds(seconds as i64));
 
         // Store tokens
         let mut tokens = self.tokens.write().await;
@@ -274,7 +281,9 @@ impl OAuth2Provider {
     /// Refresh the access token using refresh token
     pub async fn refresh_access_token(&self) -> Result<String, AuthError> {
         let tokens_guard = self.tokens.read().await;
-        let refresh_token = tokens_guard.refresh_token.as_ref()
+        let refresh_token = tokens_guard
+            .refresh_token
+            .as_ref()
             .ok_or_else(|| AuthError::OAuth("No refresh token available".to_string()))?
             .clone();
         drop(tokens_guard);
@@ -325,11 +334,13 @@ impl OAuth2Provider {
         // Update tokens
         let mut tokens = self.tokens.write().await;
         tokens.access_token = Some(token_response.access_token.clone());
-        tokens.refresh_token = token_response.refresh_token.or(tokens.refresh_token.clone());
+        tokens.refresh_token = token_response
+            .refresh_token
+            .or(tokens.refresh_token.clone());
 
-        let expires_at = token_response.expires_in.map(|seconds| {
-            chrono::Utc::now() + chrono::Duration::seconds(seconds as i64)
-        });
+        let expires_at = token_response
+            .expires_in
+            .map(|seconds| chrono::Utc::now() + chrono::Duration::seconds(seconds as i64));
         tokens.expires_at = expires_at;
 
         info!("OAuth2 token refreshed successfully");
@@ -384,7 +395,10 @@ impl AuthProvider for OAuth2Provider {
         }
     }
 
-    async fn add_auth_headers(&self, headers: &mut HashMap<String, String>) -> Result<(), AuthError> {
+    async fn add_auth_headers(
+        &self,
+        headers: &mut HashMap<String, String>,
+    ) -> Result<(), AuthError> {
         let token = self.get_token().await?;
         headers.insert("Authorization".to_string(), format!("Bearer {token}"));
         Ok(())
@@ -435,7 +449,10 @@ impl AuthProvider for ApiKeyProvider {
         !self.api_key.is_empty()
     }
 
-    async fn add_auth_headers(&self, headers: &mut HashMap<String, String>) -> Result<(), AuthError> {
+    async fn add_auth_headers(
+        &self,
+        headers: &mut HashMap<String, String>,
+    ) -> Result<(), AuthError> {
         let header_name = self.header_name.as_deref().unwrap_or("X-API-Key");
         let value = if let Some(prefix) = &self.prefix {
             format!("{} {}", prefix, self.api_key)
@@ -482,18 +499,27 @@ impl MemoryTokenStorage {
 #[async_trait]
 impl TokenStorage for MemoryTokenStorage {
     async fn save_token(&self, key: &str, token: &str) -> Result<(), AuthError> {
-        let mut tokens = self.tokens.lock().map_err(|e| AuthError::Configuration(e.to_string()))?;
+        let mut tokens = self
+            .tokens
+            .lock()
+            .map_err(|e| AuthError::Configuration(e.to_string()))?;
         tokens.insert(key.to_string(), token.to_string());
         Ok(())
     }
 
     async fn load_token(&self, key: &str) -> Result<Option<String>, AuthError> {
-        let tokens = self.tokens.lock().map_err(|e| AuthError::Configuration(e.to_string()))?;
+        let tokens = self
+            .tokens
+            .lock()
+            .map_err(|e| AuthError::Configuration(e.to_string()))?;
         Ok(tokens.get(key).cloned())
     }
 
     async fn delete_token(&self, key: &str) -> Result<(), AuthError> {
-        let mut tokens = self.tokens.lock().map_err(|e| AuthError::Configuration(e.to_string()))?;
+        let mut tokens = self
+            .tokens
+            .lock()
+            .map_err(|e| AuthError::Configuration(e.to_string()))?;
         tokens.remove(key);
         Ok(())
     }
@@ -520,9 +546,9 @@ pub struct OAuthDiscoveryResult {
 fn extract_origin(raw_url: &str) -> Result<String, AuthError> {
     // Minimal URL parsing: find scheme://, then host[:port], up to next /
     if !raw_url.contains("://") {
-        return Err(AuthError::Configuration(
-            format!("Invalid URL (no scheme): {raw_url}")
-        ));
+        return Err(AuthError::Configuration(format!(
+            "Invalid URL (no scheme): {raw_url}"
+        )));
     }
     let scheme_end = raw_url.find("://").ok_or_else(|| {
         AuthError::Configuration(format!("Invalid URL (malformed scheme): {raw_url}"))
@@ -587,16 +613,13 @@ fn parse_auth_server_metadata(metadata: &serde_json::Value) -> Option<OAuthDisco
 /// 3. RFC 8414 direct: Try `{resource_origin}/.well-known/oauth-authorization-server`
 ///    in case the resource server is also the authorization server.
 /// 4. Fallback: return an error — caller should use explicit config.
-pub async fn discover_oauth_endpoints(
-    server_url: &str,
-) -> Result<OAuthDiscoveryResult, AuthError> {
+pub async fn discover_oauth_endpoints(server_url: &str) -> Result<OAuthDiscoveryResult, AuthError> {
     let origin = extract_origin(server_url)?;
 
     info!("Starting OAuth discovery for server: {server_url}");
 
     // Step 1: RFC 9728 Protected Resource Metadata
-    let resource_metadata_url =
-        format!("{origin}/.well-known/oauth-protected-resource");
+    let resource_metadata_url = format!("{origin}/.well-known/oauth-protected-resource");
 
     if let Some(metadata) = fetch_metadata_json(&resource_metadata_url).await {
         info!("Found RFC 9728 Protected Resource Metadata");
@@ -628,8 +651,7 @@ pub async fn discover_oauth_endpoints(
     }
 
     // Step 3: RFC 8414 direct at the resource origin
-    let direct_metadata_url =
-        format!("{origin}/.well-known/oauth-authorization-server");
+    let direct_metadata_url = format!("{origin}/.well-known/oauth-authorization-server");
 
     if let Some(metadata) = fetch_metadata_json(&direct_metadata_url).await {
         if let Some(result) = parse_auth_server_metadata(&metadata) {
@@ -746,14 +768,11 @@ pub async fn auto_register_oauth(
 ) -> Result<OAuth2Provider, AuthError> {
     let discovery = discover_oauth_endpoints(server_url).await?;
 
-    let registration_endpoint = discovery
-        .registration_endpoint
-        .as_ref()
-        .ok_or_else(|| {
-            AuthError::Configuration(
-                "Server does not advertise a registration_endpoint for DCR".to_string(),
-            )
-        })?;
+    let registration_endpoint = discovery.registration_endpoint.as_ref().ok_or_else(|| {
+        AuthError::Configuration(
+            "Server does not advertise a registration_endpoint for DCR".to_string(),
+        )
+    })?;
 
     let redirect_uris = vec![redirect_url.to_string()];
     let dcr = register_client(registration_endpoint, &redirect_uris, &scopes).await?;
@@ -884,7 +903,10 @@ mod tests {
             "scopes_supported": ["read", "write"]
         });
         let result = super::parse_auth_server_metadata(&metadata).unwrap();
-        assert_eq!(result.authorization_endpoint, "https://auth.example.com/authorize");
+        assert_eq!(
+            result.authorization_endpoint,
+            "https://auth.example.com/authorize"
+        );
         assert_eq!(result.token_endpoint, "https://auth.example.com/token");
         assert_eq!(result.scopes_supported, vec!["read", "write"]);
         assert!(result.registration_endpoint.is_none());
@@ -906,7 +928,10 @@ mod tests {
             "registration_endpoint": "https://auth.example.com/register"
         });
         let result = super::parse_auth_server_metadata(&metadata).unwrap();
-        assert_eq!(result.registration_endpoint.as_deref(), Some("https://auth.example.com/register"));
+        assert_eq!(
+            result.registration_endpoint.as_deref(),
+            Some("https://auth.example.com/register")
+        );
     }
 
     #[test]
@@ -926,7 +951,10 @@ mod tests {
             "token_endpoint": "http://localhost:8080/token"
         });
         let result = super::parse_auth_server_metadata(&metadata).unwrap();
-        assert_eq!(result.authorization_endpoint, "http://localhost:8080/authorize");
+        assert_eq!(
+            result.authorization_endpoint,
+            "http://localhost:8080/authorize"
+        );
     }
 
     #[tokio::test]
@@ -941,6 +969,10 @@ mod tests {
         let result = super::discover_oauth_endpoints("https://127.0.0.1:1/mcp").await;
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("no metadata found") || msg.contains("connection refused") || msg.contains("discovery failed"));
+        assert!(
+            msg.contains("no metadata found")
+                || msg.contains("connection refused")
+                || msg.contains("discovery failed")
+        );
     }
 }

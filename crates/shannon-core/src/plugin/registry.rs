@@ -1,6 +1,9 @@
 //! Plugin registry
 
-use super::{config::PluginsConfig, error::PluginError, index::PluginIndex, manifest::PluginManifest, PluginResult};
+use super::{
+    PluginResult, config::PluginsConfig, error::PluginError, index::PluginIndex,
+    manifest::PluginManifest,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -84,11 +87,14 @@ impl PluginRegistry {
                     let name = manifest.name.clone();
                     let enabled = self.config.is_enabled(&name);
 
-                    self.plugins.insert(name, InstalledPlugin {
-                        manifest,
-                        path,
-                        enabled,
-                    });
+                    self.plugins.insert(
+                        name,
+                        InstalledPlugin {
+                            manifest,
+                            path,
+                            enabled,
+                        },
+                    );
                 }
             }
         }
@@ -112,7 +118,10 @@ impl PluginRegistry {
         let target_dir = self.plugins_dir.join(&plugin_name);
 
         let target_str = target_dir.to_str().ok_or_else(|| {
-            PluginError::GitFailed(format!("Plugin path is not valid UTF-8: {}", target_dir.display()))
+            PluginError::GitFailed(format!(
+                "Plugin path is not valid UTF-8: {}",
+                target_dir.display()
+            ))
         })?;
         let status = Command::new("git")
             .args(["clone", "--depth", "1", repo_url, target_str])
@@ -120,7 +129,9 @@ impl PluginRegistry {
             .await?;
 
         if !status.success() {
-            return Err(PluginError::GitFailed(format!("Failed to clone {repo_url}")));
+            return Err(PluginError::GitFailed(format!(
+                "Failed to clone {repo_url}"
+            )));
         }
 
         // Load manifest
@@ -129,11 +140,14 @@ impl PluginRegistry {
         let name = manifest.name.clone();
 
         // Register the plugin
-        self.plugins.insert(name.clone(), InstalledPlugin {
-            manifest,
-            path: target_dir,
-            enabled: self.config.is_enabled(&name),
-        });
+        self.plugins.insert(
+            name.clone(),
+            InstalledPlugin {
+                manifest,
+                path: target_dir,
+                enabled: self.config.is_enabled(&name),
+            },
+        );
 
         Ok(name)
     }
@@ -165,18 +179,23 @@ impl PluginRegistry {
         Self::copy_dir_contents(path, &target_dir).await?;
 
         // Register the plugin
-        self.plugins.insert(plugin_name.clone(), InstalledPlugin {
-            manifest,
-            path: target_dir,
-            enabled: self.config.is_enabled(&plugin_name),
-        });
+        self.plugins.insert(
+            plugin_name.clone(),
+            InstalledPlugin {
+                manifest,
+                path: target_dir,
+                enabled: self.config.is_enabled(&plugin_name),
+            },
+        );
 
         Ok(plugin_name)
     }
 
     /// Uninstall a plugin
     pub async fn uninstall(&mut self, name: &str) -> PluginResult<()> {
-        let plugin = self.plugins.get(name)
+        let plugin = self
+            .plugins
+            .get(name)
             .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
 
         // Remove plugin directory
@@ -190,7 +209,9 @@ impl PluginRegistry {
 
     /// Enable a plugin
     pub fn enable(&mut self, name: &str) -> PluginResult<()> {
-        let plugin = self.plugins.get_mut(name)
+        let plugin = self
+            .plugins
+            .get_mut(name)
             .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
 
         plugin.enabled = true;
@@ -199,7 +220,9 @@ impl PluginRegistry {
 
     /// Disable a plugin
     pub fn disable(&mut self, name: &str) -> PluginResult<()> {
-        let plugin = self.plugins.get_mut(name)
+        let plugin = self
+            .plugins
+            .get_mut(name)
             .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
 
         plugin.enabled = false;
@@ -208,7 +231,9 @@ impl PluginRegistry {
 
     /// Update a plugin from its source
     pub async fn update(&mut self, name: &str) -> PluginResult<()> {
-        let plugin = self.plugins.get(name)
+        let plugin = self
+            .plugins
+            .get(name)
             .ok_or_else(|| PluginError::NotFound(name.to_string()))?;
 
         // Check if plugin has a git repository
@@ -232,7 +257,9 @@ impl PluginRegistry {
 
             Ok(())
         } else {
-            Err(PluginError::GitFailed(format!("Plugin {name} is not a git repository")))
+            Err(PluginError::GitFailed(format!(
+                "Plugin {name} is not a git repository"
+            )))
         }
     }
 
@@ -257,9 +284,7 @@ impl PluginRegistry {
 
     /// List enabled plugins
     pub fn list_enabled(&self) -> Vec<&InstalledPlugin> {
-        self.plugins.values()
-            .filter(|p| p.enabled)
-            .collect()
+        self.plugins.values().filter(|p| p.enabled).collect()
     }
 
     /// Get a plugin by name
@@ -311,7 +336,8 @@ impl PluginRegistry {
         let url = url.trim_end_matches(".git");
 
         // Get the last part of the path
-        let name = url.split('/')
+        let name = url
+            .split('/')
             .next_back()
             .ok_or_else(|| PluginError::InvalidManifest(format!("Invalid URL: {url}")))?;
 
@@ -319,7 +345,10 @@ impl PluginRegistry {
     }
 
     /// Copy directory contents recursively
-    fn copy_dir_contents<'a>(source: &'a Path, dest: &'a Path) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
+    fn copy_dir_contents<'a>(
+        source: &'a Path,
+        dest: &'a Path,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginResult<()>> + Send + 'a>> {
         Box::pin(async move {
             let mut entries = fs::read_dir(source).await?;
 
@@ -341,8 +370,10 @@ impl PluginRegistry {
 
     /// Create a plugin index from the configured registry
     pub fn create_index(&self) -> PluginIndex {
-        let url = self.config.registry_url.clone()
-            .unwrap_or_else(|| "https://raw.githubusercontent.com/shannon-code/plugins-index/main/index.json".to_string());
+        let url = self.config.registry_url.clone().unwrap_or_else(|| {
+            "https://raw.githubusercontent.com/shannon-code/plugins-index/main/index.json"
+                .to_string()
+        });
         PluginIndex::new(url)
     }
 }
@@ -469,9 +500,7 @@ permissions = [\"read_files\"]\n";
                 "name = \"{name}\"\nversion = \"1.0.0\"\ndescription = \"Test\"\n\
                 type = \"skill\"\nentry = \"t.md\"\ntrigger = \"/{name}\"\ntemplate = \"hi\"\n"
             );
-            fs::write(dir.join("plugin.toml"), manifest)
-                .await
-                .unwrap();
+            fs::write(dir.join("plugin.toml"), manifest).await.unwrap();
         }
 
         let mut registry = PluginRegistry::new(temp_dir.path().to_path_buf());

@@ -11,13 +11,13 @@
 
 mod credential_manager_tests {
     use shannon_core::credential_manager::{
-        Credential, CredentialError, CredentialFileFormat, CredentialManager,
-        PortableCredential, PortableCredentialBundle,
+        Credential, CredentialError, CredentialFileFormat, CredentialManager, PortableCredential,
+        PortableCredentialBundle,
     };
     use std::collections::HashMap;
-    use tempfile::TempDir;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use tempfile::TempDir;
 
     /// Helper: create a CredentialManager backed by a temp directory.
     fn make_mgr() -> (CredentialManager, TempDir) {
@@ -43,9 +43,12 @@ mod credential_manager_tests {
     #[test]
     fn test_store_multiple_credentials_and_retrieve_each() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store(Credential::new("Anthropic", "anthropic", "key-a")).unwrap();
-        mgr.store(Credential::new("GitHub", "github", "key-g")).unwrap();
-        mgr.store(Credential::new("OpenAI", "openai", "key-o")).unwrap();
+        mgr.store(Credential::new("Anthropic", "anthropic", "key-a"))
+            .unwrap();
+        mgr.store(Credential::new("GitHub", "github", "key-g"))
+            .unwrap();
+        mgr.store(Credential::new("OpenAI", "openai", "key-o"))
+            .unwrap();
 
         assert_eq!(mgr.retrieve("anthropic").unwrap().value, "key-a");
         assert_eq!(mgr.retrieve("github").unwrap().value, "key-g");
@@ -60,7 +63,9 @@ mod credential_manager_tests {
         let result = mgr.retrieve("nonexistent_service");
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, CredentialError::NotFound(ref s) if s.contains("nonexistent_service")));
+        assert!(
+            matches!(err, CredentialError::NotFound(ref s) if s.contains("nonexistent_service"))
+        );
     }
 
     #[test]
@@ -74,7 +79,8 @@ mod credential_manager_tests {
     #[test]
     fn test_store_duplicate_service_rejected() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store(Credential::new("First", "anthropic", "key-1")).unwrap();
+        mgr.store(Credential::new("First", "anthropic", "key-1"))
+            .unwrap();
         let result = mgr.store(Credential::new("Second", "anthropic", "key-2"));
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -90,10 +96,12 @@ mod credential_manager_tests {
     #[test]
     fn test_store_or_update_overwrites_existing() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store(Credential::new("Original", "anthropic", "old-key")).unwrap();
+        mgr.store(Credential::new("Original", "anthropic", "old-key"))
+            .unwrap();
         assert_eq!(mgr.retrieve("anthropic").unwrap().value, "old-key");
 
-        mgr.store_or_update(Credential::new("Updated", "anthropic", "new-key")).unwrap();
+        mgr.store_or_update(Credential::new("Updated", "anthropic", "new-key"))
+            .unwrap();
         let retrieved = mgr.retrieve("anthropic").unwrap();
         assert_eq!(retrieved.name, "Updated");
         assert_eq!(retrieved.value, "new-key");
@@ -102,7 +110,8 @@ mod credential_manager_tests {
     #[test]
     fn test_store_or_update_creates_if_not_exists() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store_or_update(Credential::new("Fresh", "openai", "fresh-key")).unwrap();
+        mgr.store_or_update(Credential::new("Fresh", "openai", "fresh-key"))
+            .unwrap();
         assert_eq!(mgr.retrieve("openai").unwrap().value, "fresh-key");
     }
 
@@ -111,7 +120,8 @@ mod credential_manager_tests {
     #[test]
     fn test_delete_existing_credential() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store(Credential::new("Test", "anthropic", "key")).unwrap();
+        mgr.store(Credential::new("Test", "anthropic", "key"))
+            .unwrap();
         assert!(mgr.exists("anthropic"));
 
         let deleted = mgr.delete("anthropic").unwrap();
@@ -130,7 +140,8 @@ mod credential_manager_tests {
     #[test]
     fn test_delete_removes_file_from_disk() {
         let (mut mgr, dir) = make_mgr();
-        mgr.store(Credential::new("Test", "anthropic", "key")).unwrap();
+        mgr.store(Credential::new("Test", "anthropic", "key"))
+            .unwrap();
         let file_path = dir.path().join("anthropic.json");
         assert!(file_path.exists());
 
@@ -166,7 +177,8 @@ mod credential_manager_tests {
     #[test]
     fn test_list_does_not_contain_sensitive_values() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store(Credential::new("Test", "anthropic", "super-secret-key")).unwrap();
+        mgr.store(Credential::new("Test", "anthropic", "super-secret-key"))
+            .unwrap();
 
         let list = mgr.list();
         assert_eq!(list.len(), 1);
@@ -197,7 +209,8 @@ mod credential_manager_tests {
         let (mut mgr, _dir) = make_mgr();
         assert!(!mgr.exists("anthropic"));
 
-        mgr.store(Credential::new("Anthropic", "anthropic", "key")).unwrap();
+        mgr.store(Credential::new("Anthropic", "anthropic", "key"))
+            .unwrap();
         assert!(mgr.exists("anthropic"));
     }
 
@@ -210,7 +223,12 @@ mod credential_manager_tests {
         cred.name = String::new();
         let result = mgr.store(cred);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("name cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("name cannot be empty")
+        );
     }
 
     #[test]
@@ -220,7 +238,12 @@ mod credential_manager_tests {
         cred.service = String::new();
         let result = mgr.store(cred);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("service cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("service cannot be empty")
+        );
     }
 
     // -- Persistence -----------------------------------------------------------
@@ -233,7 +256,8 @@ mod credential_manager_tests {
         // Store in first instance
         {
             let mut mgr = CredentialManager::with_dir(dir_path.clone()).unwrap();
-            mgr.store(Credential::new("Persistent", "anthropic", "persisted-key")).unwrap();
+            mgr.store(Credential::new("Persistent", "anthropic", "persisted-key"))
+                .unwrap();
         }
 
         // Load in second instance
@@ -249,7 +273,8 @@ mod credential_manager_tests {
     #[test]
     fn test_persist_creates_json_file_on_disk() {
         let (mut mgr, dir) = make_mgr();
-        mgr.store(Credential::new("Test", "openai", "key-123")).unwrap();
+        mgr.store(Credential::new("Test", "openai", "key-123"))
+            .unwrap();
 
         let file_path = dir.path().join("openai.json");
         assert!(file_path.exists());
@@ -273,7 +298,8 @@ mod credential_manager_tests {
     #[test]
     fn test_file_descriptor_existing_file() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store(Credential::new("Test", "anthropic", "key")).unwrap();
+        mgr.store(Credential::new("Test", "anthropic", "key"))
+            .unwrap();
 
         let desc = mgr.file_descriptor("anthropic");
         assert!(desc.exists);
@@ -316,7 +342,8 @@ mod credential_manager_tests {
     #[test]
     fn test_import_portable_skip_existing_preserves_original() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store(Credential::new("Original", "anthropic", "original-key")).unwrap();
+        mgr.store(Credential::new("Original", "anthropic", "original-key"))
+            .unwrap();
 
         let mut bundle = PortableCredentialBundle::new();
         bundle.credentials.push(PortableCredential {
@@ -337,7 +364,8 @@ mod credential_manager_tests {
     #[test]
     fn test_import_portable_overwrite_replaces_existing() {
         let (mut mgr, _dir) = make_mgr();
-        mgr.store(Credential::new("Original", "anthropic", "old-key")).unwrap();
+        mgr.store(Credential::new("Original", "anthropic", "old-key"))
+            .unwrap();
 
         let mut bundle = PortableCredentialBundle::new();
         bundle.credentials.push(PortableCredential {
@@ -464,7 +492,8 @@ mod credential_manager_tests {
         let (mut mgr, _dir) = make_mgr();
 
         // Create
-        mgr.store(Credential::new("Test", "svc", "initial")).unwrap();
+        mgr.store(Credential::new("Test", "svc", "initial"))
+            .unwrap();
         assert_eq!(mgr.count(), 1);
 
         // Read
@@ -472,7 +501,8 @@ mod credential_manager_tests {
         assert_eq!(cred.value, "initial");
 
         // Update
-        mgr.store_or_update(Credential::new("Updated", "svc", "updated")).unwrap();
+        mgr.store_or_update(Credential::new("Updated", "svc", "updated"))
+            .unwrap();
         assert_eq!(mgr.retrieve("svc").unwrap().value, "updated");
         assert_eq!(mgr.count(), 1); // still one, not two
 
@@ -593,7 +623,10 @@ mod settings_tests {
         let mut settings = Settings::default();
         for bad in &["unknown", "admin", "readwrite", ""] {
             settings.permissions_mode = bad.to_string();
-            assert!(settings.validate().is_err(), "Expected error for permissions_mode={bad}");
+            assert!(
+                settings.validate().is_err(),
+                "Expected error for permissions_mode={bad}"
+            );
         }
     }
 
@@ -602,7 +635,10 @@ mod settings_tests {
         for mode in &["ask", "auto", "readonly"] {
             let mut settings = Settings::default();
             settings.permissions_mode = mode.to_string();
-            assert!(settings.validate().is_ok(), "Expected ok for permissions_mode={mode}");
+            assert!(
+                settings.validate().is_ok(),
+                "Expected ok for permissions_mode={mode}"
+            );
         }
     }
 
@@ -897,7 +933,10 @@ mod settings_tests {
         let mut mgr = SettingsManager::new();
         let result = mgr.load_from_path(&path);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), SettingsError::InvalidVersion { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            SettingsError::InvalidVersion { .. }
+        ));
     }
 
     #[test]
@@ -1035,7 +1074,10 @@ mod unified_config_tests {
         assert_eq!(config.model.as_deref(), Some("claude-opus-4-6"));
         assert_eq!(config.provider.as_deref(), Some("anthropic"));
         assert_eq!(config.api_key.as_deref(), Some("sk-test"));
-        assert_eq!(config.base_url.as_deref(), Some("https://api.anthropic.com"));
+        assert_eq!(
+            config.base_url.as_deref(),
+            Some("https://api.anthropic.com")
+        );
         assert_eq!(config.max_tokens, Some(4096));
         assert_eq!(config.temperature, Some(0.7));
         assert_eq!(config.timeout, Some(30));
@@ -1114,18 +1156,36 @@ mod unified_config_tests {
     #[test]
     fn test_merge_debug_is_or_logic() {
         // If either side has debug=true, result should be true
-        let a = ShannonConfig { debug: true, ..Default::default() };
-        let b = ShannonConfig { debug: false, ..Default::default() };
+        let a = ShannonConfig {
+            debug: true,
+            ..Default::default()
+        };
+        let b = ShannonConfig {
+            debug: false,
+            ..Default::default()
+        };
         let merged = a.merge(&b);
         assert!(merged.debug);
 
-        let a2 = ShannonConfig { debug: false, ..Default::default() };
-        let b2 = ShannonConfig { debug: true, ..Default::default() };
+        let a2 = ShannonConfig {
+            debug: false,
+            ..Default::default()
+        };
+        let b2 = ShannonConfig {
+            debug: true,
+            ..Default::default()
+        };
         let merged2 = a2.merge(&b2);
         assert!(merged2.debug);
 
-        let a3 = ShannonConfig { debug: false, ..Default::default() };
-        let b3 = ShannonConfig { debug: false, ..Default::default() };
+        let a3 = ShannonConfig {
+            debug: false,
+            ..Default::default()
+        };
+        let b3 = ShannonConfig {
+            debug: false,
+            ..Default::default()
+        };
         let merged3 = a3.merge(&b3);
         assert!(!merged3.debug);
     }
@@ -1378,7 +1438,9 @@ debug = true
         // Set env vars
         let cleanup = vec!["SHANNON_MODEL", "SHANNON_PROVIDER", "SHANNON_MAX_TOKENS"];
         for var in &cleanup {
-            unsafe { std::env::remove_var(var); }
+            unsafe {
+                std::env::remove_var(var);
+            }
         }
 
         unsafe {
@@ -1393,7 +1455,9 @@ debug = true
 
         // Clean up before assertions so they don't leak
         for var in &cleanup {
-            unsafe { std::env::remove_var(var); }
+            unsafe {
+                std::env::remove_var(var);
+            }
         }
 
         assert_eq!(config.model, Some("env-model".to_string()));
@@ -1403,14 +1467,20 @@ debug = true
 
     #[test]
     fn test_builder_env_vars_with_debug() {
-        unsafe { std::env::remove_var("SHANNON_DEBUG"); }
-        unsafe { std::env::set_var("SHANNON_DEBUG", "true"); }
+        unsafe {
+            std::env::remove_var("SHANNON_DEBUG");
+        }
+        unsafe {
+            std::env::set_var("SHANNON_DEBUG", "true");
+        }
 
         let mut builder = ConfigBuilder::new();
         builder.load_env_vars();
         let config = builder.build();
 
-        unsafe { std::env::remove_var("SHANNON_DEBUG"); }
+        unsafe {
+            std::env::remove_var("SHANNON_DEBUG");
+        }
 
         assert!(config.debug);
     }
@@ -1419,12 +1489,19 @@ debug = true
     fn test_builder_env_vars_missing_vars_produce_none() {
         // Remove all SHANNON_ vars
         let vars = [
-            "SHANNON_MODEL", "SHANNON_PROVIDER", "SHANNON_API_KEY",
-            "SHANNON_BASE_URL", "SHANNON_MAX_TOKENS", "SHANNON_TEMPERATURE",
-            "SHANNON_TIMEOUT", "SHANNON_DEBUG",
+            "SHANNON_MODEL",
+            "SHANNON_PROVIDER",
+            "SHANNON_API_KEY",
+            "SHANNON_BASE_URL",
+            "SHANNON_MAX_TOKENS",
+            "SHANNON_TEMPERATURE",
+            "SHANNON_TIMEOUT",
+            "SHANNON_DEBUG",
         ];
         for var in &vars {
-            unsafe { std::env::remove_var(var); }
+            unsafe {
+                std::env::remove_var(var);
+            }
         }
 
         let mut builder = ConfigBuilder::new();

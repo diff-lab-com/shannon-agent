@@ -1,6 +1,8 @@
 //! /review command - Review local code changes
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 const REVIEW_PROMPT: &str = r##"
 You are an expert code reviewer. Analyze local code changes and provide a structured review.
@@ -66,9 +68,7 @@ pub fn command() -> Command {
             is_enabled: true,
             is_hidden: false,
             argument_hint: Some("[file or path]".to_string()),
-            when_to_use: Some(
-                "Review your local changes before committing or merging".to_string(),
-            ),
+            when_to_use: Some("Review your local changes before committing or merging".to_string()),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
             user_invocable: true,

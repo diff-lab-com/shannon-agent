@@ -114,7 +114,12 @@ pub fn detect_reference_kind(path: &str) -> AtReferenceKind {
     }
 
     // PDF detection by extension
-    if path.rsplit('.').next().map(|e| e.eq_ignore_ascii_case("pdf")).unwrap_or(false) {
+    if path
+        .rsplit('.')
+        .next()
+        .map(|e| e.eq_ignore_ascii_case("pdf"))
+        .unwrap_or(false)
+    {
         return AtReferenceKind::Pdf;
     }
 
@@ -189,23 +194,20 @@ pub fn extract_pdf_text(file_path: &str) -> AtReferenceResult {
     let max_bytes = 50_000;
     let (content, truncated) = if text.len() > max_bytes {
         let mut end = max_bytes;
-        while !text.is_char_boundary(end) { end -= 1; }
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
         (text[..end].to_string(), true)
     } else {
         (text, false)
     };
 
-    let mut injected = format!(
-        "**PDF: {file_name}{page_info}**\n\n```\n{content}\n```"
-    );
+    let mut injected = format!("**PDF: {file_name}{page_info}**\n\n```\n{content}\n```");
     if truncated {
         injected.push_str("\n\n*[Content truncated — PDF is too large to include in full]*");
     }
 
-    AtReferenceResult::with_status(
-        injected,
-        format!("Attached PDF \"{file_name}\"{page_info}"),
-    )
+    AtReferenceResult::with_status(injected, format!("Attached PDF \"{file_name}\"{page_info}"))
 }
 
 /// Get the page count from a PDF using `pdfinfo`.
@@ -263,9 +265,9 @@ pub fn fetch_url_content(url: &str) -> AtReferenceResult {
                     return fetch_url_content_with_rt(url, &rt);
                 }
                 Err(e) => {
-                    return AtReferenceResult::error(
-                        format!("Failed to create tokio runtime for URL fetch: {e}"),
-                    );
+                    return AtReferenceResult::error(format!(
+                        "Failed to create tokio runtime for URL fetch: {e}"
+                    ));
                 }
             }
         }
@@ -328,9 +330,7 @@ fn fetch_url_content_with_handle(url: &str, handle: &tokio::runtime::Handle) -> 
 async fn process_url_response(url: &str, response: reqwest::Response) -> AtReferenceResult {
     let status = response.status();
     if !status.is_success() {
-        return AtReferenceResult::error(format!(
-            "HTTP error fetching URL: {status}"
-        ));
+        return AtReferenceResult::error(format!("HTTP error fetching URL: {status}"));
     }
 
     let body = match response.text().await {
@@ -346,16 +346,16 @@ async fn process_url_response(url: &str, response: reqwest::Response) -> AtRefer
     };
 
     if content.trim().is_empty() {
-        return AtReferenceResult::error(format!(
-            "URL {url} returned empty content."
-        ));
+        return AtReferenceResult::error(format!("URL {url} returned empty content."));
     }
 
     let content_length = content.len();
     let max_bytes = 50_000;
     let (display_content, truncated) = if content.len() > max_bytes {
         let mut end = max_bytes;
-        while !content.is_char_boundary(end) { end -= 1; }
+        while !content.is_char_boundary(end) {
+            end -= 1;
+        }
         (content[..end].to_string(), true)
     } else {
         (content, false)
@@ -411,7 +411,16 @@ pub fn generate_directory_tree(dir_path: &str, max_depth: Option<usize>) -> AtRe
     let mut total_files: usize = 0;
     let mut total_dirs: usize = 0;
 
-    build_tree_recursive(path, &mut tree, "", true, 0, max_depth, &mut total_files, &mut total_dirs);
+    build_tree_recursive(
+        path,
+        &mut tree,
+        "",
+        true,
+        0,
+        max_depth,
+        &mut total_files,
+        &mut total_dirs,
+    );
 
     let injected = format!(
         "**Directory: {dir_name}**\n**{total_files} files, {total_dirs} subdirectories**\n\n```\n{tree}\n```"
@@ -419,7 +428,9 @@ pub fn generate_directory_tree(dir_path: &str, max_depth: Option<usize>) -> AtRe
 
     AtReferenceResult::with_status(
         injected,
-        format!("Attached directory tree for \"{dir_name}\" ({total_files} files, {total_dirs} dirs, max depth {max_depth})"),
+        format!(
+            "Attached directory tree for \"{dir_name}\" ({total_files} files, {total_dirs} dirs, max depth {max_depth})"
+        ),
     )
 }
 
@@ -485,7 +496,11 @@ fn build_tree_recursive(
     let count = all_entries.len();
     for (i, (name, is_dir)) in all_entries.iter().enumerate() {
         let is_last_entry = i == count - 1;
-        let connector = if is_last_entry { "└── " } else { "├── " };
+        let connector = if is_last_entry {
+            "└── "
+        } else {
+            "├── "
+        };
         let suffix = if *is_dir { "/" } else { "" };
 
         // Get file size for files
@@ -501,9 +516,7 @@ fn build_tree_recursive(
             String::new()
         };
 
-        output.push_str(&format!(
-            "{prefix}{connector}{name}{suffix}{size_info}\n"
-        ));
+        output.push_str(&format!("{prefix}{connector}{name}{suffix}{size_info}\n"));
 
         // Recurse into subdirectories
         if *is_dir {
@@ -559,9 +572,7 @@ pub fn extract_file_content(file_path: &str) -> AtReferenceResult {
             // Binary or non-UTF-8 file — just insert the path
             return AtReferenceResult::with_status(
                 format!("@{file_path}"),
-                format!(
-                    "Could not read file as text: {e}. Path inserted instead."
-                ),
+                format!("Could not read file as text: {e}. Path inserted instead."),
             );
         }
     };
@@ -842,7 +853,11 @@ mod tests {
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
         let path = format!("{manifest_dir}/Cargo.toml");
         let result = extract_file_content(&path);
-        assert!(!result.is_error, "Expected success, got error: {:?}", result.status_message);
+        assert!(
+            !result.is_error,
+            "Expected success, got error: {:?}",
+            result.status_message
+        );
         assert!(result.injected_text.contains("```toml"));
         assert!(result.status_message.is_some());
     }

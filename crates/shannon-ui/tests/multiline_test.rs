@@ -20,7 +20,11 @@ fn test_multiline_basic() {
 
     // Test Shift+Enter (newline)
     buf.newline();
-    println!("  After Shift+Enter: line_count={}, text='{}'", buf.line_count(), buf.text());
+    println!(
+        "  After Shift+Enter: line_count={}, text='{}'",
+        buf.line_count(),
+        buf.text()
+    );
     assert_eq!(buf.line_count(), 2);
 
     buf.insert_char('W');
@@ -37,26 +41,46 @@ fn test_multiline_basic() {
     let mut buf2 = InputBuffer::new();
     buf2.set_text("Line 1\nLine 2\nLine 3");
     println!("  Set text: '{}'", buf2.text());
-    println!("  Initial: row={}, col={}", buf2.cursor_row(), buf2.cursor_col());
+    println!(
+        "  Initial: row={}, col={}",
+        buf2.cursor_row(),
+        buf2.cursor_col()
+    );
 
     // Move up from line 3 (row 2) -> line 2 (row 1)
     buf2.move_up();
-    println!("  After up: row={}, col={}", buf2.cursor_row(), buf2.cursor_col());
+    println!(
+        "  After up: row={}, col={}",
+        buf2.cursor_row(),
+        buf2.cursor_col()
+    );
     assert_eq!(buf2.cursor_row(), 1);
 
     // Move up to line 1 (row 0)
     buf2.move_up();
-    println!("  After up: row={}, col={}", buf2.cursor_row(), buf2.cursor_col());
+    println!(
+        "  After up: row={}, col={}",
+        buf2.cursor_row(),
+        buf2.cursor_col()
+    );
     assert_eq!(buf2.cursor_row(), 0);
 
     // Move down to line 2 (row 1)
     buf2.move_down();
-    println!("  After down: row={}, col={}", buf2.cursor_row(), buf2.cursor_col());
+    println!(
+        "  After down: row={}, col={}",
+        buf2.cursor_row(),
+        buf2.cursor_col()
+    );
     assert_eq!(buf2.cursor_row(), 1);
 
     // Move down to line 3 (row 2)
     buf2.move_down();
-    println!("  After down: row={}, col={}", buf2.cursor_row(), buf2.cursor_col());
+    println!(
+        "  After down: row={}, col={}",
+        buf2.cursor_row(),
+        buf2.cursor_col()
+    );
     assert_eq!(buf2.cursor_row(), 2);
     println!("  ✅ PASS\n");
 
@@ -67,7 +91,7 @@ fn test_multiline_basic() {
     println!("  Initial text: '{}'", buf3.text());
 
     // Move to start of second line by going up then left to start
-    buf3.move_up();  // row 1 -> 0
+    buf3.move_up(); // row 1 -> 0
     buf3.move_down(); // row 0 -> 1
     // We're now at end of line 1, need to go to start
     while buf3.cursor_col() > 0 {
@@ -88,8 +112,11 @@ fn test_multiline_basic() {
     buf4.insert_char(' ');
     buf4.insert_char('x');
     buf4.newline();
-    println!("  After newline from '  x': cursor_col={}", buf4.cursor_col());
-    assert_eq!(buf4.cursor_col(), 2);  // Auto-indented
+    println!(
+        "  After newline from '  x': cursor_col={}",
+        buf4.cursor_col()
+    );
+    assert_eq!(buf4.cursor_col(), 2); // Auto-indented
     buf4.insert_char('y');
     println!("  Text with indent: '{}'", buf4.text());
     assert_eq!(buf4.text(), "  x\n  y");

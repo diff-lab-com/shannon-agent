@@ -180,12 +180,7 @@ pub struct Skill {
 
 impl Skill {
     /// Create a new skill definition
-    pub fn new(
-        id: SkillId,
-        name: String,
-        description: String,
-        content: String,
-    ) -> Self {
+    pub fn new(id: SkillId, name: String, description: String, content: String) -> Self {
         let content_length = content.len();
         let now = chrono::Utc::now();
         Self {
@@ -373,7 +368,10 @@ mod tests {
         let meta = SkillMetadata::from(&skill);
         assert_eq!(meta.id, "commit");
         assert_eq!(meta.name, "commit");
-        assert_eq!(meta.description, "Generate git commits with conventional messages");
+        assert_eq!(
+            meta.description,
+            "Generate git commits with conventional messages"
+        );
         assert_eq!(meta.aliases, vec!["ci".to_string()]);
         assert_eq!(meta.allowed_tools, vec!["bash".to_string()]);
         assert_eq!(meta.argument_hint, Some("<message>".to_string()));

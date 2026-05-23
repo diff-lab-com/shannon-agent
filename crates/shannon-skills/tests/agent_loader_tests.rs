@@ -252,10 +252,7 @@ fn test_discover_agent_directories_from_temp_dir() {
     let dirs = discover_agent_directories(tmp.path());
 
     // Filter to only paths under tmp (home dir may also contribute)
-    let local: Vec<_> = dirs
-        .iter()
-        .filter(|p| p.starts_with(tmp.path()))
-        .collect();
+    let local: Vec<_> = dirs.iter().filter(|p| p.starts_with(tmp.path())).collect();
 
     assert_eq!(local.len(), 2);
     assert!(local.iter().any(|p| p.ends_with(".claude/agents")));
@@ -271,10 +268,7 @@ fn test_discover_agent_directories_only_existing_dirs() {
     fs::create_dir_all(&claude_agents).unwrap();
 
     let dirs = discover_agent_directories(tmp.path());
-    let local: Vec<_> = dirs
-        .iter()
-        .filter(|p| p.starts_with(tmp.path()))
-        .collect();
+    let local: Vec<_> = dirs.iter().filter(|p| p.starts_with(tmp.path())).collect();
 
     assert_eq!(local.len(), 1);
     assert!(local[0].ends_with(".claude/agents"));

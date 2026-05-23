@@ -2,23 +2,23 @@
 
 #[cfg(test)]
 mod tests {
-    
+
     use crate::api::{ContentBlock, Message, MessageContent, ToolResultContent};
     use std::time::Duration;
 
-    use super::super::compact_messages::{
-        compact_messages, CompactionConfig, CompactionStrategy,
-    };
+    use super::super::compact_messages::{CompactionConfig, CompactionStrategy, compact_messages};
     use super::super::engine::CompactEngine;
     use super::super::helpers::{
         estimate_message_tokens, estimate_tokens, extract_text_content, looks_like_code,
         truncate_text,
     };
-    use super::super::protection::{classify_message_priority, compact_messages_with_protection, MessageProtector};
+    use super::super::protection::{
+        MessageProtector, classify_message_priority, compact_messages_with_protection,
+    };
     use super::super::summarizer::RuleBasedSummarizer;
     use super::super::types::{
-        CompactConfig, CompactError, CompactPrompt, CompactResult, CompactStrategy,
-        GroupedMessage, MessageGroup, Summarizer,
+        CompactConfig, CompactError, CompactPrompt, CompactResult, CompactStrategy, GroupedMessage,
+        MessageGroup, Summarizer,
     };
 
     // -- Helper functions for test data --
@@ -542,11 +542,7 @@ mod tests {
     #[test]
     fn test_post_compact_cleanup_noop() {
         let engine = CompactEngine::with_defaults().unwrap();
-        let mut messages = vec![
-            user_msg("Hello"),
-            assistant_msg("Hi"),
-            user_msg("Question"),
-        ];
+        let mut messages = vec![user_msg("Hello"), assistant_msg("Hi"), user_msg("Question")];
 
         let removed = engine.post_compact_cleanup(&mut messages);
         assert_eq!(removed, 0);
@@ -589,10 +585,22 @@ mod tests {
     #[test]
     fn test_strategy_display() {
         assert_eq!(format!("{}", CompactStrategy::TruncateOld), "truncate_old");
-        assert_eq!(format!("{}", CompactStrategy::SummarizeOld), "summarize_old");
-        assert_eq!(format!("{}", CompactStrategy::MicroCompress), "micro_compress");
-        assert_eq!(format!("{}", CompactStrategy::GroupCompress), "group_compress");
-        assert_eq!(format!("{}", CompactStrategy::SessionMemoryCompress), "session_memory_compress");
+        assert_eq!(
+            format!("{}", CompactStrategy::SummarizeOld),
+            "summarize_old"
+        );
+        assert_eq!(
+            format!("{}", CompactStrategy::MicroCompress),
+            "micro_compress"
+        );
+        assert_eq!(
+            format!("{}", CompactStrategy::GroupCompress),
+            "group_compress"
+        );
+        assert_eq!(
+            format!("{}", CompactStrategy::SessionMemoryCompress),
+            "session_memory_compress"
+        );
     }
 
     // -- MessageGroup --
@@ -731,10 +739,7 @@ mod tests {
     #[test]
     fn test_rule_based_summarizer_tool_uses() {
         let summarizer = RuleBasedSummarizer::new();
-        let messages = vec![
-            user_msg("Run ls"),
-            tool_use_msg("t1", "bash", "ls"),
-        ];
+        let messages = vec![user_msg("Run ls"), tool_use_msg("t1", "bash", "ls")];
         let result = summarizer.summarize(&messages, 1000).unwrap();
         assert!(result.contains("bash"));
         assert!(result.contains("Tools used"));
@@ -792,7 +797,9 @@ mod tests {
         assert!(result.messages_removed > 0);
         assert!(messages.len() < original_count);
         assert_eq!(messages[0].role, "system");
-        assert!(matches!(&messages[0].content, MessageContent::Text(t) if t.contains("Group-compacted")));
+        assert!(
+            matches!(&messages[0].content, MessageContent::Text(t) if t.contains("Group-compacted"))
+        );
     }
 
     #[test]
@@ -872,9 +879,7 @@ mod tests {
         )
         .unwrap();
 
-        let mut messages = vec![
-            system_msg("You are a helpful coding assistant."),
-        ];
+        let mut messages = vec![system_msg("You are a helpful coding assistant.")];
         for i in 0..15 {
             messages.push(user_msg(&format!("User query {i}")));
             messages.push(assistant_msg(&format!("Response {i}")));
@@ -886,7 +891,10 @@ mod tests {
         let has_system_prompt = messages.iter().any(|m| {
             matches!(&m.content, MessageContent::Text(t) if t.contains("helpful coding assistant"))
         });
-        assert!(has_system_prompt, "System prompt should be preserved after compaction");
+        assert!(
+            has_system_prompt,
+            "System prompt should be preserved after compaction"
+        );
     }
 
     // -- Edge case: concurrent compact guard --
@@ -908,12 +916,18 @@ mod tests {
         // 100 chars = ~25 tokens (at 4 chars/token)
         let msg = user_msg(&"A".repeat(100));
         let tokens = estimate_message_tokens(&msg);
-        assert!((20..=30).contains(&tokens), "100 chars should be ~25 tokens, got {tokens}");
+        assert!(
+            (20..=30).contains(&tokens),
+            "100 chars should be ~25 tokens, got {tokens}"
+        );
 
         // 1000 chars = ~250 tokens
         let msg = user_msg(&"B".repeat(1000));
         let tokens = estimate_message_tokens(&msg);
-        assert!((240..=260).contains(&tokens), "1000 chars should be ~250 tokens, got {tokens}");
+        assert!(
+            (240..=260).contains(&tokens),
+            "1000 chars should be ~250 tokens, got {tokens}"
+        );
 
         // Single char = 1 token (min(1))
         let msg = user_msg("X");
@@ -1088,18 +1102,15 @@ mod tests {
         }
         // Add code-heavy messages
         messages.push(user_msg("Look at src/main.rs:\n```rust\nfn main() {}\n```"));
-        messages.push(assistant_msg("I see you have ```python\nprint('hello')\n``` in lib.py"));
+        messages.push(assistant_msg(
+            "I see you have ```python\nprint('hello')\n``` in lib.py",
+        ));
         for i in 0..5 {
             messages.push(user_msg(&format!(
                 "Follow up message number {i} with additional padding for token budget"
             )));
         }
-        let result = compact_messages(
-            &messages,
-            &CompactionStrategy::PrioritizeCode,
-            200,
-            3,
-        );
+        let result = compact_messages(&messages, &CompactionStrategy::PrioritizeCode, 200, 3);
         assert!(result.did_compact);
         // Code messages should be preserved
         let has_code = result.messages.iter().any(|m| {
@@ -1120,12 +1131,7 @@ mod tests {
                 "This is a conversation message number {i} with enough words to consume tokens"
             )));
         }
-        let result = compact_messages(
-            &messages,
-            &CompactionStrategy::Summarize,
-            50,
-            4,
-        );
+        let result = compact_messages(&messages, &CompactionStrategy::Summarize, 50, 4);
         assert!(result.did_compact);
         // First two messages should still be the system messages
         assert_eq!(result.messages[0].role, "system");
@@ -1138,16 +1144,8 @@ mod tests {
 
     #[test]
     fn test_compact_messages_only_system_no_compact() {
-        let messages = vec![
-            system_msg("System A"),
-            system_msg("System B"),
-        ];
-        let result = compact_messages(
-            &messages,
-            &CompactionStrategy::Summarize,
-            100,
-            10,
-        );
+        let messages = vec![system_msg("System A"), system_msg("System B")];
+        let result = compact_messages(&messages, &CompactionStrategy::Summarize, 100, 10);
         assert!(!result.did_compact);
         assert_eq!(result.messages.len(), 2);
     }
@@ -1277,11 +1275,9 @@ mod tests {
             MessageContent::Text(t) => t.clone(),
             _ => String::new(),
         };
-        let found = result.messages.iter().any(|m| {
-            match &m.content {
-                MessageContent::Text(t) => *t == protected_text,
-                _ => false,
-            }
+        let found = result.messages.iter().any(|m| match &m.content {
+            MessageContent::Text(t) => *t == protected_text,
+            _ => false,
         });
         assert!(found, "Protected message should be preserved in result");
         assert!(result.compacted_count < original_len);
@@ -1367,8 +1363,15 @@ mod tests {
         }
 
         // Recent messages preserved at the tail
-        assert!(messages.len() < total, "should have fewer messages: {} vs {total}", messages.len());
-        assert!(messages.len() >= 5, "should keep system + summary + 4 recent");
+        assert!(
+            messages.len() < total,
+            "should have fewer messages: {} vs {total}",
+            messages.len()
+        );
+        assert!(
+            messages.len() >= 5,
+            "should keep system + summary + 4 recent"
+        );
     }
 
     #[test]
@@ -1440,7 +1443,10 @@ mod tests {
         let tokens = estimate_tokens(&messages);
 
         // ~200 chars per turn pair × 10 turns × ~0.25 tokens/char ≈ 500+ tokens
-        assert!(tokens > 100, "should estimate at least 100 tokens for 10 turns");
+        assert!(
+            tokens > 100,
+            "should estimate at least 100 tokens for 10 turns"
+        );
         assert!(tokens < 50_000, "should not wildly overestimate");
     }
 
@@ -1633,17 +1639,15 @@ mod tests {
                 for block in blocks {
                     if let ContentBlock::ToolResult { tool_use_id, .. } = block {
                         // Look back for a matching tool_use
-                        let has_matching_use = messages[..i].iter().any(|m| {
-                            match &m.content {
-                                MessageContent::Blocks(bs) => bs.iter().any(|b| {
-                                    if let ContentBlock::ToolUse { id, .. } = b {
-                                        id == tool_use_id
-                                    } else {
-                                        false
-                                    }
-                                }),
-                                _ => false,
-                            }
+                        let has_matching_use = messages[..i].iter().any(|m| match &m.content {
+                            MessageContent::Blocks(bs) => bs.iter().any(|b| {
+                                if let ContentBlock::ToolUse { id, .. } = b {
+                                    id == tool_use_id
+                                } else {
+                                    false
+                                }
+                            }),
+                            _ => false,
                         });
                         // Tool results in recent section should have matching use
                         // (summarized section may have orphans, which is acceptable)
@@ -1937,48 +1941,56 @@ mod tests {
             "The morning sun cast golden rays across the ancient stone bridge. \
              Eleanor stood at its edge, clutching the weathered map her grandmother \
              had given her. The parchment showed a path leading deep into the Whispering \
-             Woods, a place where few dared to venture.".to_string(),
+             Woods, a place where few dared to venture."
+                .to_string(),
             "\"Are you certain about this?\" asked Marcus, his voice barely above a whisper. \
              He adjusted his leather satchel and glanced nervously at the dark treeline. \
-             The trees seemed to lean inward, their branches intertwining like grasping fingers.".to_string(),
+             The trees seemed to lean inward, their branches intertwining like grasping fingers."
+                .to_string(),
             "Eleanor nodded firmly. \"The amulet must be returned before the next \
              full moon. If it isn't, the seal on the Shadow Gate will break, and \
              what lies beyond will flood into our world.\" She pulled the silver \
-             amulet from beneath her cloak, and it pulsed with a faint blue light.".to_string(),
+             amulet from beneath her cloak, and it pulsed with a faint blue light."
+                .to_string(),
             "They had been walking for three days since leaving the village of \
              Thornhaven. The journey had been uneventful until now, but the woods \
              ahead carried an unnatural silence. No birds sang. No insects buzzed. \
-             Even the wind seemed to die at the treeline.".to_string(),
+             Even the wind seemed to die at the treeline."
+                .to_string(),
             "Marcus consulted his own notes from the Academy of Arcane Studies. \
              According to the texts, the Whispering Woods were once a sacred grove \
              where the Elders communed with spirits of the ancient world. The trees \
              themselves were said to be sentient, their roots reaching deep into ley \
-             lines of magical energy.".to_string(),
+             lines of magical energy."
+                .to_string(),
             "\"The path splits ahead,\" Eleanor observed, studying the map. \"One \
              leads to the Moonwell, where the amulet was originally forged. The other \
              goes to the Shadow Gate itself.\" She traced the route with her finger, \
-             frowning. \"We need to purify the amulet at the Moonwell first.\"".to_string(),
+             frowning. \"We need to purify the amulet at the Moonwell first.\""
+                .to_string(),
             "As they stepped onto the forest path, a low humming sound began. \
              It came from everywhere and nowhere at once. The amulet's glow intensified, \
-             and Eleanor felt a warmth spreading through her chest. The forest was testing them.".to_string(),
+             and Eleanor felt a warmth spreading through her chest. The forest was testing them."
+                .to_string(),
             "The seventh sentinel, a creature of bark and shadow, emerged from the \
              largest oak. Its eyes glowed with amber fire. \"State your purpose, \
-             travelers,\" it intoned, its voice like creaking timber.".to_string(),
+             travelers,\" it intoned, its voice like creaking timber."
+                .to_string(),
             "Eleanor held up the amulet. \"I carry the Moonstone of Aelindra, \
              forged in the Moonwell by the Elder priestess Seraphina. I seek to \
-             return it and renew the seal upon the Shadow Gate.\"".to_string(),
+             return it and renew the seal upon the Shadow Gate.\""
+                .to_string(),
             "\"Proceed,\" it said. \"But know this: the path to the Moonwell is guarded \
              by the Echo Wraiths. They will show you illusions drawn from your deepest \
-             memories. Do not trust your eyes.\" The sentinel dissolved back into the oak.".to_string(),
+             memories. Do not trust your eyes.\" The sentinel dissolved back into the oak."
+                .to_string(),
         ];
         paragraphs.join("\n\n")
     }
 
     /// Build a novel-writing conversation with 4 turns
     fn build_novel_session() -> Vec<Message> {
-        let mut messages = vec![
-            system_msg("You are a creative writing assistant."),
-        ];
+        let mut messages = vec![system_msg("You are a creative writing assistant.")];
         messages.push(user_msg("Please write me a short novel with multiple chapters. Make it about a fantasy adventure."));
         messages.push(assistant_msg(&novel_chapter(1)));
         messages.push(user_msg("Great! Now please summarize the chapter outline of the novel you just wrote. List all the key plot points."));
@@ -1996,7 +2008,7 @@ mod tests {
         messages.push(assistant_msg(
             "The amulet was called the Moonstone of Aelindra. It was forged by \
              the Elder priestess Seraphina at the Moonwell, and it pulsed with \
-             a faint blue light."
+             a faint blue light.",
         ));
         messages.push(user_msg("Based on the chapter outline you created, please suggest how to add a plot twist involving Marcus."));
         messages.push(assistant_msg(
@@ -2006,7 +2018,7 @@ mod tests {
              - When they reach the Moonwell, Marcus discovers he can activate the \
                purification ritual, only Seraphina's bloodline can do this\n\
              - This reveals why Marcus was so insistent on joining the journey\n\
-             - The Echo Wraiths show Marcus visions of Seraphina, confirming his heritage"
+             - The Echo Wraiths show Marcus visions of Seraphina, confirming his heritage",
         ));
         messages
     }
@@ -2019,7 +2031,8 @@ mod tests {
 
         assert_eq!(messages[0].role, "system");
 
-        let all_text: String = messages.iter()
+        let all_text: String = messages
+            .iter()
             .filter_map(|m| match &m.content {
                 MessageContent::Text(t) => Some(t.as_str()),
                 _ => None,
@@ -2027,12 +2040,18 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(all_text.contains("Eleanor") || all_text.contains("eleanor"),
-            "compaction lost character name 'Eleanor'");
-        assert!(all_text.contains("Moonstone") || all_text.contains("amulet"),
-            "compaction lost key artifact 'Moonstone/amulet'");
-        assert!(all_text.contains("Seraphina") || all_text.contains("seraphina"),
-            "compaction lost key character 'Seraphina'");
+        assert!(
+            all_text.contains("Eleanor") || all_text.contains("eleanor"),
+            "compaction lost character name 'Eleanor'"
+        );
+        assert!(
+            all_text.contains("Moonstone") || all_text.contains("amulet"),
+            "compaction lost key artifact 'Moonstone/amulet'"
+        );
+        assert!(
+            all_text.contains("Seraphina") || all_text.contains("seraphina"),
+            "compaction lost key character 'Seraphina'"
+        );
     }
 
     #[test]
@@ -2041,7 +2060,8 @@ mod tests {
         let mut messages = build_novel_session();
         engine.compact(&mut messages).unwrap();
 
-        let all_text: String = messages.iter()
+        let all_text: String = messages
+            .iter()
             .filter_map(|m| match &m.content {
                 MessageContent::Text(t) => Some(t.as_str()),
                 _ => None,
@@ -2049,8 +2069,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(all_text.contains("Moonstone of Aelindra") || all_text.contains("Seraphina"),
-            "compaction lost the cross-turn reference answer about the amulet name");
+        assert!(
+            all_text.contains("Moonstone of Aelindra") || all_text.contains("Seraphina"),
+            "compaction lost the cross-turn reference answer about the amulet name"
+        );
     }
 
     #[test]
@@ -2059,7 +2081,8 @@ mod tests {
         let mut messages = build_novel_session();
         engine.compact(&mut messages).unwrap();
 
-        let all_text: String = messages.iter()
+        let all_text: String = messages
+            .iter()
             .filter_map(|m| match &m.content {
                 MessageContent::Text(t) => Some(t.as_str()),
                 _ => None,
@@ -2067,10 +2090,16 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(all_text.contains("Marcus") || all_text.contains("marcus"),
-            "compaction lost character 'Marcus' from modification suggestions");
-        assert!(all_text.contains("Seraphina") || all_text.contains("bloodline") || all_text.contains("Moonwell"),
-            "compaction lost plot twist details involving Marcus's heritage");
+        assert!(
+            all_text.contains("Marcus") || all_text.contains("marcus"),
+            "compaction lost character 'Marcus' from modification suggestions"
+        );
+        assert!(
+            all_text.contains("Seraphina")
+                || all_text.contains("bloodline")
+                || all_text.contains("Moonwell"),
+            "compaction lost plot twist details involving Marcus's heritage"
+        );
     }
 
     #[test]
@@ -2079,7 +2108,10 @@ mod tests {
         let mut messages = build_novel_session();
 
         for i in 0..5 {
-            messages.push(user_msg(&format!("Can you elaborate more on chapter {} of the novel?", i + 2)));
+            messages.push(user_msg(&format!(
+                "Can you elaborate more on chapter {} of the novel?",
+                i + 2
+            )));
             messages.push(assistant_msg(&novel_chapter(i + 2)));
         }
 
@@ -2087,7 +2119,8 @@ mod tests {
             let _ = engine.compact(&mut messages);
         }
 
-        let all_text: String = messages.iter()
+        let all_text: String = messages
+            .iter()
             .filter_map(|m| match &m.content {
                 MessageContent::Text(t) => Some(t.as_str()),
                 _ => None,
@@ -2095,10 +2128,16 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(all_text.contains("Eleanor") || all_text.contains("Marcus"),
-            "repeated compaction lost all character names");
-        assert!(all_text.contains("Shadow") || all_text.contains("amulet") || all_text.contains("Moonstone"),
-            "repeated compaction lost all key artifacts");
+        assert!(
+            all_text.contains("Eleanor") || all_text.contains("Marcus"),
+            "repeated compaction lost all character names"
+        );
+        assert!(
+            all_text.contains("Shadow")
+                || all_text.contains("amulet")
+                || all_text.contains("Moonstone"),
+            "repeated compaction lost all key artifacts"
+        );
     }
 
     #[test]
@@ -2106,19 +2145,30 @@ mod tests {
         let mut engine = CompactEngine::with_defaults().unwrap();
         let mut messages = vec![
             system_msg("You are a helpful coding assistant."),
-            user_msg("Write a Rust function called calculate_fibonacci that returns the nth Fibonacci number with overflow handling."),
-            assistant_msg("fn calculate_fibonacci(n: u32) -> Result<u64, &'static str> { ... uses checked_add for overflow ... }"),
+            user_msg(
+                "Write a Rust function called calculate_fibonacci that returns the nth Fibonacci number with overflow handling.",
+            ),
+            assistant_msg(
+                "fn calculate_fibonacci(n: u32) -> Result<u64, &'static str> { ... uses checked_add for overflow ... }",
+            ),
             user_msg("What parameters does the calculate_fibonacci function take?"),
-            assistant_msg("The function takes n: u32 and returns Result<u64, &'static str>. The Ok variant contains the Fibonacci number, Err for overflow."),
+            assistant_msg(
+                "The function takes n: u32 and returns Result<u64, &'static str>. The Ok variant contains the Fibonacci number, Err for overflow.",
+            ),
             user_msg("What line handles the overflow check?"),
-            assistant_msg("The overflow check uses checked_add on a and b, converting None to an error string."),
+            assistant_msg(
+                "The overflow check uses checked_add on a and b, converting None to an error string.",
+            ),
             user_msg("Add memoization to the function."),
-            assistant_msg("Use HashMap<u32, u64> as a cache parameter. On each call, check cache first, then recurse and store result. Still uses checked_add for overflow safety."),
+            assistant_msg(
+                "Use HashMap<u32, u64> as a cache parameter. On each call, check cache first, then recurse and store result. Still uses checked_add for overflow safety.",
+            ),
         ];
 
         engine.compact(&mut messages).unwrap();
 
-        let all_text: String = messages.iter()
+        let all_text: String = messages
+            .iter()
             .filter_map(|m| match &m.content {
                 MessageContent::Text(t) => Some(t.as_str()),
                 _ => None,
@@ -2126,12 +2176,20 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(all_text.contains("fibonacci") || all_text.contains("Fibonacci"),
-            "compaction lost the main function name");
-        assert!(all_text.contains("overflow") || all_text.contains("checked_add"),
-            "compaction lost the overflow handling detail");
-        assert!(all_text.contains("memoiz") || all_text.contains("cache") || all_text.contains("HashMap"),
-            "compaction lost the memoization detail from the final turn");
+        assert!(
+            all_text.contains("fibonacci") || all_text.contains("Fibonacci"),
+            "compaction lost the main function name"
+        );
+        assert!(
+            all_text.contains("overflow") || all_text.contains("checked_add"),
+            "compaction lost the overflow handling detail"
+        );
+        assert!(
+            all_text.contains("memoiz")
+                || all_text.contains("cache")
+                || all_text.contains("HashMap"),
+            "compaction lost the memoization detail from the final turn"
+        );
     }
 
     #[test]
@@ -2140,20 +2198,31 @@ mod tests {
         let mut messages = vec![
             system_msg("You are a research assistant."),
             user_msg("What is the capital of France?"),
-            assistant_msg("The capital of France is Paris. It is known for the Eiffel Tower, the Louvre museum, and its rich cultural heritage."),
+            assistant_msg(
+                "The capital of France is Paris. It is known for the Eiffel Tower, the Louvre museum, and its rich cultural heritage.",
+            ),
             user_msg("What is the population of that city?"),
-            assistant_msg("Paris has a population of approximately 2.1 million within the city proper, and about 12 million in the greater metropolitan area."),
+            assistant_msg(
+                "Paris has a population of approximately 2.1 million within the city proper, and about 12 million in the greater metropolitan area.",
+            ),
             user_msg("What river flows through it?"),
-            assistant_msg("The Seine River flows through Paris, dividing the city into the Left Bank and the Right Bank."),
+            assistant_msg(
+                "The Seine River flows through Paris, dividing the city into the Left Bank and the Right Bank.",
+            ),
             user_msg("Name three famous bridges across that river."),
-            assistant_msg("Three famous bridges across the Seine: Pont Neuf (oldest, 1607), Pont Alexandre III (ornate arch), Pont de l'Alma (flame statue)."),
+            assistant_msg(
+                "Three famous bridges across the Seine: Pont Neuf (oldest, 1607), Pont Alexandre III (ornate arch), Pont de l'Alma (flame statue).",
+            ),
             user_msg("Which of those bridges is the oldest?"),
-            assistant_msg("Pont Neuf is the oldest, completed in 1607 during the reign of Henry IV."),
+            assistant_msg(
+                "Pont Neuf is the oldest, completed in 1607 during the reign of Henry IV.",
+            ),
         ];
 
         engine.compact(&mut messages).unwrap();
 
-        let all_text: String = messages.iter()
+        let all_text: String = messages
+            .iter()
             .filter_map(|m| match &m.content {
                 MessageContent::Text(t) => Some(t.as_str()),
                 _ => None,
@@ -2161,10 +2230,14 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(all_text.contains("Paris") || all_text.contains("paris"),
-            "compaction lost 'Paris' from Q&A chain");
-        assert!(all_text.contains("Seine") || all_text.contains("Pont") || all_text.contains("bridge"),
-            "compaction lost river/bridge details from Q&A chain");
+        assert!(
+            all_text.contains("Paris") || all_text.contains("paris"),
+            "compaction lost 'Paris' from Q&A chain"
+        );
+        assert!(
+            all_text.contains("Seine") || all_text.contains("Pont") || all_text.contains("bridge"),
+            "compaction lost river/bridge details from Q&A chain"
+        );
     }
 
     #[test]
@@ -2172,17 +2245,26 @@ mod tests {
         let mut engine = CompactEngine::with_defaults().unwrap();
         let mut messages = vec![
             system_msg("You are a code reviewer."),
-            user_msg("Review this authentication module. It uses JWT tokens with 24-hour expiry and stores refresh tokens in an encrypted database column."),
-            assistant_msg("Key findings:\n1. JWT expiry of 24 hours is reasonable\n2. Refresh token storage is good\n3. Token refresh endpoint lacks rate limiting\n4. Password hashing uses bcrypt cost 10 (recommend 12)\n5. Missing session cleanup cron for expired refresh tokens"),
+            user_msg(
+                "Review this authentication module. It uses JWT tokens with 24-hour expiry and stores refresh tokens in an encrypted database column.",
+            ),
+            assistant_msg(
+                "Key findings:\n1. JWT expiry of 24 hours is reasonable\n2. Refresh token storage is good\n3. Token refresh endpoint lacks rate limiting\n4. Password hashing uses bcrypt cost 10 (recommend 12)\n5. Missing session cleanup cron for expired refresh tokens",
+            ),
             user_msg("What rate limit would you suggest for the token refresh endpoint?"),
-            assistant_msg("Suggest 10 req/min per user, 100 req/min globally, sliding window algorithm, 429 with Retry-After header, log violations for security monitoring."),
+            assistant_msg(
+                "Suggest 10 req/min per user, 100 req/min globally, sliding window algorithm, 429 with Retry-After header, log violations for security monitoring.",
+            ),
             user_msg("Should we migrate existing bcrypt hashes from cost 10 to 12?"),
-            assistant_msg("Yes: keep old verifier during transition, re-hash on next login with cost 12, store migration flag, force-reset remaining cost-10 accounts after 90 days, then remove old verifier code."),
+            assistant_msg(
+                "Yes: keep old verifier during transition, re-hash on next login with cost 12, store migration flag, force-reset remaining cost-10 accounts after 90 days, then remove old verifier code.",
+            ),
         ];
 
         engine.compact(&mut messages).unwrap();
 
-        let all_text: String = messages.iter()
+        let all_text: String = messages
+            .iter()
             .filter_map(|m| match &m.content {
                 MessageContent::Text(t) => Some(t.as_str()),
                 _ => None,
@@ -2190,11 +2272,22 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
 
-        assert!(all_text.contains("JWT") || all_text.contains("token") || all_text.contains("auth"),
-            "compaction lost authentication context");
-        assert!(all_text.contains("rate limit") || all_text.contains("rate_limit") || all_text.contains("bcrypt") || all_text.contains("cost"),
-            "compaction lost the rate limiting or bcrypt discussion");
-        assert!(all_text.contains("migrat") || all_text.contains("refresh") || all_text.contains("hash"),
-            "compaction lost the migration strategy discussion");
+        assert!(
+            all_text.contains("JWT") || all_text.contains("token") || all_text.contains("auth"),
+            "compaction lost authentication context"
+        );
+        assert!(
+            all_text.contains("rate limit")
+                || all_text.contains("rate_limit")
+                || all_text.contains("bcrypt")
+                || all_text.contains("cost"),
+            "compaction lost the rate limiting or bcrypt discussion"
+        );
+        assert!(
+            all_text.contains("migrat")
+                || all_text.contains("refresh")
+                || all_text.contains("hash"),
+            "compaction lost the migration strategy discussion"
+        );
     }
 }

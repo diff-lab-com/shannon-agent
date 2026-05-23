@@ -10,10 +10,12 @@ mod tool_use_tests {
     use async_trait::async_trait;
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use shannon_core::api::{LlmClientConfig, LlmProvider};
     use shannon_core::permissions::PermissionManager;
-    use shannon_core::query_engine::{QueryEngine, QueryEngineConfig, QueryContext, QueryEvent, QueryMetadata};
+    use shannon_core::query_engine::{
+        QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
+    };
     use shannon_core::state::StateManager;
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
     use std::collections::HashMap;
@@ -24,7 +26,9 @@ mod tool_use_tests {
     impl KeyGuard {
         fn set() -> Self {
             let old = std::env::var_os("ANTHROPIC_API_KEY");
-            unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+            unsafe {
+                std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+            }
             Self(old)
         }
     }
@@ -73,7 +77,8 @@ mod tool_use_tests {
     #[async_trait]
     impl Tool for RecordableTool {
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
-            self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let responses = self.responses.lock().unwrap();
             if responses.is_empty() {
                 Ok(ToolOutput::success("default response".to_string()))
@@ -81,8 +86,12 @@ mod tool_use_tests {
                 Ok(responses[0].clone())
             }
         }
-        fn name(&self) -> &str { &self.name }
-        fn description(&self) -> &str { "recordable test tool" }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "recordable test tool"
+        }
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {}})
         }
@@ -98,8 +107,12 @@ mod tool_use_tests {
         async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
             Ok(ToolOutput::error("tool execution failed".to_string()))
         }
-        fn name(&self) -> &str { &self.name }
-        fn description(&self) -> &str { "failing test tool" }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "failing test tool"
+        }
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {}})
         }
@@ -123,7 +136,13 @@ mod tool_use_tests {
             reasoning_effort: None,
         };
         let client = shannon_core::api::LlmClient::new(config);
-        QueryEngine::new(client, registry, PermissionManager::new(), StateManager::new(), QueryEngineConfig::default())
+        QueryEngine::new(
+            client,
+            registry,
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        )
     }
 
     fn make_context(msg: &str) -> QueryContext {
@@ -143,7 +162,12 @@ mod tool_use_tests {
     }
 
     /// SSE response: text + tool_use (stop_reason: tool_use).
-    fn sse_tool_use_response(text: &str, tool_id: &str, tool_name: &str, tool_input: &str) -> String {
+    fn sse_tool_use_response(
+        text: &str,
+        tool_id: &str,
+        tool_name: &str,
+        tool_input: &str,
+    ) -> String {
         format!(
             "data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_tool\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":20,\"output_tokens\":0}}}}}}\n\n\
              data: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
@@ -177,8 +201,12 @@ mod tool_use_tests {
     /// SSE response: text intro + two tool_use blocks (stop_reason: tool_use).
     fn sse_multi_tool_response(
         intro_text: &str,
-        tool1_id: &str, tool1_name: &str, tool1_input: &str,
-        tool2_id: &str, tool2_name: &str, tool2_input: &str,
+        tool1_id: &str,
+        tool1_name: &str,
+        tool1_input: &str,
+        tool2_id: &str,
+        tool2_name: &str,
+        tool2_input: &str,
     ) -> String {
         format!(
             "data: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_multi\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":25,\"output_tokens\":0}}}}}}\n\n\
@@ -194,8 +222,12 @@ mod tool_use_tests {
              data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"tool_use\"}},\"usage\":{{\"input_tokens\":25,\"output_tokens\":20}}}}\n\n\
              data: {{\"type\":\"message_stop\"}}\n\n",
             intro = intro_text,
-            t1id = tool1_id, t1n = tool1_name, t1i = tool1_input,
-            t2id = tool2_id, t2n = tool2_name, t2i = tool2_input,
+            t1id = tool1_id,
+            t1n = tool1_name,
+            t1i = tool1_input,
+            t2id = tool2_id,
+            t2n = tool2_name,
+            t2i = tool2_input,
         )
     }
 
@@ -237,11 +269,15 @@ mod tool_use_tests {
         let engine = create_engine(&mock_url, registry);
 
         // First response: text + tool_use
-        let _m1 = setup_mock(&mut server, &sse_tool_use_response(
-            "Let me check that.",
-            "toolu_bash_1", "bash",
-            r#"{\"command\":\"ls -la\"}"#,
-        ));
+        let _m1 = setup_mock(
+            &mut server,
+            &sse_tool_use_response(
+                "Let me check that.",
+                "toolu_bash_1",
+                "bash",
+                r#"{\"command\":\"ls -la\"}"#,
+            ),
+        );
         // Second response: text answer using tool result
         let _m2 = setup_mock(&mut server, &sse_text_response("The directory is empty."));
 
@@ -249,15 +285,20 @@ mod tool_use_tests {
         let events = collect_events(&engine, ctx).await;
 
         // Verify full pipeline
-        let has_tool_request = events.iter().any(|e| matches!(
-            e, QueryEvent::ToolUseRequest { tool_name, .. } if tool_name == "bash"
-        ));
+        let has_tool_request = events.iter().any(|e| {
+            matches!(
+                e, QueryEvent::ToolUseRequest { tool_name, .. } if tool_name == "bash"
+            )
+        });
         let has_tool_result = events.iter().any(|e| matches!(
             e, QueryEvent::ToolUseResult { tool_name, is_error, .. } if tool_name == "bash" && !is_error
         ));
-        let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
+        let has_completed = events
+            .iter()
+            .any(|e| matches!(e, QueryEvent::Completed { .. }));
 
-        let final_text: String = events.iter()
+        let final_text: String = events
+            .iter()
             .filter_map(|e| match e {
                 QueryEvent::Text { content, .. } => Some(content.as_str()),
                 _ => None,
@@ -267,10 +308,14 @@ mod tool_use_tests {
         assert!(has_tool_request, "Pipeline should request bash tool");
         assert!(has_tool_result, "Pipeline should produce bash tool result");
         assert!(has_completed, "Pipeline should complete");
-        assert!(final_text.contains("The directory is empty."), "Final text should contain tool-derived response. Got: {final_text}");
+        assert!(
+            final_text.contains("The directory is empty."),
+            "Final text should contain tool-derived response. Got: {final_text}"
+        );
 
         // Verify ConversationUpdate preserves the full flow
-        let updates: Vec<_> = events.iter()
+        let updates: Vec<_> = events
+            .iter()
             .filter_map(|e| match e {
                 QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
                 _ => None,
@@ -287,43 +332,69 @@ mod tool_use_tests {
         let mock_url = server.url();
 
         let registry = ToolRegistry::new();
-        let read_tool = RecordableTool::new("read_file", ToolOutput::success("file contents here".to_string()));
-        let search_tool = RecordableTool::new("search", ToolOutput::success("found 3 matches".to_string()));
+        let read_tool = RecordableTool::new(
+            "read_file",
+            ToolOutput::success("file contents here".to_string()),
+        );
+        let search_tool =
+            RecordableTool::new("search", ToolOutput::success("found 3 matches".to_string()));
         registry.register(Box::new(read_tool)).unwrap();
         registry.register(Box::new(search_tool)).unwrap();
 
         let engine = create_engine(&mock_url, registry);
 
         // First response: text intro + two tool_use blocks
-        let _m1 = setup_mock(&mut server, &sse_multi_tool_response(
-            "Checking now.",
-            "toolu_1", "read_file", r#"{\"path\":\"/tmp/test.txt\"}"#,
-            "toolu_2", "search", r#"{\"pattern\":\"TODO\"}"#,
-        ));
+        let _m1 = setup_mock(
+            &mut server,
+            &sse_multi_tool_response(
+                "Checking now.",
+                "toolu_1",
+                "read_file",
+                r#"{\"path\":\"/tmp/test.txt\"}"#,
+                "toolu_2",
+                "search",
+                r#"{\"pattern\":\"TODO\"}"#,
+            ),
+        );
         // Second response: combined answer
         let _m2 = setup_mock(&mut server, &sse_text_response("Found TODO in 3 places."));
 
         let ctx = make_context("Check the file for TODOs");
         let events = collect_events(&engine, ctx).await;
 
-        let tool_requests: Vec<_> = events.iter()
+        let tool_requests: Vec<_> = events
+            .iter()
             .filter_map(|e| match e {
                 QueryEvent::ToolUseRequest { tool_name, .. } => Some(tool_name.clone()),
                 _ => None,
             })
             .collect();
 
-        assert!(tool_requests.contains(&"read_file".to_string()), "Should request read_file");
-        assert!(tool_requests.contains(&"search".to_string()), "Should request search");
+        assert!(
+            tool_requests.contains(&"read_file".to_string()),
+            "Should request read_file"
+        );
+        assert!(
+            tool_requests.contains(&"search".to_string()),
+            "Should request search"
+        );
 
-        let final_text: String = events.iter()
+        let final_text: String = events
+            .iter()
             .filter_map(|e| match e {
                 QueryEvent::Text { content, .. } => Some(content.as_str()),
                 _ => None,
             })
             .collect();
-        assert!(final_text.contains("Found TODO"), "Final answer should combine tool results. Got: {final_text}");
-        assert!(events.iter().any(|e| matches!(e, QueryEvent::Completed { .. })));
+        assert!(
+            final_text.contains("Found TODO"),
+            "Final answer should combine tool results. Got: {final_text}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. }))
+        );
     }
 
     #[tokio::test]
@@ -334,18 +405,28 @@ mod tool_use_tests {
         let mock_url = server.url();
 
         let registry = ToolRegistry::new();
-        let fail_tool = FailingTool { name: "bash".to_string() };
+        let fail_tool = FailingTool {
+            name: "bash".to_string(),
+        };
         registry.register(Box::new(fail_tool)).unwrap();
 
         let engine = create_engine(&mock_url, registry);
 
         // First response: tool_use
-        let _m1 = setup_mock(&mut server, &sse_tool_use_response(
-            "Let me try.", "toolu_1", "bash",
-            r#"{\"command\":\"rm -rf /\"}"#,
-        ));
+        let _m1 = setup_mock(
+            &mut server,
+            &sse_tool_use_response(
+                "Let me try.",
+                "toolu_1",
+                "bash",
+                r#"{\"command\":\"rm -rf /\"}"#,
+            ),
+        );
         // Second response: acknowledge error
-        let _m2 = setup_mock(&mut server, &sse_text_response("The command was not allowed."));
+        let _m2 = setup_mock(
+            &mut server,
+            &sse_text_response("The command was not allowed."),
+        );
 
         let ctx = make_context("Delete everything");
         let events = collect_events(&engine, ctx).await;
@@ -356,12 +437,20 @@ mod tool_use_tests {
         assert!(has_error_result, "Should have error tool result");
 
         // Engine must still complete (not hang or crash)
-        assert!(events.iter().any(|e| matches!(e, QueryEvent::Completed { .. })),
-            "Engine must complete even after tool error");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::Completed { .. })),
+            "Engine must complete even after tool error"
+        );
 
         // ConversationUpdate must still be emitted
-        assert!(events.iter().any(|e| matches!(e, QueryEvent::ConversationUpdate { .. })),
-            "ConversationUpdate must be emitted even after tool error");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, QueryEvent::ConversationUpdate { .. })),
+            "ConversationUpdate must be emitted even after tool error"
+        );
     }
 
     #[tokio::test]
@@ -372,34 +461,54 @@ mod tool_use_tests {
         let mock_url = server.url();
 
         let registry = ToolRegistry::new();
-        registry.register(Box::new(RecordableTool::new(
-            "bash",
-            ToolOutput::success("ok".to_string()),
-        ))).unwrap();
+        registry
+            .register(Box::new(RecordableTool::new(
+                "bash",
+                ToolOutput::success("ok".to_string()),
+            )))
+            .unwrap();
 
         let engine = create_engine(&mock_url, registry);
 
-        let _m1 = setup_mock(&mut server, &sse_tool_use_response(
-            "Working", "toolu_1", "bash", r#"{\"command\":\"echo hi\"}"#,
-        ));
+        let _m1 = setup_mock(
+            &mut server,
+            &sse_tool_use_response("Working", "toolu_1", "bash", r#"{\"command\":\"echo hi\"}"#),
+        );
         let _m2 = setup_mock(&mut server, &sse_text_response("Done."));
 
         let ctx = make_context("test");
         let events = collect_events(&engine, ctx).await;
 
-        let text_before_tool = events.iter().position(|e| matches!(e, QueryEvent::Text { .. }));
-        let tool_req_idx = events.iter().position(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
-        let tool_res_idx = events.iter().position(|e| matches!(e, QueryEvent::ToolUseResult { .. }));
-        let completed_idx = events.iter().position(|e| matches!(e, QueryEvent::Completed { .. }));
+        let text_before_tool = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::Text { .. }));
+        let tool_req_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
+        let tool_res_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::ToolUseResult { .. }));
+        let completed_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::Completed { .. }));
 
         assert!(text_before_tool.is_some(), "Text event must exist");
         assert!(tool_req_idx.is_some(), "ToolUseRequest must exist");
         assert!(tool_res_idx.is_some(), "ToolUseResult must exist");
         assert!(completed_idx.is_some(), "Completed must exist");
 
-        assert!(text_before_tool < tool_req_idx, "Text must precede ToolUseRequest");
-        assert!(tool_req_idx < tool_res_idx, "ToolUseRequest must precede ToolUseResult");
-        assert!(tool_res_idx < completed_idx, "ToolUseResult must precede Completed");
+        assert!(
+            text_before_tool < tool_req_idx,
+            "Text must precede ToolUseRequest"
+        );
+        assert!(
+            tool_req_idx < tool_res_idx,
+            "ToolUseRequest must precede ToolUseResult"
+        );
+        assert!(
+            tool_res_idx < completed_idx,
+            "ToolUseResult must precede Completed"
+        );
     }
 
     #[tokio::test]
@@ -411,50 +520,79 @@ mod tool_use_tests {
         let mock_url = server.url();
 
         let registry = ToolRegistry::new();
-        registry.register(Box::new(RecordableTool::new(
-            "bash",
-            ToolOutput::success("hello world".to_string()),
-        ))).unwrap();
+        registry
+            .register(Box::new(RecordableTool::new(
+                "bash",
+                ToolOutput::success("hello world".to_string()),
+            )))
+            .unwrap();
 
         let mut engine = create_engine(&mock_url, registry);
 
         // Turn 1: tool use
-        let _m1 = setup_mock(&mut server, &sse_tool_use_response(
-            "Running", "toolu_1", "bash", r#"{\"command\":\"echo hello\"}"#,
-        ));
+        let _m1 = setup_mock(
+            &mut server,
+            &sse_tool_use_response(
+                "Running",
+                "toolu_1",
+                "bash",
+                r#"{\"command\":\"echo hello\"}"#,
+            ),
+        );
         let _m2 = setup_mock(&mut server, &sse_text_response("Output: hello world"));
         let ctx1 = make_context("echo hello");
         let events1 = collect_events(&engine, ctx1).await;
 
         // Restore messages
-        let update1 = events1.iter().find_map(|e| match e {
-            QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
-            _ => None,
-        }).expect("Turn 1 must emit ConversationUpdate");
+        let update1 = events1
+            .iter()
+            .find_map(|e| match e {
+                QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
+                _ => None,
+            })
+            .expect("Turn 1 must emit ConversationUpdate");
         engine.restore_messages(update1);
 
         // Turn 2: text-only follow-up
-        let _m3 = setup_mock(&mut server, &sse_text_response("Previous output was hello world."));
+        let _m3 = setup_mock(
+            &mut server,
+            &sse_text_response("Previous output was hello world."),
+        );
         let ctx2 = make_context("What was the output?");
         let events2 = collect_events(&engine, ctx2).await;
 
-        let update2 = events2.iter().find_map(|e| match e {
-            QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
-            _ => None,
-        }).expect("Turn 2 must emit ConversationUpdate");
+        let update2 = events2
+            .iter()
+            .find_map(|e| match e {
+                QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
+                _ => None,
+            })
+            .expect("Turn 2 must emit ConversationUpdate");
 
         // After 2 turns, conversation should have accumulated correctly
-        assert!(update2.len() >= 4, "After 2 turns: at least 4 messages, got {}", update2.len());
+        assert!(
+            update2.len() >= 4,
+            "After 2 turns: at least 4 messages, got {}",
+            update2.len()
+        );
 
         // The tool-use turn content should be preserved
-        let all_text: String = update2.iter().map(|m| match &m.content {
-            shannon_core::api::MessageContent::Text(t) => t.clone(),
-            shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter()
-                .filter_map(|b| match b {
-                    shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                }).collect(),
-        }).collect();
-        assert!(all_text.contains("hello world"), "Tool result from turn 1 must survive into turn 2");
+        let all_text: String = update2
+            .iter()
+            .map(|m| match &m.content {
+                shannon_core::api::MessageContent::Text(t) => t.clone(),
+                shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect(),
+            })
+            .collect();
+        assert!(
+            all_text.contains("hello world"),
+            "Tool result from turn 1 must survive into turn 2"
+        );
     }
 }

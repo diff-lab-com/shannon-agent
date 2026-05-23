@@ -88,10 +88,7 @@ pub enum SandboxError {
     OutsideAllowedRoots(String),
 
     #[error("Symlink resolves outside allowed roots: {symlink} -> {target}")]
-    SymlinkEscape {
-        symlink: String,
-        target: String,
-    },
+    SymlinkEscape { symlink: String, target: String },
 
     #[error("Potential TOCTOU attack detected: symlink target changed between check and use")]
     ToctouDetected(String),
@@ -153,11 +150,9 @@ impl PathSandbox {
         // Canonicalize: resolve symlinks, `.` and `..` components
         // This is the primary TOCTOU protection - we resolve the actual
         // target immediately before checking it against allowed roots.
-        let canonical = tokio::fs::canonicalize(path)
-            .await
-            .map_err(|e| SandboxError::ResolutionFailed(format!(
-                "Cannot resolve path '{path_str}': {e}"
-            )))?;
+        let canonical = tokio::fs::canonicalize(path).await.map_err(|e| {
+            SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': {e}"))
+        })?;
 
         let canonical_str = canonical.to_string_lossy().to_string();
 
@@ -188,10 +183,9 @@ impl PathSandbox {
 
         self.check_raw_traversal(&path_str)?;
 
-        let canonical = std::fs::canonicalize(path)
-            .map_err(|e| SandboxError::ResolutionFailed(format!(
-                "Cannot resolve path '{path_str}': {e}"
-            )))?;
+        let canonical = std::fs::canonicalize(path).map_err(|e| {
+            SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': {e}"))
+        })?;
 
         let canonical_str = canonical.to_string_lossy().to_string();
 
@@ -234,7 +228,8 @@ impl PathSandbox {
     fn check_denied_patterns(&self, canonical_str: &str) -> Result<(), SandboxError> {
         for pattern in &self.config.denied_patterns {
             // Match as prefix. Both "/etc/passwd" and "/etc/" itself should match "/etc/"
-            if canonical_str.starts_with(pattern) || canonical_str == pattern.trim_end_matches('/') {
+            if canonical_str.starts_with(pattern) || canonical_str == pattern.trim_end_matches('/')
+            {
                 return Err(SandboxError::Denied(format!(
                     "Path '{canonical_str}' is in a restricted area (matches '{pattern}')"
                 )));
@@ -293,8 +288,7 @@ impl PathSandbox {
 
         Err(SandboxError::OutsideAllowedRoots(format!(
             "Path '{}' is not within any allowed root. Allowed roots: {:?}",
-            canonical_str,
-            self.config.allowed_roots
+            canonical_str, self.config.allowed_roots
         )))
     }
 
@@ -392,10 +386,14 @@ mod tests {
     impl TestDir {
         fn new() -> Self {
             // Use a unique suffix to avoid collisions between parallel tests
-            let unique = format!("sandbox_test_{}_{}", std::process::id(), std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos());
+            let unique = format!(
+                "sandbox_test_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
             let dir = std::env::temp_dir().join(unique);
             fs::create_dir_all(&dir).expect("Failed to create test dir");
             Self {
@@ -428,7 +426,8 @@ mod tests {
             #[cfg(unix)]
             std::os::unix::fs::symlink(target, &link_path).expect("Failed to create symlink");
             #[cfg(windows)]
-            std::os::windows::fs::symlink_file(target, &link_path).expect("Failed to create symlink");
+            std::os::windows::fs::symlink_file(target, &link_path)
+                .expect("Failed to create symlink");
             link_path
         }
     }
@@ -466,7 +465,9 @@ mod tests {
         let err = result.unwrap_err().to_string();
         let err_lower = err.to_lowercase();
         assert!(
-            err_lower.contains("traversal") || err_lower.contains("outside allowed roots") || err_lower.contains("cannot resolve"),
+            err_lower.contains("traversal")
+                || err_lower.contains("outside allowed roots")
+                || err_lower.contains("cannot resolve"),
             "Expected traversal or outside-roots error, got: {err}"
         );
     }
@@ -600,7 +601,12 @@ mod tests {
         // Try to access a file in a different directory
         let result = sandbox.validate(&td.file("file.txt")).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("not within any allowed root"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not within any allowed root")
+        );
 
         let _ = fs::remove_dir_all(&allowed);
     }
@@ -645,7 +651,10 @@ mod tests {
 
         // Symlink that stays within allowed root should be fine
         let result = sandbox.validate(&link).await;
-        assert!(result.is_ok(), "Symlink inside root should be allowed, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "Symlink inside root should be allowed, got: {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -653,7 +662,8 @@ mod tests {
         let td = TestDir::new();
 
         // Create a target outside the allowed root
-        let outside_dir = std::env::temp_dir().join(format!("sandbox_outside_{}", std::process::id()));
+        let outside_dir =
+            std::env::temp_dir().join(format!("sandbox_outside_{}", std::process::id()));
         fs::create_dir_all(&outside_dir).expect("Failed to create outside dir");
         let outside_file = outside_dir.join("secret.txt");
         fs::write(&outside_file, "secret data").expect("Failed to write outside file");
@@ -711,7 +721,8 @@ mod tests {
 
         // Create a chain: link1 -> link2 -> outside_file
         // This should still be blocked
-        let outside_dir = std::env::temp_dir().join(format!("sandbox_chain_{}", std::process::id()));
+        let outside_dir =
+            std::env::temp_dir().join(format!("sandbox_chain_{}", std::process::id()));
         fs::create_dir_all(&outside_dir).expect("Failed to create outside dir");
         let outside_file = outside_dir.join("secret.txt");
         fs::write(&outside_file, "secret data").expect("Failed to write outside file");
@@ -734,7 +745,10 @@ mod tests {
 
             // Accessing link1 should fail (it resolves to outside the root)
             let result = sandbox.validate(&link1).await;
-            assert!(result.is_err(), "Symlink chain escaping root should be blocked");
+            assert!(
+                result.is_err(),
+                "Symlink chain escaping root should be blocked"
+            );
 
             let _ = fs::remove_file(&link1);
         }
@@ -751,7 +765,7 @@ mod tests {
         let sandbox = PathSandbox::with_config(SandboxConfig {
             allowed_roots: vec![td.path().to_path_buf()],
             denied_patterns: vec![], // No denied patterns
-            strict_mode: false,     // Non-strict: only denied patterns apply
+            strict_mode: false,      // Non-strict: only denied patterns apply
         });
 
         // In non-strict mode, paths outside roots are allowed (unless denied)
@@ -760,7 +774,10 @@ mod tests {
         fs::write(&tmp_file, "test").ok(); // May already exist, ignore error
 
         let result = sandbox.validate(&tmp_file).await;
-        assert!(result.is_ok(), "Non-strict mode should allow non-root paths: {result:?}");
+        assert!(
+            result.is_ok(),
+            "Non-strict mode should allow non-root paths: {result:?}"
+        );
 
         let _ = fs::remove_file(&tmp_file);
     }
@@ -774,7 +791,10 @@ mod tests {
         });
 
         let result = sandbox.validate(Path::new("/etc/passwd")).await;
-        assert!(result.is_err(), "Denied patterns should apply even in non-strict mode");
+        assert!(
+            result.is_err(),
+            "Denied patterns should apply even in non-strict mode"
+        );
     }
 
     // --- Empty / invalid path tests ---
@@ -818,7 +838,10 @@ mod tests {
         // The current working directory itself should be accessible
         let cwd = std::env::current_dir().expect("Failed to get cwd");
         let result = sandbox.validate(&cwd).await;
-        assert!(result.is_ok(), "Default config should allow CWD: {result:?}");
+        assert!(
+            result.is_ok(),
+            "Default config should allow CWD: {result:?}"
+        );
     }
 
     // --- Home directory boundary tests ---
@@ -878,7 +901,13 @@ mod tests {
     fn test_add_denied_pattern() {
         let mut sandbox = PathSandbox::new();
         sandbox.add_denied_pattern("/custom/denied/".to_string());
-        assert!(sandbox.config().denied_patterns.iter().any(|p| p == "/custom/denied/"));
+        assert!(
+            sandbox
+                .config()
+                .denied_patterns
+                .iter()
+                .any(|p| p == "/custom/denied/")
+        );
     }
 
     #[test]

@@ -284,7 +284,10 @@ impl MagicDocsService {
     }
 
     /// Generate documentation from the given request.
-    pub fn generate_docs(&self, request: &DocGenerationRequest) -> Result<DocOutput, MagicDocsError> {
+    pub fn generate_docs(
+        &self,
+        request: &DocGenerationRequest,
+    ) -> Result<DocOutput, MagicDocsError> {
         if request.source_paths.is_empty() {
             return Err(MagicDocsError::NoSourcePaths);
         }
@@ -319,13 +322,7 @@ impl MagicDocsService {
 
             let content = template.replace("{title}", &title);
 
-            sections.push(DocSection::new(
-                &title,
-                content,
-                order,
-                level,
-                source_path,
-            ));
+            sections.push(DocSection::new(&title, content, order, level, source_path));
             order += 1;
         }
 
@@ -345,8 +342,9 @@ impl MagicDocsService {
         match output.metadata.output_format {
             DocOutputFormat::Markdown => self.render_markdown(output),
             DocOutputFormat::Html => self.render_html(output),
-            DocOutputFormat::Json => serde_json::to_string_pretty(output)
-                .unwrap_or_else(|_| "[]".to_string()),
+            DocOutputFormat::Json => {
+                serde_json::to_string_pretty(output).unwrap_or_else(|_| "[]".to_string())
+            }
         }
     }
 
@@ -383,7 +381,9 @@ impl MagicDocsService {
             body.push_str(&format!("<{}>{}</{}>\n", heading, section.title, heading));
             // Convert newlines to <br> for simple rendering
             let html_content = section.content.replace('\n', "<br>\n");
-            body.push_str(&format!("<div class=\"doc-section\">{html_content}</div>\n"));
+            body.push_str(&format!(
+                "<div class=\"doc-section\">{html_content}</div>\n"
+            ));
         }
 
         format!(
@@ -397,12 +397,8 @@ impl MagicDocsService {
     fn infer_level(&self, path: &Path) -> DocLevel {
         match path.extension().and_then(|e| e.to_str()) {
             // Module-level files (mod.rs, lib.rs, main.rs)
-            Some("rs") => {
-                DocLevel::Module
-            }
-            Some("py") => {
-                DocLevel::Module
-            }
+            Some("rs") => DocLevel::Module,
+            Some("py") => DocLevel::Module,
             _ => DocLevel::Module,
         }
     }
@@ -476,8 +472,8 @@ mod tests {
     #[test]
     fn test_generate_docs_with_title() {
         let service = MagicDocsService::new();
-        let request = DocGenerationRequest::new(vec!["src/lib.rs".to_string()])
-            .with_title("My Crate");
+        let request =
+            DocGenerationRequest::new(vec!["src/lib.rs".to_string()]).with_title("My Crate");
 
         let output = service.generate_docs(&request).unwrap();
         assert_eq!(output.metadata.title, Some("My Crate".to_string()));
@@ -514,8 +510,8 @@ mod tests {
     #[test]
     fn test_render_markdown_with_title() {
         let service = MagicDocsService::new();
-        let request = DocGenerationRequest::new(vec!["src/lib.rs".to_string()])
-            .with_title("Test Docs");
+        let request =
+            DocGenerationRequest::new(vec!["src/lib.rs".to_string()]).with_title("Test Docs");
 
         let output = service.generate_docs(&request).unwrap();
         let rendered = service.render(&output);
@@ -565,7 +561,13 @@ mod tests {
 
     #[test]
     fn test_doc_serialization_round_trip() {
-        let section = DocSection::new("my_module", "Content here", 0, DocLevel::Module, "src/my_module.rs");
+        let section = DocSection::new(
+            "my_module",
+            "Content here",
+            0,
+            DocLevel::Module,
+            "src/my_module.rs",
+        );
         let json = serde_json::to_string(&section).unwrap();
         let decoded: DocSection = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded.title, "my_module");
@@ -576,12 +578,10 @@ mod tests {
 
     #[test]
     fn test_doc_metadata_fields() {
-        let request = DocGenerationRequest::new(vec![
-            "src/a.rs".to_string(),
-            "src/b.rs".to_string(),
-        ])
-        .with_format(DocOutputFormat::Html)
-        .with_title("Test");
+        let request =
+            DocGenerationRequest::new(vec!["src/a.rs".to_string(), "src/b.rs".to_string()])
+                .with_format(DocOutputFormat::Html)
+                .with_title("Test");
 
         let service = MagicDocsService::new();
         let output = service.generate_docs(&request).unwrap();

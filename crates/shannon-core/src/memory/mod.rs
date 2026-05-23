@@ -23,20 +23,18 @@
 // Re-export all public types to maintain `crate::memory::*` paths
 pub use crate::api::{Message, MessageContent};
 
-pub use types::{
-    MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig,
-};
-pub use store::MemoryStore;
 pub use auto_dream::AutoDreamService;
-pub use consolidator::{MemoryConsolidator, ConsolidationResult};
+pub use consolidator::{ConsolidationResult, MemoryConsolidator};
 pub use error::MemoryError;
+pub use store::MemoryStore;
+pub use types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig};
 
 // Private modules
-mod error;
-mod types;
-mod store;
 mod auto_dream;
 mod consolidator;
+mod error;
+mod store;
+mod types;
 
 // Re-export the private error type as public
 pub use error::MemoryError as Error;

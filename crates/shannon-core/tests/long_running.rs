@@ -9,12 +9,12 @@
 //! All tests are marked `#[ignore]` and only run via `test-release.sh`
 //! or explicitly with `cargo test -- --ignored`.
 
+use serde_json::json;
 use shannon_core::api::{ContentBlock, Message, MessageContent, ToolResultContent};
 use shannon_core::compact::helpers::estimate_tokens;
 use shannon_core::query_engine::{CompressionStrategy, QueryEngineConfig};
 use shannon_core::testing::mock_dsl::*;
 use shannon_core::testing::snapshot::*;
-use serde_json::json;
 
 // ── Message helpers ──────────────────────────────────────────────────
 
@@ -82,7 +82,13 @@ impl ConversationSimulator {
         self.turn += 1;
     }
 
-    fn add_tool_cycle(&mut self, tool_name: &str, tool_input: serde_json::Value, result: &str, is_error: bool) {
+    fn add_tool_cycle(
+        &mut self,
+        tool_name: &str,
+        tool_input: serde_json::Value,
+        result: &str,
+        is_error: bool,
+    ) {
         let id = self.turn + 1;
         self.messages.push(tool_use_msg(id, tool_name, tool_input));
         self.messages.push(tool_result_msg(id, result, is_error));
@@ -102,7 +108,10 @@ impl ConversationSimulator {
         if self.messages.len() <= self.config.keep_recent_messages + 1 {
             return false;
         }
-        let split_point = self.messages.len().saturating_sub(self.config.keep_recent_messages);
+        let split_point = self
+            .messages
+            .len()
+            .saturating_sub(self.config.keep_recent_messages);
         match self.config.compression_strategy {
             CompressionStrategy::TruncateOldest => {
                 self.messages.drain(..split_point);
@@ -112,7 +121,9 @@ impl ConversationSimulator {
                 let summary = summarize_messages(&old);
                 let summary_msg = Message {
                     role: "system".to_string(),
-                    content: MessageContent::Text(format!("[Previous conversation summary]\n\n{summary}")),
+                    content: MessageContent::Text(format!(
+                        "[Previous conversation summary]\n\n{summary}"
+                    )),
                 };
                 self.messages.insert(0, summary_msg);
             }
@@ -135,8 +146,16 @@ fn summarize_messages(messages: &[Message]) -> String {
     for msg in messages {
         match &msg.content {
             MessageContent::Text(text) => {
-                let role = if msg.role == "user" { "User" } else { "Assistant" };
-                let preview = if text.len() > 100 { format!("{}...", &text[..100]) } else { text.clone() };
+                let role = if msg.role == "user" {
+                    "User"
+                } else {
+                    "Assistant"
+                };
+                let preview = if text.len() > 100 {
+                    format!("{}...", &text[..100])
+                } else {
+                    text.clone()
+                };
                 parts.push(format!("{role}: {preview}"));
             }
             MessageContent::Blocks(blocks) => {
@@ -148,7 +167,11 @@ fn summarize_messages(messages: &[Message]) -> String {
             }
         }
     }
-    format!("Summary of {} messages:\n{}", messages.len(), parts.join("\n"))
+    format!(
+        "Summary of {} messages:\n{}",
+        messages.len(),
+        parts.join("\n")
+    )
 }
 
 /// Build mock responses for N turns of refactoring (alternating text + tool calls).
@@ -339,13 +362,22 @@ fn test_50_turn_debugging_session() {
     // Verify tool chain was recorded correctly
     assert!(!tool_chain.is_empty(), "Tool chain should not be empty");
     let chain_snapshot = snapshot_tool_chain(&tool_chain);
-    assert!(chain_snapshot.contains("[ERROR]"), "Snapshot should show errors");
-    assert!(chain_snapshot.contains("[OK]"), "Snapshot should show successes");
+    assert!(
+        chain_snapshot.contains("[ERROR]"),
+        "Snapshot should show errors"
+    );
+    assert!(
+        chain_snapshot.contains("[OK]"),
+        "Snapshot should show successes"
+    );
 
     // Verify the last few operations are successful (recovery happened)
     let last_5: Vec<_> = tool_chain.iter().rev().take(5).collect();
     let has_success_in_last_5 = last_5.iter().any(|(_, _, _, is_error)| !is_error);
-    assert!(has_success_in_last_5, "Should have recovered from errors in recent turns");
+    assert!(
+        has_success_in_last_5,
+        "Should have recovered from errors in recent turns"
+    );
 }
 
 #[test]
@@ -366,12 +398,16 @@ fn test_80_turn_feature_development() {
     let mut fix_count = 0;
 
     for i in 0..80 {
-        sim.add_user(&format!("Feature step {}: {}", i, match i % 4 {
-            0 => "Create new module",
-            1 => "Add functionality",
-            2 => "Write tests",
-            _ => "Fix issues",
-        }));
+        sim.add_user(&format!(
+            "Feature step {}: {}",
+            i,
+            match i % 4 {
+                0 => "Create new module",
+                1 => "Add functionality",
+                2 => "Write tests",
+                _ => "Fix issues",
+            }
+        ));
 
         match i % 4 {
             0 => {
@@ -396,10 +432,16 @@ fn test_80_turn_feature_development() {
                 } else {
                     format!("Tests failed for feature {}, fixing...", i / 4)
                 };
-                sim.add_tool_cycle("Bash",
+                sim.add_tool_cycle(
+                    "Bash",
                     json!({"command": format!("cargo test feature_{}", i / 4)}),
-                    if test_passed { "All tests passed" } else { "1 test failed" },
-                    !test_passed);
+                    if test_passed {
+                        "All tests passed"
+                    } else {
+                        "1 test failed"
+                    },
+                    !test_passed,
+                );
                 sim.add_assistant_after_tool(&result_msg);
             }
             _ => {
@@ -424,12 +466,14 @@ fn test_80_turn_feature_development() {
 
     // Verify context is bounded after compaction
     let final_tokens = sim.estimate_tokens();
-    let raw_estimate: usize = (0..80).map(|i| {
-        let msg_len = 50 + i.to_string().len(); // user msg
-        let tool_len = 100; // tool call + result
-        let resp_len = 60; // assistant response
-        msg_len + tool_len + resp_len
-    }).sum();
+    let raw_estimate: usize = (0..80)
+        .map(|i| {
+            let msg_len = 50 + i.to_string().len(); // user msg
+            let tool_len = 100; // tool call + result
+            let resp_len = 60; // assistant response
+            msg_len + tool_len + resp_len
+        })
+        .sum();
     // Compacted context should be significantly smaller than un-compacted
     assert!(
         final_tokens < raw_estimate / 3,
@@ -456,7 +500,11 @@ fn test_memory_stability_50_turns() {
     for i in 0..50 {
         // Generate variable-sized content to stress memory
         let large_content = "x".repeat(200 + (i % 5) * 100);
-        sim.add_user(&format!("Turn {}: {}", i, &large_content[..50.min(large_content.len())]));
+        sim.add_user(&format!(
+            "Turn {}: {}",
+            i,
+            &large_content[..50.min(large_content.len())]
+        ));
         sim.add_assistant(&large_content);
 
         if sim.needs_compression() {
@@ -519,10 +567,12 @@ fn test_compaction_quality_long_session() {
     for i in 0..30 {
         let file = critical_files[i % critical_files.len()];
         sim.add_user(&format!("Work on {}", file));
-        sim.add_tool_cycle("Read",
+        sim.add_tool_cycle(
+            "Read",
             json!({"path": file}),
             &format!("// Contents of {} at revision {}", file, i),
-            false);
+            false,
+        );
         sim.add_assistant_after_tool(&format!("Reviewed {}", file));
     }
 
@@ -554,7 +604,10 @@ fn test_compaction_quality_long_session() {
                         ContentBlock::ToolUse { name, input, .. } => {
                             recent_parts.push(format!("{}({})", name, input));
                         }
-                        ContentBlock::ToolResult { content: Some(ToolResultContent::Single(s)), .. } => {
+                        ContentBlock::ToolResult {
+                            content: Some(ToolResultContent::Single(s)),
+                            ..
+                        } => {
                             recent_parts.push(s.clone());
                         }
                         _ => {}
@@ -567,15 +620,20 @@ fn test_compaction_quality_long_session() {
 
     // At least one critical file should be in the recent context
     let found_any = critical_files.iter().any(|f| recent_text.contains(f));
-    assert!(found_any, "At least one critical file name should be preserved in recent context");
+    assert!(
+        found_any,
+        "At least one critical file name should be preserved in recent context"
+    );
 
     // Verify subsequent turns still work after compaction
     sim.add_user("Continue working on the project");
     sim.add_assistant("Sure, I'll continue. Let me check the current state.");
-    sim.add_tool_cycle("Read",
+    sim.add_tool_cycle(
+        "Read",
         json!({"path": "src/lib.rs"}),
         "// Updated lib.rs contents",
-        false);
+        false,
+    );
     sim.add_assistant_after_tool("The codebase looks good.");
 
     assert_eq!(sim.turn, 31, "Should continue to 31 turns after compaction");
@@ -599,6 +657,12 @@ fn test_compaction_quality_long_session() {
         RenderMode::KindOnly,
     );
 
-    assert!(!final_snapshot.is_empty(), "Final snapshot should not be empty");
-    assert!(final_snapshot.contains("system/text"), "Summary message should be present");
+    assert!(
+        !final_snapshot.is_empty(),
+        "Final snapshot should not be empty"
+    );
+    assert!(
+        final_snapshot.contains("system/text"),
+        "Summary message should be present"
+    );
 }

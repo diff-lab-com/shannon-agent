@@ -216,10 +216,7 @@ impl PathSandboxAdapter {
             ));
         }
 
-        SandboxResult::allowed(&format!(
-            "Path '{}' is accessible",
-            path.display()
-        ))
+        SandboxResult::allowed(&format!("Path '{}' is accessible", path.display()))
     }
 
     /// Check if a command is safe to execute.
@@ -231,16 +228,16 @@ impl PathSandboxAdapter {
         let raw_base = command.split_whitespace().next().unwrap_or(command);
         // Normalize: strip leading "./" and extract filename after last "/" to prevent bypass
         let normalized = raw_base
-            .strip_prefix("./").unwrap_or(raw_base)
-            .rsplit('/').next().unwrap_or(raw_base);
+            .strip_prefix("./")
+            .unwrap_or(raw_base)
+            .rsplit('/')
+            .next()
+            .unwrap_or(raw_base);
 
         // Check denied commands
         for denied in &self.config.denied_commands {
             let denied_base = denied.split_whitespace().next().unwrap_or(denied);
-            if raw_base == denied_base
-                || normalized == denied_base
-                || command.contains(denied)
-            {
+            if raw_base == denied_base || normalized == denied_base || command.contains(denied) {
                 return SandboxResult::denied(&format!(
                     "Command '{raw_base}' is in the denied list"
                 ));
@@ -337,17 +334,19 @@ impl PathSandboxAdapter {
     /// Check if a path is read-only.
     fn is_read_only(&self, path: &Path) -> bool {
         let resolved = safe_resolve(path);
-        self.config.read_only_paths.iter().any(|ro| {
-            resolved.starts_with(ro) || resolved == *ro
-        })
+        self.config
+            .read_only_paths
+            .iter()
+            .any(|ro| resolved.starts_with(ro) || resolved == *ro)
     }
 
     /// Check if a path is in the denied list.
     fn is_path_denied(&self, path: &Path) -> bool {
         let resolved = safe_resolve(path);
-        self.config.denied_paths.iter().any(|denied| {
-            resolved.starts_with(denied) || resolved == *denied
-        })
+        self.config
+            .denied_paths
+            .iter()
+            .any(|denied| resolved.starts_with(denied) || resolved == *denied)
     }
 
     /// Check if a path is under any allowed path.
@@ -358,9 +357,10 @@ impl PathSandboxAdapter {
         }
 
         let resolved = safe_resolve(path);
-        self.config.allowed_paths.iter().any(|allowed| {
-            resolved.starts_with(allowed) || resolved == *allowed
-        })
+        self.config
+            .allowed_paths
+            .iter()
+            .any(|allowed| resolved.starts_with(allowed) || resolved == *allowed)
     }
 }
 
@@ -460,8 +460,14 @@ mod tests {
 
     impl TestDir {
         fn new() -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("shannon_sandbox_test_{}_{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()));
+            let dir = std::env::temp_dir().join(format!(
+                "shannon_sandbox_test_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
             fs::create_dir_all(&dir).expect("Failed to create test dir");
             Self(dir)
         }
@@ -684,7 +690,13 @@ mod tests {
     fn test_add_allowed_command() {
         let mut adapter = PathSandboxAdapter::new();
         adapter.add_allowed_command("python3".to_string());
-        assert!(adapter.config().allowed_commands.iter().any(|c| c == "python3"));
+        assert!(
+            adapter
+                .config()
+                .allowed_commands
+                .iter()
+                .any(|c| c == "python3")
+        );
     }
 
     #[test]

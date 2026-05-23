@@ -21,12 +21,24 @@ impl ModelCapabilities {
     const CHEAP: u8 = 1 << 3;
     const VISION: u8 = 1 << 4;
 
-    pub const fn empty() -> Self { Self(0) }
-    pub const fn reasoning() -> Self { Self(Self::REASONING) }
-    pub const fn coding() -> Self { Self(Self::CODING) }
-    pub const fn speed() -> Self { Self(Self::SPEED) }
-    pub const fn cheap() -> Self { Self(Self::CHEAP) }
-    pub const fn vision() -> Self { Self(Self::VISION) }
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+    pub const fn reasoning() -> Self {
+        Self(Self::REASONING)
+    }
+    pub const fn coding() -> Self {
+        Self(Self::CODING)
+    }
+    pub const fn speed() -> Self {
+        Self(Self::SPEED)
+    }
+    pub const fn cheap() -> Self {
+        Self(Self::CHEAP)
+    }
+    pub const fn vision() -> Self {
+        Self(Self::VISION)
+    }
 
     pub const fn has(self, cap: ModelCapabilities) -> bool {
         self.0 & cap.0 != 0
@@ -85,7 +97,9 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         max_output: 32_000,
         cost_per_m_input: 15.0,
         cost_per_m_output: 75.0,
-        capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::coding()).or(ModelCapabilities::vision()),
+        capabilities: ModelCapabilities::reasoning()
+            .or(ModelCapabilities::coding())
+            .or(ModelCapabilities::vision()),
     },
     ModelInfo {
         id: "claude-haiku-4-5-20251001",
@@ -119,7 +133,9 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         max_output: 16_384,
         cost_per_m_input: 2.50,
         cost_per_m_output: 10.0,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()).or(ModelCapabilities::vision()),
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
     },
     ModelInfo {
         id: "gpt-4o-mini",
@@ -164,7 +180,9 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         max_output: 65_536,
         cost_per_m_input: 1.25,
         cost_per_m_output: 10.0,
-        capabilities: ModelCapabilities::reasoning().or(ModelCapabilities::coding()).or(ModelCapabilities::vision()),
+        capabilities: ModelCapabilities::reasoning()
+            .or(ModelCapabilities::coding())
+            .or(ModelCapabilities::vision()),
     },
     ModelInfo {
         id: "gemini-2.5-flash",
@@ -175,7 +193,8 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         max_output: 65_536,
         cost_per_m_input: 0.15,
         cost_per_m_output: 0.60,
-        capabilities: ModelCapabilities::cheap().or(ModelCapabilities::speed().or(ModelCapabilities::vision())),
+        capabilities: ModelCapabilities::cheap()
+            .or(ModelCapabilities::speed().or(ModelCapabilities::vision())),
     },
     // ── DeepSeek ───────────────────────────────────────────────
     ModelInfo {
@@ -209,7 +228,9 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         max_output: 384_000,
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.28,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::cheap()).or(ModelCapabilities::speed()),
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::cheap())
+            .or(ModelCapabilities::speed()),
     },
     ModelInfo {
         id: "deepseek-v4-pro",
@@ -399,7 +420,9 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         max_output: 96_000,
         cost_per_m_input: 0.91,
         cost_per_m_output: 3.78,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()).or(ModelCapabilities::vision()),
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
     },
     ModelInfo {
         id: "kimi-k2.5",
@@ -410,7 +433,9 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         max_output: 96_000,
         cost_per_m_input: 0.56,
         cost_per_m_output: 2.94,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::reasoning()).or(ModelCapabilities::vision()),
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::reasoning())
+            .or(ModelCapabilities::vision()),
     },
     ModelInfo {
         id: "moonshot-v1-128k",
@@ -500,7 +525,9 @@ pub static MODEL_CATALOG: &[ModelInfo] = &[
         max_output: 64_000,
         cost_per_m_input: 0.14,
         cost_per_m_output: 0.57,
-        capabilities: ModelCapabilities::coding().or(ModelCapabilities::speed()).or(ModelCapabilities::cheap()),
+        capabilities: ModelCapabilities::coding()
+            .or(ModelCapabilities::speed())
+            .or(ModelCapabilities::cheap()),
     },
     // ── MiniMax ───────────────────────────────────────────────
     ModelInfo {
@@ -573,10 +600,8 @@ pub fn models_for_provider(provider: LlmProvider) -> Vec<&'static ModelInfo> {
 
 /// Return all distinct providers that have models in the catalog.
 pub fn all_providers() -> Vec<LlmProvider> {
-    let mut providers: Vec<LlmProvider> = MODEL_CATALOG
-        .iter()
-        .map(|m| m.provider.clone())
-        .collect();
+    let mut providers: Vec<LlmProvider> =
+        MODEL_CATALOG.iter().map(|m| m.provider.clone()).collect();
     providers.sort_by_key(provider_order);
     providers.dedup();
     providers
@@ -636,10 +661,7 @@ pub fn provider_display_name(p: &LlmProvider) -> &'static str {
 ///
 /// Returns an empty Vec silently if Ollama is not installed or not running.
 pub fn detect_local_models() -> Vec<ModelInfo> {
-    let output = match std::process::Command::new("ollama")
-        .arg("list")
-        .output()
-    {
+    let output = match std::process::Command::new("ollama").arg("list").output() {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -660,7 +682,7 @@ pub fn detect_local_models() -> Vec<ModelInfo> {
         models.push(ModelInfo {
             id: Box::leak(name.clone().into_boxed_str()),
             display_name: Box::leak(name.into_boxed_str()),
-        aliases: &[],
+            aliases: &[],
             provider: LlmProvider::Ollama,
             context_window: 4096,
             max_output: 4_096,
@@ -690,10 +712,7 @@ pub fn context_window_for(model_id: &str) -> usize {
     }
     // Prefix match: catalog entry starts with the given model_id
     // (handles short names like "claude-sonnet-4" → "claude-sonnet-4-20250514")
-    if let Some(info) = MODEL_CATALOG
-        .iter()
-        .find(|m| m.id.starts_with(model_id))
-    {
+    if let Some(info) = MODEL_CATALOG.iter().find(|m| m.id.starts_with(model_id)) {
         return info.context_window;
     }
     // Reverse prefix: given model_id starts with a catalog entry
@@ -716,9 +735,10 @@ pub fn model_info_for(model_id: &str) -> Option<&'static ModelInfo> {
 /// Look up a model by ID or alias.
 pub fn model_info_for_alias(alias: &str) -> Option<&'static ModelInfo> {
     let lower = alias.to_lowercase();
-    MODEL_CATALOG.iter().find(|m| {
-        m.id == lower || m.aliases.iter().any(|a| a == &lower)
-    }).or_else(|| model_info_for(alias))
+    MODEL_CATALOG
+        .iter()
+        .find(|m| m.id == lower || m.aliases.iter().any(|a| a == &lower))
+        .or_else(|| model_info_for(alias))
 }
 
 // ============================================================================
@@ -794,7 +814,9 @@ impl ModelTier {
 
     fn select<'a>(self, candidates: &[&'a ModelInfo]) -> &'a ModelInfo {
         if candidates.is_empty() {
-            tracing::warn!("ModelTier::select called with no candidates; falling back to first catalog entry");
+            tracing::warn!(
+                "ModelTier::select called with no candidates; falling back to first catalog entry"
+            );
             return &MODEL_CATALOG[0];
         }
         match self {
@@ -914,7 +936,9 @@ impl ModelRouter {
             TaskType::QuickQuery => ModelCapabilities::cheap(),
             TaskType::CodeGeneration => ModelCapabilities::coding(),
             TaskType::ArchitectureDesign => ModelCapabilities::reasoning(),
-            TaskType::ComplexWorkflow => ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+            TaskType::ComplexWorkflow => {
+                ModelCapabilities::coding().or(ModelCapabilities::reasoning())
+            }
         };
 
         // Find cheapest model that has the required capabilities
@@ -943,11 +967,15 @@ impl ModelRouter {
             TaskType::QuickQuery => ModelCapabilities::cheap().or(ModelCapabilities::speed()),
             TaskType::CodeGeneration => ModelCapabilities::coding().or(ModelCapabilities::speed()),
             TaskType::ArchitectureDesign => ModelCapabilities::reasoning(),
-            TaskType::ComplexWorkflow => ModelCapabilities::coding().or(ModelCapabilities::reasoning()),
+            TaskType::ComplexWorkflow => {
+                ModelCapabilities::coding().or(ModelCapabilities::reasoning())
+            }
         };
 
         for model in MODEL_CATALOG {
-            if model.capabilities.has(required) && model.capabilities.has(ModelCapabilities::speed()) {
+            if model.capabilities.has(required)
+                && model.capabilities.has(ModelCapabilities::speed())
+            {
                 return model.id;
             }
         }
@@ -969,8 +997,8 @@ impl ModelRouter {
 
 #[cfg(test)]
 mod tests {
-    use crate::api::types::WireFormat;
     use super::*;
+    use crate::api::types::WireFormat;
 
     #[test]
     fn test_models_for_provider_anthropic() {
@@ -1104,7 +1132,10 @@ mod tests {
 
     #[test]
     fn test_resolve_model_passthrough() {
-        assert_eq!(resolve_model("claude-sonnet-4-20250514", None), "claude-sonnet-4-20250514");
+        assert_eq!(
+            resolve_model("claude-sonnet-4-20250514", None),
+            "claude-sonnet-4-20250514"
+        );
     }
 
     #[test]
@@ -1130,7 +1161,10 @@ mod tests {
     fn test_effort_level_parse() {
         assert_eq!(EffortLevel::from_str_opt("low"), Some(EffortLevel::Low));
         assert_eq!(EffortLevel::from_str_opt("HIGH"), Some(EffortLevel::High));
-        assert_eq!(EffortLevel::from_str_opt("medium"), Some(EffortLevel::Medium));
+        assert_eq!(
+            EffortLevel::from_str_opt("medium"),
+            Some(EffortLevel::Medium)
+        );
         assert_eq!(EffortLevel::from_str_opt("med"), Some(EffortLevel::Medium));
         assert_eq!(EffortLevel::from_str_opt("unknown"), None);
     }
@@ -1139,7 +1173,10 @@ mod tests {
     fn test_effort_level_budget() {
         assert!(EffortLevel::Low.thinking_budget().is_none());
         assert!(EffortLevel::Medium.thinking_budget().unwrap() > 0);
-        assert!(EffortLevel::High.thinking_budget().unwrap() > EffortLevel::Medium.thinking_budget().unwrap());
+        assert!(
+            EffortLevel::High.thinking_budget().unwrap()
+                > EffortLevel::Medium.thinking_budget().unwrap()
+        );
     }
 
     // ── context_window_for with prefix matching ─────────────────────────
@@ -1180,7 +1217,8 @@ mod tests {
 
     #[test]
     fn test_deepseek_v4_flash_registered() {
-        let info = model_info_for("deepseek-v4-flash").expect("deepseek-v4-flash should be registered");
+        let info =
+            model_info_for("deepseek-v4-flash").expect("deepseek-v4-flash should be registered");
         assert_eq!(info.context_window, 1_000_000);
         assert_eq!(info.max_output, 384_000);
         assert!(info.capabilities.has(ModelCapabilities::coding()));
@@ -1208,11 +1246,22 @@ mod tests {
     #[test]
     fn test_glm_models_registered() {
         let glm_ids = [
-            "glm-4-plus", "glm-4-flash", "glm-4-long", "glm-4-air", "glm-4v-flash",
-            "glm-5", "glm-5.1", "glm-5-flash", "glm-5.1-flash",
+            "glm-4-plus",
+            "glm-4-flash",
+            "glm-4-long",
+            "glm-4-air",
+            "glm-4v-flash",
+            "glm-5",
+            "glm-5.1",
+            "glm-5-flash",
+            "glm-5.1-flash",
         ];
         for id in &glm_ids {
-            assert!(model_info_for(id).is_some(), "GLM model {} should be registered", id);
+            assert!(
+                model_info_for(id).is_some(),
+                "GLM model {} should be registered",
+                id
+            );
         }
     }
 
@@ -1252,7 +1301,11 @@ mod tests {
     #[test]
     fn test_models_for_provider_zhipu() {
         let glm = models_for_provider(LlmProvider::Zhipu);
-        assert!(glm.len() >= 9, "Zhipu should have at least 9 models, got {}", glm.len());
+        assert!(
+            glm.len() >= 9,
+            "Zhipu should have at least 9 models, got {}",
+            glm.len()
+        );
     }
 
     // ── Zhipu International tests ──────────────────────────────
@@ -1260,18 +1313,30 @@ mod tests {
     #[test]
     fn test_zhipu_intl_models_registered() {
         let intl_ids = [
-            "glm-4-plus-intl", "glm-4-flash-intl", "glm-4-long-intl",
-            "glm-5-intl", "glm-5.1-intl", "glm-5-flash-intl",
+            "glm-4-plus-intl",
+            "glm-4-flash-intl",
+            "glm-4-long-intl",
+            "glm-5-intl",
+            "glm-5.1-intl",
+            "glm-5-flash-intl",
         ];
         for id in &intl_ids {
-            assert!(model_info_for(id).is_some(), "Zhipu Intl model {} should be registered", id);
+            assert!(
+                model_info_for(id).is_some(),
+                "Zhipu Intl model {} should be registered",
+                id
+            );
         }
     }
 
     #[test]
     fn test_zhipu_intl_models_for_provider() {
         let models = models_for_provider(LlmProvider::ZhipuInternational);
-        assert!(models.len() >= 6, "ZhipuInternational should have at least 6 models, got {}", models.len());
+        assert!(
+            models.len() >= 6,
+            "ZhipuInternational should have at least 6 models, got {}",
+            models.len()
+        );
     }
 
     #[test]
@@ -1295,30 +1360,50 @@ mod tests {
 
     #[test]
     fn test_zhipu_intl_provider_display_name() {
-        assert_eq!(provider_display_name(&LlmProvider::ZhipuInternational), "GLM (Zhipu Int'l)");
+        assert_eq!(
+            provider_display_name(&LlmProvider::ZhipuInternational),
+            "GLM (Zhipu Int'l)"
+        );
     }
 
     #[test]
     fn test_zhipu_intl_wire_format_openai() {
-        assert_eq!(LlmProvider::ZhipuInternational.wire_format(), WireFormat::OpenAI);
+        assert_eq!(
+            LlmProvider::ZhipuInternational.wire_format(),
+            WireFormat::OpenAI
+        );
         assert!(LlmProvider::ZhipuInternational.is_openai_compatible());
     }
 
     #[test]
     fn test_zhipu_intl_default_endpoint() {
-        assert_eq!(LlmProvider::ZhipuInternational.default_base_url(), "https://open.international.bigmodel.cn");
-        assert_eq!(LlmProvider::ZhipuInternational.endpoint(), "/api/paas/v4/chat/completions");
+        assert_eq!(
+            LlmProvider::ZhipuInternational.default_base_url(),
+            "https://open.international.bigmodel.cn"
+        );
+        assert_eq!(
+            LlmProvider::ZhipuInternational.endpoint(),
+            "/api/paas/v4/chat/completions"
+        );
     }
 
     #[test]
     fn test_zhipu_intl_from_url() {
-        assert_eq!(LlmProvider::from_base_url("https://open.international.bigmodel.cn"), LlmProvider::ZhipuInternational);
+        assert_eq!(
+            LlmProvider::from_base_url("https://open.international.bigmodel.cn"),
+            LlmProvider::ZhipuInternational
+        );
     }
 
     #[test]
     fn test_zhipu_intl_provider_order() {
-        assert!(provider_order(&LlmProvider::ZhipuInternational) > provider_order(&LlmProvider::Zhipu));
-        assert!(provider_order(&LlmProvider::ZhipuInternational) < provider_order(&LlmProvider::Moonshot));
+        assert!(
+            provider_order(&LlmProvider::ZhipuInternational) > provider_order(&LlmProvider::Zhipu)
+        );
+        assert!(
+            provider_order(&LlmProvider::ZhipuInternational)
+                < provider_order(&LlmProvider::Moonshot)
+        );
     }
 
     // ── Kimi / Moonshot tests ──────────────────────────────────
@@ -1336,7 +1421,11 @@ mod tests {
     fn test_kimi_models_have_vision() {
         for id in &["kimi-k2.6", "kimi-k2.5"] {
             let info = model_info_for(id).unwrap();
-            assert!(info.capabilities.has(ModelCapabilities::vision()), "{} should have vision", id);
+            assert!(
+                info.capabilities.has(ModelCapabilities::vision()),
+                "{} should have vision",
+                id
+            );
         }
     }
 
@@ -1350,12 +1439,19 @@ mod tests {
     #[test]
     fn test_moonshot_models_for_provider() {
         let models = models_for_provider(LlmProvider::Moonshot);
-        assert!(models.len() >= 5, "Moonshot should have at least 5 models, got {}", models.len());
+        assert!(
+            models.len() >= 5,
+            "Moonshot should have at least 5 models, got {}",
+            models.len()
+        );
     }
 
     #[test]
     fn test_moonshot_provider_display_name() {
-        assert_eq!(provider_display_name(&LlmProvider::Moonshot), "Kimi (Moonshot)");
+        assert_eq!(
+            provider_display_name(&LlmProvider::Moonshot),
+            "Kimi (Moonshot)"
+        );
     }
 
     #[test]
@@ -1379,21 +1475,44 @@ mod tests {
     fn test_context_window_lookup_all_new_models() {
         // All new models should resolve to their registered context window
         for id in &[
-            "deepseek-v4-flash", "deepseek-v4-pro",
-            "glm-4-plus", "glm-4-flash", "glm-4-long", "glm-4-air", "glm-4v-flash",
-            "glm-5", "glm-5.1", "glm-5-flash", "glm-5.1-flash",
-            "glm-4-plus-intl", "glm-4-flash-intl", "glm-4-long-intl",
-            "glm-5-intl", "glm-5.1-intl", "glm-5-flash-intl",
-            "kimi-k2.6", "kimi-k2.5",
-            "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
-            "MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.7-highspeed",
-            "qwen3.7-max", "qwen3.6-plus", "qwen3.6-flash",
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "glm-4-plus",
+            "glm-4-flash",
+            "glm-4-long",
+            "glm-4-air",
+            "glm-4v-flash",
+            "glm-5",
+            "glm-5.1",
+            "glm-5-flash",
+            "glm-5.1-flash",
+            "glm-4-plus-intl",
+            "glm-4-flash-intl",
+            "glm-4-long-intl",
+            "glm-5-intl",
+            "glm-5.1-intl",
+            "glm-5-flash-intl",
+            "kimi-k2.6",
+            "kimi-k2.5",
+            "moonshot-v1-8k",
+            "moonshot-v1-32k",
+            "moonshot-v1-128k",
+            "MiniMax-M2.7",
+            "MiniMax-M2.5",
+            "MiniMax-M2.7-highspeed",
+            "qwen3.7-max",
+            "qwen3.6-plus",
+            "qwen3.6-flash",
         ] {
             let ctx = context_window_for(id);
             assert!(ctx > 0, "{} should have a positive context window", id);
             // Verify model is in catalog (not falling back to generic 200K default)
             let in_catalog = model_info_for(id).is_some();
-            assert!(in_catalog, "{} resolved to context {ctx} but is not in catalog — check registration", id);
+            assert!(
+                in_catalog,
+                "{} resolved to context {ctx} but is not in catalog — check registration",
+                id
+            );
         }
     }
 
@@ -1405,14 +1524,23 @@ mod tests {
 
     #[test]
     fn test_moonshot_default_endpoint() {
-        assert_eq!(LlmProvider::Moonshot.default_base_url(), "https://api.moonshot.cn");
+        assert_eq!(
+            LlmProvider::Moonshot.default_base_url(),
+            "https://api.moonshot.cn"
+        );
         assert_eq!(LlmProvider::Moonshot.endpoint(), "/v1/chat/completions");
     }
 
     #[test]
     fn test_moonshot_from_url() {
-        assert_eq!(LlmProvider::from_base_url("https://api.moonshot.cn"), LlmProvider::Moonshot);
-        assert_eq!(LlmProvider::from_base_url("https://api.moonshot.cn/v1"), LlmProvider::Moonshot);
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.moonshot.cn"),
+            LlmProvider::Moonshot
+        );
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.moonshot.cn/v1"),
+            LlmProvider::Moonshot
+        );
     }
 
     // ── GLM-5 / GLM-5.1 tests ──────────────────────────────────
@@ -1461,7 +1589,11 @@ mod tests {
     fn test_qwen_models_registered() {
         let qwen_ids = ["qwen3.7-max", "qwen3.6-plus", "qwen3.6-flash"];
         for id in &qwen_ids {
-            assert!(model_info_for(id).is_some(), "Qwen model {} should be registered", id);
+            assert!(
+                model_info_for(id).is_some(),
+                "Qwen model {} should be registered",
+                id
+            );
         }
     }
 
@@ -1484,13 +1616,21 @@ mod tests {
     #[test]
     fn test_qwen_all_have_1m_context() {
         for id in &["qwen3.7-max", "qwen3.6-plus", "qwen3.6-flash"] {
-            assert_eq!(context_window_for(id), 1_000_000, "{} should have 1M context", id);
+            assert_eq!(
+                context_window_for(id),
+                1_000_000,
+                "{} should have 1M context",
+                id
+            );
         }
     }
 
     #[test]
     fn test_dashscope_provider_display_name() {
-        assert_eq!(provider_display_name(&LlmProvider::DashScope), "Qwen (DashScope)");
+        assert_eq!(
+            provider_display_name(&LlmProvider::DashScope),
+            "Qwen (DashScope)"
+        );
     }
 
     #[test]
@@ -1501,13 +1641,22 @@ mod tests {
 
     #[test]
     fn test_dashscope_default_endpoint() {
-        assert_eq!(LlmProvider::DashScope.default_base_url(), "https://dashscope.aliyuncs.com");
-        assert_eq!(LlmProvider::DashScope.endpoint(), "/compatible-mode/v1/chat/completions");
+        assert_eq!(
+            LlmProvider::DashScope.default_base_url(),
+            "https://dashscope.aliyuncs.com"
+        );
+        assert_eq!(
+            LlmProvider::DashScope.endpoint(),
+            "/compatible-mode/v1/chat/completions"
+        );
     }
 
     #[test]
     fn test_dashscope_from_url() {
-        assert_eq!(LlmProvider::from_base_url("https://dashscope.aliyuncs.com"), LlmProvider::DashScope);
+        assert_eq!(
+            LlmProvider::from_base_url("https://dashscope.aliyuncs.com"),
+            LlmProvider::DashScope
+        );
     }
 
     #[test]
@@ -1519,7 +1668,11 @@ mod tests {
     #[test]
     fn test_dashscope_models_for_provider() {
         let models = models_for_provider(LlmProvider::DashScope);
-        assert!(models.len() >= 3, "DashScope should have at least 3 models, got {}", models.len());
+        assert!(
+            models.len() >= 3,
+            "DashScope should have at least 3 models, got {}",
+            models.len()
+        );
     }
 
     // ── MiniMax tests ───────────────────────────────────────────
@@ -1542,7 +1695,8 @@ mod tests {
 
     #[test]
     fn test_minimax_m27_highspeed() {
-        let info = model_info_for("MiniMax-M2.7-highspeed").expect("MiniMax-M2.7-highspeed should be registered");
+        let info = model_info_for("MiniMax-M2.7-highspeed")
+            .expect("MiniMax-M2.7-highspeed should be registered");
         assert_eq!(info.context_window, 1_000_000);
         assert!(info.capabilities.has(ModelCapabilities::coding()));
         assert!(info.capabilities.has(ModelCapabilities::speed()));
@@ -1558,7 +1712,11 @@ mod tests {
     #[test]
     fn test_minimax_models_for_provider() {
         let models = models_for_provider(LlmProvider::Minimax);
-        assert!(models.len() >= 3, "Minimax should have at least 3 models, got {}", models.len());
+        assert!(
+            models.len() >= 3,
+            "Minimax should have at least 3 models, got {}",
+            models.len()
+        );
     }
 
     #[test]
@@ -1574,13 +1732,22 @@ mod tests {
 
     #[test]
     fn test_minimax_default_endpoint() {
-        assert_eq!(LlmProvider::Minimax.default_base_url(), "https://api.minimax.chat");
+        assert_eq!(
+            LlmProvider::Minimax.default_base_url(),
+            "https://api.minimax.chat"
+        );
     }
 
     #[test]
     fn test_minimax_from_url() {
-        assert_eq!(LlmProvider::from_base_url("https://api.minimax.chat"), LlmProvider::Minimax);
-        assert_eq!(LlmProvider::from_base_url("https://api.minimaxi.com"), LlmProvider::Minimax);
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.minimax.chat"),
+            LlmProvider::Minimax
+        );
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.minimaxi.com"),
+            LlmProvider::Minimax
+        );
     }
 
     #[test]
@@ -1593,6 +1760,9 @@ mod tests {
     fn test_minimax_output_tokens() {
         assert_eq!(model_info_for("MiniMax-M2.7").unwrap().max_output, 64_000);
         assert_eq!(model_info_for("MiniMax-M2.5").unwrap().max_output, 32_000);
-        assert_eq!(model_info_for("MiniMax-M2.7-highspeed").unwrap().max_output, 64_000);
+        assert_eq!(
+            model_info_for("MiniMax-M2.7-highspeed").unwrap().max_output,
+            64_000
+        );
     }
 }

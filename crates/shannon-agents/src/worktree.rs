@@ -7,7 +7,7 @@
 use crate::error::AgentError;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolResult};
 use shannon_types::recover_lock;
 use std::collections::HashMap;
@@ -98,7 +98,8 @@ impl WorktreeManager {
     /// Create a new worktree manager
     pub async fn new(config: WorktreeConfig) -> Result<Self, AgentError> {
         // Ensure base directory exists
-        tokio::fs::create_dir_all(&config.base_dir).await
+        tokio::fs::create_dir_all(&config.base_dir)
+            .await
             .map_err(|e| AgentError::Worktree(format!("Failed to create base directory: {e}")))?;
 
         // Verify we're in a git repository
@@ -109,9 +110,7 @@ impl WorktreeManager {
             .map_err(|e| AgentError::Worktree(format!("Failed to execute git: {e}")))?;
 
         if !output.status.success() {
-            return Err(AgentError::Worktree(
-                "Not in a git repository".to_string()
-            ));
+            return Err(AgentError::Worktree("Not in a git repository".to_string()));
         }
 
         Ok(Self {
@@ -127,18 +126,17 @@ impl WorktreeManager {
         branch_name: Option<String>,
         starting_point: Option<String>,
     ) -> Result<WorktreeSession, AgentError> {
-        let session_id = name.unwrap_or_else(|| {
-            format!("{}{}", self.config.worktree_prefix, uuid::Uuid::new_v4())
-        });
+        let session_id = name
+            .unwrap_or_else(|| format!("{}{}", self.config.worktree_prefix, uuid::Uuid::new_v4()));
 
-        let branch = branch_name.unwrap_or_else(|| {
-            format!("worktree/{session_id}")
-        });
+        let branch = branch_name.unwrap_or_else(|| format!("worktree/{session_id}"));
 
         let worktree_path = self.config.base_dir.join(&session_id);
 
         // Get current branch
-        let original_branch = self.get_current_branch().await
+        let original_branch = self
+            .get_current_branch()
+            .await
             .unwrap_or_else(|_| "HEAD".to_string());
 
         // Build git worktree add command
@@ -150,7 +148,10 @@ impl WorktreeManager {
         }
 
         let worktree_str = worktree_path.to_str().ok_or_else(|| {
-            AgentError::Worktree(format!("Worktree path is not valid UTF-8: {}", worktree_path.display()))
+            AgentError::Worktree(format!(
+                "Worktree path is not valid UTF-8: {}",
+                worktree_path.display()
+            ))
         })?;
         cmd.arg(worktree_str);
 
@@ -177,7 +178,10 @@ impl WorktreeManager {
             metadata: HashMap::new(),
         };
 
-        self.active_sessions.write().await.insert(session.id.clone(), session.clone());
+        self.active_sessions
+            .write()
+            .await
+            .insert(session.id.clone(), session.clone());
 
         tracing::info!(
             session_id = %session.id,
@@ -198,19 +202,22 @@ impl WorktreeManager {
         let session_id = format!("agent-{}-{}", agent_name, uuid::Uuid::new_v4());
         let branch_name = format!("agent-work/{agent_name}");
 
-        let mut session = self.create_session(
-            Some(session_id.clone()),
-            Some(branch_name),
-            None,
-        ).await?;
+        let mut session = self
+            .create_session(Some(session_id.clone()), Some(branch_name), None)
+            .await?;
 
         session.agent = Some(agent_name.to_string());
 
         if let Some(task_id) = task_id {
-            session.metadata.insert("task_id".to_string(), task_id.to_string());
+            session
+                .metadata
+                .insert("task_id".to_string(), task_id.to_string());
         }
 
-        self.active_sessions.write().await.insert(session_id.clone(), session.clone());
+        self.active_sessions
+            .write()
+            .await
+            .insert(session_id.clone(), session.clone());
 
         Ok(session)
     }
@@ -235,7 +242,12 @@ impl WorktreeManager {
 
     /// List all active sessions
     pub async fn list_sessions(&self) -> Vec<WorktreeSession> {
-        self.active_sessions.read().await.values().cloned().collect()
+        self.active_sessions
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect()
     }
 
     /// Update session metadata
@@ -247,7 +259,8 @@ impl WorktreeManager {
     ) -> Result<(), AgentError> {
         let mut sessions = self.active_sessions.write().await;
 
-        let session = sessions.get_mut(session_id)
+        let session = sessions
+            .get_mut(session_id)
             .ok_or_else(|| AgentError::Worktree(format!("Session '{session_id}' not found")))?;
 
         session.metadata.insert(key, value);
@@ -264,7 +277,8 @@ impl WorktreeManager {
     ) -> Result<(), AgentError> {
         let mut sessions = self.active_sessions.write().await;
 
-        let session = sessions.get(session_id)
+        let session = sessions
+            .get(session_id)
             .ok_or_else(|| AgentError::Worktree(format!("Session '{session_id}' not found")))?
             .clone();
 
@@ -273,12 +287,14 @@ impl WorktreeManager {
             let has_changes = self.session_has_changes(&session.path).await?;
             if has_changes {
                 return Err(AgentError::Worktree(
-                    "Session has uncommitted changes. Use discard_changes=true to force exit.".to_string()
+                    "Session has uncommitted changes. Use discard_changes=true to force exit."
+                        .to_string(),
                 ));
             }
         }
 
-        let session = sessions.remove(session_id)
+        let session = sessions
+            .remove(session_id)
             .ok_or_else(|| AgentError::Worktree(format!("Session '{session_id}' not found")))?;
 
         match action {
@@ -301,7 +317,8 @@ impl WorktreeManager {
 
     /// Remove a worktree session
     pub async fn remove_session(&self, session_id: &str) -> Result<(), AgentError> {
-        self.exit_session(session_id, ExitAction::RemoveBoth, false).await
+        self.exit_session(session_id, ExitAction::RemoveBoth, false)
+            .await
     }
 
     /// Clean up all active sessions
@@ -309,7 +326,9 @@ impl WorktreeManager {
         let session_ids: Vec<_> = self.active_sessions.read().await.keys().cloned().collect();
 
         for session_id in session_ids {
-            let _ = self.exit_session(&session_id, ExitAction::RemoveWorktree, false).await;
+            let _ = self
+                .exit_session(&session_id, ExitAction::RemoveWorktree, false)
+                .await;
         }
 
         tracing::debug!("All worktree sessions cleaned up");
@@ -327,7 +346,7 @@ impl WorktreeManager {
 
         if !output.status.success() {
             return Err(AgentError::Worktree(
-                "Failed to get current branch".to_string()
+                "Failed to get current branch".to_string(),
             ));
         }
 
@@ -349,7 +368,10 @@ impl WorktreeManager {
     /// Remove a worktree
     async fn remove_worktree(&self, path: &Path) -> Result<(), AgentError> {
         let path_str = path.to_str().ok_or_else(|| {
-            AgentError::Worktree(format!("Worktree path is not valid UTF-8: {}", path.display()))
+            AgentError::Worktree(format!(
+                "Worktree path is not valid UTF-8: {}",
+                path.display()
+            ))
         })?;
         let output = Command::new("git")
             .args(["worktree", "remove"])
@@ -467,7 +489,11 @@ fn find_git_root(start: &Path) -> Option<PathBuf> {
 fn generate_random_name() -> String {
     format!(
         "wt-{}",
-        uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+        uuid::Uuid::new_v4()
+            .to_string()
+            .split('-')
+            .next()
+            .unwrap_or("0")
     )
 }
 
@@ -544,9 +570,8 @@ impl Tool for EnterWorktreeTool {
 
         let cwd = std::env::current_dir()
             .map_err(|e| ToolError::ExecutionFailed(format!("Cannot determine cwd: {e}")))?;
-        let git_root = find_git_root(&cwd).ok_or_else(|| {
-            ToolError::ExecutionFailed("Not in a git repository".into())
-        })?;
+        let git_root = find_git_root(&cwd)
+            .ok_or_else(|| ToolError::ExecutionFailed("Not in a git repository".into()))?;
 
         // Resolve / validate name.
         let name = match &parsed.name {
@@ -562,7 +587,10 @@ impl Tool for EnterWorktreeTool {
 
         // Create the worktree.
         let worktree_str = worktree_path.to_str().ok_or_else(|| {
-            ToolError::ExecutionFailed(format!("Worktree path is not valid UTF-8: {}", worktree_path.display()))
+            ToolError::ExecutionFailed(format!(
+                "Worktree path is not valid UTF-8: {}",
+                worktree_path.display()
+            ))
         })?;
         let output = Command::new("git")
             .args(["worktree", "add", "-b", &branch])
@@ -612,7 +640,10 @@ impl Tool for EnterWorktreeTool {
             is_error: false,
             metadata: {
                 let mut m = HashMap::new();
-                m.insert("worktree_path".into(), json!(worktree_path.to_string_lossy()));
+                m.insert(
+                    "worktree_path".into(),
+                    json!(worktree_path.to_string_lossy()),
+                );
                 m.insert("branch".into(), json!(branch));
                 m
             },
@@ -720,7 +751,10 @@ impl Tool for ExitWorktreeTool {
                     metadata: {
                         let mut m = HashMap::new();
                         m.insert("action".into(), json!("keep"));
-                        m.insert("worktree_path".into(), json!(session.path.to_string_lossy()));
+                        m.insert(
+                            "worktree_path".into(),
+                            json!(session.path.to_string_lossy()),
+                        );
                         m
                     },
                 })
@@ -742,9 +776,7 @@ impl Tool for ExitWorktreeTool {
                     .args(["worktree", "remove", "--force"])
                     .arg(session.path.to_str().unwrap_or("."))
                     .output()
-                    .map_err(|e| {
-                        ToolError::ExecutionFailed(format!("Failed to run git: {e}"))
-                    })?;
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to run git: {e}")))?;
 
                 if !output.status.success() {
                     return Err(ToolError::ExecutionFailed(format!(
@@ -797,15 +829,15 @@ impl Tool for ExitWorktreeTool {
                 );
 
                 Ok(ToolOutput {
-                    content: format!(
-                        "Exited and removed worktree at {}.",
-                        session.path.display()
-                    ),
+                    content: format!("Exited and removed worktree at {}.", session.path.display()),
                     is_error: false,
                     metadata: {
                         let mut m = HashMap::new();
                         m.insert("action".into(), json!("remove"));
-                        m.insert("worktree_path".into(), json!(session.path.to_string_lossy()));
+                        m.insert(
+                            "worktree_path".into(),
+                            json!(session.path.to_string_lossy()),
+                        );
                         m
                     },
                 })
@@ -946,9 +978,15 @@ mod tests {
         // The isolated session starts as None, so this should error.
 
         let result = rt.block_on(tool.execute(json!({"action": "keep"})));
-        assert!(result.is_err(), "Expected error when no active session, got: {result:?}");
+        assert!(
+            result.is_err(),
+            "Expected error when no active session, got: {result:?}"
+        );
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("No active worktree session"), "Error message: {err}");
+        assert!(
+            err.contains("No active worktree session"),
+            "Error message: {err}"
+        );
     }
 
     #[test]
@@ -972,7 +1010,10 @@ mod tests {
         }
 
         let result = rt.block_on(tool.execute(json!({"action": "invalid"})));
-        assert!(result.is_err(), "Expected error for invalid action, got: {result:?}");
+        assert!(
+            result.is_err(),
+            "Expected error for invalid action, got: {result:?}"
+        );
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Invalid action"), "Error message: {err}");
     }

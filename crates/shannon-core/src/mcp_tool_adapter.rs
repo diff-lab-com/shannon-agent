@@ -103,7 +103,6 @@ impl McpToolAdapter {
     /// to save context, and the real schema is retrieved on demand via
     /// `mcp__tool_search`.
     pub fn swap_schema_for_deferred(&mut self) -> Value {
-        
         std::mem::replace(
             &mut self.input_schema,
             serde_json::json!({
@@ -183,24 +182,31 @@ impl McpToolAdapter {
                     }
                     return Ok(ToolOutput::error(format!(
                         "MCP server '{}' HTTP error: {}",
-                        self.server_name,
-                        status
+                        self.server_name, status
                     )));
                 }
                 let body = response.text().await.unwrap_or_default();
                 if let Ok(parsed) = serde_json::from_str::<Value>(&body) {
                     if let Some(result) = parsed.get("result") {
                         if let Some(content) = result.get("content") {
-                            if let Some(text) = content.get(0).and_then(|c| c.get("text")).and_then(|t| t.as_str()) {
+                            if let Some(text) = content
+                                .get(0)
+                                .and_then(|c| c.get("text"))
+                                .and_then(|t| t.as_str())
+                            {
                                 return Ok(ToolOutput::success(text.to_string()));
                             }
                         }
                         return Ok(ToolOutput::success(result.to_string()));
                     }
                     if let Some(error) = parsed.get("error") {
-                        let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+                        let msg = error
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("Unknown error");
                         return Ok(ToolOutput::error(format!(
-                            "MCP server '{}' error: {}", self.server_name, msg
+                            "MCP server '{}' error: {}",
+                            self.server_name, msg
                         )));
                     }
                 }
@@ -275,10 +281,7 @@ impl Tool for McpToolAdapter {
             .map_err(|e| ToolError::InvalidInput(format!("Failed to serialize request: {e}")))?;
 
         // Split command into program + args
-        let mut parts: Vec<String> = command
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect();
+        let mut parts: Vec<String> = command.split_whitespace().map(|s| s.to_string()).collect();
         parts.extend(self.args.iter().cloned());
 
         if parts.is_empty() {
@@ -291,8 +294,12 @@ impl Tool for McpToolAdapter {
         let program = &parts[0];
 
         // Validate program name — reject paths and shell metacharacters
-        if program.contains('/') || program.contains("..") || program.contains('\\')
-            || program.contains([';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r'])
+        if program.contains('/')
+            || program.contains("..")
+            || program.contains('\\')
+            || program.contains([
+                ';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r',
+            ])
         {
             return Err(ToolError::ExecutionFailed(format!(
                 "MCP server '{}' has invalid program path: {program} (must be a simple binary name)",
@@ -324,12 +331,15 @@ impl Tool for McpToolAdapter {
         // Write request to stdin
         use tokio::io::AsyncWriteExt;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(request_json.as_bytes()).await.map_err(|e| {
-                ToolError::ExecutionFailed(format!(
-                    "MCP server '{}' stdin write failed: {}",
-                    self.server_name, e
-                ))
-            })?;
+            stdin
+                .write_all(request_json.as_bytes())
+                .await
+                .map_err(|e| {
+                    ToolError::ExecutionFailed(format!(
+                        "MCP server '{}' stdin write failed: {}",
+                        self.server_name, e
+                    ))
+                })?;
             // Send newline to signal end of input
             let _ = stdin.write_all(b"\n").await;
             drop(stdin);
@@ -347,16 +357,24 @@ impl Tool for McpToolAdapter {
                     if let Ok(response) = serde_json::from_str::<Value>(&stdout) {
                         if let Some(result) = response.get("result") {
                             if let Some(content) = result.get("content") {
-                                if let Some(text) = content.get(0).and_then(|c| c.get("text")).and_then(|t| t.as_str()) {
+                                if let Some(text) = content
+                                    .get(0)
+                                    .and_then(|c| c.get("text"))
+                                    .and_then(|t| t.as_str())
+                                {
                                     return Ok(ToolOutput::success(text.to_string()));
                                 }
                             }
                             return Ok(ToolOutput::success(result.to_string()));
                         }
                         if let Some(error) = response.get("error") {
-                            let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+                            let msg = error
+                                .get("message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("Unknown error");
                             return Ok(ToolOutput::error(format!(
-                                "MCP server '{}' error: {}", self.server_name, msg
+                                "MCP server '{}' error: {}",
+                                self.server_name, msg
                             )));
                         }
                     }
@@ -425,10 +443,7 @@ pub async fn discover_tools(
     timeout_secs: Option<u64>,
 ) -> Result<DiscoveryResult, String> {
     // Build the full command
-    let mut parts: Vec<String> = command
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
+    let mut parts: Vec<String> = command.split_whitespace().map(|s| s.to_string()).collect();
     parts.extend(args.iter().cloned());
 
     if parts.is_empty() {
@@ -449,9 +464,9 @@ pub async fn discover_tools(
         cmd.env(key, value);
     }
 
-    let mut child = cmd.spawn().map_err(|e| {
-        format!("MCP server '{server_name}' failed to spawn '{command}': {e}")
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("MCP server '{server_name}' failed to spawn '{command}': {e}"))?;
 
     // Build the initialize + tools/list request sequence (sent as two JSON-RPC messages)
     let init_request = serde_json::json!({
@@ -486,9 +501,10 @@ pub async fn discover_tools(
 
     use tokio::io::AsyncWriteExt;
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(request_json.as_bytes()).await.map_err(|e| {
-            format!("MCP server '{server_name}' stdin write failed: {e}")
-        })?;
+        stdin
+            .write_all(request_json.as_bytes())
+            .await
+            .map_err(|e| format!("MCP server '{server_name}' stdin write failed: {e}"))?;
         drop(stdin);
     }
 
@@ -499,7 +515,11 @@ pub async fn discover_tools(
     let output = match result {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => return Err(format!("MCP server '{server_name}' I/O error: {e}")),
-        Err(_) => return Err(format!("MCP server '{server_name}' timed out during discovery")),
+        Err(_) => {
+            return Err(format!(
+                "MCP server '{server_name}' timed out during discovery"
+            ));
+        }
     };
 
     if !output.status.success() {
@@ -581,7 +601,9 @@ pub async fn discover_tools(
                             .and_then(|a| a.as_array())
                             .map(|arr| {
                                 arr.iter()
-                                    .filter_map(|arg| arg.get("name").and_then(|n| n.as_str()).map(String::from))
+                                    .filter_map(|arg| {
+                                        arg.get("name").and_then(|n| n.as_str()).map(String::from)
+                                    })
                                     .collect()
                             })
                             .unwrap_or_default();
@@ -662,7 +684,10 @@ pub async fn discover_tools_http(
         .map_err(|e| format!("MCP server '{server_name}' init request failed: {e}"))?;
 
     if !init_resp.status().is_success() {
-        return Err(format!("MCP server '{server_name}' init returned HTTP {}", init_resp.status()));
+        return Err(format!(
+            "MCP server '{server_name}' init returned HTTP {}",
+            init_resp.status()
+        ));
     }
 
     // Send tools/list
@@ -678,21 +703,41 @@ pub async fn discover_tools_http(
     let prompts_resp = tokio::time::timeout(
         tokio::time::Duration::from_secs(10),
         send_request(prompts_list_request),
-    ).await;
+    )
+    .await;
     let prompts_body = prompts_resp
         .ok()
         .and_then(|r| r.ok())
-        .map(|r| tokio::runtime::Handle::current().block_on(r.text()).unwrap_or_default())
+        .map(|r| {
+            tokio::runtime::Handle::current()
+                .block_on(r.text())
+                .unwrap_or_default()
+        })
         .unwrap_or_default();
 
     // Parse tools
     let mut discovered_tools: Vec<McpToolAdapter> = Vec::new();
     if let Ok(parsed) = serde_json::from_str::<Value>(&tools_body) {
-        if let Some(tools_array) = parsed.get("result").and_then(|r| r.get("tools")).and_then(|t| t.as_array()) {
+        if let Some(tools_array) = parsed
+            .get("result")
+            .and_then(|r| r.get("tools"))
+            .and_then(|t| t.as_array())
+        {
             for tool_value in tools_array {
-                let tool_name = tool_value.get("name").and_then(|n| n.as_str()).unwrap_or("unknown").to_string();
-                let description = tool_value.get("description").and_then(|d| d.as_str()).unwrap_or(&format!("MCP tool: {tool_name}")).to_string();
-                let input_schema = tool_value.get("inputSchema").cloned().unwrap_or(serde_json::json!({"type": "object"}));
+                let tool_name = tool_value
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let description = tool_value
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or(&format!("MCP tool: {tool_name}"))
+                    .to_string();
+                let input_schema = tool_value
+                    .get("inputSchema")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({"type": "object"}));
                 discovered_tools.push(McpToolAdapter::new_remote(
                     server_name.to_string(),
                     tool_name,
@@ -708,15 +753,38 @@ pub async fn discover_tools_http(
     // Parse prompts
     let mut discovered_prompts: Vec<PromptInfo> = Vec::new();
     if let Ok(parsed) = serde_json::from_str::<Value>(&prompts_body) {
-        if let Some(prompts_array) = parsed.get("result").and_then(|r| r.get("prompts")).and_then(|p| p.as_array()) {
+        if let Some(prompts_array) = parsed
+            .get("result")
+            .and_then(|r| r.get("prompts"))
+            .and_then(|p| p.as_array())
+        {
             for prompt_value in prompts_array {
-                let name = prompt_value.get("name").and_then(|n| n.as_str()).unwrap_or("unknown").to_string();
-                let description = prompt_value.get("description").and_then(|d| d.as_str()).unwrap_or("").to_string();
-                let argument_names = prompt_value.get("arguments")
+                let name = prompt_value
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let description = prompt_value
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let argument_names = prompt_value
+                    .get("arguments")
                     .and_then(|a| a.as_array())
-                    .map(|arr| arr.iter().filter_map(|arg| arg.get("name").and_then(|n| n.as_str()).map(String::from)).collect())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|arg| {
+                                arg.get("name").and_then(|n| n.as_str()).map(String::from)
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
-                discovered_prompts.push(PromptInfo { name, description, argument_names });
+                discovered_prompts.push(PromptInfo {
+                    name,
+                    description,
+                    argument_names,
+                });
             }
         }
     }
@@ -748,9 +816,7 @@ pub const DEFERRED_SCHEMA_THRESHOLD: usize = 20;
 /// Swaps each adapter's full schema for a minimal stub, storing the
 /// originals in the returned store. Returns the store and the number
 /// of tools deferred.
-pub fn prepare_deferred_schemas(
-    tools: &mut [Box<McpToolAdapter>],
-) -> DeferredSchemaStore {
+pub fn prepare_deferred_schemas(tools: &mut [Box<McpToolAdapter>]) -> DeferredSchemaStore {
     let store: DeferredSchemaStore = Arc::new(std::sync::Mutex::new(HashMap::new()));
     for tool in tools.iter_mut() {
         let real_schema = tool.swap_schema_for_deferred();
@@ -819,8 +885,8 @@ impl Tool for DeferredSchemaSearchTool {
         let schemas = recover_lock(self.schemas.lock());
         match schemas.get(tool_name) {
             Some(schema) => {
-                let schema_str = serde_json::to_string_pretty(schema)
-                    .unwrap_or_else(|_| schema.to_string());
+                let schema_str =
+                    serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
                 Ok(ToolOutput::success(schema_str))
             }
             None => {

@@ -9,8 +9,8 @@
 //! Uses a pragmatic approach: communicates with language servers via
 //! JSON-RPC over stdin/stdout, with automatic server lifecycle management.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
 use crate::file::sandbox::{PathSandbox, SandboxConfig};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -29,7 +29,10 @@ fn validate_path(path: &Path) -> Result<PathBuf, ToolError> {
         strict_mode: false,
     });
     sandbox.validate_sync(path).map_err(|e| {
-        ToolError::InvalidInput(format!("Path validation failed for {}: {e}", path.display()))
+        ToolError::InvalidInput(format!(
+            "Path validation failed for {}: {e}",
+            path.display()
+        ))
     })
 }
 
@@ -150,21 +153,21 @@ impl LspClient {
 
         let response = self.send_request("initialize", &params).await?;
         if response.get("error").is_some() {
-            return Err(format!(
-                "LSP initialize failed: {}",
-                response["error"]
-            ));
+            return Err(format!("LSP initialize failed: {}", response["error"]));
         }
 
         // Send initialized notification
-        self.send_notification("initialized", &json!({}))
-            .await?;
+        self.send_notification("initialized", &json!({})).await?;
 
         Ok(())
     }
 
     /// Send a JSON-RPC request and wait for the response.
-    async fn send_request(&mut self, method: &str, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+    async fn send_request(
+        &mut self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let id = {
             let mut rid = recover_lock(self.request_id.lock());
             let current = *rid;
@@ -182,13 +185,18 @@ impl LspClient {
         self.send_message(&message.to_string()).await?;
 
         // Read response
-        let stdout = self.child.stdout.as_mut()
+        let stdout = self
+            .child
+            .stdout
+            .as_mut()
             .ok_or_else(|| "stdout not available".to_string())?;
         let mut reader = BufReader::new(stdout);
 
         loop {
             let mut header_line = String::new();
-            let bytes_read = reader.read_line(&mut header_line).await
+            let bytes_read = reader
+                .read_line(&mut header_line)
+                .await
                 .map_err(|e| format!("Failed to read LSP response header: {e}"))?;
 
             if bytes_read == 0 {
@@ -201,23 +209,31 @@ impl LspClient {
             }
 
             if let Some(length_str) = header_line.strip_prefix("Content-Length: ") {
-                let length: usize = length_str.trim().parse()
+                let length: usize = length_str
+                    .trim()
+                    .parse()
                     .map_err(|e| format!("Invalid Content-Length: {e}"))?;
 
                 // Guard against unbounded allocation from malicious/buggy servers
                 const MAX_CONTENT_LENGTH: usize = 100 * 1024 * 1024; // 100 MB
                 if length > MAX_CONTENT_LENGTH {
-                    return Err(format!("LSP Content-Length too large: {length} bytes (max {MAX_CONTENT_LENGTH})"));
+                    return Err(format!(
+                        "LSP Content-Length too large: {length} bytes (max {MAX_CONTENT_LENGTH})"
+                    ));
                 }
 
                 // Read the empty line after headers
                 let mut sep = String::new();
-                reader.read_line(&mut sep).await
+                reader
+                    .read_line(&mut sep)
+                    .await
                     .map_err(|e| format!("Failed to read header separator: {e}"))?;
 
                 // Read the body
                 let mut body = vec![0u8; length];
-                reader.read_exact(&mut body).await
+                reader
+                    .read_exact(&mut body)
+                    .await
                     .map_err(|e| format!("Failed to read LSP response body: {e}"))?;
 
                 let body_str = String::from_utf8_lossy(&body);
@@ -234,7 +250,11 @@ impl LspClient {
     }
 
     /// Send a JSON-RPC notification (no response expected).
-    async fn send_notification(&mut self, method: &str, params: &serde_json::Value) -> Result<(), String> {
+    async fn send_notification(
+        &mut self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<(), String> {
         let message = json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -246,7 +266,10 @@ impl LspClient {
 
     /// Write a JSON-RPC message to the server's stdin.
     async fn send_message(&mut self, content: &str) -> Result<(), String> {
-        let stdin = self.child.stdin.as_mut()
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
             .ok_or_else(|| "stdin not available".to_string())?;
 
         let body = content.as_bytes();
@@ -285,7 +308,8 @@ impl LspClient {
             }
         });
 
-        self.send_notification("textDocument/didOpen", &params).await
+        self.send_notification("textDocument/didOpen", &params)
+            .await
     }
 
     /// Send `textDocument/definition` request.
@@ -304,7 +328,9 @@ impl LspClient {
             "position": { "line": line, "character": character }
         });
 
-        let response = self.send_request("textDocument/definition", &params).await?;
+        let response = self
+            .send_request("textDocument/definition", &params)
+            .await?;
 
         if let Some(error) = response.get("error") {
             return Err(format!("LSP definition error: {error}"));
@@ -335,7 +361,9 @@ impl LspClient {
             "context": { "includeDeclaration": include_declaration }
         });
 
-        let response = self.send_request("textDocument/references", &params).await?;
+        let response = self
+            .send_request("textDocument/references", &params)
+            .await?;
 
         if let Some(error) = response.get("error") {
             return Err(format!("LSP references error: {error}"));
@@ -398,7 +426,9 @@ impl LspClient {
             "textDocument": { "uri": uri }
         });
 
-        let response = self.send_request("textDocument/documentSymbol", &params).await?;
+        let response = self
+            .send_request("textDocument/documentSymbol", &params)
+            .await?;
 
         if let Some(error) = response.get("error") {
             return Err(format!("LSP document symbol error: {error}"));
@@ -483,7 +513,10 @@ fn detect_server_command(language_id: &str) -> Option<(String, Vec<String>)> {
     // 2. Fall back to hardcoded defaults
     match language_id {
         "rust" => Some(("rust-analyzer".to_string(), vec![])),
-        "typescript" | "javascript" => Some(("typescript-language-server".to_string(), vec!["--stdio".to_string()])),
+        "typescript" | "javascript" => Some((
+            "typescript-language-server".to_string(),
+            vec!["--stdio".to_string()],
+        )),
         "python" => Some(("pylsp".to_string(), vec![])),
         "go" => Some(("gopls".to_string(), vec![])),
         "java" => Some(("jdtls".to_string(), vec![])),
@@ -527,10 +560,18 @@ pub struct LspServerConfig {
     pub max_restarts: u32,
 }
 
-fn default_startup_timeout() -> u64 { 10000 }
-fn default_shutdown_timeout() -> u64 { 5000 }
-fn default_restart_on_crash() -> bool { true }
-fn default_max_restarts() -> u32 { 3 }
+fn default_startup_timeout() -> u64 {
+    10000
+}
+fn default_shutdown_timeout() -> u64 {
+    5000
+}
+fn default_restart_on_crash() -> bool {
+    true
+}
+fn default_max_restarts() -> u32 {
+    3
+}
 
 /// The full `.lsp.json` file structure: maps language names to server configs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,10 +722,7 @@ fn parse_hierarchical_symbol(value: &serde_json::Value) -> DocumentSymbolItem {
         .unwrap_or("")
         .to_string();
 
-    let kind_num = value
-        .get("kind")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let kind_num = value.get("kind").and_then(|v| v.as_u64()).unwrap_or(0);
     let kind = symbol_kind_to_string(kind_num);
 
     let detail = value
@@ -696,8 +734,14 @@ fn parse_hierarchical_symbol(value: &serde_json::Value) -> DocumentSymbolItem {
         .get("range")
         .and_then(|r| serde_json::from_value(r.clone()).ok())
         .unwrap_or(LspRange {
-            start: LspPosition { line: 0, character: 0 },
-            end: LspPosition { line: 0, character: 0 },
+            start: LspPosition {
+                line: 0,
+                character: 0,
+            },
+            end: LspPosition {
+                line: 0,
+                character: 0,
+            },
         });
 
     let selection_range = value
@@ -729,10 +773,7 @@ fn parse_symbol_information(value: &serde_json::Value) -> DocumentSymbolItem {
         .unwrap_or("")
         .to_string();
 
-    let kind_num = value
-        .get("kind")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
+    let kind_num = value.get("kind").and_then(|v| v.as_u64()).unwrap_or(0);
     let kind = symbol_kind_to_string(kind_num);
 
     let container_name = value
@@ -748,12 +789,24 @@ fn parse_symbol_information(value: &serde_json::Value) -> DocumentSymbolItem {
         Some(loc) => (loc.range.clone(), loc.range.clone()),
         None => (
             LspRange {
-                start: LspPosition { line: 0, character: 0 },
-                end: LspPosition { line: 0, character: 0 },
+                start: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
+                end: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
             },
             LspRange {
-                start: LspPosition { line: 0, character: 0 },
-                end: LspPosition { line: 0, character: 0 },
+                start: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
+                end: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
             },
         ),
     };
@@ -910,7 +963,10 @@ impl GoToDefinitionTool {
         }
     }
 
-    async fn execute_inner(&self, input: GoToDefinitionInput) -> Result<GoToDefinitionOutput, ToolError> {
+    async fn execute_inner(
+        &self,
+        input: GoToDefinitionInput,
+    ) -> Result<GoToDefinitionOutput, ToolError> {
         let file_path = validate_path(Path::new(&input.file_path))?;
 
         let language_id = detect_language_id(&file_path);
@@ -922,10 +978,7 @@ impl GoToDefinitionTool {
         })?;
 
         // Check if language server is available
-        let which_result = Command::new("which")
-            .arg(&server_cmd)
-            .output()
-            .await;
+        let which_result = Command::new("which").arg(&server_cmd).output().await;
 
         let which_ok = match which_result {
             Ok(output) => output,
@@ -946,7 +999,9 @@ impl GoToDefinitionTool {
 
         let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
+            })?;
 
         let result = client
             .goto_definition(&file_path, input.line, input.character, language_id)
@@ -1024,7 +1079,9 @@ impl Tool for GoToDefinitionTool {
     fn category(&self) -> &str {
         "lsp"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 /// Find references tool
@@ -1047,7 +1104,10 @@ impl FindReferencesTool {
         }
     }
 
-    async fn execute_inner(&self, input: FindReferencesInput) -> Result<FindReferencesOutput, ToolError> {
+    async fn execute_inner(
+        &self,
+        input: FindReferencesInput,
+    ) -> Result<FindReferencesOutput, ToolError> {
         let file_path = validate_path(Path::new(&input.file_path))?;
 
         let language_id = detect_language_id(&file_path);
@@ -1057,10 +1117,7 @@ impl FindReferencesTool {
             ))
         })?;
 
-        let which_result = Command::new("which")
-            .arg(&server_cmd)
-            .output()
-            .await;
+        let which_result = Command::new("which").arg(&server_cmd).output().await;
 
         let which_ok = match which_result {
             Ok(output) => output,
@@ -1081,7 +1138,9 @@ impl FindReferencesTool {
 
         let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
+            })?;
 
         let result = client
             .find_references(
@@ -1168,7 +1227,9 @@ impl Tool for FindReferencesTool {
     fn category(&self) -> &str {
         "lsp"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 /// Hover information tool
@@ -1185,10 +1246,11 @@ impl Default for HoverTool {
 impl HoverTool {
     pub fn new() -> Self {
         Self {
-            description: "Get type information and documentation for the symbol at a given position. \
+            description:
+                "Get type information and documentation for the symbol at a given position. \
                 Uses the language server to provide hover information such as type signatures, \
                 doc comments, and other contextual information."
-                .to_string(),
+                    .to_string(),
         }
     }
 
@@ -1202,10 +1264,7 @@ impl HoverTool {
             ))
         })?;
 
-        let which_result = Command::new("which")
-            .arg(&server_cmd)
-            .output()
-            .await;
+        let which_result = Command::new("which").arg(&server_cmd).output().await;
 
         let which_ok = match which_result {
             Ok(output) => output,
@@ -1226,7 +1285,9 @@ impl HoverTool {
 
         let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
+            })?;
 
         let result = client
             .hover(&file_path, input.line, input.character, language_id)
@@ -1291,10 +1352,7 @@ impl Tool for HoverTool {
             is_error: false,
             metadata: {
                 let mut map = HashMap::new();
-                map.insert(
-                    "hover".to_string(),
-                    json!(output.result),
-                );
+                map.insert("hover".to_string(), json!(output.result));
                 map
             },
         })
@@ -1303,7 +1361,9 @@ impl Tool for HoverTool {
     fn category(&self) -> &str {
         "lsp"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 /// Document symbol tool
@@ -1327,7 +1387,10 @@ impl DocumentSymbolTool {
         }
     }
 
-    async fn execute_inner(&self, input: DocumentSymbolInput) -> Result<DocumentSymbolOutput, ToolError> {
+    async fn execute_inner(
+        &self,
+        input: DocumentSymbolInput,
+    ) -> Result<DocumentSymbolOutput, ToolError> {
         let file_path = validate_path(Path::new(&input.file_path))?;
 
         let language_id = detect_language_id(&file_path);
@@ -1337,10 +1400,7 @@ impl DocumentSymbolTool {
             ))
         })?;
 
-        let which_result = Command::new("which")
-            .arg(&server_cmd)
-            .output()
-            .await;
+        let which_result = Command::new("which").arg(&server_cmd).output().await;
 
         let which_ok = match which_result {
             Ok(output) => output,
@@ -1361,11 +1421,11 @@ impl DocumentSymbolTool {
 
         let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
+            })?;
 
-        let result = client
-            .document_symbols(&file_path, language_id)
-            .await;
+        let result = client.document_symbols(&file_path, language_id).await;
 
         if let Err(e) = client.shutdown().await {
             tracing::debug!("LSP client shutdown failed: {e}");
@@ -1430,7 +1490,9 @@ impl Tool for DocumentSymbolTool {
     fn category(&self) -> &str {
         "lsp"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,9 +1554,14 @@ impl WorkspaceSymbolTool {
         }
     }
 
-    async fn execute_inner(&self, input: WorkspaceSymbolInput) -> Result<WorkspaceSymbolOutput, ToolError> {
+    async fn execute_inner(
+        &self,
+        input: WorkspaceSymbolInput,
+    ) -> Result<WorkspaceSymbolOutput, ToolError> {
         if input.query.trim().is_empty() {
-            return Err(ToolError::InvalidInput("Query must not be empty".to_string()));
+            return Err(ToolError::InvalidInput(
+                "Query must not be empty".to_string(),
+            ));
         }
 
         // Determine language server based on optional file_path or workspace root
@@ -1533,7 +1600,9 @@ impl WorkspaceSymbolTool {
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
         let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
+            })?;
 
         let params = json!({
             "query": input.query
@@ -1547,10 +1616,14 @@ impl WorkspaceSymbolTool {
         let response = response.map_err(ToolError::ExecutionFailed)?;
 
         if let Some(error) = response.get("error") {
-            return Err(ToolError::ExecutionFailed(format!("LSP workspace symbol error: {error}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "LSP workspace symbol error: {error}"
+            )));
         }
 
-        let result = response.get("result").ok_or_else(|| ToolError::ExecutionFailed("No result in workspace symbol response".to_string()))?;
+        let result = response.get("result").ok_or_else(|| {
+            ToolError::ExecutionFailed("No result in workspace symbol response".to_string())
+        })?;
         let symbols = parse_workspace_symbols(result)?;
 
         Ok(WorkspaceSymbolOutput {
@@ -1614,11 +1687,15 @@ impl Tool for WorkspaceSymbolTool {
     fn category(&self) -> &str {
         "lsp"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 /// Parse workspace symbol results.
-fn parse_workspace_symbols(result: &serde_json::Value) -> Result<Vec<WorkspaceSymbolItem>, ToolError> {
+fn parse_workspace_symbols(
+    result: &serde_json::Value,
+) -> Result<Vec<WorkspaceSymbolItem>, ToolError> {
     if result.is_null() {
         return Ok(Vec::new());
     }
@@ -1628,26 +1705,45 @@ fn parse_workspace_symbols(result: &serde_json::Value) -> Result<Vec<WorkspaceSy
 
     let mut symbols = Vec::new();
     for item in arr {
-        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let name = item
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let kind_num = item.get("kind").and_then(|v| v.as_u64()).unwrap_or(0);
         let kind = symbol_kind_to_string(kind_num);
-        let container_name = item.get("containerName").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let container_name = item
+            .get("containerName")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         // SymbolInformation has a "location" field, not inline range
         let location = if let Some(loc) = item.get("location") {
             serde_json::from_value::<LspLocation>(loc.clone()).unwrap_or(LspLocation {
                 uri: String::new(),
                 range: LspRange {
-                    start: LspPosition { line: 0, character: 0 },
-                    end: LspPosition { line: 0, character: 0 },
+                    start: LspPosition {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: LspPosition {
+                        line: 0,
+                        character: 0,
+                    },
                 },
             })
         } else {
             LspLocation {
                 uri: String::new(),
                 range: LspRange {
-                    start: LspPosition { line: 0, character: 0 },
-                    end: LspPosition { line: 0, character: 0 },
+                    start: LspPosition {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: LspPosition {
+                        line: 0,
+                        character: 0,
+                    },
                 },
             }
         };
@@ -1712,11 +1808,16 @@ impl RenameSymbolTool {
         }
     }
 
-    async fn execute_inner(&self, input: RenameSymbolInput) -> Result<RenameSymbolOutput, ToolError> {
+    async fn execute_inner(
+        &self,
+        input: RenameSymbolInput,
+    ) -> Result<RenameSymbolOutput, ToolError> {
         let file_path = validate_path(Path::new(&input.file_path))?;
 
         if input.new_name.trim().is_empty() {
-            return Err(ToolError::InvalidInput("new_name must not be empty".to_string()));
+            return Err(ToolError::InvalidInput(
+                "new_name must not be empty".to_string(),
+            ));
         }
 
         let language_id = detect_language_id(&file_path);
@@ -1745,7 +1846,9 @@ impl RenameSymbolTool {
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
         let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
+            })?;
 
         let uri = path_to_uri(&file_path);
         let params = json!({
@@ -1762,10 +1865,15 @@ impl RenameSymbolTool {
         let response = response.map_err(ToolError::ExecutionFailed)?;
 
         if let Some(error) = response.get("error") {
-            return Err(ToolError::ExecutionFailed(format!("LSP rename error: {error}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "LSP rename error: {error}"
+            )));
         }
 
-        let result = response.get("result").cloned().unwrap_or(serde_json::Value::Null);
+        let result = response
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
 
         // Count edits
         let mut files_modified = 0usize;
@@ -1951,10 +2059,14 @@ impl CodeActionsTool {
         let args: Vec<&str> = server_args.iter().map(|s| s.as_str()).collect();
         let mut client = LspClient::launch(&server_cmd, &args, &root_path)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to start language server: {e}")))?;
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to start language server: {e}"))
+            })?;
 
         // Open the document first
-        client.open_document(&file_path, language_id).await
+        client
+            .open_document(&file_path, language_id)
+            .await
             .map_err(ToolError::ExecutionFailed)?;
 
         let uri = path_to_uri(&file_path);
@@ -1970,7 +2082,9 @@ impl CodeActionsTool {
             }
         });
 
-        let response = client.send_request("textDocument/codeAction", &params).await;
+        let response = client
+            .send_request("textDocument/codeAction", &params)
+            .await;
         if let Err(e) = client.shutdown().await {
             tracing::debug!("LSP client shutdown failed: {e}");
         }
@@ -1978,10 +2092,14 @@ impl CodeActionsTool {
         let response = response.map_err(ToolError::ExecutionFailed)?;
 
         if let Some(error) = response.get("error") {
-            return Err(ToolError::ExecutionFailed(format!("LSP code action error: {error}")));
+            return Err(ToolError::ExecutionFailed(format!(
+                "LSP code action error: {error}"
+            )));
         }
 
-        let result = response.get("result").ok_or_else(|| ToolError::ExecutionFailed("No result in code action response".to_string()))?;
+        let result = response.get("result").ok_or_else(|| {
+            ToolError::ExecutionFailed("No result in code action response".to_string())
+        })?;
         let actions = parse_code_actions(result)?;
 
         Ok(CodeActionsOutput {
@@ -2040,7 +2158,11 @@ impl Tool for CodeActionsTool {
             "No code actions available for the given range".to_string()
         } else {
             let titles: Vec<&str> = output.actions.iter().map(|a| a.title.as_str()).collect();
-            format!("Found {} code action(s): {}", output.count, titles.join(", "))
+            format!(
+                "Found {} code action(s): {}",
+                output.count,
+                titles.join(", ")
+            )
         };
 
         Ok(ToolOutput {
@@ -2058,7 +2180,9 @@ impl Tool for CodeActionsTool {
     fn category(&self) -> &str {
         "lsp"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 /// Parse code action results from LSP response.
@@ -2074,10 +2198,12 @@ fn parse_code_actions(result: &serde_json::Value) -> Result<Vec<CodeActionItem>,
     for item in arr {
         // CodeAction objects have a "title" field
         if let Some(title) = item.get("title").and_then(|v| v.as_str()) {
-            let kind = item.get("kind").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let kind = item
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let is_preferred = item.get("isPreferred").and_then(|v| v.as_bool());
-            let diagnostics = item.get("diagnostics")
-                .and_then(|v| v.as_array()).cloned();
+            let diagnostics = item.get("diagnostics").and_then(|v| v.as_array()).cloned();
 
             actions.push(CodeActionItem {
                 title: title.to_string(),
@@ -2149,7 +2275,10 @@ mod tests {
 
     #[test]
     fn test_lsp_position_serialization() {
-        let pos = LspPosition { line: 10, character: 5 };
+        let pos = LspPosition {
+            line: 10,
+            character: 5,
+        };
         let json_str = serde_json::to_string(&pos).unwrap();
         assert!(json_str.contains("\"line\":10"));
         assert!(json_str.contains("\"character\":5"));
@@ -2164,9 +2293,18 @@ mod tests {
 
     #[test]
     fn test_lsp_position_equality() {
-        let a = LspPosition { line: 1, character: 2 };
-        let b = LspPosition { line: 1, character: 2 };
-        let c = LspPosition { line: 1, character: 3 };
+        let a = LspPosition {
+            line: 1,
+            character: 2,
+        };
+        let b = LspPosition {
+            line: 1,
+            character: 2,
+        };
+        let c = LspPosition {
+            line: 1,
+            character: 3,
+        };
         assert_eq!(a, b);
         assert_ne!(a, c);
     }
@@ -2174,8 +2312,14 @@ mod tests {
     #[test]
     fn test_lsp_range_serialization() {
         let range = LspRange {
-            start: LspPosition { line: 0, character: 0 },
-            end: LspPosition { line: 5, character: 10 },
+            start: LspPosition {
+                line: 0,
+                character: 0,
+            },
+            end: LspPosition {
+                line: 5,
+                character: 10,
+            },
         };
         let json_str = serde_json::to_string(&range).unwrap();
         assert!(json_str.contains("\"start\""));
@@ -2185,8 +2329,9 @@ mod tests {
     #[test]
     fn test_lsp_range_deserialization() {
         let range: LspRange = serde_json::from_str(
-            "{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":5,\"character\":10}}"
-        ).unwrap();
+            "{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":5,\"character\":10}}",
+        )
+        .unwrap();
         assert_eq!(range.start.line, 0);
         assert_eq!(range.start.character, 0);
         assert_eq!(range.end.line, 5);
@@ -2198,8 +2343,14 @@ mod tests {
         let loc = LspLocation {
             uri: "file:///test.rs".to_string(),
             range: LspRange {
-                start: LspPosition { line: 10, character: 0 },
-                end: LspPosition { line: 15, character: 1 },
+                start: LspPosition {
+                    line: 10,
+                    character: 0,
+                },
+                end: LspPosition {
+                    line: 15,
+                    character: 1,
+                },
             },
         };
         let json_str = serde_json::to_string(&loc).unwrap();
@@ -2221,8 +2372,14 @@ mod tests {
         let hover = HoverResult {
             contents: "fn main()".to_string(),
             range: Some(LspRange {
-                start: LspPosition { line: 0, character: 0 },
-                end: LspPosition { line: 0, character: 7 },
+                start: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
+                end: LspPosition {
+                    line: 0,
+                    character: 7,
+                },
             }),
         };
         let json_str = serde_json::to_string(&hover).unwrap();
@@ -2248,12 +2405,24 @@ mod tests {
             kind: "Function".to_string(),
             detail: Some("fn main()".to_string()),
             range: LspRange {
-                start: LspPosition { line: 0, character: 0 },
-                end: LspPosition { line: 10, character: 1 },
+                start: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
+                end: LspPosition {
+                    line: 10,
+                    character: 1,
+                },
             },
             selection_range: LspRange {
-                start: LspPosition { line: 0, character: 3 },
-                end: LspPosition { line: 0, character: 7 },
+                start: LspPosition {
+                    line: 0,
+                    character: 3,
+                },
+                end: LspPosition {
+                    line: 0,
+                    character: 7,
+                },
             },
             children: vec![],
         };
@@ -2271,12 +2440,24 @@ mod tests {
             kind: "Variable".to_string(),
             detail: None,
             range: LspRange {
-                start: LspPosition { line: 2, character: 4 },
-                end: LspPosition { line: 2, character: 8 },
+                start: LspPosition {
+                    line: 2,
+                    character: 4,
+                },
+                end: LspPosition {
+                    line: 2,
+                    character: 8,
+                },
             },
             selection_range: LspRange {
-                start: LspPosition { line: 2, character: 4 },
-                end: LspPosition { line: 2, character: 8 },
+                start: LspPosition {
+                    line: 2,
+                    character: 4,
+                },
+                end: LspPosition {
+                    line: 2,
+                    character: 8,
+                },
             },
             children: vec![],
         };
@@ -2285,12 +2466,24 @@ mod tests {
             kind: "Function".to_string(),
             detail: None,
             range: LspRange {
-                start: LspPosition { line: 0, character: 0 },
-                end: LspPosition { line: 5, character: 1 },
+                start: LspPosition {
+                    line: 0,
+                    character: 0,
+                },
+                end: LspPosition {
+                    line: 5,
+                    character: 1,
+                },
             },
             selection_range: LspRange {
-                start: LspPosition { line: 0, character: 3 },
-                end: LspPosition { line: 0, character: 8 },
+                start: LspPosition {
+                    line: 0,
+                    character: 3,
+                },
+                end: LspPosition {
+                    line: 0,
+                    character: 8,
+                },
             },
             children: vec![child],
         };
@@ -2304,7 +2497,10 @@ mod tests {
     #[test]
     fn test_detect_language_id_rust() {
         assert_eq!(detect_language_id(Path::new("main.rs")), "rust");
-        assert_eq!(detect_language_id(Path::new("/home/user/project/lib.rs")), "rust");
+        assert_eq!(
+            detect_language_id(Path::new("/home/user/project/lib.rs")),
+            "rust"
+        );
     }
 
     #[test]
@@ -2571,7 +2767,8 @@ mod tests {
             "file_path": "/test.rs",
             "line": 10,
             "character": 5
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(input.file_path, "/test.rs");
         assert_eq!(input.line, 10);
         assert_eq!(input.character, 5);
@@ -2584,7 +2781,8 @@ mod tests {
             "line": 10,
             "character": 5,
             "include_declaration": false
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(input.file_path, "/test.rs");
         assert_eq!(input.line, 10);
         assert_eq!(input.character, 5);
@@ -2597,7 +2795,8 @@ mod tests {
             "file_path": "/test.rs",
             "line": 10,
             "character": 5
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(input.include_declaration); // defaults to true
     }
 
@@ -2607,7 +2806,8 @@ mod tests {
             "file_path": "/test.rs",
             "line": 10,
             "character": 5
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(input.file_path, "/test.rs");
         assert_eq!(input.line, 10);
         assert_eq!(input.character, 5);
@@ -2617,7 +2817,8 @@ mod tests {
     fn test_document_symbol_input_deserialization() {
         let input: DocumentSymbolInput = serde_json::from_value(json!({
             "file_path": "/test.rs"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(input.file_path, "/test.rs");
     }
 
@@ -2837,8 +3038,14 @@ mod tests {
             locations: vec![LspLocation {
                 uri: "file:///test.rs".to_string(),
                 range: LspRange {
-                    start: LspPosition { line: 5, character: 0 },
-                    end: LspPosition { line: 5, character: 10 },
+                    start: LspPosition {
+                        line: 5,
+                        character: 0,
+                    },
+                    end: LspPosition {
+                        line: 5,
+                        character: 10,
+                    },
                 },
             }],
         };
@@ -2855,15 +3062,27 @@ mod tests {
                 LspLocation {
                     uri: "file:///a.rs".to_string(),
                     range: LspRange {
-                        start: LspPosition { line: 1, character: 0 },
-                        end: LspPosition { line: 1, character: 5 },
+                        start: LspPosition {
+                            line: 1,
+                            character: 0,
+                        },
+                        end: LspPosition {
+                            line: 1,
+                            character: 5,
+                        },
                     },
                 },
                 LspLocation {
                     uri: "file:///b.rs".to_string(),
                     range: LspRange {
-                        start: LspPosition { line: 3, character: 0 },
-                        end: LspPosition { line: 3, character: 5 },
+                        start: LspPosition {
+                            line: 3,
+                            character: 0,
+                        },
+                        end: LspPosition {
+                            line: 3,
+                            character: 5,
+                        },
                     },
                 },
             ],
@@ -2893,12 +3112,24 @@ mod tests {
                 kind: "Function".to_string(),
                 detail: Some("fn main()".to_string()),
                 range: LspRange {
-                    start: LspPosition { line: 0, character: 0 },
-                    end: LspPosition { line: 5, character: 1 },
+                    start: LspPosition {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: LspPosition {
+                        line: 5,
+                        character: 1,
+                    },
                 },
                 selection_range: LspRange {
-                    start: LspPosition { line: 0, character: 3 },
-                    end: LspPosition { line: 0, character: 7 },
+                    start: LspPosition {
+                        line: 0,
+                        character: 3,
+                    },
+                    end: LspPosition {
+                        line: 0,
+                        character: 7,
+                    },
                 },
                 children: vec![],
             }],
@@ -2936,7 +3167,8 @@ mod tests {
     fn test_workspace_symbol_input_deserialization() {
         let input: WorkspaceSymbolInput = serde_json::from_value(json!({
             "query": "MyStruct"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(input.query, "MyStruct");
         assert!(input.file_path.is_none());
     }
@@ -2946,7 +3178,8 @@ mod tests {
         let input: WorkspaceSymbolInput = serde_json::from_value(json!({
             "query": "parse_",
             "file_path": "/project/src/main.rs"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(input.query, "parse_");
         assert_eq!(input.file_path, Some("/project/src/main.rs".to_string()));
     }
@@ -2961,8 +3194,14 @@ mod tests {
                 location: LspLocation {
                     uri: "file:///test.rs".to_string(),
                     range: LspRange {
-                        start: LspPosition { line: 0, character: 0 },
-                        end: LspPosition { line: 5, character: 1 },
+                        start: LspPosition {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: LspPosition {
+                            line: 5,
+                            character: 1,
+                        },
                     },
                 },
                 container_name: Some("my_module".to_string()),
@@ -3059,7 +3298,8 @@ mod tests {
             "line": 10,
             "character": 5,
             "new_name": "better_name"
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(input.file_path, "/test.rs");
         assert_eq!(input.new_name, "better_name");
     }
@@ -3138,7 +3378,8 @@ mod tests {
             "start_character": 0,
             "end_line": 10,
             "end_character": 20
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(input.file_path, "/test.rs");
         assert_eq!(input.start_line, 10);
         assert_eq!(input.end_character, 20);

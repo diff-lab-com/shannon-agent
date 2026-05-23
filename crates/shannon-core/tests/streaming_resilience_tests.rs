@@ -15,12 +15,12 @@
 use futures::StreamExt;
 use mockito::{Server, ServerGuard};
 use shannon_core::api::error::ApiError;
-use shannon_core::api::retry::{retry_request, RetryConfig};
+use shannon_core::api::retry::{RetryConfig, retry_request};
 use shannon_core::api::streaming::{LastEventId, SseStream};
 use shannon_core::api::{ContentDelta, LlmProvider, StreamEvent};
 use shannon_core::testing::mock_dsl::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -117,7 +117,9 @@ async fn test_sse_connection_dropped_mid_stream() {
 
     // Should have received events before the drop
     assert!(
-        events.iter().any(|e| matches!(e, StreamEvent::MessageStart { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::MessageStart { .. })),
         "Should have MessageStart before drop",
     );
 
@@ -171,7 +173,9 @@ async fn test_sse_partial_event_recovery() {
 
     // Should have the events before the truncation
     assert!(
-        events.iter().any(|e| matches!(e, StreamEvent::MessageStart { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::MessageStart { .. })),
         "Should have MessageStart",
     );
 
@@ -282,7 +286,9 @@ async fn test_sse_rate_limit_backoff() {
         .mock("POST", "/v1/messages")
         .with_status(429)
         .with_header("content-type", "application/json")
-        .with_body(r#"{"type":"error","error":{"type":"rate_limit_error","message":"Too many requests"}}"#)
+        .with_body(
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"Too many requests"}}"#,
+        )
         .expect(1)
         .create();
 
@@ -347,7 +353,10 @@ async fn test_sse_rate_limit_backoff() {
             _ => None,
         })
         .collect();
-    assert_eq!(text, "after-rate-limit", "Should get text from retry response");
+    assert_eq!(
+        text, "after-rate-limit",
+        "Should get text from retry response"
+    );
 }
 
 /// Test 6: API returns context length exceeded error.
@@ -410,9 +419,7 @@ async fn test_sse_cancellation_cleanup() {
     let mut server = Server::new_async().await;
 
     // Build a long SSE stream
-    let chunks: Vec<String> = (0..500)
-        .map(|i| format!("chunk-{} ", i))
-        .collect();
+    let chunks: Vec<String> = (0..500).map(|i| format!("chunk-{} ", i)).collect();
     let full_text: String = chunks.join("");
 
     let resp = text_response(&full_text);
@@ -479,7 +486,9 @@ async fn test_sse_malformed_header() {
     // Despite wrong content-type, the parser should still extract events
     // because it operates on the raw byte stream
     assert!(
-        events.iter().any(|e| matches!(e, StreamEvent::MessageStart { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::MessageStart { .. })),
         "Should parse events despite wrong content-type",
     );
 
@@ -518,10 +527,7 @@ async fn test_sse_empty_response_body() {
 
     let events = collect_stream_events(&url, LlmProvider::Anthropic).await;
 
-    assert!(
-        events.is_empty(),
-        "Empty body should produce no events",
-    );
+    assert!(events.is_empty(), "Empty body should produce no events",);
 }
 
 /// Test 10: Slow provider — chunks with deliberate delays.
@@ -568,18 +574,14 @@ async fn test_sse_slow_provider() {
         "data: {}\n\n",
         serde_json::json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"input_tokens": 10, "output_tokens": 5}})
     );
-    let msg_stop = format!(
-        "data: {}\n\n",
-        serde_json::json!({"type": "message_stop"})
-    );
+    let msg_stop = format!("data: {}\n\n", serde_json::json!({"type": "message_stop"}));
 
     // Combine all events into the full body. mockito sends the full body
     // at once, but we test that the parser handles the full stream correctly.
     // The "slow" aspect is tested by the fact that the parser correctly
     // reassembles all events from the stream.
-    let full_body = format!(
-        "{msg_start}{block_start}{delta1}{delta2}{block_stop}{msg_delta}{msg_stop}",
-    );
+    let full_body =
+        format!("{msg_start}{block_start}{delta1}{delta2}{block_stop}{msg_delta}{msg_stop}",);
 
     mock_sse_stream(&mut server, &full_body);
     let url = server.url();
@@ -588,7 +590,9 @@ async fn test_sse_slow_provider() {
 
     // Verify event sequence is complete
     assert!(
-        events.iter().any(|e| matches!(e, StreamEvent::MessageStart { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::MessageStart { .. })),
         "Should have MessageStart",
     );
     assert!(
@@ -616,9 +620,7 @@ async fn test_sse_slow_provider() {
     let delta_positions: Vec<usize> = events
         .iter()
         .enumerate()
-        .filter_map(|(i, e)| {
-            matches!(e, StreamEvent::ContentBlockDelta { .. }).then_some(i)
-        })
+        .filter_map(|(i, e)| matches!(e, StreamEvent::ContentBlockDelta { .. }).then_some(i))
         .collect();
     let stop_pos = events
         .iter()

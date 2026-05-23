@@ -86,9 +86,7 @@ impl ServerDiscovery {
 
         // Check VS Code extensions
         if let Ok(home) = std::env::var("HOME") {
-            let extensions_dir = PathBuf::from(home)
-                .join(".vscode")
-                .join("extensions");
+            let extensions_dir = PathBuf::from(home).join(".vscode").join("extensions");
 
             if let Ok(entries) = std::fs::read_dir(&extensions_dir) {
                 for entry in entries.flatten() {
@@ -104,16 +102,15 @@ impl ServerDiscovery {
 
         // Check system PATH for known servers
         for (language, command, args) in Self::KNOWN_SERVERS {
-            if !seen_languages.contains_key(*language)
-                && Self::command_exists(command) {
-                    servers.push(DiscoveredServer {
-                        language: language.to_string(),
-                        command: command.to_string(),
-                        args: args.iter().map(|s| s.to_string()).collect(),
-                        source: ServerSource::SystemPath(command.to_string()),
-                    });
-                    seen_languages.insert(language.to_string(), servers.len());
-                }
+            if !seen_languages.contains_key(*language) && Self::command_exists(command) {
+                servers.push(DiscoveredServer {
+                    language: language.to_string(),
+                    command: command.to_string(),
+                    args: args.iter().map(|s| s.to_string()).collect(),
+                    source: ServerSource::SystemPath(command.to_string()),
+                });
+                seen_languages.insert(language.to_string(), servers.len());
+            }
         }
 
         servers
@@ -125,9 +122,7 @@ impl ServerDiscovery {
             return None;
         };
 
-        let extensions_dir = PathBuf::from(home)
-            .join(".vscode")
-            .join("extensions");
+        let extensions_dir = PathBuf::from(home).join(".vscode").join("extensions");
 
         let Ok(entries) = std::fs::read_dir(&extensions_dir) else {
             return None;
@@ -162,7 +157,11 @@ impl ServerDiscovery {
             ("rust-analyzer", "rust", "rust-analyzer"),
             ("python-lang", "python", "pylsp"),
             ("vscode-python", "python", "pylsp"),
-            ("vscode-typescript-next", "typescript", "typescript-language-server"),
+            (
+                "vscode-typescript-next",
+                "typescript",
+                "typescript-language-server",
+            ),
             ("golang", "go", "gopls"),
             ("vscode-clangd", "c", "clangd"),
             ("vscode-java", "java", "jdtls"),
@@ -296,8 +295,7 @@ mod tests {
     fn test_server_config_creation() {
         use crate::lsp::config::ServerConfig;
 
-        let config = ServerConfig::new("rust-analyzer")
-            .with_args(vec!["--stdio".to_string()]);
+        let config = ServerConfig::new("rust-analyzer").with_args(vec!["--stdio".to_string()]);
 
         assert_eq!(config.command, "rust-analyzer");
         assert_eq!(config.args, vec!["--stdio".to_string()]);

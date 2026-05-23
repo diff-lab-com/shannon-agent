@@ -93,12 +93,15 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
     let trimmed = content.trim_start();
 
     if !trimmed.starts_with("---") {
-        return (FrontMatter {
-            model: None,
-            temperature: None,
-            description: None,
-            capabilities: None,
-        }, content.to_string());
+        return (
+            FrontMatter {
+                model: None,
+                temperature: None,
+                description: None,
+                capabilities: None,
+            },
+            content.to_string(),
+        );
     }
 
     // Find the closing ---
@@ -147,12 +150,15 @@ fn parse_front_matter(content: &str) -> (FrontMatter, String) {
     }
 
     // No closing fence found — treat entire content as body
-    (FrontMatter {
-        model: None,
-        temperature: None,
-        description: None,
-        capabilities: None,
-    }, content.to_string())
+    (
+        FrontMatter {
+            model: None,
+            temperature: None,
+            description: None,
+            capabilities: None,
+        },
+        content.to_string(),
+    )
 }
 
 impl AgentDefinition {
@@ -175,8 +181,8 @@ impl AgentDefinition {
 
     /// Load a single agent definition from a TOML file.
     pub fn from_file(path: &Path) -> Result<Self, AgentDefError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| AgentDefError::Io(path.to_path_buf(), e))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| AgentDefError::Io(path.to_path_buf(), e))?;
 
         let def: Self = toml::from_str(&content)
             .map_err(|e| AgentDefError::Parse(path.to_path_buf(), e.to_string()))?;
@@ -206,8 +212,8 @@ impl AgentDefinition {
     /// You are a code reviewer agent...
     /// ```
     pub fn from_markdown_file(path: &Path) -> Result<Self, AgentDefError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| AgentDefError::Io(path.to_path_buf(), e))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| AgentDefError::Io(path.to_path_buf(), e))?;
 
         // Derive name from filename (e.g. "backend-dev.md" → "backend-dev")
         let name = path
@@ -420,7 +426,10 @@ impl AgentDefinitionRegistry {
         }
 
         let mut lines = Vec::new();
-        lines.push(format!("Loaded {} agent definition(s):", self.definitions.len()));
+        lines.push(format!(
+            "Loaded {} agent definition(s):",
+            self.definitions.len()
+        ));
         for (name, def) in &self.definitions {
             let caps = if def.capabilities.is_empty() {
                 String::new()
@@ -691,7 +700,10 @@ temperature = 0.7
         let def: AgentDefinition = toml::from_str(toml).unwrap();
         assert_eq!(def.name, "backend-dev");
         assert_eq!(def.description, "Backend development specialist");
-        assert_eq!(def.system_prompt.as_deref(), Some("You are a Rust backend developer."));
+        assert_eq!(
+            def.system_prompt.as_deref(),
+            Some("You are a Rust backend developer.")
+        );
         assert_eq!(def.model.as_deref(), Some("claude-sonnet"));
         assert_eq!(def.capabilities, vec!["rust", "api-design", "database"]);
         assert_eq!(def.allowed_tools, vec!["bash", "read", "write"]);
@@ -716,7 +728,10 @@ temperature = 0.7
 
         let config = def.to_teammate_config();
         assert_eq!(config.agent_type, "reviewer");
-        assert_eq!(config.system_prompt.as_deref(), Some("Review code carefully."));
+        assert_eq!(
+            config.system_prompt.as_deref(),
+            Some("Review code carefully.")
+        );
         assert_eq!(config.model.as_deref(), Some("claude-opus"));
         assert_eq!(config.capabilities, vec!["code-review"]);
         assert_eq!(config.max_concurrent_tasks, 2);
@@ -728,12 +743,16 @@ temperature = 0.7
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test-agent.toml");
         let mut f = std::fs::File::create(&file_path).unwrap();
-        write!(f, r#"
+        write!(
+            f,
+            r#"
 name = "my-agent"
 description = "Test agent"
 system_prompt = "Hello"
 capabilities = ["test"]
-"#).unwrap();
+"#
+        )
+        .unwrap();
 
         let def = AgentDefinition::from_file(&file_path).unwrap();
         assert_eq!(def.name, "my-agent");
@@ -780,13 +799,15 @@ capabilities = ["test"]
         std::fs::write(
             global.path().join("dev.toml"),
             "name = \"dev\"\ndescription = \"Global dev\"\nmodel = \"claude-haiku\"\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Local override
         std::fs::write(
             local.path().join("dev.toml"),
             "name = \"dev\"\ndescription = \"Local dev\"\nmodel = \"claude-opus\"\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut registry = AgentDefinitionRegistry::new();
         registry.load_from_dir(global.path());
@@ -803,17 +824,20 @@ capabilities = ["test"]
         let empty_summary = registry.summary();
         assert!(empty_summary.contains("No custom agent"));
 
-        registry.definitions.insert("dev".to_string(), AgentDefinition {
-            name: "dev".to_string(),
-            description: "Developer".to_string(),
-            system_prompt: None,
-            model: None,
-            capabilities: vec!["rust".to_string()],
-            allowed_tools: vec![],
-            max_concurrent_tasks: 3,
-            plan_mode_required: false,
-            temperature: None,
-        });
+        registry.definitions.insert(
+            "dev".to_string(),
+            AgentDefinition {
+                name: "dev".to_string(),
+                description: "Developer".to_string(),
+                system_prompt: None,
+                model: None,
+                capabilities: vec!["rust".to_string()],
+                allowed_tools: vec![],
+                max_concurrent_tasks: 3,
+                plan_mode_required: false,
+                temperature: None,
+            },
+        );
 
         let summary = registry.summary();
         assert!(summary.contains("1 agent definition"));
@@ -833,7 +857,10 @@ capabilities = ["test"]
 
         let def = AgentDefinition::from_markdown_file(&file_path).unwrap();
         assert_eq!(def.name, "code-reviewer");
-        assert_eq!(def.system_prompt.as_deref(), Some("You are a code reviewer. Focus on security."));
+        assert_eq!(
+            def.system_prompt.as_deref(),
+            Some("You are a code reviewer. Focus on security.")
+        );
         assert!(def.model.is_none());
         assert!(def.temperature.is_none());
 
@@ -850,7 +877,10 @@ capabilities = ["test"]
 
         let def = AgentDefinition::from_markdown_file(&file_path).unwrap();
         assert_eq!(def.name, "backend-dev");
-        assert_eq!(def.system_prompt.as_deref(), Some("You are a backend developer."));
+        assert_eq!(
+            def.system_prompt.as_deref(),
+            Some("You are a backend developer.")
+        );
         assert_eq!(def.model.as_deref(), Some("claude-opus"));
         assert_eq!(def.temperature, Some(0.3));
         assert_eq!(def.description, "Backend specialist");
@@ -895,7 +925,11 @@ capabilities = ["test"]
         fs::create_dir_all(&agents_dir).unwrap();
 
         fs::write(agents_dir.join("reviewer.md"), "Review code for bugs.").unwrap();
-        fs::write(agents_dir.join("tester.md"), "---\nmodel: claude-haiku\n---\nWrite tests.").unwrap();
+        fs::write(
+            agents_dir.join("tester.md"),
+            "---\nmodel: claude-haiku\n---\nWrite tests.",
+        )
+        .unwrap();
 
         let mut registry = AgentDefinitionRegistry::new();
         registry.load_markdown_from_dir(&agents_dir);
@@ -903,7 +937,10 @@ capabilities = ["test"]
         assert_eq!(registry.all().len(), 2);
         assert!(registry.get("reviewer").is_some());
         assert!(registry.get("tester").is_some());
-        assert_eq!(registry.get("tester").unwrap().model.as_deref(), Some("claude-haiku"));
+        assert_eq!(
+            registry.get("tester").unwrap().model.as_deref(),
+            Some("claude-haiku")
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -979,7 +1016,8 @@ capabilities = ["test"]
         std::fs::write(
             dir.path().join("explorer.toml"),
             "name = \"explorer\"\ndescription = \"My custom explorer\"\nmodel = \"gpt-4\"\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut registry = AgentDefinitionRegistry::new();
         registry.with_builtin_defaults();

@@ -9,7 +9,7 @@
 //! - Deleting cells
 //! - Changing cell types (code/markdown)
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -193,7 +193,8 @@ impl Default for NotebookEditTool {
 impl NotebookEditTool {
     pub fn new() -> Self {
         Self {
-            description: "Edit Jupyter notebook (.ipynb) cells - replace, insert, or delete cells".to_string(),
+            description: "Edit Jupyter notebook (.ipynb) cells - replace, insert, or delete cells"
+                .to_string(),
         }
     }
 
@@ -202,16 +203,18 @@ impl NotebookEditTool {
         let content = fs::read_to_string(path)
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read notebook: {e}")))?;
 
-        let notebook: NotebookContent = serde_json::from_str(&content)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to parse notebook JSON: {e}")))?;
+        let notebook: NotebookContent = serde_json::from_str(&content).map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to parse notebook JSON: {e}"))
+        })?;
 
         Ok(notebook)
     }
 
     /// Save notebook to file
     fn save_notebook(path: &str, notebook: &NotebookContent) -> Result<(), ToolError> {
-        let json = serde_json::to_string_pretty(notebook)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize notebook: {e}")))?;
+        let json = serde_json::to_string_pretty(notebook).map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to serialize notebook: {e}"))
+        })?;
 
         fs::write(path, json)
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write notebook: {e}")))?;
@@ -262,7 +265,10 @@ impl NotebookEditTool {
     }
 
     /// Execute notebook edit operation
-    async fn execute_edit(&self, input: NotebookEditInput) -> Result<NotebookEditOutput, ToolError> {
+    async fn execute_edit(
+        &self,
+        input: NotebookEditInput,
+    ) -> Result<NotebookEditOutput, ToolError> {
         let notebook_path = &input.notebook_path;
 
         // Validate file extension
@@ -296,8 +302,7 @@ impl NotebookEditTool {
         }
 
         // Read original file
-        let original_content = fs::read_to_string(notebook_path)
-            .unwrap_or_default();
+        let original_content = fs::read_to_string(notebook_path).unwrap_or_default();
 
         // Load notebook
         let mut notebook = Self::load_notebook(notebook_path)?;
@@ -365,9 +370,14 @@ impl NotebookEditTool {
                 }
             }
             EditMode::Insert => {
-                let cell_type = input.cell_type
+                let cell_type = input
+                    .cell_type
                     .as_ref()
-                    .ok_or_else(|| ToolError::ExecutionFailed("Cell type is required when using edit_mode=insert".to_string()))?
+                    .ok_or_else(|| {
+                        ToolError::ExecutionFailed(
+                            "Cell type is required when using edit_mode=insert".to_string(),
+                        )
+                    })?
                     .clone();
 
                 let insert_index = if let Some(ref cell_id) = input.cell_id {
@@ -526,7 +536,7 @@ impl Tool for NotebookEditTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use tempfile::NamedTempFile;
 
     #[test]
@@ -655,16 +665,14 @@ mod tests {
                 }),
                 other: serde_json::json!({}),
             },
-            cells: vec![
-                NotebookCell {
-                    cell_type: CellType::Code,
-                    id: Some("test-cell-1".to_string()),
-                    source: CellSource::Single("x = 42".to_string()),
-                    metadata: serde_json::json!({}),
-                    execution_count: None,
-                    outputs: vec![],
-                },
-            ],
+            cells: vec![NotebookCell {
+                cell_type: CellType::Code,
+                id: Some("test-cell-1".to_string()),
+                source: CellSource::Single("x = 42".to_string()),
+                metadata: serde_json::json!({}),
+                execution_count: None,
+                outputs: vec![],
+            }],
         };
 
         // Save notebook
@@ -742,16 +750,14 @@ mod tests {
                 language_info: None,
                 other: serde_json::json!({}),
             },
-            cells: vec![
-                NotebookCell {
-                    cell_type: CellType::Code,
-                    id: Some("cell-1".to_string()),
-                    source: CellSource::Single("original".to_string()),
-                    metadata: serde_json::json!({}),
-                    execution_count: None,
-                    outputs: vec![],
-                },
-            ],
+            cells: vec![NotebookCell {
+                cell_type: CellType::Code,
+                id: Some("cell-1".to_string()),
+                source: CellSource::Single("original".to_string()),
+                metadata: serde_json::json!({}),
+                execution_count: None,
+                outputs: vec![],
+            }],
         };
 
         // Insert at index 0 (beginning)
@@ -824,16 +830,14 @@ mod tests {
                 language_info: None,
                 other: serde_json::json!({}),
             },
-            cells: vec![
-                NotebookCell {
-                    cell_type: CellType::Code,
-                    id: Some("cell-1".to_string()),
-                    source: CellSource::Single("old code".to_string()),
-                    metadata: serde_json::json!({}),
-                    execution_count: Some(1),
-                    outputs: vec![serde_json::json!({"output": "result"})],
-                },
-            ],
+            cells: vec![NotebookCell {
+                cell_type: CellType::Code,
+                id: Some("cell-1".to_string()),
+                source: CellSource::Single("old code".to_string()),
+                metadata: serde_json::json!({}),
+                execution_count: Some(1),
+                outputs: vec![serde_json::json!({"output": "result"})],
+            }],
         };
 
         let cell = &mut notebook.cells[0];

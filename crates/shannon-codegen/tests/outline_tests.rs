@@ -1,6 +1,6 @@
 //! Integration tests for symbol outline extraction.
 
-use shannon_codegen::{file_outline_content, Symbol, SymbolKind};
+use shannon_codegen::{Symbol, SymbolKind, file_outline_content};
 
 // ── Rust Symbol Extraction ──────────────────────────────────────────────
 
@@ -85,14 +85,20 @@ impl std::fmt::Display for Foo {
 "#;
     let symbols = file_outline_content(code, "Rust").unwrap();
     // struct Foo + impl Foo + impl Display for Foo
-    let impl_symbols: Vec<&Symbol> = symbols.iter().filter(|s| s.kind == SymbolKind::Impl).collect();
+    let impl_symbols: Vec<&Symbol> = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Impl)
+        .collect();
     assert!(
         !impl_symbols.is_empty(),
         "Expected at least 1 impl symbol, got {}",
         impl_symbols.len()
     );
     // Verify the impl block for Foo is found
-    let foo_impl = impl_symbols.iter().find(|s| s.name == "Foo").expect("should find impl Foo");
+    let foo_impl = impl_symbols
+        .iter()
+        .find(|s| s.name == "Foo")
+        .expect("should find impl Foo");
     assert_eq!(foo_impl.kind, SymbolKind::Impl);
     assert!(foo_impl.start_line > 0);
     // Note: child method extraction depends on tree-sitter node nesting;
@@ -152,8 +158,14 @@ static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize:
         .map(|s| s.name.as_str())
         .collect();
 
-    assert!(const_names.contains(&"MAX_SIZE"), "Expected MAX_SIZE constant");
-    assert!(const_names.contains(&"VERSION"), "Expected VERSION constant");
+    assert!(
+        const_names.contains(&"MAX_SIZE"),
+        "Expected MAX_SIZE constant"
+    );
+    assert!(
+        const_names.contains(&"VERSION"),
+        "Expected VERSION constant"
+    );
     assert!(static_names.contains(&"COUNTER"), "Expected COUNTER static");
 }
 
@@ -170,7 +182,10 @@ pub type Handler = fn(i32) -> bool;
         .map(|s| s.name.as_str())
         .collect();
     assert!(type_names.contains(&"Result"), "Expected Result type alias");
-    assert!(type_names.contains(&"Handler"), "Expected Handler type alias");
+    assert!(
+        type_names.contains(&"Handler"),
+        "Expected Handler type alias"
+    );
 }
 
 #[test]
@@ -187,7 +202,11 @@ static INSTANCE: Option<Config> = None;
 type Id = u64;
 "#;
     let symbols = file_outline_content(code, "Rust").unwrap();
-    assert!(symbols.len() >= 7, "Expected at least 7 symbols, got {}", symbols.len());
+    assert!(
+        symbols.len() >= 7,
+        "Expected at least 7 symbols, got {}",
+        symbols.len()
+    );
 
     let kinds: Vec<SymbolKind> = symbols.iter().map(|s| s.kind.clone()).collect();
     assert!(kinds.contains(&SymbolKind::Function), "missing Function");
@@ -468,7 +487,10 @@ pub fn second() {}
     assert!(!symbols.is_empty());
     for sym in &symbols {
         assert!(sym.start_line >= 1, "start_line should be 1-indexed");
-        assert!(sym.end_line >= sym.start_line, "end_line should be >= start_line");
+        assert!(
+            sym.end_line >= sym.start_line,
+            "end_line should be >= start_line"
+        );
     }
 }
 

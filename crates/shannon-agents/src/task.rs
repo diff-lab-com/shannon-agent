@@ -146,7 +146,11 @@ mod tests {
 
     #[test]
     fn task_new_defaults() {
-        let task = AgentTask::new("Fix bug".to_string(), "Fix the auth bug".to_string(), TaskPriority::High);
+        let task = AgentTask::new(
+            "Fix bug".to_string(),
+            "Fix the auth bug".to_string(),
+            TaskPriority::High,
+        );
         assert_eq!(task.subject, "Fix bug");
         assert_eq!(task.description, "Fix the auth bug");
         assert_eq!(task.status, TaskStatus::Pending);
@@ -246,7 +250,10 @@ mod tests {
     #[test]
     fn task_status_inprogress_serializes_pascal() {
         let json = serde_json::to_string(&TaskStatus::InProgress).unwrap();
-        assert!(json.contains("InProgress"), "Expected 'InProgress', got: {json}");
+        assert!(
+            json.contains("InProgress"),
+            "Expected 'InProgress', got: {json}"
+        );
     }
 
     #[test]
@@ -259,7 +266,11 @@ mod tests {
 
     #[test]
     fn dependency_type_serde() {
-        let deps = vec![DependencyType::MustComplete, DependencyType::MustStart, DependencyType::ShouldComplete];
+        let deps = vec![
+            DependencyType::MustComplete,
+            DependencyType::MustStart,
+            DependencyType::ShouldComplete,
+        ];
         let json = serde_json::to_string(&deps).unwrap();
         let de: Vec<DependencyType> = serde_json::from_str(&json).unwrap();
         assert_eq!(de, deps);

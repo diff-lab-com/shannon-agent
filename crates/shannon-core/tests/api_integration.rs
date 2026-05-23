@@ -12,13 +12,17 @@
 #[cfg(test)]
 mod llm_client_tests {
     use mockito::{Server, ServerGuard};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::sleep;
 
     /// Helper to set up mock server with Anthropic-style responses
-    fn setup_anthropic_mock(server: &mut ServerGuard, endpoint: &str, response: Value) -> mockito::Mock {
+    fn setup_anthropic_mock(
+        server: &mut ServerGuard,
+        endpoint: &str,
+        response: Value,
+    ) -> mockito::Mock {
         server
             .mock("POST", endpoint)
             .with_status(200)
@@ -29,7 +33,11 @@ mod llm_client_tests {
     }
 
     /// Helper to set up mock server with OpenAI-style responses
-    fn setup_openai_mock(server: &mut ServerGuard, endpoint: &str, response: Value) -> mockito::Mock {
+    fn setup_openai_mock(
+        server: &mut ServerGuard,
+        endpoint: &str,
+        response: Value,
+    ) -> mockito::Mock {
         server
             .mock("POST", endpoint)
             .with_status(200)
@@ -39,7 +47,11 @@ mod llm_client_tests {
     }
 
     /// Helper to set up mock server with Ollama-style responses
-    fn setup_ollama_mock(server: &mut ServerGuard, endpoint: &str, response: Value) -> mockito::Mock {
+    fn setup_ollama_mock(
+        server: &mut ServerGuard,
+        endpoint: &str,
+        response: Value,
+    ) -> mockito::Mock {
         server
             .mock("POST", endpoint)
             .with_status(200)
@@ -157,10 +169,7 @@ mod llm_client_tests {
 
         assert_eq!(response.status(), 200);
         let json: Value = response.json().await.unwrap();
-        assert_eq!(
-            json.get("id").unwrap().as_str(),
-            Some("chatcmpl-123456")
-        );
+        assert_eq!(json.get("id").unwrap().as_str(), Some("chatcmpl-123456"));
         assert_eq!(
             json.get("object").unwrap().as_str(),
             Some("chat.completion")
@@ -210,7 +219,10 @@ mod llm_client_tests {
         assert_eq!(response.status(), 200);
         let json: Value = response.json().await.unwrap();
         assert_eq!(json.get("model").unwrap().as_str(), Some("llama2"));
-        assert_eq!(json.get("response").unwrap().as_str(), Some("Hello, world!"));
+        assert_eq!(
+            json.get("response").unwrap().as_str(),
+            Some("Hello, world!")
+        );
         assert_eq!(json.get("done").unwrap().as_bool(), Some(true));
 
         mock.assert();
@@ -312,10 +324,7 @@ mod llm_client_tests {
             error.get("message").unwrap().as_str(),
             Some("Invalid authentication")
         );
-        assert_eq!(
-            error.get("code").unwrap().as_str(),
-            Some("invalid_api_key")
-        );
+        assert_eq!(error.get("code").unwrap().as_str(), Some("invalid_api_key"));
 
         mock.assert();
     }
@@ -458,10 +467,7 @@ mod llm_client_tests {
 
         assert_eq!(response2.status(), 200);
         let json: Value = response2.json().await.unwrap();
-        assert_eq!(
-            json.get("id").unwrap().as_str(),
-            Some("chatcmpl-retry")
-        );
+        assert_eq!(json.get("id").unwrap().as_str(), Some("chatcmpl-retry"));
 
         mock.assert();
         mock_success.assert();
@@ -514,7 +520,12 @@ data: {"type":"message_stop"}
 
         assert_eq!(response.status(), 200);
         assert_eq!(
-            response.headers().get("content-type").unwrap().to_str().unwrap(),
+            response
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "text/event-stream"
         );
 
@@ -716,8 +727,14 @@ data: {"type":"message_stop"}
         assert_eq!(response.status(), 200);
         let json: Value = response.json().await.unwrap();
         let usage = json.get("usage").unwrap();
-        assert_eq!(usage.get("cache_creation_input_tokens").unwrap().as_u64(), Some(500));
-        assert_eq!(usage.get("cache_read_input_tokens").unwrap().as_u64(), Some(2000));
+        assert_eq!(
+            usage.get("cache_creation_input_tokens").unwrap().as_u64(),
+            Some(500)
+        );
+        assert_eq!(
+            usage.get("cache_read_input_tokens").unwrap().as_u64(),
+            Some(2000)
+        );
 
         mock.assert();
     }
@@ -734,15 +751,27 @@ data: {"type":"message_stop"}
         };
 
         let serialized = serde_json::to_string(&block).unwrap();
-        assert!(serialized.contains(r#""cache_control""#), "should include cache_control");
-        assert!(serialized.contains(r#""ephemeral""#), "should be ephemeral type");
-        assert!(serialized.contains(r#""type":"text""#), "should have type text");
+        assert!(
+            serialized.contains(r#""cache_control""#),
+            "should include cache_control"
+        );
+        assert!(
+            serialized.contains(r#""ephemeral""#),
+            "should be ephemeral type"
+        );
+        assert!(
+            serialized.contains(r#""type":"text""#),
+            "should have type text"
+        );
 
         // Verify roundtrip
         let deserialized: SystemContentBlock = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.text, "You are a helpful assistant.");
         assert!(deserialized.cache_control.is_some());
-        assert_eq!(deserialized.cache_control.unwrap().control_type, "ephemeral");
+        assert_eq!(
+            deserialized.cache_control.unwrap().control_type,
+            "ephemeral"
+        );
     }
 
     /// Verify subsequent requests hit cache (cache_read_input_tokens > 0)
@@ -788,8 +817,14 @@ data: {"type":"message_stop"}
 
         let json1: Value = resp1.json().await.unwrap();
         let usage1 = json1.get("usage").unwrap();
-        assert_eq!(usage1.get("cache_creation_input_tokens").unwrap().as_u64(), Some(1000));
-        assert_eq!(usage1.get("cache_read_input_tokens").unwrap().as_u64(), Some(0));
+        assert_eq!(
+            usage1.get("cache_creation_input_tokens").unwrap().as_u64(),
+            Some(1000)
+        );
+        assert_eq!(
+            usage1.get("cache_read_input_tokens").unwrap().as_u64(),
+            Some(0)
+        );
         mock1.assert();
     }
 }
@@ -803,13 +838,11 @@ data: {"type":"message_stop"}
 /// - Provider-specific adapter behavior
 #[cfg(test)]
 mod e2e_client_tests {
+    use futures::StreamExt;
     use mockito::{Server, ServerGuard};
     use serde_json::json;
-    use shannon_core::api::{
-        LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
-    };
+    use shannon_core::api::{LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent};
     use shannon_core::error::ApiKeyGuard;
-    use futures::StreamExt;
 
     /// Create an LlmClient pointing at the mock server.
     fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
@@ -862,7 +895,10 @@ mod e2e_client_tests {
             .create();
 
         let client = make_client(&server, LlmProvider::Anthropic);
-        let content = client.send_message(simple_message(), None, None).await.unwrap();
+        let content = client
+            .send_message(simple_message(), None, None)
+            .await
+            .unwrap();
         assert_eq!(content.len(), 1);
     }
 
@@ -891,7 +927,10 @@ mod e2e_client_tests {
             .create();
 
         let client = make_client(&server, LlmProvider::OpenAI);
-        let content = client.send_message(simple_message(), None, None).await.unwrap();
+        let content = client
+            .send_message(simple_message(), None, None)
+            .await
+            .unwrap();
         assert_eq!(content.len(), 1);
     }
 
@@ -927,7 +966,10 @@ mod e2e_client_tests {
             .create();
 
         let client = make_client(&server, LlmProvider::OpenAI);
-        let content = client.send_message(simple_message(), None, None).await.unwrap();
+        let content = client
+            .send_message(simple_message(), None, None)
+            .await
+            .unwrap();
         assert_eq!(content.len(), 2, "Should have 2 tool_use blocks");
     }
 
@@ -952,7 +994,10 @@ mod e2e_client_tests {
             .create();
 
         let client = make_client(&server, LlmProvider::Ollama);
-        let content = client.send_message(simple_message(), None, None).await.unwrap();
+        let content = client
+            .send_message(simple_message(), None, None)
+            .await
+            .unwrap();
         assert_eq!(content.len(), 1);
     }
 
@@ -977,7 +1022,10 @@ mod e2e_client_tests {
             .create();
 
         let client = make_client(&server, LlmProvider::OpenAI);
-        let mut stream = client.send_message_stream(simple_message(), None, None).await.unwrap();
+        let mut stream = client
+            .send_message_stream(simple_message(), None, None)
+            .await
+            .unwrap();
 
         let mut text = String::new();
         while let Some(result) = stream.next().await {
@@ -1014,19 +1062,30 @@ mod e2e_client_tests {
             .create();
 
         let client = make_client(&server, LlmProvider::OpenAI);
-        let mut stream = client.send_message_stream(simple_message(), None, None).await.unwrap();
+        let mut stream = client
+            .send_message_stream(simple_message(), None, None)
+            .await
+            .unwrap();
 
         let mut tool_starts = Vec::new();
         while let Some(result) = stream.next().await {
             let event = result.unwrap();
-            if let shannon_core::api::StreamEvent::ContentBlockStart { index, content_block } = event {
+            if let shannon_core::api::StreamEvent::ContentBlockStart {
+                index,
+                content_block,
+            } = event
+            {
                 if let shannon_core::api::ContentBlock::ToolUse { name, .. } = content_block {
                     tool_starts.push((index, name));
                 }
             }
         }
         // Both tool calls must be delivered — this was the P0-2 bug
-        assert_eq!(tool_starts.len(), 2, "Both tool calls should be delivered, got {tool_starts:?}");
+        assert_eq!(
+            tool_starts.len(),
+            2,
+            "Both tool calls should be delivered, got {tool_starts:?}"
+        );
         assert_eq!(tool_starts[0], (0, "bash".to_string()));
         assert_eq!(tool_starts[1], (1, "read".to_string()));
     }
@@ -1049,7 +1108,10 @@ mod e2e_client_tests {
             .create();
 
         let client = make_client(&server, LlmProvider::Anthropic);
-        let mut stream = client.send_message_stream(simple_message(), None, None).await.unwrap();
+        let mut stream = client
+            .send_message_stream(simple_message(), None, None)
+            .await
+            .unwrap();
 
         let mut text = String::new();
         while let Some(result) = stream.next().await {
@@ -1067,27 +1129,33 @@ mod e2e_client_tests {
 /// Tests for LlmClient::send_message_with_retry and fallback provider behavior.
 #[cfg(test)]
 mod retry_tests {
+    use futures::StreamExt;
     use mockito::{Server, ServerGuard};
     use serde_json::json;
     use shannon_core::api::{
         LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent, RetryConfig,
     };
-    use futures::StreamExt;
 
     /// Set ANTHROPIC_API_KEY for retry tests (uses Anthropic provider)
     struct AnthropicKeyGuard(Option<std::ffi::OsString>);
     impl AnthropicKeyGuard {
         fn set() -> Self {
             let old = std::env::var_os("ANTHROPIC_API_KEY");
-            unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+            unsafe {
+                std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+            }
             Self(old)
         }
     }
     impl Drop for AnthropicKeyGuard {
         fn drop(&mut self) {
             match &self.0 {
-                Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v); },
-                None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); },
+                Some(v) => unsafe {
+                    std::env::set_var("ANTHROPIC_API_KEY", v);
+                },
+                None => unsafe {
+                    std::env::remove_var("ANTHROPIC_API_KEY");
+                },
             }
         }
     }
@@ -1116,10 +1184,7 @@ mod retry_tests {
         LlmClient::new(config)
     }
 
-    fn make_client_with_fallback(
-        primary: &ServerGuard,
-        fallback: &ServerGuard,
-    ) -> LlmClient {
+    fn make_client_with_fallback(primary: &ServerGuard, fallback: &ServerGuard) -> LlmClient {
         let config = LlmClientConfig {
             api_key: "test-key".to_string(),
             base_url: primary.url(),
@@ -1172,7 +1237,10 @@ mod retry_tests {
             .create();
 
         let client = make_client_with_retry(&server, LlmProvider::OpenAI, 3);
-        let content = client.send_message_with_retry(simple_message(), None, None).await.unwrap();
+        let content = client
+            .send_message_with_retry(simple_message(), None, None)
+            .await
+            .unwrap();
         assert_eq!(content.len(), 1);
         mock.assert();
     }
@@ -1214,7 +1282,10 @@ mod retry_tests {
             .create();
 
         let client = make_client_with_retry(&server, LlmProvider::OpenAI, 3);
-        let content = client.send_message_with_retry(simple_message(), None, None).await.unwrap();
+        let content = client
+            .send_message_with_retry(simple_message(), None, None)
+            .await
+            .unwrap();
         assert_eq!(content.len(), 1);
     }
 
@@ -1235,7 +1306,9 @@ mod retry_tests {
             .create();
 
         let client = make_client_with_retry(&server, LlmProvider::OpenAI, 1);
-        let result = client.send_message_with_retry(simple_message(), None, None).await;
+        let result = client
+            .send_message_with_retry(simple_message(), None, None)
+            .await;
         assert!(result.is_err());
     }
 
@@ -1274,7 +1347,10 @@ mod retry_tests {
             .create();
 
         let client = make_client_with_fallback(&primary, &fallback);
-        let content = client.send_message_with_retry(simple_message(), None, None).await.unwrap();
+        let content = client
+            .send_message_with_retry(simple_message(), None, None)
+            .await
+            .unwrap();
         assert_eq!(content.len(), 1);
         fallback_mock.assert();
     }
@@ -1348,15 +1424,21 @@ mod query_pipeline_tests {
     impl AnthropicKeyGuard {
         fn set() -> Self {
             let old = std::env::var_os("ANTHROPIC_API_KEY");
-            unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+            unsafe {
+                std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+            }
             Self(old)
         }
     }
     impl Drop for AnthropicKeyGuard {
         fn drop(&mut self) {
             match &self.0 {
-                Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v); },
-                None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); },
+                Some(v) => unsafe {
+                    std::env::set_var("ANTHROPIC_API_KEY", v);
+                },
+                None => unsafe {
+                    std::env::remove_var("ANTHROPIC_API_KEY");
+                },
             }
         }
     }
@@ -1440,7 +1522,9 @@ mod query_pipeline_tests {
         }
 
         let has_text = events.iter().any(|e| matches!(e, QueryEvent::Text { .. }));
-        let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
+        let has_completed = events
+            .iter()
+            .any(|e| matches!(e, QueryEvent::Completed { .. }));
 
         assert!(has_text, "Expected Text event, got: {events:?}");
         assert!(has_completed, "Expected Completed event, got: {events:?}");
@@ -1508,15 +1592,22 @@ mod query_pipeline_tests {
         struct MockBashTool;
         #[async_trait]
         impl shannon_core::tools::Tool for MockBashTool {
-            async fn execute(&self, _input: serde_json::Value) -> shannon_core::tools::ToolResult<shannon_core::tools::ToolOutput> {
+            async fn execute(
+                &self,
+                _input: serde_json::Value,
+            ) -> shannon_core::tools::ToolResult<shannon_core::tools::ToolOutput> {
                 Ok(shannon_core::tools::ToolOutput {
                     content: "hello".to_string(),
                     is_error: false,
                     metadata: Default::default(),
                 })
             }
-            fn name(&self) -> &str { "bash" }
-            fn description(&self) -> &str { "Mock bash" }
+            fn name(&self) -> &str {
+                "bash"
+            }
+            fn description(&self) -> &str {
+                "Mock bash"
+            }
             fn input_schema(&self) -> serde_json::Value {
                 json!({"type": "object", "properties": {"command": {"type": "string"}}})
             }
@@ -1542,12 +1633,24 @@ mod query_pipeline_tests {
         }
 
         // Should have tool use request and result events
-        let has_tool_request = events.iter().any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
-        let has_tool_result = events.iter().any(|e| matches!(e, QueryEvent::ToolUseResult { .. }));
-        let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
+        let has_tool_request = events
+            .iter()
+            .any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
+        let has_tool_result = events
+            .iter()
+            .any(|e| matches!(e, QueryEvent::ToolUseResult { .. }));
+        let has_completed = events
+            .iter()
+            .any(|e| matches!(e, QueryEvent::Completed { .. }));
 
-        assert!(has_tool_request, "Expected ToolUseRequest event, got: {events:?}");
-        assert!(has_tool_result, "Expected ToolUseResult event, got: {events:?}");
+        assert!(
+            has_tool_request,
+            "Expected ToolUseRequest event, got: {events:?}"
+        );
+        assert!(
+            has_tool_result,
+            "Expected ToolUseResult event, got: {events:?}"
+        );
         assert!(has_completed, "Expected Completed event, got: {events:?}");
 
         mock1.assert();
@@ -1687,15 +1790,18 @@ mod query_pipeline_tests {
             .mock("POST", "/v1/messages")
             .with_status(200)
             .with_header("content-type", "application/json")
-            .with_body(json!({
-                "id": "msg_session",
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "text", "text": "Session test"}],
-                "model": "test-model",
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 10, "output_tokens": 5}
-            }).to_string())
+            .with_body(
+                json!({
+                    "id": "msg_session",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Session test"}],
+                    "model": "test-model",
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 10, "output_tokens": 5}
+                })
+                .to_string(),
+            )
             .expect(1)
             .create();
 
@@ -1769,20 +1875,36 @@ mod query_pipeline_tests {
         }
 
         // Extract cache tokens from Usage events
-        let usage_events: Vec<_> = events.iter()
+        let usage_events: Vec<_> = events
+            .iter()
             .filter_map(|e| match e {
-                QueryEvent::Usage { cache_creation_tokens, cache_read_tokens, input_tokens, output_tokens, .. } => {
-                    Some((*input_tokens, *output_tokens, *cache_creation_tokens, *cache_read_tokens))
-                }
+                QueryEvent::Usage {
+                    cache_creation_tokens,
+                    cache_read_tokens,
+                    input_tokens,
+                    output_tokens,
+                    ..
+                } => Some((
+                    *input_tokens,
+                    *output_tokens,
+                    *cache_creation_tokens,
+                    *cache_read_tokens,
+                )),
                 _ => None,
             })
             .collect();
 
-        assert!(!usage_events.is_empty(), "Should have at least one Usage event");
+        assert!(
+            !usage_events.is_empty(),
+            "Should have at least one Usage event"
+        );
         let (input, output, creation, read) = usage_events[0];
         assert_eq!(input, 100, "input_tokens should be 100");
         assert_eq!(output, 20, "output_tokens should be 20");
-        assert_eq!(creation, 5000, "cache_creation_tokens should be 5000, got {creation}");
+        assert_eq!(
+            creation, 5000,
+            "cache_creation_tokens should be 5000, got {creation}"
+        );
         assert_eq!(read, 0, "cache_read_tokens should be 0, got {read}");
     }
 
@@ -1825,14 +1947,25 @@ mod query_pipeline_tests {
         let mut cache_read = 0u64;
         let mut cache_creation = 0u64;
         while let Some(result) = stream.next().await {
-            if let Ok(QueryEvent::Usage { cache_read_tokens, cache_creation_tokens, .. }) = result {
+            if let Ok(QueryEvent::Usage {
+                cache_read_tokens,
+                cache_creation_tokens,
+                ..
+            }) = result
+            {
                 cache_read = cache_read_tokens;
                 cache_creation = cache_creation_tokens;
             }
         }
 
-        assert_eq!(cache_creation, 0, "Cache miss should have 0 creation tokens");
-        assert_eq!(cache_read, 8000, "Cache hit should have 8000 read tokens, got {cache_read}");
+        assert_eq!(
+            cache_creation, 0,
+            "Cache miss should have 0 creation tokens"
+        );
+        assert_eq!(
+            cache_read, 8000,
+            "Cache hit should have 8000 read tokens, got {cache_read}"
+        );
     }
 
     /// Test: multi-turn cache progression (miss → hit → partial).
@@ -1893,7 +2026,12 @@ mod query_pipeline_tests {
         let mut turn1_read = 0u64;
         let mut turn1_creation = 0u64;
         while let Some(r) = s1.next().await {
-            if let Ok(QueryEvent::Usage { cache_read_tokens, cache_creation_tokens, .. }) = r {
+            if let Ok(QueryEvent::Usage {
+                cache_read_tokens,
+                cache_creation_tokens,
+                ..
+            }) = r
+            {
                 turn1_read = cache_read_tokens;
                 turn1_creation = cache_creation_tokens;
             }
@@ -1902,7 +2040,9 @@ mod query_pipeline_tests {
         assert_eq!(turn1_read, 0);
 
         engine.add_user_message("First".to_string());
-        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text { text: "Turn 1".to_string() }]);
+        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+            text: "Turn 1".to_string(),
+        }]);
 
         // Turn 2
         let ctx2 = make_context("Second");
@@ -1910,20 +2050,31 @@ mod query_pipeline_tests {
         let mut turn2_read = 0u64;
         let mut turn2_creation = 0u64;
         while let Some(r) = s2.next().await {
-            if let Ok(QueryEvent::Usage { cache_read_tokens, cache_creation_tokens, .. }) = r {
+            if let Ok(QueryEvent::Usage {
+                cache_read_tokens,
+                cache_creation_tokens,
+                ..
+            }) = r
+            {
                 turn2_read = cache_read_tokens;
                 turn2_creation = cache_creation_tokens;
             }
         }
         assert_eq!(turn2_creation, 0, "Turn 2 should have 0 cache creation");
-        assert_eq!(turn2_read, 9000, "Turn 2 should be cache hit with 9000 read tokens");
+        assert_eq!(
+            turn2_read, 9000,
+            "Turn 2 should be cache hit with 9000 read tokens"
+        );
 
         // Verify overall hit rate across turns
         let total_read = turn1_read + turn2_read;
         let total_creation = turn1_creation + turn2_creation;
         let hit_rate = total_read as f64 / (total_read + total_creation) as f64;
         // 9000 / (9000 + 10000) ≈ 0.47
-        assert!(hit_rate > 0.4, "Overall hit rate should be > 40%, got {hit_rate:.2}");
+        assert!(
+            hit_rate > 0.4,
+            "Overall hit rate should be > 40%, got {hit_rate:.2}"
+        );
     }
 }
 
@@ -1964,9 +2115,9 @@ mod conversation_export_tests {
                 },
                 Message {
                     role: "assistant".to_string(),
-                    content: MessageContent::Blocks(vec![
-                        ContentBlock::Text { text: "Hi there!".to_string() },
-                    ]),
+                    content: MessageContent::Blocks(vec![ContentBlock::Text {
+                        text: "Hi there!".to_string(),
+                    }]),
                 },
             ],
         };
@@ -2033,7 +2184,8 @@ mod conversation_export_tests {
             metadata.total_input_tokens,
             metadata.total_output_tokens,
             metadata.total_input_tokens + metadata.total_output_tokens,
-            (metadata.total_input_tokens as f64 * 0.000003) + (metadata.total_output_tokens as f64 * 0.000015),
+            (metadata.total_input_tokens as f64 * 0.000003)
+                + (metadata.total_output_tokens as f64 * 0.000015),
         );
 
         assert!(summary.contains("Model: claude-3-5-sonnet"));
@@ -2055,9 +2207,9 @@ mod conversation_export_tests {
             },
             Message {
                 role: "assistant".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::Text { text: "World".to_string() },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::Text {
+                    text: "World".to_string(),
+                }]),
             },
             Message {
                 role: "user".to_string(),
@@ -2078,7 +2230,9 @@ mod conversation_export_tests {
         };
 
         // Save
-        state_manager.save_session(&session_id, &messages, &metadata).unwrap();
+        state_manager
+            .save_session(&session_id, &messages, &metadata)
+            .unwrap();
 
         // Load
         let loaded = state_manager.load_session(&session_id).unwrap();
@@ -2086,7 +2240,10 @@ mod conversation_export_tests {
 
         let loaded_data = loaded.unwrap();
         assert_eq!(loaded_data.session_id, session_id);
-        assert_eq!(loaded_data.metadata.title, Some("Round-trip test".to_string()));
+        assert_eq!(
+            loaded_data.metadata.title,
+            Some("Round-trip test".to_string())
+        );
         assert_eq!(loaded_data.metadata.model, "test-model");
         assert_eq!(loaded_data.messages.len(), 3);
         assert_eq!(loaded_data.metadata.turn_count, 3); // preserved: max(stored, visible)
@@ -2139,7 +2296,9 @@ mod conversation_export_tests {
             Message {
                 role: "assistant".to_string(),
                 content: MessageContent::Blocks(vec![
-                    ContentBlock::Text { text: "Let me check that.".to_string() },
+                    ContentBlock::Text {
+                        text: "Let me check that.".to_string(),
+                    },
                     ContentBlock::ToolUse {
                         id: "toolu_123".to_string(),
                         name: "bash".to_string(),
@@ -2149,13 +2308,13 @@ mod conversation_export_tests {
             },
             Message {
                 role: "user".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "toolu_123".to_string(),
-                        content: Some(shannon_core::api::ToolResultContent::Single("file1.txt\nfile2.txt".to_string())),
-                        is_error: Some(false),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "toolu_123".to_string(),
+                    content: Some(shannon_core::api::ToolResultContent::Single(
+                        "file1.txt\nfile2.txt".to_string(),
+                    )),
+                    is_error: Some(false),
+                }]),
             },
         ];
 
@@ -2176,7 +2335,9 @@ mod permission_flow_tests {
     use mockito::{Server, ServerGuard};
     use shannon_core::api::{LlmClient, LlmClientConfig, LlmProvider};
     use shannon_core::permissions::{PermissionChoice, PermissionManager};
-    use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata, PermissionRequest};
+    use shannon_core::query_engine::{
+        PermissionRequest, QueryContext, QueryEngine, QueryEvent, QueryMetadata,
+    };
     use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
     use uuid::Uuid;
@@ -2185,15 +2346,21 @@ mod permission_flow_tests {
     impl AnthropicKeyGuard {
         fn set() -> Self {
             let old = std::env::var_os("ANTHROPIC_API_KEY");
-            unsafe { std::env::set_var("ANTHROPIC_API_KEY", "test-key"); }
+            unsafe {
+                std::env::set_var("ANTHROPIC_API_KEY", "test-key");
+            }
             Self(old)
         }
     }
     impl Drop for AnthropicKeyGuard {
         fn drop(&mut self) {
             match &self.0 {
-                Some(v) => unsafe { std::env::set_var("ANTHROPIC_API_KEY", v); },
-                None => unsafe { std::env::remove_var("ANTHROPIC_API_KEY"); },
+                Some(v) => unsafe {
+                    std::env::set_var("ANTHROPIC_API_KEY", v);
+                },
+                None => unsafe {
+                    std::env::remove_var("ANTHROPIC_API_KEY");
+                },
             }
         }
     }
@@ -2317,34 +2484,47 @@ mod permission_flow_tests {
         let _ = deny_handle.await;
 
         // Should have completed (not failed) - the engine recovered
-        let has_completed = events.iter().any(|e| matches!(e, QueryEvent::Completed { .. }));
-        let has_tool_request = events.iter().any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
+        let has_completed = events
+            .iter()
+            .any(|e| matches!(e, QueryEvent::Completed { .. }));
+        let has_tool_request = events
+            .iter()
+            .any(|e| matches!(e, QueryEvent::ToolUseRequest { .. }));
 
-        assert!(has_tool_request, "Expected ToolUseRequest event before denial");
+        assert!(
+            has_tool_request,
+            "Expected ToolUseRequest event before denial"
+        );
 
         // Engine should complete gracefully (either with recovery text or just Completed)
         // The key assertion is that it doesn't panic or hang
         assert!(
-            has_completed || events.iter().any(|e| matches!(e, QueryEvent::Failed { .. })),
+            has_completed
+                || events
+                    .iter()
+                    .any(|e| matches!(e, QueryEvent::Failed { .. })),
             "Expected either Completed or Failed event, got: {:?}",
-            events.iter().map(|e| match e {
-                QueryEvent::Started { .. } => "Started",
-                QueryEvent::Text { .. } => "Text",
-                QueryEvent::ToolUseRequest { .. } => "ToolUseRequest",
-                QueryEvent::ToolUseResult { .. } => "ToolUseResult",
-                QueryEvent::TurnCompleted { .. } => "TurnCompleted",
-                QueryEvent::Progress { .. } => "Progress",
-                QueryEvent::Usage { .. } => "Usage",
-                QueryEvent::Cost { .. } => "Cost",
-                QueryEvent::ToolProgress { .. } => "ToolProgress",
-                QueryEvent::Completed { .. } => "Completed",
-                QueryEvent::Failed { .. } => "Failed",
-                QueryEvent::Thinking { .. } => "Thinking",
-                QueryEvent::Info { .. } => "Info",
-                QueryEvent::RateLimit { .. } => "RateLimit",
-                QueryEvent::ConversationUpdate { .. } => "ConversationUpdate",
-                QueryEvent::Warning { .. } => "Warning",
-            }).collect::<Vec<_>>()
+            events
+                .iter()
+                .map(|e| match e {
+                    QueryEvent::Started { .. } => "Started",
+                    QueryEvent::Text { .. } => "Text",
+                    QueryEvent::ToolUseRequest { .. } => "ToolUseRequest",
+                    QueryEvent::ToolUseResult { .. } => "ToolUseResult",
+                    QueryEvent::TurnCompleted { .. } => "TurnCompleted",
+                    QueryEvent::Progress { .. } => "Progress",
+                    QueryEvent::Usage { .. } => "Usage",
+                    QueryEvent::Cost { .. } => "Cost",
+                    QueryEvent::ToolProgress { .. } => "ToolProgress",
+                    QueryEvent::Completed { .. } => "Completed",
+                    QueryEvent::Failed { .. } => "Failed",
+                    QueryEvent::Thinking { .. } => "Thinking",
+                    QueryEvent::Info { .. } => "Info",
+                    QueryEvent::RateLimit { .. } => "RateLimit",
+                    QueryEvent::ConversationUpdate { .. } => "ConversationUpdate",
+                    QueryEvent::Warning { .. } => "Warning",
+                })
+                .collect::<Vec<_>>()
         );
     }
 }

@@ -44,30 +44,32 @@ impl ConversationState {
                                 block_tokens += serde_json::to_string(input)
                                     .map_or(0, |s| estimate_text_tokens(&s));
                             }
-                            crate::api::ContentBlock::ToolResult { content: Some(c), .. } => {
-                                match c {
-                                    crate::api::ToolResultContent::Single(s) => {
-                                        block_tokens += estimate_text_tokens(s)
-                                    }
-                                    crate::api::ToolResultContent::Multiple(blocks) => {
-                                        for b in blocks {
-                                            match b {
-                                                crate::api::ContentBlock::Text { text } => {
-                                                    block_tokens += estimate_text_tokens(text)
-                                                }
-                                                crate::api::ContentBlock::ToolUse {
-                                                    name, input, ..
-                                                } => {
-                                                    block_tokens += estimate_text_tokens(name);
-                                                    block_tokens += serde_json::to_string(input)
-                                                        .map_or(0, |s| estimate_text_tokens(&s));
-                                                }
-                                                _ => {}
+                            crate::api::ContentBlock::ToolResult {
+                                content: Some(c), ..
+                            } => match c {
+                                crate::api::ToolResultContent::Single(s) => {
+                                    block_tokens += estimate_text_tokens(s)
+                                }
+                                crate::api::ToolResultContent::Multiple(blocks) => {
+                                    for b in blocks {
+                                        match b {
+                                            crate::api::ContentBlock::Text { text } => {
+                                                block_tokens += estimate_text_tokens(text)
                                             }
+                                            crate::api::ContentBlock::ToolUse {
+                                                name,
+                                                input,
+                                                ..
+                                            } => {
+                                                block_tokens += estimate_text_tokens(name);
+                                                block_tokens += serde_json::to_string(input)
+                                                    .map_or(0, |s| estimate_text_tokens(&s));
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
-                            }
+                            },
                             crate::api::ContentBlock::ToolResult { content: None, .. } => {}
                             crate::api::ContentBlock::Image { .. } => block_tokens += 100,
                             _ => {}
@@ -128,15 +130,16 @@ impl ConversationState {
         match config.compression_strategy {
             crate::query_engine::types::CompressionStrategy::SummarizeOld => {
                 // Drain messages between the cache prefix and the recent tail
-                let old_messages: Vec<Message> = self.messages.drain(min_preserve..split_point).collect();
+                let old_messages: Vec<Message> =
+                    self.messages.drain(min_preserve..split_point).collect();
                 let summary = Self::summarize_messages(&old_messages);
 
                 // Create a summary message as a system message
                 let summary_msg = crate::api::Message {
                     role: "system".to_string(),
-                    content: crate::api::MessageContent::Text(
-                        format!("[Previous conversation summary]\n\n{summary}"),
-                    ),
+                    content: crate::api::MessageContent::Text(format!(
+                        "[Previous conversation summary]\n\n{summary}"
+                    )),
                 };
 
                 // Insert summary after the preserved cache prefix
@@ -171,7 +174,11 @@ impl ConversationState {
         for msg in messages {
             match &msg.content {
                 crate::api::MessageContent::Text(text) => {
-                    let role = if msg.role == "user" { "User" } else { "Assistant" };
+                    let role = if msg.role == "user" {
+                        "User"
+                    } else {
+                        "Assistant"
+                    };
                     let preview = truncate_summary(text, 150);
                     summary_parts.push(format!("{role}: {preview}"));
                     turn_count += 1;
@@ -180,11 +187,9 @@ impl ConversationState {
                     for block in blocks {
                         match block {
                             crate::api::ContentBlock::ToolUse { name, input, .. } => {
-                                let input_json =
-                                    serde_json::to_string(input).unwrap_or_default();
+                                let input_json = serde_json::to_string(input).unwrap_or_default();
                                 let input_preview = truncate_summary(&input_json, 80);
-                                summary_parts
-                                    .push(format!("Tool: {name}({input_preview})"));
+                                summary_parts.push(format!("Tool: {name}({input_preview})"));
                                 turn_count += 1;
                             }
                             crate::api::ContentBlock::ToolResult {
@@ -198,8 +203,11 @@ impl ConversationState {
                                     .map(|s| s.as_str())
                                     .unwrap_or("unknown");
                                 let limit = content_rich_limit(tool_name);
-                                let err_tag =
-                                    if is_error.unwrap_or(false) { " (error)" } else { "" };
+                                let err_tag = if is_error.unwrap_or(false) {
+                                    " (error)"
+                                } else {
+                                    ""
+                                };
                                 let result_text = match content {
                                     Some(crate::api::ToolResultContent::Single(s)) => {
                                         truncate_summary(s, limit)
@@ -219,15 +227,12 @@ impl ConversationState {
                                     }
                                     None => "(empty)".to_string(),
                                 };
-                                summary_parts.push(format!(
-                                    "Result{err_tag} [{tool_name}]: {result_text}"
-                                ));
+                                summary_parts
+                                    .push(format!("Result{err_tag} [{tool_name}]: {result_text}"));
                             }
                             crate::api::ContentBlock::Text { text } => {
-                                summary_parts.push(format!(
-                                    "Text: {}",
-                                    truncate_summary(text, 100)
-                                ));
+                                summary_parts
+                                    .push(format!("Text: {}", truncate_summary(text, 100)));
                                 turn_count += 1;
                             }
                             _ => {}
@@ -274,9 +279,16 @@ fn truncate_summary(text: &str, max_bytes: usize) -> String {
 fn content_rich_limit(tool_name: &str) -> usize {
     if matches!(
         tool_name,
-        "Read" | "Grep" | "Glob" | "Bash"
-            | "WebSearch" | "WebFetch" | "Fetch"
-            | "search" | "code_search" | "ast_grep_search"
+        "Read"
+            | "Grep"
+            | "Glob"
+            | "Bash"
+            | "WebSearch"
+            | "WebFetch"
+            | "Fetch"
+            | "search"
+            | "code_search"
+            | "ast_grep_search"
     ) {
         300
     } else {
@@ -291,7 +303,10 @@ mod tests {
     use crate::query_engine::types::CompressionStrategy;
 
     fn text_msg(role: &str, text: &str) -> Message {
-        Message { role: role.into(), content: MessageContent::Text(text.into()) }
+        Message {
+            role: role.into(),
+            content: MessageContent::Text(text.into()),
+        }
     }
 
     fn test_config() -> QueryEngineConfig {
@@ -343,7 +358,9 @@ mod tests {
             messages: vec![Message {
                 role: "assistant".into(),
                 content: MessageContent::Blocks(vec![
-                    ContentBlock::Text { text: "Here's the result:".into() },
+                    ContentBlock::Text {
+                        text: "Here's the result:".into(),
+                    },
                     ContentBlock::ToolUse {
                         id: "t1".into(),
                         name: "Read".into(),
@@ -466,9 +483,14 @@ mod tests {
     fn test_compress_truncate_removes_old_messages() {
         let config = test_config(); // keep_recent = 2
         let mut state = ConversationState {
-            messages: (0..6).map(|i| {
-                text_msg(if i % 2 == 0 { "user" } else { "assistant" }, &format!("msg {i}"))
-            }).collect(),
+            messages: (0..6)
+                .map(|i| {
+                    text_msg(
+                        if i % 2 == 0 { "user" } else { "assistant" },
+                        &format!("msg {i}"),
+                    )
+                })
+                .collect(),
             ..Default::default()
         };
         state.compress(&config);
@@ -522,9 +544,10 @@ mod tests {
         // Should have: first pair + summary + recent pair
         assert!(state.messages.len() >= 3);
         // Check that a summary message was inserted
-        let has_summary = state.messages.iter().any(|m| {
-            matches!(&m.content, MessageContent::Text(t) if t.contains("summary"))
-        });
+        let has_summary = state
+            .messages
+            .iter()
+            .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("summary")));
         assert!(has_summary);
     }
 
@@ -546,13 +569,11 @@ mod tests {
     fn test_summarize_tool_use_messages() {
         let msgs = vec![Message {
             role: "assistant".into(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::ToolUse {
-                    id: "t1".into(),
-                    name: "Read".into(),
-                    input: serde_json::json!({"file": "main.rs"}),
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "Read".into(),
+                input: serde_json::json!({"file": "main.rs"}),
+            }]),
         }];
         let summary = ConversationState::summarize_messages(&msgs);
         assert!(summary.contains("Tool:"));
@@ -563,13 +584,11 @@ mod tests {
     fn test_summarize_tool_result_message() {
         let msgs = vec![Message {
             role: "user".into(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::ToolResult {
-                    tool_use_id: "t1".into(),
-                    content: Some(ToolResultContent::Single("fn main() {}".into())),
-                    is_error: Some(false),
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: Some(ToolResultContent::Single("fn main() {}".into())),
+                is_error: Some(false),
+            }]),
         }];
         let summary = ConversationState::summarize_messages(&msgs);
         assert!(summary.contains("Result"));
@@ -579,13 +598,11 @@ mod tests {
     fn test_summarize_error_result() {
         let msgs = vec![Message {
             role: "user".into(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::ToolResult {
-                    tool_use_id: "t1".into(),
-                    content: Some(ToolResultContent::Single("file not found".into())),
-                    is_error: Some(true),
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: Some(ToolResultContent::Single("file not found".into())),
+                is_error: Some(true),
+            }]),
         }];
         let summary = ConversationState::summarize_messages(&msgs);
         assert!(summary.contains("error"));
@@ -595,13 +612,11 @@ mod tests {
     fn test_summarize_empty_tool_result() {
         let msgs = vec![Message {
             role: "user".into(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::ToolResult {
-                    tool_use_id: "t1".into(),
-                    content: None,
-                    is_error: None,
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "t1".into(),
+                content: None,
+                is_error: None,
+            }]),
         }];
         let summary = ConversationState::summarize_messages(&msgs);
         assert!(summary.contains("empty"));

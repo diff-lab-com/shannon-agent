@@ -164,7 +164,10 @@ async fn test_ollama_text_response_headless() {
 
     assert_eq!(json["exit_code"], "success");
     let response = json["response"].as_str().unwrap_or("");
-    assert!(response.contains("Ollama"), "Expected 'Ollama' in response, got: {response}");
+    assert!(
+        response.contains("Ollama"),
+        "Expected 'Ollama' in response, got: {response}"
+    );
 }
 
 #[tokio::test]
@@ -183,7 +186,10 @@ async fn test_openai_text_response_headless() {
 
     assert_eq!(json["exit_code"], "success");
     let response = json["response"].as_str().unwrap_or("");
-    assert!(response.contains("OpenAI"), "Expected 'OpenAI' in response, got: {response}");
+    assert!(
+        response.contains("OpenAI"),
+        "Expected 'OpenAI' in response, got: {response}"
+    );
 }
 
 #[tokio::test]
@@ -202,7 +208,10 @@ async fn test_anthropic_text_response_headless() {
 
     assert_eq!(json["exit_code"], "success");
     let response = json["response"].as_str().unwrap_or("");
-    assert!(response.contains("Anthropic"), "Expected 'Anthropic' in response, got: {response}");
+    assert!(
+        response.contains("Anthropic"),
+        "Expected 'Anthropic' in response, got: {response}"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -446,7 +455,10 @@ async fn test_anthropic_usage_tracking() {
 
     assert_eq!(json["exit_code"], "success");
     let tokens = json["total_tokens"].as_u64().unwrap_or(0);
-    assert!(tokens > 0, "Anthropic response should report tokens > 0, got: {tokens}");
+    assert!(
+        tokens > 0,
+        "Anthropic response should report tokens > 0, got: {tokens}"
+    );
 }
 
 #[tokio::test]
@@ -465,7 +477,12 @@ async fn test_openai_streaming_json_output() {
     let json = parse_json_output(&stdout);
 
     assert_eq!(json["exit_code"], "success");
-    assert!(json["response"].as_str().unwrap_or("").contains("OpenAI streaming"));
+    assert!(
+        json["response"]
+            .as_str()
+            .unwrap_or("")
+            .contains("OpenAI streaming")
+    );
     assert!(json["tool_calls"].is_array());
 }
 
@@ -501,7 +518,12 @@ async fn test_context_preservation_prompt_in_output() {
     let _m = mock_ollama_streaming(&mut server, "Context preserved response");
 
     let result = shannon_with_mock("ollama", &server.url())
-        .args(["--prompt", "What is the meaning of 42?", "--output-format", "json"])
+        .args([
+            "--prompt",
+            "What is the meaning of 42?",
+            "--output-format",
+            "json",
+        ])
         .assert();
 
     let stdout = stdout_string(&result);
@@ -531,7 +553,10 @@ async fn test_prompt_preserved_in_response_context() {
     let json = parse_json_output(&stdout);
 
     let prompt = json["prompt"].as_str().unwrap_or("");
-    assert!(prompt.contains("Rust"), "Prompt should be preserved, got: {prompt}");
+    assert!(
+        prompt.contains("Rust"),
+        "Prompt should be preserved, got: {prompt}"
+    );
 
     let response = json["response"].as_str().unwrap_or("");
     assert!(
@@ -556,24 +581,42 @@ async fn test_json_stream_event_sequence() {
     let events: Vec<serde_json::Value> = stdout
         .lines()
         .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}")))
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}"))
+        })
         .collect();
 
     assert!(!events.is_empty(), "Should produce at least one event");
 
     // First event should be "start"
-    assert_eq!(events[0]["type"], "start", "First event should be 'start', got: {}", events[0]);
+    assert_eq!(
+        events[0]["type"], "start",
+        "First event should be 'start', got: {}",
+        events[0]
+    );
 
     // Find the CiEvent::Done (has turns_used + tokens_used, not just exit_code)
-    let ci_done = events.iter().find(|e| {
-        e["type"] == "done" && e.get("turns_used").is_some()
-    });
-    assert!(ci_done.is_some(), "Should have CiEvent::Done with turns_used");
+    let ci_done = events
+        .iter()
+        .find(|e| e["type"] == "done" && e.get("turns_used").is_some());
+    assert!(
+        ci_done.is_some(),
+        "Should have CiEvent::Done with turns_used"
+    );
 
     let done = ci_done.unwrap();
-    assert!(done.get("exit_code").is_some(), "done should have exit_code");
-    assert!(done.get("turns_used").is_some(), "done should have turns_used");
-    assert!(done.get("tokens_used").is_some(), "done should have tokens_used");
+    assert!(
+        done.get("exit_code").is_some(),
+        "done should have exit_code"
+    );
+    assert!(
+        done.get("turns_used").is_some(),
+        "done should have turns_used"
+    );
+    assert!(
+        done.get("tokens_used").is_some(),
+        "done should have tokens_used"
+    );
 }
 
 #[tokio::test]
@@ -592,15 +635,27 @@ async fn test_json_stream_text_delta_events() {
     let events: Vec<serde_json::Value> = stdout
         .lines()
         .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}")))
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}"))
+        })
         .collect();
 
     // Should have at least: start, text_delta, done
-    assert!(events.len() >= 3, "Should have at least start+text_delta+done events, got {}", events.len());
+    assert!(
+        events.len() >= 3,
+        "Should have at least start+text_delta+done events, got {}",
+        events.len()
+    );
 
     // Find text_delta events (the actual streaming content events)
-    let text_events: Vec<_> = events.iter().filter(|e| e["type"] == "text_delta").collect();
-    assert!(!text_events.is_empty(), "Should have at least one 'text_delta' event");
+    let text_events: Vec<_> = events
+        .iter()
+        .filter(|e| e["type"] == "text_delta")
+        .collect();
+    assert!(
+        !text_events.is_empty(),
+        "Should have at least one 'text_delta' event"
+    );
 
     let content = text_events[0]["content"].as_str().unwrap_or("");
     assert!(!content.is_empty(), "text_delta event should have content");
@@ -622,25 +677,41 @@ async fn test_json_stream_anthropic_full_event_flow() {
     let events: Vec<serde_json::Value> = stdout
         .lines()
         .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}")))
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}"))
+        })
         .collect();
 
-    let types: Vec<&str> = events.iter().map(|e| e["type"].as_str().unwrap_or("unknown")).collect();
+    let types: Vec<&str> = events
+        .iter()
+        .map(|e| e["type"].as_str().unwrap_or("unknown"))
+        .collect();
 
     // Should have start as first event
     assert_eq!(types[0], "start", "First event should be start");
 
     // Should have at least one text_delta
-    assert!(types.contains(&"text_delta"), "Should have text_delta events, got: {types:?}");
+    assert!(
+        types.contains(&"text_delta"),
+        "Should have text_delta events, got: {types:?}"
+    );
 
     // Should end with two done events (CiEvent::Done then OutputEvent::Done)
     let done_count = types.iter().filter(|&&t| t == "done").count();
     assert!(done_count >= 1, "Should have at least one done event");
 
     // CiEvent::Done should have full metadata
-    let ci_done = events.iter().find(|e| e["type"] == "done" && e.get("turns_used").is_some());
-    assert!(ci_done.is_some(), "Should have CiEvent::Done with turns_used");
-    assert!(ci_done.unwrap()["exit_code"].as_i64().unwrap_or(-1) == 0, "exit_code should be 0 for success");
+    let ci_done = events
+        .iter()
+        .find(|e| e["type"] == "done" && e.get("turns_used").is_some());
+    assert!(
+        ci_done.is_some(),
+        "Should have CiEvent::Done with turns_used"
+    );
+    assert!(
+        ci_done.unwrap()["exit_code"].as_i64().unwrap_or(-1) == 0,
+        "exit_code should be 0 for success"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -683,7 +754,9 @@ async fn test_openai_auth_failure() {
         .mock("POST", "/v1/chat/completions")
         .with_status(401)
         .with_header("content-type", "application/json")
-        .with_body(r#"{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}"#)
+        .with_body(
+            r#"{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}"#,
+        )
         .expect(1)
         .create();
 
@@ -795,7 +868,9 @@ async fn test_json_stream_error_event() {
         .mock("POST", "/v1/messages")
         .with_status(401)
         .with_header("content-type", "application/json")
-        .with_body(r#"{"type":"error","error":{"type":"authentication_error","message":"bad key"}}"#)
+        .with_body(
+            r#"{"type":"error","error":{"type":"authentication_error","message":"bad key"}}"#,
+        )
         .expect(1)
         .create();
 
@@ -808,12 +883,17 @@ async fn test_json_stream_error_event() {
     let events: Vec<serde_json::Value> = stdout
         .lines()
         .filter(|l| !l.is_empty())
-        .map(|line| serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}")))
+        .map(|line| {
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("Invalid NDJSON: {line}\n{e}"))
+        })
         .collect();
 
     // Should contain an error event
     let error_events: Vec<_> = events.iter().filter(|e| e["type"] == "error").collect();
-    assert!(!error_events.is_empty(), "Should have error event in stream, got: {events:?}");
+    assert!(
+        !error_events.is_empty(),
+        "Should have error event in stream, got: {events:?}"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -833,7 +913,14 @@ async fn test_json_output_structure() {
     let stdout = stdout_string(&result);
     let json = parse_json_output(&stdout);
 
-    for field in &["prompt", "response", "tool_calls", "total_tokens", "duration_ms", "exit_code"] {
+    for field in &[
+        "prompt",
+        "response",
+        "tool_calls",
+        "total_tokens",
+        "duration_ms",
+        "exit_code",
+    ] {
         assert!(
             json.get(*field).is_some(),
             "Missing required field '{field}' in JSON output"
@@ -843,8 +930,14 @@ async fn test_json_output_structure() {
     assert!(json["prompt"].is_string(), "prompt should be string");
     assert!(json["response"].is_string(), "response should be string");
     assert!(json["tool_calls"].is_array(), "tool_calls should be array");
-    assert!(json["total_tokens"].is_number(), "total_tokens should be number");
-    assert!(json["duration_ms"].is_number(), "duration_ms should be number");
+    assert!(
+        json["total_tokens"].is_number(),
+        "total_tokens should be number"
+    );
+    assert!(
+        json["duration_ms"].is_number(),
+        "duration_ms should be number"
+    );
     assert!(json["exit_code"].is_string(), "exit_code should be string");
 }
 
@@ -886,11 +979,22 @@ async fn test_json_stream_output() {
 
     let first: serde_json::Value = serde_json::from_str(lines[0])
         .unwrap_or_else(|e| panic!("Invalid NDJSON first line:\n{}\nError: {e}", lines[0]));
-    assert!(first.get("type").is_some(), "NDJSON line should have 'type' field");
+    assert!(
+        first.get("type").is_some(),
+        "NDJSON line should have 'type' field"
+    );
 
-    let last: serde_json::Value = serde_json::from_str(lines[lines.len() - 1])
-        .unwrap_or_else(|e| panic!("Invalid last NDJSON line:\n{}\nError: {e}", lines[lines.len() - 1]));
-    assert_eq!(last["type"], "done", "Last event should be 'done', got: {last}");
+    let last: serde_json::Value =
+        serde_json::from_str(lines[lines.len() - 1]).unwrap_or_else(|e| {
+            panic!(
+                "Invalid last NDJSON line:\n{}\nError: {e}",
+                lines[lines.len() - 1]
+            )
+        });
+    assert_eq!(
+        last["type"], "done",
+        "Last event should be 'done', got: {last}"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1000,9 +1104,15 @@ async fn test_all_producers_json_output_consistent() {
         let mut server = mockito::Server::new_async().await;
 
         match provider {
-            "ollama" => { mock_ollama_streaming(&mut server, response_text); }
-            "anthropic" => { mock_anthropic_streaming(&mut server, response_text); }
-            _ => { mock_openai_streaming(&mut server, response_text); }
+            "ollama" => {
+                mock_ollama_streaming(&mut server, response_text);
+            }
+            "anthropic" => {
+                mock_anthropic_streaming(&mut server, response_text);
+            }
+            _ => {
+                mock_openai_streaming(&mut server, response_text);
+            }
         }
 
         let mut cmd = shannon_with_mock(provider, &server.url());
@@ -1293,7 +1403,10 @@ async fn test_ollama_request_has_no_tools_field() {
     let json = parse_json_output(&stdout);
     assert_eq!(json["exit_code"], "success");
     let response = json["response"].as_str().unwrap_or("");
-    assert!(response.contains("local model"), "Expected 'local model' in response, got: {response}");
+    assert!(
+        response.contains("local model"),
+        "Expected 'local model' in response, got: {response}"
+    );
 }
 
 #[tokio::test]
@@ -1422,7 +1535,11 @@ fn shannon_with_sessions(provider: &str, server_url: &str, home_dir: &std::path:
 }
 
 /// Write a session file directly into the isolated sessions directory.
-fn write_session_file(home_dir: &std::path::Path, session_id: &str, messages: Vec<serde_json::Value>) {
+fn write_session_file(
+    home_dir: &std::path::Path,
+    session_id: &str,
+    messages: Vec<serde_json::Value>,
+) {
     let sessions_dir = home_dir.join(".shannon").join("sessions");
     std::fs::create_dir_all(&sessions_dir).unwrap();
 
@@ -1497,11 +1614,22 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         "The capital of France is Paris. The Eiffel Tower is its most famous landmark.",
     );
     let r1 = shannon_with_sessions("ollama", &s1.url(), &home)
-        .args(["--prompt", "What is the capital of France?", "--output-format", "json"])
+        .args([
+            "--prompt",
+            "What is the capital of France?",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
-    assert!(find_latest_session_id(&home).is_some(), "Session saved after turn 1");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r1))["exit_code"],
+        "success"
+    );
+    assert!(
+        find_latest_session_id(&home).is_some(),
+        "Session saved after turn 1"
+    );
 
     // Turn 2: resume — verify prior context (Eiffel) is sent to API
     let mut s2 = mockito::Server::new_async().await;
@@ -1510,14 +1638,25 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         .match_body(Matcher::Regex(r#"Eiffel"#.to_string()))
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(ollama_streaming_body("I mentioned the Eiffel Tower and Paris."))
+        .with_body(ollama_streaming_body(
+            "I mentioned the Eiffel Tower and Paris.",
+        ))
         .expect(1)
         .create();
     let r2 = shannon_with_sessions("ollama", &s2.url(), &home)
-        .args(["--resume", "--prompt", "What landmark did you mention?", "--output-format", "json"])
+        .args([
+            "--resume",
+            "--prompt",
+            "What landmark did you mention?",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], "success");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r2))["exit_code"],
+        "success"
+    );
 
     // Turn 3: resume again — verify BOTH prior turns loaded
     let mut s3 = mockito::Server::new_async().await;
@@ -1526,11 +1665,19 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
         .match_body(Matcher::Regex(r#"capital.*France|Eiffel"#.to_string()))
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(ollama_streaming_body("We discussed France, Paris, and the Eiffel Tower."))
+        .with_body(ollama_streaming_body(
+            "We discussed France, Paris, and the Eiffel Tower.",
+        ))
         .expect(1)
         .create();
     let r3 = shannon_with_sessions("ollama", &s3.url(), &home)
-        .args(["--resume", "--prompt", "Summarize our conversation", "--output-format", "json"])
+        .args([
+            "--resume",
+            "--prompt",
+            "Summarize our conversation",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
     let j3 = parse_json_output(&stdout_string(&r3));
@@ -1544,13 +1691,19 @@ async fn test_multiturn_openai_resume_preserves_context() {
     let home = session_home_dir();
 
     let mut s1 = mockito::Server::new_async().await;
-    let _m1 = mock_openai_streaming(&mut s1, "Rust is a systems programming language focused on safety and performance.");
+    let _m1 = mock_openai_streaming(
+        &mut s1,
+        "Rust is a systems programming language focused on safety and performance.",
+    );
     let r1 = shannon_with_sessions("openai", &s1.url(), &home)
         .env("SHANNON_API_KEY", "test-key")
         .args(["--prompt", "Tell me about Rust", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r1))["exit_code"],
+        "success"
+    );
 
     let mut s2 = mockito::Server::new_async().await;
     let _m2 = s2
@@ -1558,15 +1711,26 @@ async fn test_multiturn_openai_resume_preserves_context() {
         .match_body(Matcher::Regex(r#"safety"#.to_string()))
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(openai_sse_body("Rust's ownership system ensures memory safety without GC."))
+        .with_body(openai_sse_body(
+            "Rust's ownership system ensures memory safety without GC.",
+        ))
         .expect(1)
         .create();
     let r2 = shannon_with_sessions("openai", &s2.url(), &home)
         .env("SHANNON_API_KEY", "test-key")
-        .args(["--resume", "--prompt", "How does it ensure memory safety?", "--output-format", "json"])
+        .args([
+            "--resume",
+            "--prompt",
+            "How does it ensure memory safety?",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], "success");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r2))["exit_code"],
+        "success"
+    );
 }
 
 #[tokio::test]
@@ -1575,13 +1739,19 @@ async fn test_multiturn_anthropic_resume_context() {
     let home = session_home_dir();
 
     let mut s1 = mockito::Server::new_async().await;
-    let _m1 = mock_anthropic_streaming(&mut s1, "Python is a high-level language known for readability.");
+    let _m1 = mock_anthropic_streaming(
+        &mut s1,
+        "Python is a high-level language known for readability.",
+    );
     let r1 = shannon_with_sessions("anthropic", &s1.url(), &home)
         .env("SHANNON_API_KEY", "test-key")
         .args(["--prompt", "What is Python?", "--output-format", "json"])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r1))["exit_code"],
+        "success"
+    );
 
     let mut s2 = mockito::Server::new_async().await;
     let _m2 = s2
@@ -1590,15 +1760,26 @@ async fn test_multiturn_anthropic_resume_context() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(anthropic_sse_body("Python is great for data science and web development."))
+        .with_body(anthropic_sse_body(
+            "Python is great for data science and web development.",
+        ))
         .expect(1)
         .create();
     let r2 = shannon_with_sessions("anthropic", &s2.url(), &home)
         .env("SHANNON_API_KEY", "test-key")
-        .args(["--resume", "--prompt", "What is it good for?", "--output-format", "json"])
+        .args([
+            "--resume",
+            "--prompt",
+            "What is it good for?",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], "success");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r2))["exit_code"],
+        "success"
+    );
 }
 
 #[tokio::test]
@@ -1610,10 +1791,18 @@ async fn test_multiturn_ollama_story_then_character_count() {
     let story = "Once upon a time, a brave rabbit named Hoppy lived with friends Foxie, Owly, and Deery in a meadow.";
     let _m1 = mock_ollama_streaming(&mut s1, story);
     let r1 = shannon_with_sessions("ollama", &s1.url(), &home)
-        .args(["--prompt", "Write a short story about a brave rabbit", "--output-format", "json"])
+        .args([
+            "--prompt",
+            "Write a short story about a brave rabbit",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r1))["exit_code"],
+        "success"
+    );
 
     let mut s2 = mockito::Server::new_async().await;
     let _m2 = s2
@@ -1621,11 +1810,19 @@ async fn test_multiturn_ollama_story_then_character_count() {
         .match_body(Matcher::Regex(r#"Hoppy"#.to_string()))
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(ollama_streaming_body("The story has 4 characters: Hoppy, Foxie, Owly, and Deery."))
+        .with_body(ollama_streaming_body(
+            "The story has 4 characters: Hoppy, Foxie, Owly, and Deery.",
+        ))
         .expect(1)
         .create();
     let r2 = shannon_with_sessions("ollama", &s2.url(), &home)
-        .args(["--resume", "--prompt", "How many characters are in the story?", "--output-format", "json"])
+        .args([
+            "--resume",
+            "--prompt",
+            "How many characters are in the story?",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
     let j2 = parse_json_output(&stdout_string(&r2));
@@ -1658,13 +1855,24 @@ async fn test_multiturn_deepseek_resume_context() {
     let home = session_home_dir();
 
     let mut s1 = mockito::Server::new_async().await;
-    let _m1 = mock_openai_streaming(&mut s1, "Tokyo is the capital of Japan, known for its temples and technology.");
+    let _m1 = mock_openai_streaming(
+        &mut s1,
+        "Tokyo is the capital of Japan, known for its temples and technology.",
+    );
     let r1 = shannon_with_sessions("deepseek", &s1.url(), &home)
         .env("SHANNON_API_KEY", "test-key")
-        .args(["--prompt", "What is the capital of Japan?", "--output-format", "json"])
+        .args([
+            "--prompt",
+            "What is the capital of Japan?",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r1))["exit_code"], "success");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r1))["exit_code"],
+        "success"
+    );
 
     let mut s2 = mockito::Server::new_async().await;
     let _m2 = s2
@@ -1672,15 +1880,26 @@ async fn test_multiturn_deepseek_resume_context() {
         .match_body(Matcher::Regex(r#"temples"#.to_string()))
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(openai_sse_body("You asked about Japan's capital Tokyo. It's famous for both temples and tech."))
+        .with_body(openai_sse_body(
+            "You asked about Japan's capital Tokyo. It's famous for both temples and tech.",
+        ))
         .expect(1)
         .create();
     let r2 = shannon_with_sessions("deepseek", &s2.url(), &home)
         .env("SHANNON_API_KEY", "test-key")
-        .args(["--resume", "--prompt", "What else is it known for?", "--output-format", "json"])
+        .args([
+            "--resume",
+            "--prompt",
+            "What else is it known for?",
+            "--output-format",
+            "json",
+        ])
         .timeout(std::time::Duration::from_secs(15))
         .assert();
-    assert_eq!(parse_json_output(&stdout_string(&r2))["exit_code"], "success");
+    assert_eq!(
+        parse_json_output(&stdout_string(&r2))["exit_code"],
+        "success"
+    );
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1700,16 +1919,21 @@ async fn run_long_conversation_test(n_turns: usize) {
         .match_body(Matcher::Regex(r#"TOPIC_MARKER_XYZ"#.to_string()))
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(ollama_streaming_body(&format!("Loaded {n_turns} turns of context successfully.")))
+        .with_body(ollama_streaming_body(&format!(
+            "Loaded {n_turns} turns of context successfully."
+        )))
         .expect(1)
         .create();
 
     let result = shannon_with_sessions("ollama", &server.url(), &home)
         .args([
             "--resume",
-            "--session", session_id,
-            "--prompt", "What was discussed in earlier turns?",
-            "--output-format", "json",
+            "--session",
+            session_id,
+            "--prompt",
+            "What was discussed in earlier turns?",
+            "--output-format",
+            "json",
         ])
         .timeout(std::time::Duration::from_secs(30))
         .assert();
@@ -1721,7 +1945,10 @@ async fn run_long_conversation_test(n_turns: usize) {
         "Failed for {n_turns} turns: {stdout}"
     );
     assert!(
-        json["response"].as_str().unwrap_or("").contains(&format!("{n_turns} turns")),
+        json["response"]
+            .as_str()
+            .unwrap_or("")
+            .contains(&format!("{n_turns} turns")),
         "Response should mention turn count for {n_turns} turns, got: {}",
         json["response"].as_str().unwrap_or("")
     );

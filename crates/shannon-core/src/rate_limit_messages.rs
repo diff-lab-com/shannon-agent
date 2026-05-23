@@ -36,9 +36,7 @@ impl RateLimitMessageBuilder {
         remaining: usize,
         reset_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> String {
-        let mut msg = format!(
-            "Rate limit reached for {limit_type}. Remaining: {remaining}."
-        );
+        let mut msg = format!("Rate limit reached for {limit_type}. Remaining: {remaining}.");
 
         if let Some(reset) = reset_at {
             let now = chrono::Utc::now();
@@ -65,7 +63,9 @@ impl RateLimitMessageBuilder {
         }
 
         if self.include_tips {
-            msg.push_str(" Tip: wait for the limit window to reset, or reduce your request frequency.");
+            msg.push_str(
+                " Tip: wait for the limit window to reset, or reduce your request frequency.",
+            );
         }
 
         msg
@@ -74,15 +74,9 @@ impl RateLimitMessageBuilder {
     /// Build a tool-specific rate limit message.
     ///
     /// Displays the tool name, its limit, and the time window.
-    pub fn build_tool_limit_message(
-        &self,
-        tool_name: &str,
-        limit: usize,
-        window: &str,
-    ) -> String {
-        let mut msg = format!(
-            "Tool '{tool_name}' has reached its rate limit of {limit} calls per {window}."
-        );
+    pub fn build_tool_limit_message(&self, tool_name: &str, limit: usize, window: &str) -> String {
+        let mut msg =
+            format!("Tool '{tool_name}' has reached its rate limit of {limit} calls per {window}.");
 
         if self.include_tips {
             msg.push_str(&format!(

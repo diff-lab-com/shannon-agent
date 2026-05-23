@@ -188,7 +188,10 @@ Use ${variable} for bash, {{target}} for templates."#,
     vars.insert("target".to_string(), "substitution".to_string());
 
     let rendered = template.render(&vars);
-    assert_eq!(rendered, "Use ${variable} for bash, substitution for templates.");
+    assert_eq!(
+        rendered,
+        "Use ${variable} for bash, substitution for templates."
+    );
 }
 
 #[test]

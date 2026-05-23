@@ -1,6 +1,8 @@
 //! /security-review command - OWASP-focused security audit
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 const SECURITY_REVIEW_PROMPT: &str = r##"
 You are a security-focused code reviewer. Perform an OWASP-aligned security audit on the code changes.

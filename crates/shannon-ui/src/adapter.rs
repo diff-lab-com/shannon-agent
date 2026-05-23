@@ -7,9 +7,8 @@
 
 // Re-export the canonical types from shannon-core.
 pub use shannon_core::ui_adapter::{
-    UiAdapter, UiError, UiResult,
-    DefaultUiAdapter, NullUiAdapter,
-    DisplayMessage, MessageSeverity, UserChoice,
+    DefaultUiAdapter, DisplayMessage, MessageSeverity, NullUiAdapter, UiAdapter, UiError, UiResult,
+    UserChoice,
 };
 
 #[cfg(test)]
@@ -19,10 +18,7 @@ mod tests {
     #[tokio::test]
     async fn test_null_adapter_display() {
         let adapter = NullUiAdapter;
-        assert!(adapter
-            .display(&DisplayMessage::info("test"))
-            .await
-            .is_ok());
+        assert!(adapter.display(&DisplayMessage::info("test")).await.is_ok());
         assert!(adapter.display_progress("loading", Some(50)).await.is_ok());
     }
 

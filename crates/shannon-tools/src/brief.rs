@@ -5,10 +5,10 @@
 //! Provides text-based summarization without LLM calls, extracting key information
 //! such as actions taken, files modified, errors encountered, and decisions made.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 /// Format for the brief output
@@ -20,7 +20,6 @@ pub enum BriefFormat {
     #[default]
     Markdown,
 }
-
 
 /// A single message in a conversation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,7 +59,8 @@ pub struct BriefTool {
 impl BriefTool {
     pub fn new() -> Self {
         Self {
-            description: "Generate a concise task summary from conversation history or content".to_string(),
+            description: "Generate a concise task summary from conversation history or content"
+                .to_string(),
         }
     }
 
@@ -159,33 +159,26 @@ impl BriefTool {
     }
 
     /// Format the summary into a string
-    fn format_summary(&self, summary: &BriefSummary, format: &BriefFormat, max_length: usize) -> String {
+    fn format_summary(
+        &self,
+        summary: &BriefSummary,
+        format: &BriefFormat,
+        max_length: usize,
+    ) -> String {
         let mut sections = Vec::new();
 
         if !summary.actions.is_empty() {
-            let items: Vec<String> = summary
-                .actions
-                .iter()
-                .map(|a| format!("  - {a}"))
-                .collect();
+            let items: Vec<String> = summary.actions.iter().map(|a| format!("  - {a}")).collect();
             sections.push(("Actions", items.join("\n")));
         }
 
         if !summary.results.is_empty() {
-            let items: Vec<String> = summary
-                .results
-                .iter()
-                .map(|r| format!("  - {r}"))
-                .collect();
+            let items: Vec<String> = summary.results.iter().map(|r| format!("  - {r}")).collect();
             sections.push(("Results", items.join("\n")));
         }
 
         if !summary.issues.is_empty() {
-            let items: Vec<String> = summary
-                .issues
-                .iter()
-                .map(|i| format!("  - {i}"))
-                .collect();
+            let items: Vec<String> = summary.issues.iter().map(|i| format!("  - {i}")).collect();
             sections.push(("Issues", items.join("\n")));
         }
 
@@ -255,13 +248,34 @@ impl BriefTool {
     /// Check if a line represents an action
     fn is_action_line(&self, line: &str) -> bool {
         let action_prefixes = [
-            "created", "updated", "modified", "deleted", "added", "removed",
-            "implemented", "refactored", "fixed", "changed", "installed",
-            "configured", "deployed", "built", "ran", "executed", "wrote",
-            "committed", "merged", "moved", "renamed", "generated", "set up",
+            "created",
+            "updated",
+            "modified",
+            "deleted",
+            "added",
+            "removed",
+            "implemented",
+            "refactored",
+            "fixed",
+            "changed",
+            "installed",
+            "configured",
+            "deployed",
+            "built",
+            "ran",
+            "executed",
+            "wrote",
+            "committed",
+            "merged",
+            "moved",
+            "renamed",
+            "generated",
+            "set up",
         ];
         let lower = line.to_lowercase();
-        action_prefixes.iter().any(|prefix| lower.starts_with(prefix))
+        action_prefixes
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
             && line.len() > 10
     }
 
@@ -433,7 +447,9 @@ impl Tool for BriefTool {
             metadata: HashMap::new(),
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -448,7 +464,9 @@ mod tests {
     async fn test_summarize_plain_content() {
         let tool = make_tool();
         let input = BriefInput {
-            content: Some("Created auth module. Updated database schema. Fixed login bug.".to_string()),
+            content: Some(
+                "Created auth module. Updated database schema. Fixed login bug.".to_string(),
+            ),
             messages: None,
             max_length: Some(500),
             format: Some(BriefFormat::Markdown),
@@ -503,7 +521,11 @@ mod tests {
         };
 
         let result = tool.generate_brief(input).unwrap();
-        assert!(result.len() <= 110, "Summary should be truncated: {} chars", result.len());
+        assert!(
+            result.len() <= 110,
+            "Summary should be truncated: {} chars",
+            result.len()
+        );
     }
 
     #[tokio::test]
@@ -518,7 +540,12 @@ mod tests {
 
         let result = tool.generate_brief(input);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Either 'content' or 'messages'"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Either 'content' or 'messages'")
+        );
     }
 
     #[tokio::test]
@@ -553,7 +580,10 @@ mod tests {
     async fn test_plain_format() {
         let tool = make_tool();
         let input = BriefInput {
-            content: Some("Created auth module. Error: connection timeout. Completed tests successfully.".to_string()),
+            content: Some(
+                "Created auth module. Error: connection timeout. Completed tests successfully."
+                    .to_string(),
+            ),
             messages: None,
             max_length: Some(500),
             format: Some(BriefFormat::Plain),
@@ -562,14 +592,20 @@ mod tests {
         let result = tool.generate_brief(input).unwrap();
         // Plain format should not contain markdown headers
         assert!(!result.contains("###"));
-        assert!(result.contains("Actions:") || result.contains("Issues:") || result.contains("Results:"));
+        assert!(
+            result.contains("Actions:")
+                || result.contains("Issues:")
+                || result.contains("Results:")
+        );
     }
 
     #[tokio::test]
     async fn test_markdown_format() {
         let tool = make_tool();
         let input = BriefInput {
-            content: Some("Created auth module. Fixed login bug. Tests passed successfully.".to_string()),
+            content: Some(
+                "Created auth module. Fixed login bug. Tests passed successfully.".to_string(),
+            ),
             messages: None,
             max_length: Some(500),
             format: Some(BriefFormat::Markdown),
@@ -577,7 +613,11 @@ mod tests {
 
         let result = tool.generate_brief(input).unwrap();
         // Markdown format should contain headers
-        assert!(result.contains("### Actions") || result.contains("### Results") || result.contains("### Issues"));
+        assert!(
+            result.contains("### Actions")
+                || result.contains("### Results")
+                || result.contains("### Issues")
+        );
     }
 
     #[tokio::test]
@@ -585,7 +625,9 @@ mod tests {
         let tool = make_tool();
         let mut lines = Vec::new();
         for i in 0..100 {
-            lines.push(format!("Created module number {i} with extensive functionality and many features"));
+            lines.push(format!(
+                "Created module number {i} with extensive functionality and many features"
+            ));
         }
         let long_content = lines.join(". ");
 
@@ -597,7 +639,11 @@ mod tests {
         };
 
         let result = tool.generate_brief(input).unwrap();
-        assert!(result.len() <= 210, "Long content should be truncated: {} chars", result.len());
+        assert!(
+            result.len() <= 210,
+            "Long content should be truncated: {} chars",
+            result.len()
+        );
     }
 
     #[tokio::test]

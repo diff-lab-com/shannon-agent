@@ -40,14 +40,15 @@ mod tests;
 // Re-export all public types to maintain the same public API as the original
 // single-file module.
 pub use compact_messages::{
-    compact_messages, CompactionConfig, CompactionStrategy,
-    CompactMessagesResult,
+    CompactMessagesResult, CompactionConfig, CompactionStrategy, compact_messages,
 };
 
-pub use protection::compact_messages_with_protection;
 pub use engine::CompactEngine;
-pub use helpers::{estimate_message_tokens, estimate_text_tokens, estimate_tokens, looks_like_code};
-pub use protection::{classify_message_priority, MessageProtector};
+pub use helpers::{
+    estimate_message_tokens, estimate_text_tokens, estimate_tokens, looks_like_code,
+};
+pub use protection::compact_messages_with_protection;
+pub use protection::{MessageProtector, classify_message_priority};
 pub use summarizer::{LlmSummarizer, RuleBasedSummarizer};
 pub use types::{
     CompactConfig, CompactError, CompactPrompt, CompactResult, CompactStrategy, ContextAnalysis,

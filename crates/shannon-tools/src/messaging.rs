@@ -6,7 +6,7 @@
 //! Supports both plain text messages and structured protocol messages
 //! for team coordination.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -19,9 +19,7 @@ use uuid::Uuid;
 #[serde(tag = "type")]
 pub enum StructuredMessage {
     #[serde(rename = "shutdown_request")]
-    ShutdownRequest {
-        reason: Option<String>,
-    },
+    ShutdownRequest { reason: Option<String> },
     #[serde(rename = "shutdown_response")]
     ShutdownResponse {
         request_id: String,
@@ -42,7 +40,9 @@ mod structured_message_tests {
 
     #[test]
     fn test_shutdown_request_serialization() {
-        let msg = StructuredMessage::ShutdownRequest { reason: Some("done".into()) };
+        let msg = StructuredMessage::ShutdownRequest {
+            reason: Some("done".into()),
+        };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("shutdown_request"));
         assert!(json.contains("done"));
@@ -56,7 +56,10 @@ mod structured_message_tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("shutdown_request"));
         let parsed: StructuredMessage = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, StructuredMessage::ShutdownRequest { reason: None }));
+        assert!(matches!(
+            parsed,
+            StructuredMessage::ShutdownRequest { reason: None }
+        ));
     }
 
     #[test]
@@ -71,7 +74,10 @@ mod structured_message_tests {
         assert!(json.contains("req-123"));
         assert!(json.contains("\"approve\":true"));
         let parsed: StructuredMessage = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, StructuredMessage::ShutdownResponse { approve: true, .. }));
+        assert!(matches!(
+            parsed,
+            StructuredMessage::ShutdownResponse { approve: true, .. }
+        ));
     }
 
     #[test]
@@ -85,7 +91,10 @@ mod structured_message_tests {
         assert!(json.contains("plan_approval_response"));
         assert!(json.contains("needs work"));
         let parsed: StructuredMessage = serde_json::from_str(&json).unwrap();
-        assert!(matches!(parsed, StructuredMessage::PlanApprovalResponse { approve: false, .. }));
+        assert!(matches!(
+            parsed,
+            StructuredMessage::PlanApprovalResponse { approve: false, .. }
+        ));
     }
 
     #[test]
@@ -257,7 +266,8 @@ impl Default for SendMessageTool {
 impl SendMessageTool {
     pub fn new() -> Self {
         Self {
-            description: "Send messages to agent teammates for collaborative problem-solving".to_string(),
+            description: "Send messages to agent teammates for collaborative problem-solving"
+                .to_string(),
             inbox: get_inbox(),
         }
     }
@@ -285,7 +295,10 @@ impl SendMessageTool {
             let mut inbox = self.inbox.write().map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {e}"))
             })?;
-            inbox.entry(recipient.to_string()).or_insert_with(Vec::new).push(inbox_message);
+            inbox
+                .entry(recipient.to_string())
+                .or_insert_with(Vec::new)
+                .push(inbox_message);
         }
 
         Ok(SendMessageOutput {
@@ -369,14 +382,15 @@ impl SendMessageTool {
             let mut inbox = self.inbox.write().map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {e}"))
             })?;
-            inbox.entry(target.to_string()).or_insert_with(Vec::new).push(message);
+            inbox
+                .entry(target.to_string())
+                .or_insert_with(Vec::new)
+                .push(message);
         }
 
         Ok(SendMessageOutput {
             success: true,
-            message: format!(
-                "Shutdown request sent to {target}. Request ID: {request_id}"
-            ),
+            message: format!("Shutdown request sent to {target}. Request ID: {request_id}"),
             request_id: Some(request_id),
             target: Some(target.to_string()),
         })
@@ -389,15 +403,17 @@ impl SendMessageTool {
         match &input.message {
             MessageContent::Text(_content) => {
                 if input.to == "*" {
-                    self.broadcast_message(
-                        &input.message,
-                        input.summary.as_deref(),
-                        &team_context,
-                    )
-                    .await
+                    self.broadcast_message(&input.message, input.summary.as_deref(), &team_context)
+                        .await
                 } else {
                     // Validate summary is provided for text messages
-                    if input.summary.as_ref().map(|s| s.trim()).unwrap_or("").is_empty() {
+                    if input
+                        .summary
+                        .as_ref()
+                        .map(|s| s.trim())
+                        .unwrap_or("")
+                        .is_empty()
+                    {
                         return Ok(SendMessageOutput {
                             success: false,
                             message: "summary is required when message is a string".to_string(),
@@ -420,7 +436,8 @@ impl SendMessageTool {
                     if input.to == "*" {
                         return Ok(SendMessageOutput {
                             success: false,
-                            message: "structured messages cannot be broadcast (to: \"*\")".to_string(),
+                            message: "structured messages cannot be broadcast (to: \"*\")"
+                                .to_string(),
                             request_id: None,
                             target: Some("*".to_string()),
                         });
@@ -449,7 +466,10 @@ impl SendMessageTool {
                         let mut inbox = self.inbox.write().map_err(|e| {
                             ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {e}"))
                         })?;
-                        inbox.entry(input.to.clone()).or_insert_with(Vec::new).push(message);
+                        inbox
+                            .entry(input.to.clone())
+                            .or_insert_with(Vec::new)
+                            .push(message);
                     }
 
                     Ok(SendMessageOutput {
@@ -484,7 +504,10 @@ impl SendMessageTool {
                         let mut inbox = self.inbox.write().map_err(|e| {
                             ToolError::ExecutionFailed(format!("Failed to acquire inbox lock: {e}"))
                         })?;
-                        inbox.entry(input.to.clone()).or_insert_with(Vec::new).push(message);
+                        inbox
+                            .entry(input.to.clone())
+                            .or_insert_with(Vec::new)
+                            .push(message);
                     }
 
                     Ok(SendMessageOutput {
@@ -493,7 +516,10 @@ impl SendMessageTool {
                             "Plan {} for request {}{}",
                             if *approve { "approved" } else { "rejected" },
                             request_id,
-                            feedback.as_ref().map(|f| format!(": {f}")).unwrap_or_default()
+                            feedback
+                                .as_ref()
+                                .map(|f| format!(": {f}"))
+                                .unwrap_or_default()
                         ),
                         request_id: Some(request_id.clone()),
                         target: Some(input.to.clone()),

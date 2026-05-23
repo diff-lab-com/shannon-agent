@@ -8,7 +8,9 @@
 //!   - A model pulled (e.g. `ollama pull qwen3:4b`)
 //!   - `OLLAMA_E2E=1` and `OLLAMA_MODEL=<model>` set
 
-use shannon_core::api::{ContentBlock, LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent};
+use shannon_core::api::{
+    ContentBlock, LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
+};
 use shannon_core::compact::{CompactConfig, CompactEngine};
 use std::time::Instant;
 
@@ -51,10 +53,9 @@ fn generate_conversation(turns: usize) -> Vec<Message> {
         // Assistant turn
         messages.push(Message {
             role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::Text {
-                    text: format!(
-                        "Turn {i} response: Ownership is a core Rust concept. \
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: format!(
+                    "Turn {i} response: Ownership is a core Rust concept. \
                          When you assign a value, it is **moved** rather than copied. \
                          Here's an example:\n\
                          ```rust\n\
@@ -66,9 +67,8 @@ fn generate_conversation(turns: usize) -> Vec<Message> {
                          fn borrow_example(x: &i32) -> i32 {{ *x + 1 }}\n\
                          ```\n\
                          Traits like `Clone` and `Copy` control these semantics."
-                    ),
-                },
-            ]),
+                ),
+            }]),
         });
     }
     messages
@@ -85,7 +85,9 @@ fn generate_tool_conversation(turns: usize) -> Vec<Message> {
         // User asks to read a file
         messages.push(Message {
             role: "user".to_string(),
-            content: MessageContent::Text(format!("Turn {i}: Read the file src/main.rs and explain the entry point")),
+            content: MessageContent::Text(format!(
+                "Turn {i}: Read the file src/main.rs and explain the entry point"
+            )),
         });
         // Assistant uses tool
         messages.push(Message {
@@ -147,21 +149,37 @@ fn e2e_ollama_compact_basic_summarization() {
     let original_len = messages.len();
     let start = Instant::now();
 
-    let result = engine.compact(&mut messages).expect("compact should succeed");
+    let result = engine
+        .compact(&mut messages)
+        .expect("compact should succeed");
     let elapsed = start.elapsed();
 
-    println!("Basic compact: {} -> {} msgs, {:.1}% reduction, {:.2}s",
-             original_len, messages.len(), result.reduction_ratio * 100.0, elapsed.as_secs_f64());
+    println!(
+        "Basic compact: {} -> {} msgs, {:.1}% reduction, {:.2}s",
+        original_len,
+        messages.len(),
+        result.reduction_ratio * 100.0,
+        elapsed.as_secs_f64()
+    );
 
     // Summary should replace old messages
     assert!(messages.len() < original_len, "messages should be reduced");
-    assert!(result.messages_removed > 0, "some messages should be removed");
-    assert!(result.reduction_ratio > 0.0, "should have positive reduction");
+    assert!(
+        result.messages_removed > 0,
+        "some messages should be removed"
+    );
+    assert!(
+        result.reduction_ratio > 0.0,
+        "should have positive reduction"
+    );
 
     // First message should be a summary
     if let MessageContent::Text(text) = &messages[0].content {
-        assert!(text.contains("summary") || text.contains("Summary") || text.contains("compacted"),
-                "first message should be a summary, got: {}", &text[..text.len().min(100)]);
+        assert!(
+            text.contains("summary") || text.contains("Summary") || text.contains("compacted"),
+            "first message should be a summary, got: {}",
+            &text[..text.len().min(100)]
+        );
     }
 }
 
@@ -183,11 +201,18 @@ fn e2e_ollama_compact_tool_use_conversation() {
     let original_len = messages.len();
     let start = Instant::now();
 
-    let result = engine.compact(&mut messages).expect("compact tool conversation");
+    let result = engine
+        .compact(&mut messages)
+        .expect("compact tool conversation");
     let elapsed = start.elapsed();
 
-    println!("Tool-use compact: {} -> {} msgs, {:.1}% reduction, {:.2}s",
-             original_len, messages.len(), result.reduction_ratio * 100.0, elapsed.as_secs_f64());
+    println!(
+        "Tool-use compact: {} -> {} msgs, {:.1}% reduction, {:.2}s",
+        original_len,
+        messages.len(),
+        result.reduction_ratio * 100.0,
+        elapsed.as_secs_f64()
+    );
 
     assert!(messages.len() < original_len);
     assert!(result.reduction_ratio > 0.0);
@@ -210,27 +235,36 @@ fn e2e_ollama_micro_compact() {
 
     let engine = CompactEngine::new(
         config,
-        Box::new(shannon_core::compact::LlmSummarizer::with_handle(client, handle)),
-    ).expect("create engine");
+        Box::new(shannon_core::compact::LlmSummarizer::with_handle(
+            client, handle,
+        )),
+    )
+    .expect("create engine");
 
     // Create a single very large message
-    let mut messages = vec![
-        Message {
-            role: "user".to_string(),
-            content: MessageContent::Text(
-                "Analyze this code thoroughly:\n".to_string() + &"fn process(data: &mut Vec<i32>) -> Result<(), Error> {\n".repeat(50)
-            ),
-        },
-    ];
+    let mut messages = vec![Message {
+        role: "user".to_string(),
+        content: MessageContent::Text(
+            "Analyze this code thoroughly:\n".to_string()
+                + &"fn process(data: &mut Vec<i32>) -> Result<(), Error> {\n".repeat(50),
+        ),
+    }];
 
     let start = Instant::now();
     let result = engine.micro_compact(&mut messages).expect("micro compact");
     let elapsed = start.elapsed();
 
-    println!("Micro compact: {} msgs compacted, {:.1}% reduction, {:.2}s",
-             result.messages_compacted, result.reduction_ratio * 100.0, elapsed.as_secs_f64());
+    println!(
+        "Micro compact: {} msgs compacted, {:.1}% reduction, {:.2}s",
+        result.messages_compacted,
+        result.reduction_ratio * 100.0,
+        elapsed.as_secs_f64()
+    );
 
-    assert!(result.messages_compacted > 0, "should have compacted at least one message");
+    assert!(
+        result.messages_compacted > 0,
+        "should have compacted at least one message"
+    );
 }
 
 #[test]
@@ -249,8 +283,11 @@ fn e2e_ollama_compact_preserves_recent_messages() {
 
     let mut engine = CompactEngine::new(
         config,
-        Box::new(shannon_core::compact::LlmSummarizer::with_handle(client, handle)),
-    ).expect("create engine");
+        Box::new(shannon_core::compact::LlmSummarizer::with_handle(
+            client, handle,
+        )),
+    )
+    .expect("create engine");
 
     let mut messages = generate_conversation(20);
     let _last_user = messages.last().cloned();
@@ -258,10 +295,17 @@ fn e2e_ollama_compact_preserves_recent_messages() {
     let result = engine.compact(&mut messages).expect("compact");
 
     // Last message should still be present
-    assert!(messages.iter().any(|m| m.role == "user" && matches!(&m.content, MessageContent::Text(t) if t.contains("Turn 19"))),
-            "last user turn should be preserved");
+    assert!(
+        messages.iter().any(|m| m.role == "user"
+            && matches!(&m.content, MessageContent::Text(t) if t.contains("Turn 19"))),
+        "last user turn should be preserved"
+    );
 
-    println!("Preserve recent: {} removed, {} remaining", result.messages_removed, messages.len());
+    println!(
+        "Preserve recent: {} removed, {} remaining",
+        result.messages_removed,
+        messages.len()
+    );
 }
 
 #[test]
@@ -275,8 +319,8 @@ fn e2e_ollama_compact_group_based() {
     let rt = tokio::runtime::Runtime::new().expect("create runtime");
     let handle = rt.handle().clone();
 
-    let mut engine = CompactEngine::with_llm_summarizer_on_runtime(client, handle)
-        .expect("create engine");
+    let mut engine =
+        CompactEngine::with_llm_summarizer_on_runtime(client, handle).expect("create engine");
 
     let mut messages = generate_tool_conversation(10);
     let original_len = messages.len();
@@ -285,15 +329,22 @@ fn e2e_ollama_compact_group_based() {
     let result = engine.group_compact(&mut messages).expect("group compact");
     let elapsed = start.elapsed();
 
-    println!("Group compact: {} -> {} msgs, {:.1}% reduction, {:.2}s",
-             original_len, messages.len(), result.reduction_ratio * 100.0, elapsed.as_secs_f64());
+    println!(
+        "Group compact: {} -> {} msgs, {:.1}% reduction, {:.2}s",
+        original_len,
+        messages.len(),
+        result.reduction_ratio * 100.0,
+        elapsed.as_secs_f64()
+    );
 
     assert!(messages.len() < original_len);
 
     // Summary should mention groups
     if let MessageContent::Text(text) = &messages[0].content {
-        assert!(text.contains("Group") || text.contains("group"),
-                "group compact summary should mention groups");
+        assert!(
+            text.contains("Group") || text.contains("group"),
+            "group compact summary should mention groups"
+        );
     }
 }
 
@@ -308,23 +359,38 @@ fn e2e_ollama_compact_large_conversation_stress() {
     let rt = tokio::runtime::Runtime::new().expect("create runtime");
     let handle = rt.handle().clone();
 
-    let mut engine = CompactEngine::with_llm_summarizer_on_runtime(client, handle)
-        .expect("create engine");
+    let mut engine =
+        CompactEngine::with_llm_summarizer_on_runtime(client, handle).expect("create engine");
 
     // 50 turns = 101 messages — stress test
     let mut messages = generate_conversation(50);
     let original_len = messages.len();
     let start = Instant::now();
 
-    let result = engine.compact(&mut messages).expect("compact large conversation");
+    let result = engine
+        .compact(&mut messages)
+        .expect("compact large conversation");
     let elapsed = start.elapsed();
 
-    println!("Large compact (50 turns): {} -> {} msgs, {:.1}% reduction, {:.2}s",
-             original_len, messages.len(), result.reduction_ratio * 100.0, elapsed.as_secs_f64());
+    println!(
+        "Large compact (50 turns): {} -> {} msgs, {:.1}% reduction, {:.2}s",
+        original_len,
+        messages.len(),
+        result.reduction_ratio * 100.0,
+        elapsed.as_secs_f64()
+    );
 
     assert!(messages.len() < original_len);
-    assert!(result.reduction_ratio > 0.3, "large conversation should have significant reduction, got {:.1}%", result.reduction_ratio * 100.0);
-    assert!(elapsed.as_secs() < 120, "should complete within 120s, took {:.1}s", elapsed.as_secs_f64());
+    assert!(
+        result.reduction_ratio > 0.3,
+        "large conversation should have significant reduction, got {:.1}%",
+        result.reduction_ratio * 100.0
+    );
+    assert!(
+        elapsed.as_secs() < 120,
+        "should complete within 120s, took {:.1}s",
+        elapsed.as_secs_f64()
+    );
 }
 
 #[test]
@@ -338,8 +404,8 @@ fn e2e_ollama_compact_summary_quality() {
     let rt = tokio::runtime::Runtime::new().expect("create runtime");
     let handle = rt.handle().clone();
 
-    let mut engine = CompactEngine::with_llm_summarizer_on_runtime(client, handle)
-        .expect("create engine");
+    let mut engine =
+        CompactEngine::with_llm_summarizer_on_runtime(client, handle).expect("create engine");
 
     // Create conversation with specific topics to verify summarizer captures them
     // Must have enough messages to trigger compaction (default keep_recent_count=10)
@@ -367,16 +433,23 @@ fn e2e_ollama_compact_summary_quality() {
     // The summary should capture at least some key topics
     if let MessageContent::Text(summary) = &messages[0].content {
         let lower = summary.to_lowercase();
-        let topics_found = [("jwt", "auth"), ("postgres", "database"), ("redis", "cache")]
-            .iter()
-            .filter(|(a, b)| lower.contains(a) || lower.contains(b))
-            .count();
+        let topics_found = [
+            ("jwt", "auth"),
+            ("postgres", "database"),
+            ("redis", "cache"),
+        ]
+        .iter()
+        .filter(|(a, b)| lower.contains(a) || lower.contains(b))
+        .count();
 
         println!("Summary quality: {topics_found}/3 topics found");
         println!("Summary preview: {}...", &summary[..summary.len().min(300)]);
 
         // At least some topics should be captured (not all, LLM may vary)
-        assert!(topics_found >= 1, "summary should capture at least 1 topic from 3, got summary: {}",
-                &summary[..summary.len().min(200)]);
+        assert!(
+            topics_found >= 1,
+            "summary should capture at least 1 topic from 3, got summary: {}",
+            &summary[..summary.len().min(200)]
+        );
     }
 }

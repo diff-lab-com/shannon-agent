@@ -63,9 +63,7 @@ pub enum MessageContent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProtocolMessage {
     /// Request agent to gracefully shut down
-    ShutdownRequest {
-        reason: String,
-    },
+    ShutdownRequest { reason: String },
     /// Response to shutdown request
     ShutdownResponse {
         request_id: Uuid,
@@ -73,10 +71,7 @@ pub enum ProtocolMessage {
         reason: Option<String>,
     },
     /// Request plan approval (for plan-mode-required agents)
-    PlanApprovalRequest {
-        request_id: Uuid,
-        plan: String,
-    },
+    PlanApprovalRequest { request_id: Uuid, plan: String },
     /// Response to plan approval request
     PlanApprovalResponse {
         request_id: Uuid,
@@ -173,7 +168,9 @@ mod tests {
         let msg = AgentMessage::protocol(
             "lead".into(),
             "worker".into(),
-            ProtocolMessage::ShutdownRequest { reason: "done".into() },
+            ProtocolMessage::ShutdownRequest {
+                reason: "done".into(),
+            },
         );
         assert_eq!(msg.priority, MessagePriority::High);
         assert_eq!(msg.message_type, MessageType::Protocol);
@@ -188,7 +185,12 @@ mod tests {
 
     #[test]
     fn message_type_serde() {
-        let types = vec![MessageType::Chat, MessageType::Protocol, MessageType::TaskAssignment, MessageType::Error];
+        let types = vec![
+            MessageType::Chat,
+            MessageType::Protocol,
+            MessageType::TaskAssignment,
+            MessageType::Error,
+        ];
         let json = serde_json::to_string(&types).unwrap();
         let de: Vec<MessageType> = serde_json::from_str(&json).unwrap();
         assert_eq!(de, types);
@@ -274,7 +276,12 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         let de: ProtocolMessage = serde_json::from_str(&json).unwrap();
-        if let ProtocolMessage::StatusResponse { status, active_tasks, .. } = de {
+        if let ProtocolMessage::StatusResponse {
+            status,
+            active_tasks,
+            ..
+        } = de
+        {
             assert_eq!(status, "idle");
             assert_eq!(active_tasks, 2);
         } else {

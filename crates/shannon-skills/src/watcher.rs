@@ -80,9 +80,9 @@ impl SkillWatcher {
 
         // Quick check: are the maps identical?
         let changed = new_mtimes.len() != self.mtimes.len()
-            || new_mtimes.iter().any(|(path, mtime)| {
-                self.mtimes.get(path) != Some(mtime)
-            });
+            || new_mtimes
+                .iter()
+                .any(|(path, mtime)| self.mtimes.get(path) != Some(mtime));
 
         if !changed {
             trace!("SkillWatcher: no changes detected");
@@ -248,9 +248,7 @@ mod tests {
 
         // Try to advance the mtime by at least 1 ns.  std::fs doesn't expose
         // utimensat directly, so we use a small sleep as a portable fallback.
-        let original_mtime = fs::metadata(&skill_path)
-            .and_then(|m| m.modified())
-            .ok();
+        let original_mtime = fs::metadata(&skill_path).and_then(|m| m.modified()).ok();
         for _ in 0..20 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             // Re-write to bump mtime
@@ -302,10 +300,8 @@ mod tests {
         create_skill_dir(tmp2.path(), "foxtrot", &skill_content("foxtrot"));
 
         let registry = SkillRegistry::new();
-        let mut watcher = SkillWatcher::new(vec![
-            tmp1.path().to_path_buf(),
-            tmp2.path().to_path_buf(),
-        ]);
+        let mut watcher =
+            SkillWatcher::new(vec![tmp1.path().to_path_buf(), tmp2.path().to_path_buf()]);
 
         // First check after initial scan — files already seen during new().
         assert!(watcher.check_and_reload(&registry).is_none());

@@ -2,17 +2,9 @@
 //!
 //! Run with: cargo test --package shannon-ui --test snapshot_test
 
-use ratatui::{
-    backend::TestBackend,
-    buffer::Buffer,
-    layout::Rect,
-    Terminal,
-};
+use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
 use shannon_ui::theme::Theme;
-use shannon_ui::{
-    ChatWidget, ChatRole, HeaderWidget, PromptWidget, SidebarInfo,
-    StatusBarWidget,
-};
+use shannon_ui::{ChatRole, ChatWidget, HeaderWidget, PromptWidget, SidebarInfo, StatusBarWidget};
 
 /// Helper: create a terminal with a TestBackend of given size
 fn test_terminal(w: u16, h: u16) -> Terminal<TestBackend> {
@@ -40,15 +32,20 @@ fn test_header_renders_model_and_directory() {
     let mut terminal = test_terminal(80, 5);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 5);
-        HeaderWidget::render(f, area, &theme);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 80, 5);
+            HeaderWidget::render(f, area, &theme);
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 5));
 
-    assert!(text.contains("Shannon"), "header should show welcome message");
+    assert!(
+        text.contains("Shannon"),
+        "header should show welcome message"
+    );
     assert!(text.contains("/help"), "header should show key hints");
 }
 
@@ -57,14 +54,19 @@ fn test_header_handles_none_model() {
     let mut terminal = test_terminal(80, 5);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 5);
-        HeaderWidget::render(f, area, &theme);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 80, 5);
+            HeaderWidget::render(f, area, &theme);
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 5));
-    assert!(text.contains("Shannon"), "header should show welcome message");
+    assert!(
+        text.contains("Shannon"),
+        "header should show welcome message"
+    );
 }
 
 // ── Status Bar Widget ──────────────────────────────────────────────
@@ -74,10 +76,12 @@ fn test_status_bar_renders_status() {
     let mut terminal = test_terminal(80, 1);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 1);
-        StatusBarWidget::render(f, area, "Ready", &theme);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 80, 1);
+            StatusBarWidget::render(f, area, "Ready", &theme);
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 1));
@@ -89,24 +93,25 @@ fn test_status_bar_shows_no_model_configured() {
     let mut terminal = test_terminal(80, 2);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 2);
-        StatusBarWidget::render_with_spinner(
-            f, area,
-            "Ready",
-            None, // No model configured
-            None, // No effort level
-            None, None, None, None, None, None,
-            &theme,
-            None, None, None, None, None, None, None, None, None,
-            false, 0, // thinking
-            None, None, // turn_count, memory_rss_kb
-        );
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 80, 2);
+            StatusBarWidget::render_with_spinner(
+                f, area, "Ready", None, // No model configured
+                None, // No effort level
+                None, None, None, None, None, None, &theme, None, None, None, None, None, None,
+                None, None, None, false, 0, // thinking
+                None, None, // turn_count, memory_rss_kb
+            );
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
-    assert!(text.contains("No model configured"), "should show 'No model configured' when model is None");
+    assert!(
+        text.contains("No model configured"),
+        "should show 'No model configured' when model is None"
+    );
 }
 
 #[test]
@@ -114,25 +119,49 @@ fn test_status_bar_shows_model_name() {
     let mut terminal = test_terminal(80, 2);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 2);
-        StatusBarWidget::render_with_spinner(
-            f, area,
-            "Ready",
-            Some("gpt-4"),
-            None, // No effort level
-            None, None, None, None, None, None,
-            &theme,
-            None, None, None, None, None, None, None, None, None,
-            false, 0, // thinking
-            None, None, // turn_count, memory_rss_kb
-        );
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 80, 2);
+            StatusBarWidget::render_with_spinner(
+                f,
+                area,
+                "Ready",
+                Some("gpt-4"),
+                None, // No effort level
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &theme,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                0, // thinking
+                None,
+                None, // turn_count, memory_rss_kb
+            );
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
-    assert!(text.contains("gpt-4"), "should show model name when configured");
-    assert!(!text.contains("No model configured"), "should NOT show 'No model configured' when model is set");
+    assert!(
+        text.contains("gpt-4"),
+        "should show model name when configured"
+    );
+    assert!(
+        !text.contains("No model configured"),
+        "should NOT show 'No model configured' when model is set"
+    );
 }
 
 #[test]
@@ -140,20 +169,38 @@ fn test_status_bar_shows_effort_level() {
     let mut terminal = test_terminal(80, 2);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 2);
-        StatusBarWidget::render_with_spinner(
-            f, area,
-            "Ready",
-            Some("claude-sonnet-4"),
-            Some("high"),
-            None, None, None, None, None, None,
-            &theme,
-            None, None, None, None, None, None, None, None, None,
-            false, 0,
-            None, None, // turn_count, memory_rss_kb
-        );
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 80, 2);
+            StatusBarWidget::render_with_spinner(
+                f,
+                area,
+                "Ready",
+                Some("claude-sonnet-4"),
+                Some("high"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &theme,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                0,
+                None,
+                None, // turn_count, memory_rss_kb
+            );
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
@@ -166,20 +213,38 @@ fn test_status_bar_shows_thinking_indicator() {
     let mut terminal = test_terminal(80, 2);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 2);
-        StatusBarWidget::render_with_spinner(
-            f, area,
-            "Thinking...",
-            Some("claude-sonnet-4"),
-            None,
-            None, None, None, None, None, None,
-            &theme,
-            None, None, None, None, None, None, None, None, None,
-            true, 5000, // thinking phase with 5k chars
-            None, None, // turn_count, memory_rss_kb
-        );
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 80, 2);
+            StatusBarWidget::render_with_spinner(
+                f,
+                area,
+                "Thinking...",
+                Some("claude-sonnet-4"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &theme,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                true,
+                5000, // thinking phase with 5k chars
+                None,
+                None, // turn_count, memory_rss_kb
+            );
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
@@ -194,11 +259,13 @@ fn test_chat_widget_empty() {
     let mut terminal = test_terminal(60, 10);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 60, 10);
-        let chat = ChatWidget::new(100);
-        chat.render(f, area, &theme, None, true);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 60, 10);
+            let chat = ChatWidget::new(100);
+            chat.render(f, area, &theme, None, true);
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 60, 10));
@@ -214,10 +281,12 @@ fn test_chat_widget_with_messages() {
     chat.add_message(ChatRole::User, "Hello assistant".to_string());
     chat.add_message(ChatRole::Assistant, "Hello! How can I help?".to_string());
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 60, 20);
-        chat.render(f, area, &theme, None, true);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 60, 20);
+            chat.render(f, area, &theme, None, true);
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 60, 20));
@@ -233,14 +302,19 @@ fn test_chat_widget_system_message() {
     chat.add_message(ChatRole::System, "Session started".to_string());
     chat.add_message(ChatRole::User, "Ping".to_string());
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 60, 15);
-        chat.render(f, area, &theme, None, true);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 60, 15);
+            chat.render(f, area, &theme, None, true);
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 60, 15));
-    assert!(text.contains("Session") || text.contains("Ping"), "chat should display system/user messages");
+    assert!(
+        text.contains("Session") || text.contains("Ping"),
+        "chat should display system/user messages"
+    );
 }
 
 // ── Prompt Widget ──────────────────────────────────────────────────
@@ -253,10 +327,12 @@ fn test_prompt_widget_renders() {
     let mut prompt = PromptWidget::new();
     prompt.insert_text("hello world");
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 60, 3);
-        prompt.render(f, area, &theme, None);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 60, 3);
+            prompt.render(f, area, &theme, None);
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 60, 3));
@@ -331,16 +407,20 @@ fn test_narrow_terminal_no_panic() {
     let mut terminal = test_terminal(30, 8);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = f.area();
-        HeaderWidget::render(f, area, &theme);
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            HeaderWidget::render(f, area, &theme);
+        })
+        .unwrap();
 
     let mut terminal2 = test_terminal(30, 8);
-    terminal2.draw(|f| {
-        let area = f.area();
-        StatusBarWidget::render(f, area, "Ready", &theme);
-    }).unwrap();
+    terminal2
+        .draw(|f| {
+            let area = f.area();
+            StatusBarWidget::render(f, area, "Ready", &theme);
+        })
+        .unwrap();
 }
 
 #[test]

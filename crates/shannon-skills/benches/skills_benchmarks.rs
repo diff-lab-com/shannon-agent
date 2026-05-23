@@ -4,7 +4,7 @@
 //! - load_skills_from_directory for 10, 50, 200 skill files
 //! - Frontmatter parsing throughput
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use shannon_skills::definition::SkillSource;
 use shannon_skills::frontmatter::parse_skill_frontmatter;
 use shannon_skills::loader::load_skills_from_directory;
@@ -68,19 +68,13 @@ fn bench_load_skills_from_directory(c: &mut Criterion) {
     for &count in &[10usize, 50, 200] {
         let skill_tree = create_skill_tree(bench_base.path(), count);
 
-        group.bench_with_input(
-            BenchmarkId::new("skills", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    let skills = load_skills_from_directory(
-                        black_box(skill_tree.path()),
-                        SkillSource::User,
-                    );
-                    let _ = black_box(skills);
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("skills", count), &count, |b, _| {
+            b.iter(|| {
+                let skills =
+                    load_skills_from_directory(black_box(skill_tree.path()), SkillSource::User);
+                let _ = black_box(skills);
+            })
+        });
     }
 
     group.finish();
@@ -163,10 +157,7 @@ fn bench_frontmatter_parsing(c: &mut Criterion) {
                 b.iter(|| {
                     for (i, content) in contents.iter().enumerate() {
                         let source = format!("skill-{i}");
-                        let _ = parse_skill_frontmatter(
-                            black_box(content),
-                            black_box(&source),
-                        );
+                        let _ = parse_skill_frontmatter(black_box(content), black_box(&source));
                     }
                 })
             },
@@ -239,5 +230,9 @@ Edge cases and error handling.
     group.finish();
 }
 
-criterion_group!(benches, bench_load_skills_from_directory, bench_frontmatter_parsing);
+criterion_group!(
+    benches,
+    bench_load_skills_from_directory,
+    bench_frontmatter_parsing
+);
 criterion_main!(benches);

@@ -28,296 +28,298 @@
 // Initialize i18n translations from workspace locales directory
 rust_i18n::i18n!("../../locales", fallback = "en");
 
-pub mod query_engine;
-pub mod tools;
-pub mod mcp_tool_adapter;
-pub mod checkpoint;
-pub mod smart_context;
-pub mod permissions;
-pub mod state;
-pub mod api;
-pub mod project_memory;
-pub mod settings;
-pub mod hooks;
-pub mod updater;
-pub mod suggestions;
-pub mod memory;
-pub mod extract_memories;
-pub mod diagnostics;
-pub mod analytics;
-pub mod notifier;
-pub mod tips;
-pub mod rate_limit;
-pub mod away_summary;
-pub mod tool_use_summary;
-pub mod token_estimation;
-pub mod prevent_sleep;
-pub mod policy_limits;
-pub mod rate_limit_messages;
 pub mod ai_limits;
-pub mod vcr;
-pub mod internal_logging;
-pub mod git_operation_tracking;
-pub mod voice_mode;
-pub mod magic_docs;
-pub mod oauth;
-pub mod settings_sync;
-pub mod remote_settings;
-pub mod mcp_advanced;
+pub mod analytics;
+pub mod api;
 pub mod api_services;
-pub mod unified_config;
+pub mod away_summary;
 pub mod bridge_service;
-pub mod session_history;
+pub mod checkpoint;
 pub mod compact;
 pub mod context_budget;
 pub mod context_pressure;
+pub mod diagnostics;
+pub mod extract_memories;
+pub mod git_operation_tracking;
+pub mod hooks;
+pub mod internal_logging;
+pub mod magic_docs;
+pub mod mcp_advanced;
+pub mod mcp_tool_adapter;
+pub mod memory;
 pub mod model_registry;
-pub mod project_instructions;
-pub mod streaming_tool_executor;
-pub mod tool_execution;
+pub mod notifier;
+pub mod oauth;
 pub mod output_format;
+pub mod permissions;
+pub mod policy_limits;
+pub mod prevent_sleep;
+pub mod project_instructions;
+pub mod project_memory;
+pub mod query_engine;
+pub mod rate_limit;
+pub mod rate_limit_messages;
+pub mod remote_settings;
+pub mod session_history;
+pub mod settings;
+pub mod settings_sync;
+pub mod smart_context;
+pub mod state;
+pub mod streaming_tool_executor;
+pub mod suggestions;
+pub mod tips;
+pub mod token_estimation;
+pub mod tool_execution;
+pub mod tool_use_summary;
+pub mod tools;
+pub mod unified_config;
+pub mod updater;
+pub mod vcr;
+pub mod voice_mode;
 
-pub mod doctor;
-pub mod permission_classifier;
-pub mod llm_classifier;
-pub mod team_memory_sync;
-pub mod auto_dream_consolidation;
-pub mod mcp_server_approval;
-pub mod session_transcript;
 pub mod activity_manager;
-pub mod housekeeping;
-pub mod credential_manager;
-pub mod billing;
-pub mod enhanced_suggestions;
-pub mod lsp;
-pub mod ui_adapter;
-pub mod sandbox;
-pub mod plugin;
 pub mod api_server;
-pub mod preference_memory;
+pub mod auto_dream_consolidation;
+pub mod billing;
+pub mod credential_manager;
+pub mod doctor;
+pub mod enhanced_suggestions;
 pub mod feature_flags;
+pub mod housekeeping;
+pub mod llm_classifier;
+pub mod lsp;
+pub mod mcp_server_approval;
+pub mod permission_classifier;
+pub mod plugin;
+pub mod preference_memory;
+pub mod recording;
+pub mod sandbox;
+pub mod scheduled_routines;
 pub mod session_persist;
 pub mod session_recovery;
+pub mod session_transcript;
+pub mod team_memory_sync;
+pub mod ui_adapter;
 pub mod webhook;
-pub mod scheduled_routines;
-pub mod recording;
 
 pub mod testing;
 
 pub mod i18n;
 
 // Re-export key types for convenience
-pub use query_engine::{QueryEngine, QueryContext, QueryEvent};
-pub use tools::{Tool, ToolInfo, ToolRegistry, ToolOutput, ToolResult};
-pub use permissions::{PermissionManager, Permission, PermissionLevel, ApprovalMode};
-pub use checkpoint::{CheckpointManager, Checkpoint, TurnCheckpoint, RestoreMode};
-pub use state::{
-    StateManager, SessionState, SessionData, SessionInfo, SessionPersistMetadata,
+pub use ai_limits::{AiLimitType, AiLimitsTracker, AiUsageRecord, LimitStatus};
+pub use analytics::{
+    AnalyticsError, AnalyticsEvent, AnalyticsEventType, AnalyticsStore, AnalyticsSummary,
+    DailyStats, SessionStats, ToolStats,
 };
 pub use api::{
-    LlmClient, LlmClientConfig, LlmProvider, MessageStream,
-    ContentBlock, ContentDelta, ImageSource, Message, MessageContent,
-    MessageRequest, MessageResponse, StreamEvent, ToolDefinition, Usage,
-    ApiError, RetryConfig,
+    ApiError,
     // Backward-compatible aliases
-    ClaudeClient, ClaudeClientConfig,
-};
-pub use settings::{Settings, SettingsManager, SettingsError};
-pub use hooks::{HookManager, HookEvent, HookResult, HookDecision, HookEventType, HookError};
-pub use mcp_tool_adapter::{
-    McpToolAdapter, PromptInfo, discover_tools, discover_tools_http,
-    DeferredSchemaStore, DeferredSchemaSearchTool,
-    prepare_deferred_schemas, DEFERRED_SCHEMA_THRESHOLD,
-};
-pub use updater::{AutoUpdater, UpdateStatus, UpdaterConfig, ReleaseInfo, UpdateError};
-pub use memory::{
-    MemoryStore, MemoryEntry, MemoryCategory, AutoDreamService, MemoryError,
-    MemoryType, SessionMemoryConfig, MemoryConsolidator, ConsolidationResult,
-};
-pub use extract_memories::{
-    MemoryExtractor, ExtractionConfig, ExtractionResult, ExtractionCategory,
-    ExtractionError, MessageSummary, ExtractedMemory,
-};
-pub use suggestions::{
-    Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
-};
-pub use diagnostics::{
-    DiagnosticTracker, DiagnosticEvent, DiagnosticLevel, DiagnosticCategory,
-    ErrorPattern, DiagnosticSummary,
-};
-pub use analytics::{
-    AnalyticsStore, AnalyticsEvent, AnalyticsEventType, AnalyticsError, AnalyticsSummary,
-    ToolStats, SessionStats, DailyStats,
-};
-pub use notifier::{
-    Notification, NotificationLevel, Notifier, NotificationHandler,
-    LogNotifier, FileNotifier, CallbackNotifier, NotifierError,
-};
-pub use tips::{
-    Tip, TipCategory, TipCondition, TipManager, TipContext, TipError,
-};
-pub use rate_limit::{
-    RateLimiter, RateLimitConfig, RateLimitResult, TokenBucket, ExponentialBackoff,
-};
-pub use policy_limits::{PolicyLimits, PolicyLimitsManager, PolicyCheckResult, PolicyError};
-pub use rate_limit_messages::RateLimitMessageBuilder;
-pub use ai_limits::{AiLimitType, AiUsageRecord, AiLimitsTracker, LimitStatus};
-pub use vcr::{Vcr, VcrConfig, VcrRecording, VcrError};
-pub use internal_logging::{InternalLogEntry, InternalLogLevel, InternalLogger};
-pub use git_operation_tracking::{GitOperation, GitOperationTracker};
-pub use voice_mode::{
-    VoiceModeService, VoiceConfig, VoiceCommand, VoiceCommandResult, VoiceStatus,
-    VoiceSession, TranscriptionResult, KeywordSpotter, VoiceError,
-};
-pub use magic_docs::{
-    MagicDocsService, DocSection, DocGenerationRequest, DocOutput, DocOutputFormat,
-    DocLevel, DocMetadata, MagicDocsError,
-};
-pub use oauth::{OAuthService, OAuthClient, OAuthToken, OAuthError, TokenEncryption};
-pub use settings_sync::{
-    SettingsSyncService, SyncRecord, SyncStatus, DeviceRegistry, DeviceInfo, SyncError,
-};
-pub use remote_settings::{
-    RemoteSettingsProvider, RemoteManagedSettings, SettingOverride, SettingSource, RemoteSettingsError,
-};
-pub use mcp_advanced::{
-    McpChannelManager, McpServerRegistry, ElicitationHandler,
-    McpServerConfig, McpChannel, ElicitationRequest,
-    TransportType, ChannelStatus, ChannelCapabilities,
-    ElicitationStatus, McpAdvancedError,
+    ClaudeClient,
+    ClaudeClientConfig,
+    ContentBlock,
+    ContentDelta,
+    ImageSource,
+    LlmClient,
+    LlmClientConfig,
+    LlmProvider,
+    Message,
+    MessageContent,
+    MessageRequest,
+    MessageResponse,
+    MessageStream,
+    RetryConfig,
+    StreamEvent,
+    ToolDefinition,
+    Usage,
 };
 pub use api_services::{
-    ApiManager, UsageTracker, ApiRequest, ApiResponse,
-    UsageStats, ModelUsage, RateLimitInfo, ApiServiceError,
-};
-pub use unified_config::{
-    ShannonConfig, ConfigBuilder,
+    ApiManager, ApiRequest, ApiResponse, ApiServiceError, ModelUsage, RateLimitInfo, UsageStats,
+    UsageTracker,
 };
 pub use bridge_service::{
-    BridgeService, BridgeSession, BridgeConfig, BridgeStatus,
-    SessionMessage, MessageDirection, BridgeError,
+    BridgeConfig, BridgeError, BridgeService, BridgeSession, BridgeStatus, MessageDirection,
+    SessionMessage,
 };
-pub use session_history::{
-    SessionHistoryManager, SessionHistoryEntry, SessionFilter, ResumeInfo,
-    SessionMetadata, SessionSortField, SortOrder, SessionHistoryError,
+pub use checkpoint::{Checkpoint, CheckpointManager, RestoreMode, TurnCheckpoint};
+pub use compact::{
+    CompactConfig, CompactEngine, CompactError, CompactResult, CompactStrategy, MessageGroup,
+    RuleBasedSummarizer, Summarizer,
 };
-pub use streaming_tool_executor::{StreamingToolExecutor, TrackedTool, ToolStatus};
-pub use tool_execution::{ToolExecutionService, ToolExecutionResult, ToolProgress, ToolProgressStatus};
-pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
-pub use session_recovery::{SessionRecovery, SessionRecoveryError, RecoveryMetadata, SessionLogEntry};
-pub use compact::{CompactEngine, CompactConfig, CompactResult, CompactStrategy, MessageGroup, CompactError, RuleBasedSummarizer, Summarizer};
 pub use context_pressure::{
     ContextPressureMonitor, PressureLevel, PressureMetrics, PressureRecommendation,
 };
+pub use diagnostics::{
+    DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker,
+    ErrorPattern,
+};
+pub use extract_memories::{
+    ExtractedMemory, ExtractionCategory, ExtractionConfig, ExtractionError, ExtractionResult,
+    MemoryExtractor, MessageSummary,
+};
+pub use git_operation_tracking::{GitOperation, GitOperationTracker};
+pub use hooks::{HookDecision, HookError, HookEvent, HookEventType, HookManager, HookResult};
+pub use internal_logging::{InternalLogEntry, InternalLogLevel, InternalLogger};
+pub use magic_docs::{
+    DocGenerationRequest, DocLevel, DocMetadata, DocOutput, DocOutputFormat, DocSection,
+    MagicDocsError, MagicDocsService,
+};
+pub use mcp_advanced::{
+    ChannelCapabilities, ChannelStatus, ElicitationHandler, ElicitationRequest, ElicitationStatus,
+    McpAdvancedError, McpChannel, McpChannelManager, McpServerConfig, McpServerRegistry,
+    TransportType,
+};
+pub use mcp_tool_adapter::{
+    DEFERRED_SCHEMA_THRESHOLD, DeferredSchemaSearchTool, DeferredSchemaStore, McpToolAdapter,
+    PromptInfo, discover_tools, discover_tools_http, prepare_deferred_schemas,
+};
+pub use memory::{
+    AutoDreamService, ConsolidationResult, MemoryCategory, MemoryConsolidator, MemoryEntry,
+    MemoryError, MemoryStore, MemoryType, SessionMemoryConfig,
+};
+pub use notifier::{
+    CallbackNotifier, FileNotifier, LogNotifier, Notification, NotificationHandler,
+    NotificationLevel, Notifier, NotifierError,
+};
+pub use oauth::{OAuthClient, OAuthError, OAuthService, OAuthToken, TokenEncryption};
+pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
+pub use permissions::{ApprovalMode, Permission, PermissionLevel, PermissionManager};
+pub use policy_limits::{PolicyCheckResult, PolicyError, PolicyLimits, PolicyLimitsManager};
+pub use query_engine::{QueryContext, QueryEngine, QueryEvent};
+pub use rate_limit::{
+    ExponentialBackoff, RateLimitConfig, RateLimitResult, RateLimiter, TokenBucket,
+};
+pub use rate_limit_messages::RateLimitMessageBuilder;
+pub use remote_settings::{
+    RemoteManagedSettings, RemoteSettingsError, RemoteSettingsProvider, SettingOverride,
+    SettingSource,
+};
+pub use session_history::{
+    ResumeInfo, SessionFilter, SessionHistoryEntry, SessionHistoryError, SessionHistoryManager,
+    SessionMetadata, SessionSortField, SortOrder,
+};
+pub use session_recovery::{
+    RecoveryMetadata, SessionLogEntry, SessionRecovery, SessionRecoveryError,
+};
+pub use settings::{Settings, SettingsError, SettingsManager};
+pub use settings_sync::{
+    DeviceInfo, DeviceRegistry, SettingsSyncService, SyncError, SyncRecord, SyncStatus,
+};
+pub use state::{SessionData, SessionInfo, SessionPersistMetadata, SessionState, StateManager};
+pub use streaming_tool_executor::{StreamingToolExecutor, ToolStatus, TrackedTool};
+pub use suggestions::{
+    Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
+};
+pub use tips::{Tip, TipCategory, TipCondition, TipContext, TipError, TipManager};
+pub use tool_execution::{
+    ToolExecutionResult, ToolExecutionService, ToolProgress, ToolProgressStatus,
+};
+pub use tools::{Tool, ToolInfo, ToolOutput, ToolRegistry, ToolResult};
+pub use unified_config::{ConfigBuilder, ShannonConfig};
+pub use updater::{AutoUpdater, ReleaseInfo, UpdateError, UpdateStatus, UpdaterConfig};
+pub use vcr::{Vcr, VcrConfig, VcrError, VcrRecording};
+pub use voice_mode::{
+    KeywordSpotter, TranscriptionResult, VoiceCommand, VoiceCommandResult, VoiceConfig, VoiceError,
+    VoiceModeService, VoiceSession, VoiceStatus,
+};
 
-pub use permission_classifier::{
-    PermissionClassifier, PermissionClassifierError, PermissionRule, PermissionRuleParser,
-    ClassificationResult, ClassificationResultBuilder, DangerousPattern,
-    RuleDecision, RuleSource, RiskLevel,
-};
-pub use team_memory_sync::{
-    TeamMemorySync, TeamMemoryConfig, TeamMemorySyncError, SyncResult,
-    SecretScanner, SecretRule, SecretMatch, TeamMemoryGuard,
-};
+pub use activity_manager::{Activity, ActivityError, ActivityManager, ActivityStatus};
 pub use auto_dream_consolidation::{
-    ConsolidationLock, ConsolidationGuard, ConsolidationPrompt, ConsolidationConfig,
-    EnhancedConsolidationResult, ConsolidationError, should_consolidate,
-};
-pub use mcp_server_approval::{
-    McpApprovalManager, McpApprovalPolicy, McpServerApprovalRequest,
-    McpTransportType, ApprovalDecision, RiskAssessment, McpApprovalError,
-};
-pub use session_transcript::{
-    TranscriptStore, TranscriptEntry, TranscriptRole, TranscriptQuery,
-    TranscriptError, ToolCallRecord,
-    SessionTranscriptStats, GlobalTranscriptStats,
-};
-pub use activity_manager::{
-    ActivityManager, Activity, ActivityStatus, ActivityError,
-};
-pub use housekeeping::{
-    Housekeeper, HousekeepingTask, HousekeepingConfig, HousekeepingError,
-    TaskResult, TempFileCleanupTask, CacheRefreshTask,
-    OldSessionPruneTask, LogRotationTask,
-};
-pub use credential_manager::{
-    CredentialManager, Credential, CredentialError, CredentialSummary,
-    CredentialFileDescriptor, CredentialFileFormat, PortableCredential,
-    PortableCredentialBundle, ImportResult,
+    ConsolidationConfig, ConsolidationError, ConsolidationGuard, ConsolidationLock,
+    ConsolidationPrompt, EnhancedConsolidationResult, should_consolidate,
 };
 pub use billing::{
-    BillingManager, BillingPeriod, UsageRecord, BillingConfig,
-    BillingError, ModelUsageSummary, BudgetAlert, BudgetAlertType, DailyUsage,
+    BillingConfig, BillingError, BillingManager, BillingPeriod, BudgetAlert, BudgetAlertType,
+    DailyUsage, ModelUsageSummary, UsageRecord,
+};
+pub use credential_manager::{
+    Credential, CredentialError, CredentialFileDescriptor, CredentialFileFormat, CredentialManager,
+    CredentialSummary, ImportResult, PortableCredential, PortableCredentialBundle,
+};
+pub use housekeeping::{
+    CacheRefreshTask, Housekeeper, HousekeepingConfig, HousekeepingError, HousekeepingTask,
+    LogRotationTask, OldSessionPruneTask, TaskResult, TempFileCleanupTask,
 };
 pub use lsp::{
-    LspManager, LspClient, LspConfig, ServerConfig,
-    DiscoveredServer, ServerDiscovery, ServerSource, LspClientError, LspResult,
+    DiscoveredServer, LspClient, LspClientError, LspConfig, LspManager, LspResult, ServerConfig,
+    ServerDiscovery, ServerSource,
+};
+pub use mcp_server_approval::{
+    ApprovalDecision, McpApprovalError, McpApprovalManager, McpApprovalPolicy,
+    McpServerApprovalRequest, McpTransportType, RiskAssessment,
+};
+pub use permission_classifier::{
+    ClassificationResult, ClassificationResultBuilder, DangerousPattern, PermissionClassifier,
+    PermissionClassifierError, PermissionRule, PermissionRuleParser, RiskLevel, RuleDecision,
+    RuleSource,
+};
+pub use session_transcript::{
+    GlobalTranscriptStats, SessionTranscriptStats, ToolCallRecord, TranscriptEntry,
+    TranscriptError, TranscriptQuery, TranscriptRole, TranscriptStore,
+};
+pub use team_memory_sync::{
+    SecretMatch, SecretRule, SecretScanner, SyncResult, TeamMemoryConfig, TeamMemoryGuard,
+    TeamMemorySync, TeamMemorySyncError,
 };
 
 pub use enhanced_suggestions::{
-    ContextSuggestionEngine, ContextualSuggestion, SuggestionTrigger,
-    SuggestionContext as EnhancedSuggestionContext, SuggestionError,
+    ContextSuggestionEngine, ContextualSuggestion, SuggestionContext as EnhancedSuggestionContext,
+    SuggestionError, SuggestionTrigger,
 };
 pub use ui_adapter::{
-    UiAdapter, UiError, UiResult,
-    DefaultUiAdapter, NullUiAdapter,
-    DisplayMessage, MessageSeverity, UserChoice,
+    DefaultUiAdapter, DisplayMessage, MessageSeverity, NullUiAdapter, UiAdapter, UiError, UiResult,
+    UserChoice,
 };
 // Backward-compatible re-exports for the claude_md -> project_memory rename
 pub use project_memory::{
-    ProjectMemoryConfig as ClaudeMdConfig,
-    ProjectMemoryMetadata as ClaudeMdMetadata,
-    ProjectMemoryManager as ClaudeMdManager,
-    ProjectMemorySearchResult as ClaudeMdSearchResult,
-    ProjectMemoryError as ClaudeMdError,
-    MemorySource,
-    MergedMemory,
-    load_memory_index,
-    load_rules,
+    MemorySource, MergedMemory, ProjectMemoryConfig as ClaudeMdConfig,
+    ProjectMemoryError as ClaudeMdError, ProjectMemoryManager as ClaudeMdManager,
+    ProjectMemoryMetadata as ClaudeMdMetadata, ProjectMemorySearchResult as ClaudeMdSearchResult,
+    load_memory_index, load_rules,
 };
 /// Core error types for Shannon
 pub mod error {
-    pub use crate::api::ApiError;
-    pub use crate::tools::ToolError;
-    pub use crate::permissions::PermissionError;
-    pub use crate::state::StateError;
-    pub use crate::settings::SettingsError;
-    pub use crate::hooks::HookError;
-    pub use crate::updater::UpdateError;
-    pub use crate::memory::MemoryError;
-    pub use crate::extract_memories::ExtractionError;
-    pub use crate::notifier::NotifierError;
-    pub use crate::tips::TipError;
+    pub use crate::activity_manager::ActivityError;
     pub use crate::analytics::AnalyticsError;
+    pub use crate::api::ApiError;
+    pub use crate::api_services::ApiServiceError;
+    pub use crate::auto_dream_consolidation::ConsolidationError;
+    pub use crate::billing::BillingError;
+    pub use crate::bridge_service::BridgeError;
+    pub use crate::compact::CompactError;
+    pub use crate::credential_manager::CredentialError;
+    pub use crate::doctor::DoctorError;
+    pub use crate::doctor::{ApiKeyGuard, HomeGuard};
+    pub use crate::enhanced_suggestions::SuggestionError;
+    pub use crate::extract_memories::ExtractionError;
+    pub use crate::hooks::HookError;
+    pub use crate::housekeeping::HousekeepingError;
+    pub use crate::magic_docs::MagicDocsError;
+    pub use crate::mcp_advanced::McpAdvancedError;
+    pub use crate::mcp_server_approval::McpApprovalError;
+    pub use crate::memory::MemoryError;
+    pub use crate::notifier::NotifierError;
+    pub use crate::oauth::OAuthError;
+    pub use crate::permission_classifier::PermissionClassifierError;
+    pub use crate::permissions::PermissionError;
     pub use crate::policy_limits::PolicyError;
+    pub use crate::project_memory::ProjectMemoryError;
+    pub use crate::remote_settings::RemoteSettingsError;
+    pub use crate::session_history::SessionHistoryError;
+    pub use crate::session_recovery::SessionRecoveryError;
+    pub use crate::session_transcript::TranscriptError;
+    pub use crate::settings::SettingsError;
+    pub use crate::settings_sync::SyncError;
+    pub use crate::state::StateError;
+    pub use crate::streaming_tool_executor::ExecutorError;
+    pub use crate::team_memory_sync::TeamMemorySyncError;
+    pub use crate::tips::TipError;
+    pub use crate::tool_execution::ToolExecutionError;
+    pub use crate::tools::ToolError;
+    pub use crate::ui_adapter::UiError;
+    pub use crate::updater::UpdateError;
     pub use crate::vcr::VcrError;
     pub use crate::voice_mode::VoiceError;
-    pub use crate::magic_docs::MagicDocsError;
-    pub use crate::oauth::OAuthError;
-    pub use crate::settings_sync::SyncError;
-    pub use crate::remote_settings::RemoteSettingsError;
-    pub use crate::mcp_advanced::McpAdvancedError;
-    pub use crate::api_services::ApiServiceError;
-    pub use crate::bridge_service::BridgeError;
-    pub use crate::session_history::SessionHistoryError;
-    pub use crate::streaming_tool_executor::ExecutorError;
-    pub use crate::tool_execution::ToolExecutionError;
-    pub use crate::compact::CompactError;
-    pub use crate::doctor::DoctorError;
-    pub use crate::doctor::{HomeGuard, ApiKeyGuard};
-    pub use crate::team_memory_sync::TeamMemorySyncError;
-    pub use crate::permission_classifier::PermissionClassifierError;
-    pub use crate::auto_dream_consolidation::ConsolidationError;
-    pub use crate::mcp_server_approval::McpApprovalError;
-    pub use crate::session_transcript::TranscriptError;
-    pub use crate::session_recovery::SessionRecoveryError;
-    pub use crate::activity_manager::ActivityError;
-    pub use crate::housekeeping::HousekeepingError;
-    pub use crate::enhanced_suggestions::SuggestionError;
-    pub use crate::credential_manager::CredentialError;
-    pub use crate::billing::BillingError;
-    pub use crate::project_memory::ProjectMemoryError;
-    pub use crate::ui_adapter::UiError;
 }
 
 /// Version information

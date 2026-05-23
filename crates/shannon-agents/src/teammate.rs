@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock, Mutex};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use uuid::Uuid;
 
 /// Default idle poll interval in seconds for the self-claim work loop.
@@ -113,7 +113,9 @@ impl MessageInbox {
     }
 
     async fn send(&self, message: AgentMessage) -> Result<(), AgentError> {
-        self.sender.send(message).await
+        self.sender
+            .send(message)
+            .await
             .map_err(|_| AgentError::Communication("Inbox closed".to_string()))
     }
 
@@ -196,7 +198,11 @@ impl Teammate {
     }
 
     /// Create a new teammate with an LLM executor for real task execution
-    pub fn with_executor(name: String, config: TeammateConfig, executor: Arc<dyn AgentExecutor>) -> Self {
+    pub fn with_executor(
+        name: String,
+        config: TeammateConfig,
+        executor: Arc<dyn AgentExecutor>,
+    ) -> Self {
         Self {
             name,
             config,
@@ -224,7 +230,9 @@ impl Teammate {
         TeammateState {
             status: *self.status.read().await,
             active_tasks,
-            current_worktree: self.get_metadata("current_worktree").await
+            current_worktree: self
+                .get_metadata("current_worktree")
+                .await
                 .and_then(|v| v.as_str().map(|s| s.to_string())),
             last_activity: chrono::Utc::now(),
         }
@@ -240,16 +248,19 @@ impl Teammate {
 
     /// Check if agent has a specific capability
     pub fn has_capability(&self, capability: &str) -> bool {
-        self.config.capabilities.iter()
+        self.config
+            .capabilities
+            .iter()
             .any(|c| c.eq_ignore_ascii_case(capability))
     }
 
     /// Assign a task to this teammate
     pub async fn assign_task(&self, task_id: Uuid) -> Result<(), AgentError> {
         if !self.is_available().await {
-            return Err(AgentError::Communication(
-                format!("Agent '{}' is not available", self.name)
-            ));
+            return Err(AgentError::Communication(format!(
+                "Agent '{}' is not available",
+                self.name
+            )));
         }
 
         let mut tasks = self.assigned_tasks.write().await;
@@ -276,28 +287,16 @@ impl Teammate {
         );
 
         match message.message_type {
-            MessageType::Chat => {
-                self.handle_chat_message(message).await
-            }
-            MessageType::Protocol => {
-                self.handle_protocol_message(message).await
-            }
-            MessageType::TaskAssignment => {
-                self.handle_task_assignment(message).await
-            }
-            MessageType::TaskUpdate => {
-                self.handle_task_update(message).await
-            }
-            MessageType::Status => {
-                self.handle_status_request(message).await
-            }
-            _ => {
-                Ok(AgentMessage::new_text(
-                    self.name.clone(),
-                    message.from,
-                    "Message received".to_string()
-                ))
-            }
+            MessageType::Chat => self.handle_chat_message(message).await,
+            MessageType::Protocol => self.handle_protocol_message(message).await,
+            MessageType::TaskAssignment => self.handle_task_assignment(message).await,
+            MessageType::TaskUpdate => self.handle_task_update(message).await,
+            MessageType::Status => self.handle_status_request(message).await,
+            _ => Ok(AgentMessage::new_text(
+                self.name.clone(),
+                message.from,
+                "Message received".to_string(),
+            )),
         }
     }
 
@@ -320,7 +319,10 @@ impl Teammate {
     }
 
     /// Handle a chat message
-    pub async fn handle_chat_message(&self, message: AgentMessage) -> Result<AgentMessage, AgentError> {
+    pub async fn handle_chat_message(
+        &self,
+        message: AgentMessage,
+    ) -> Result<AgentMessage, AgentError> {
         let content = match &message.content {
             MessageContent::Text(text) => text.clone(),
             MessageContent::Structured(data) => {
@@ -329,8 +331,8 @@ impl Teammate {
             }
             MessageContent::Protocol(_) => {
                 return Err(AgentError::Communication(
-                    "Protocol message in chat handler".to_string()
-                ))
+                    "Protocol message in chat handler".to_string(),
+                ));
             }
         };
 
@@ -342,9 +344,11 @@ impl Teammate {
 
         if let Some(executor) = &self.executor {
             // Real LLM execution via the executor with multi-turn history
-            let system_prompt = self.config.system_prompt.as_deref().unwrap_or(
-                "You are a helpful AI agent. Respond concisely."
-            );
+            let system_prompt = self
+                .config
+                .system_prompt
+                .as_deref()
+                .unwrap_or("You are a helpful AI agent. Respond concisely.");
             let model = self.config.model.as_deref();
             let tools = if self.config.capabilities.is_empty() {
                 None
@@ -355,9 +359,9 @@ impl Teammate {
             // Read current history for context
             let history = self.conversation_history.read().await.clone();
 
-            let result = executor.execute_with_history(
-                system_prompt, &history, &content, model, tools
-            ).await
+            let result = executor
+                .execute_with_history(system_prompt, &history, &content, model, tools)
+                .await
                 .map_err(|e| AgentError::Communication(format!("LLM execution error: {e}")))?;
 
             // Append user message and assistant response to history
@@ -389,13 +393,16 @@ impl Teammate {
             Ok(AgentMessage::new_text(
                 self.name.clone(),
                 message.from,
-                response
+                response,
             ))
         }
     }
 
     /// Handle a protocol message
-    async fn handle_protocol_message(&self, message: AgentMessage) -> Result<AgentMessage, AgentError> {
+    async fn handle_protocol_message(
+        &self,
+        message: AgentMessage,
+    ) -> Result<AgentMessage, AgentError> {
         if let MessageContent::Protocol(protocol) = &message.content {
             match protocol {
                 ProtocolMessage::ShutdownRequest { reason } => {
@@ -416,7 +423,7 @@ impl Teammate {
                     return Ok(AgentMessage::protocol(
                         self.name.clone(),
                         message.from,
-                        response
+                        response,
                     ));
                 }
                 ProtocolMessage::PlanApprovalRequest { request_id, plan } => {
@@ -437,11 +444,11 @@ impl Teammate {
                     return Ok(AgentMessage::protocol(
                         self.name.clone(),
                         message.from,
-                        response
+                        response,
                     ));
                 }
-                ProtocolMessage::ShutdownResponse { .. } |
-                ProtocolMessage::PlanApprovalResponse { .. } => {
+                ProtocolMessage::ShutdownResponse { .. }
+                | ProtocolMessage::PlanApprovalResponse { .. } => {
                     // These are responses, not requests
                 }
                 ProtocolMessage::TaskAssign { task_id, .. } => {
@@ -457,7 +464,11 @@ impl Teammate {
                         format!("Task {task_id} accepted"),
                     ));
                 }
-                ProtocolMessage::TaskResult { task_id, success, output } => {
+                ProtocolMessage::TaskResult {
+                    task_id,
+                    success,
+                    output,
+                } => {
                     tracing::debug!(
                         agent = %self.name,
                         task_id = %task_id,
@@ -499,12 +510,15 @@ impl Teammate {
         Ok(AgentMessage::new_text(
             self.name.clone(),
             message.from,
-            "Protocol message received".to_string()
+            "Protocol message received".to_string(),
         ))
     }
 
     /// Handle a task assignment
-    async fn handle_task_assignment(&self, message: AgentMessage) -> Result<AgentMessage, AgentError> {
+    async fn handle_task_assignment(
+        &self,
+        message: AgentMessage,
+    ) -> Result<AgentMessage, AgentError> {
         if let MessageContent::Structured(data) = &message.content {
             if let Some(task_id) = data.get("task_id").and_then(|v| v.as_str()) {
                 if let Ok(id) = Uuid::parse_str(task_id) {
@@ -513,7 +527,7 @@ impl Teammate {
                     return Ok(AgentMessage::new_text(
                         self.name.clone(),
                         message.from,
-                        format!("Task {id} accepted")
+                        format!("Task {id} accepted"),
                     ));
                 }
             }
@@ -522,7 +536,7 @@ impl Teammate {
         Ok(AgentMessage::new_text(
             self.name.clone(),
             message.from,
-            "Invalid task assignment".to_string()
+            "Invalid task assignment".to_string(),
         ))
     }
 
@@ -537,12 +551,15 @@ impl Teammate {
         Ok(AgentMessage::new_text(
             self.name.clone(),
             message.from,
-            "Task update acknowledged".to_string()
+            "Task update acknowledged".to_string(),
         ))
     }
 
     /// Handle a status request
-    async fn handle_status_request(&self, message: AgentMessage) -> Result<AgentMessage, AgentError> {
+    async fn handle_status_request(
+        &self,
+        message: AgentMessage,
+    ) -> Result<AgentMessage, AgentError> {
         let state = self.state().await;
 
         let status_data = serde_json::json!({
@@ -640,7 +657,7 @@ impl Teammate {
     pub async fn exit_plan_mode(&self) -> Result<(), AgentError> {
         if *self.status.read().await != TeammateStatus::Planning {
             return Err(AgentError::Communication(
-                "Agent not in plan mode".to_string()
+                "Agent not in plan mode".to_string(),
             ));
         }
 
@@ -692,7 +709,8 @@ impl Teammate {
 
     /// Get the current idle poll interval in seconds.
     pub fn idle_interval(&self) -> u64 {
-        self.idle_interval_secs.lock()
+        self.idle_interval_secs
+            .lock()
             .map(|g| *g)
             .unwrap_or(DEFAULT_IDLE_INTERVAL_SECS)
     }
@@ -762,10 +780,9 @@ impl Teammate {
         &self,
         persistence: &FilePersistence,
     ) -> Result<Option<uuid::Uuid>, AgentError> {
-        let team_name = self.team_name()
-            .ok_or_else(|| AgentError::Communication(
-                format!("Agent '{}' has no team assignment", self.name)
-            ))?;
+        let team_name = self.team_name().ok_or_else(|| {
+            AgentError::Communication(format!("Agent '{}' has no team assignment", self.name))
+        })?;
 
         // Find the next claimable task (lowest-ID, unblocked, unowned)
         let Some(task_file) = persistence.find_claimable_task(&team_name)? else {
@@ -775,10 +792,9 @@ impl Teammate {
         // Attempt to claim with file-based locking
         match persistence.claim_task(&team_name, &task_file.id, &self.name) {
             Ok(claimed) => {
-                let task_id = Uuid::parse_str(&claimed.id)
-                    .map_err(|_| AgentError::Configuration(
-                        format!("Invalid task UUID: {}", claimed.id)
-                    ))?;
+                let task_id = Uuid::parse_str(&claimed.id).map_err(|_| {
+                    AgentError::Configuration(format!("Invalid task UUID: {}", claimed.id))
+                })?;
 
                 // Update in-memory state
                 {
@@ -818,10 +834,7 @@ impl Teammate {
     ///
     /// Returns the idle notification message if the agent completed work
     /// and went idle, or None if no work was available.
-    pub async fn run_work_cycle(
-        &self,
-        persistence: &FilePersistence,
-    ) -> Option<AgentMessage> {
+    pub async fn run_work_cycle(&self, persistence: &FilePersistence) -> Option<AgentMessage> {
         // Step 1: Check availability
         if !self.is_available().await {
             return None;
@@ -850,9 +863,11 @@ impl Teammate {
                 .map(|t| format!("{}\n{}", t.subject, t.description))
                 .unwrap_or_else(|| task_id.to_string());
 
-            let system_prompt = self.config.system_prompt.as_deref().unwrap_or(
-                "You are a helpful AI agent. Execute the assigned task."
-            );
+            let system_prompt = self
+                .config
+                .system_prompt
+                .as_deref()
+                .unwrap_or("You are a helpful AI agent. Execute the assigned task.");
             let model = self.config.model.as_deref();
             let tools = if self.config.capabilities.is_empty() {
                 None
@@ -860,7 +875,10 @@ impl Teammate {
                 Some(self.config.capabilities.as_slice())
             };
 
-            match executor.execute(system_prompt, &task_description, model, tools).await {
+            match executor
+                .execute(system_prompt, &task_description, model, tools)
+                .await
+            {
                 Ok(_output) => {
                     tracing::info!(
                         agent = %self.name,
@@ -901,9 +919,7 @@ impl Teammate {
         let interval_secs = self.idle_interval();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(
-                std::time::Duration::from_secs(interval_secs)
-            );
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             // Consume first immediate tick
             interval.tick().await;
 
@@ -912,7 +928,10 @@ impl Teammate {
 
                 // Check if we should stop
                 let status = agent.status().await;
-                if matches!(status, TeammateStatus::ShuttingDown | TeammateStatus::Stopped) {
+                if matches!(
+                    status,
+                    TeammateStatus::ShuttingDown | TeammateStatus::Stopped
+                ) {
                     tracing::info!(
                         agent = %agent.name,
                         "Work loop stopping due to agent status: {:?}", status
@@ -1039,17 +1058,24 @@ mod tests {
     async fn teammate_metadata_crud() {
         let agent = Teammate::new("w".into(), TeammateConfig::default());
         assert!(agent.get_metadata("key").await.is_none());
-        agent.set_metadata("key".into(), serde_json::json!("value")).await;
-        assert_eq!(agent.get_metadata("key").await.unwrap(), serde_json::json!("value"));
+        agent
+            .set_metadata("key".into(), serde_json::json!("value"))
+            .await;
+        assert_eq!(
+            agent.get_metadata("key").await.unwrap(),
+            serde_json::json!("value")
+        );
     }
 
     #[tokio::test]
     async fn teammate_merge_metadata() {
         let agent = Teammate::new("w".into(), TeammateConfig::default());
-        agent.merge_metadata(HashMap::from([
-            ("a".into(), serde_json::json!(1)),
-            ("b".into(), serde_json::json!(2)),
-        ])).await;
+        agent
+            .merge_metadata(HashMap::from([
+                ("a".into(), serde_json::json!(1)),
+                ("b".into(), serde_json::json!(2)),
+            ]))
+            .await;
         assert_eq!(agent.get_metadata("a").await.unwrap(), serde_json::json!(1));
     }
 
@@ -1071,7 +1097,10 @@ mod tests {
 
     #[tokio::test]
     async fn teammate_plan_mode() {
-        let config = TeammateConfig { plan_mode_required: true, ..Default::default() };
+        let config = TeammateConfig {
+            plan_mode_required: true,
+            ..Default::default()
+        };
         let agent = Teammate::new("w".into(), config);
         agent.enter_plan_mode().await.unwrap();
         assert_eq!(agent.status().await, TeammateStatus::Planning);
@@ -1112,7 +1141,10 @@ mod tests {
 
     #[tokio::test]
     async fn teammate_max_concurrent_respected() {
-        let config = TeammateConfig { max_concurrent_tasks: 1, ..Default::default() };
+        let config = TeammateConfig {
+            max_concurrent_tasks: 1,
+            ..Default::default()
+        };
         let agent = Teammate::new("w".into(), config);
         agent.assign_task(Uuid::new_v4()).await.unwrap();
         assert!(!agent.is_available().await);

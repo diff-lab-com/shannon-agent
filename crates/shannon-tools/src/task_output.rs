@@ -3,7 +3,7 @@
 //! Gets the output/result of a task execution from the task store.
 
 use crate::todo::{TaskStore, TodoItem, TodoStatus};
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -94,13 +94,15 @@ impl TaskOutputTool {
 
         if block {
             // Blocking wait with timeout
-            let deadline = tokio::time::Instant::now()
-                + std::time::Duration::from_millis(timeout_ms);
+            let deadline =
+                tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
 
             loop {
                 {
                     let store = self.task_store.read().map_err(|e| {
-                        ToolError::ExecutionFailed(format!("Failed to acquire task store lock: {e}"))
+                        ToolError::ExecutionFailed(format!(
+                            "Failed to acquire task store lock: {e}"
+                        ))
                     })?;
 
                     if let Some(task) = store.get(&input.task_id) {
@@ -193,7 +195,9 @@ impl Tool for TaskOutputTool {
             "required": ["task_id"]
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -235,7 +239,10 @@ mod tests {
             .unwrap();
 
         assert!(result.found);
-        assert_eq!(result.output, Some("Build completed successfully".to_string()));
+        assert_eq!(
+            result.output,
+            Some("Build completed successfully".to_string())
+        );
         assert_eq!(result.message, "Task output retrieved");
     }
 

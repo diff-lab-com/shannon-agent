@@ -165,7 +165,11 @@ pub struct DiagnosticCheck {
 
 impl DiagnosticCheck {
     /// Create a new passing check.
-    pub fn pass(name: impl Into<String>, category: DiagnosticCategory, message: impl Into<String>) -> Self {
+    pub fn pass(
+        name: impl Into<String>,
+        category: DiagnosticCategory,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             category,
@@ -211,7 +215,11 @@ impl DiagnosticCheck {
     }
 
     /// Create a new skipped check.
-    pub fn skip(name: impl Into<String>, category: DiagnosticCategory, message: impl Into<String>) -> Self {
+    pub fn skip(
+        name: impl Into<String>,
+        category: DiagnosticCategory,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             category,
@@ -269,17 +277,26 @@ impl DoctorReport {
 
     /// Returns only the checks that failed.
     pub fn failures(&self) -> Vec<&DiagnosticCheck> {
-        self.checks.iter().filter(|c| c.status == CheckStatus::Fail).collect()
+        self.checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Fail)
+            .collect()
     }
 
     /// Returns only the checks that warned.
     pub fn warnings(&self) -> Vec<&DiagnosticCheck> {
-        self.checks.iter().filter(|c| c.status == CheckStatus::Warn).collect()
+        self.checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Warn)
+            .collect()
     }
 
     /// Returns only the checks that passed.
     pub fn passes(&self) -> Vec<&DiagnosticCheck> {
-        self.checks.iter().filter(|c| c.status == CheckStatus::Pass).collect()
+        self.checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Pass)
+            .collect()
     }
 
     /// Returns a JSON summary suitable for display.
@@ -350,10 +367,22 @@ impl Doctor {
             Self::run_check(|| self.check_git_available()),
         ];
 
-        let total_pass = checks.iter().filter(|c| c.status == CheckStatus::Pass).count();
-        let total_warn = checks.iter().filter(|c| c.status == CheckStatus::Warn).count();
-        let total_fail = checks.iter().filter(|c| c.status == CheckStatus::Fail).count();
-        let total_skip = checks.iter().filter(|c| c.status == CheckStatus::Skip).count();
+        let total_pass = checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Pass)
+            .count();
+        let total_warn = checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Warn)
+            .count();
+        let total_fail = checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Fail)
+            .count();
+        let total_skip = checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Skip)
+            .count();
 
         Ok(DoctorReport {
             checks,
@@ -480,7 +509,11 @@ impl Doctor {
                 format!("Missing tools: {}", missing.join(", ")),
                 Some(format!(
                     "Install missing tools: {}",
-                    missing.iter().map(|t| format!("'{t}'")).collect::<Vec<_>>().join(", ")
+                    missing
+                        .iter()
+                        .map(|t| format!("'{t}'"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 )),
             )
         }
@@ -591,7 +624,10 @@ impl Doctor {
                 "Configuration",
                 DiagnosticCategory::Configuration,
                 "No settings file found".to_string(),
-                Some("Run Shannon to generate a default settings file at ~/.shannon/settings.json".to_string()),
+                Some(
+                    "Run Shannon to generate a default settings file at ~/.shannon/settings.json"
+                        .to_string(),
+                ),
             );
         }
 
@@ -697,7 +733,8 @@ impl Doctor {
                         DiagnosticCheck::pass(
                             "Disk Space",
                             DiagnosticCategory::Disk,
-                            "Disk appears writable (exact space could not be determined)".to_string(),
+                            "Disk appears writable (exact space could not be determined)"
+                                .to_string(),
                         )
                     }
                     Err(e) => DiagnosticCheck::fail(
@@ -725,24 +762,30 @@ impl Doctor {
                     Ok(output) => {
                         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
                         if output.status.success() && !version.is_empty() {
-                            DiagnosticCheck::pass(
-                                "Git",
-                                DiagnosticCategory::Tools,
-                                version,
-                            )
+                            DiagnosticCheck::pass("Git", DiagnosticCategory::Tools, version)
                         } else {
                             DiagnosticCheck::warn(
                                 "Git",
                                 DiagnosticCategory::Tools,
-                                format!("Git found at {} but version check failed", git_path.display()),
-                                Some("Verify your git installation is working correctly.".to_string()),
+                                format!(
+                                    "Git found at {} but version check failed",
+                                    git_path.display()
+                                ),
+                                Some(
+                                    "Verify your git installation is working correctly."
+                                        .to_string(),
+                                ),
                             )
                         }
                     }
                     Err(e) => DiagnosticCheck::warn(
                         "Git",
                         DiagnosticCategory::Tools,
-                        format!("Git found at {} but cannot execute: {}", git_path.display(), e),
+                        format!(
+                            "Git found at {} but cannot execute: {}",
+                            git_path.display(),
+                            e
+                        ),
                         Some("Check that git is executable.".to_string()),
                     ),
                 }
@@ -971,7 +1014,12 @@ mod tests {
 
     #[test]
     fn test_diagnostic_check_warn() {
-        let check = DiagnosticCheck::warn("Test", DiagnosticCategory::Tools, "caution", Some("fix it".to_string()));
+        let check = DiagnosticCheck::warn(
+            "Test",
+            DiagnosticCategory::Tools,
+            "caution",
+            Some("fix it".to_string()),
+        );
         assert_eq!(check.status, CheckStatus::Warn);
         assert_eq!(check.fix_suggestion, Some("fix it".to_string()));
     }
@@ -1128,7 +1176,10 @@ mod tests {
 
         // Should have run exactly 7 checks
         assert_eq!(report.checks.len(), 7);
-        assert_eq!(report.total_pass + report.total_warn + report.total_fail + report.total_skip, 7);
+        assert_eq!(
+            report.total_pass + report.total_warn + report.total_fail + report.total_skip,
+            7
+        );
 
         // Duration should be recorded (u64 is always >= 0)
         assert!(!report.timestamp.to_rfc3339().is_empty());
@@ -1142,7 +1193,10 @@ mod tests {
         let doctor = Doctor::new();
         let check = doctor.check_api_key();
         // In CI, API keys might be set; we just verify it returns a valid status
-        assert!(matches!(check.status, CheckStatus::Pass | CheckStatus::Fail | CheckStatus::Warn));
+        assert!(matches!(
+            check.status,
+            CheckStatus::Pass | CheckStatus::Fail | CheckStatus::Warn
+        ));
         assert!(!check.name.is_empty());
     }
 

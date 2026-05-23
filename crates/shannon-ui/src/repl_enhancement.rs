@@ -280,7 +280,11 @@ impl ReplHistory {
         if self.entries.is_empty() {
             return None;
         }
-        let idx = self.entries.len().saturating_sub(1).saturating_sub(self.cursor as usize);
+        let idx = self
+            .entries
+            .len()
+            .saturating_sub(1)
+            .saturating_sub(self.cursor as usize);
         self.entries.get(idx).map(|s| s.as_str())
     }
 
@@ -403,12 +407,18 @@ impl InputBuffer {
 
     /// Get the char count for the current line.
     fn line_char_count(&self) -> usize {
-        self.lines.get(self.cursor_row).map(|l| l.chars().count()).unwrap_or(0)
+        self.lines
+            .get(self.cursor_row)
+            .map(|l| l.chars().count())
+            .unwrap_or(0)
     }
 
     /// Get the text of the current line.
     pub fn current_line(&self) -> &str {
-        self.lines.get(self.cursor_row).map(|s| s.as_str()).unwrap_or("")
+        self.lines
+            .get(self.cursor_row)
+            .map(|s| s.as_str())
+            .unwrap_or("")
     }
 
     /// Get the word at or immediately before the cursor on the current line.
@@ -528,7 +538,11 @@ impl InputBuffer {
                 end -= 1;
             }
         } else {
-            while end > 0 && !chars[end - 1].is_alphanumeric() && chars[end - 1] != '_' && !chars[end - 1].is_whitespace() {
+            while end > 0
+                && !chars[end - 1].is_alphanumeric()
+                && chars[end - 1] != '_'
+                && !chars[end - 1].is_whitespace()
+            {
                 end -= 1;
             }
         }
@@ -547,7 +561,9 @@ impl InputBuffer {
         let col = self.cursor_col;
         let chars: Vec<char> = line.chars().collect();
         let len = chars.len();
-        if len == 0 { return None; }
+        if len == 0 {
+            return None;
+        }
         let col = col.min(len.saturating_sub(1));
 
         match target {
@@ -555,17 +571,25 @@ impl InputBuffer {
                 let is_word = |c: char| c.is_alphanumeric() || c == '_';
                 if is_word(chars[col]) {
                     let mut start = col;
-                    while start > 0 && is_word(chars[start - 1]) { start -= 1; }
+                    while start > 0 && is_word(chars[start - 1]) {
+                        start -= 1;
+                    }
                     let mut end = col + 1;
-                    while end < len && is_word(chars[end]) { end += 1; }
+                    while end < len && is_word(chars[end]) {
+                        end += 1;
+                    }
                     if inner {
                         Some((start, end))
                     } else {
                         let mut ae = end;
-                        while ae < len && chars[ae].is_whitespace() { ae += 1; }
+                        while ae < len && chars[ae].is_whitespace() {
+                            ae += 1;
+                        }
                         if ae == end && start > 0 {
                             let mut as_ = start;
-                            while as_ > 0 && chars[as_ - 1].is_whitespace() { as_ -= 1; }
+                            while as_ > 0 && chars[as_ - 1].is_whitespace() {
+                                as_ -= 1;
+                            }
                             Some((as_, end))
                         } else {
                             Some((start, ae))
@@ -573,15 +597,26 @@ impl InputBuffer {
                     }
                 } else if chars[col].is_whitespace() {
                     let mut start = col;
-                    while start > 0 && chars[start - 1].is_whitespace() { start -= 1; }
+                    while start > 0 && chars[start - 1].is_whitespace() {
+                        start -= 1;
+                    }
                     let mut end = col + 1;
-                    while end < len && chars[end].is_whitespace() { end += 1; }
+                    while end < len && chars[end].is_whitespace() {
+                        end += 1;
+                    }
                     Some((start, end))
                 } else {
                     let mut start = col;
-                    while start > 0 && !is_word(chars[start - 1]) && !chars[start - 1].is_whitespace() { start -= 1; }
+                    while start > 0
+                        && !is_word(chars[start - 1])
+                        && !chars[start - 1].is_whitespace()
+                    {
+                        start -= 1;
+                    }
                     let mut end = col + 1;
-                    while end < len && !is_word(chars[end]) && !chars[end].is_whitespace() { end += 1; }
+                    while end < len && !is_word(chars[end]) && !chars[end].is_whitespace() {
+                        end += 1;
+                    }
                     Some((start, end))
                 }
             }
@@ -589,7 +624,11 @@ impl InputBuffer {
                 let quote = target;
                 let open = (0..=col).rev().find(|&i| chars[i] == quote)?;
                 let close = (open + 1..len).find(|&i| chars[i] == quote)?;
-                if inner { Some((open + 1, close)) } else { Some((open, close + 1)) }
+                if inner {
+                    Some((open + 1, close))
+                } else {
+                    Some((open, close + 1))
+                }
             }
             '(' | ')' => find_matching_brackets(&chars, col, '(', ')', inner),
             '[' | ']' => find_matching_brackets(&chars, col, '[', ']', inner),
@@ -603,17 +642,25 @@ impl InputBuffer {
     pub fn delete_col_range(&mut self, start: usize, end: usize) -> String {
         let col = self.cursor_col;
         if col > start {
-            for _ in 0..(col - start) { self.move_left(); }
+            for _ in 0..(col - start) {
+                self.move_left();
+            }
         } else if col < start {
-            for _ in 0..(start - col) { self.move_right(); }
+            for _ in 0..(start - col) {
+                self.move_right();
+            }
         }
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
         let end = end.min(chars.len());
-        if start >= end { return String::new(); }
+        if start >= end {
+            return String::new();
+        }
         let deleted: String = chars[start..end].iter().collect();
         let count = end - start;
-        for _ in 0..count { self.delete(); }
+        for _ in 0..count {
+            self.delete();
+        }
         deleted
     }
 
@@ -693,7 +740,8 @@ impl InputBuffer {
         };
 
         self.cursor_row += 1;
-        self.lines.insert(self.cursor_row, format!("{indent}{after}"));
+        self.lines
+            .insert(self.cursor_row, format!("{indent}{after}"));
         self.cursor_col = indent.chars().count();
     }
 
@@ -746,16 +794,30 @@ impl InputBuffer {
 // ---------------------------------------------------------------------------
 
 /// Find matching bracket pair on a single line.
-fn find_matching_brackets(chars: &[char], col: usize, open: char, close: char, inner: bool) -> Option<(usize, usize)> {
+fn find_matching_brackets(
+    chars: &[char],
+    col: usize,
+    open: char,
+    close: char,
+    inner: bool,
+) -> Option<(usize, usize)> {
     let limit = col.min(chars.len().saturating_sub(1));
     let bracket_open = (0..=limit).rev().find(|&i| chars[i] == open)?;
     let mut depth = 1;
     let bracket_close = (bracket_open + 1..chars.len()).find(|&i| {
-        if chars[i] == open { depth += 1; }
-        if chars[i] == close { depth -= 1; }
+        if chars[i] == open {
+            depth += 1;
+        }
+        if chars[i] == close {
+            depth -= 1;
+        }
         depth == 0
     })?;
-    if inner { Some((bracket_open + 1, bracket_close)) } else { Some((bracket_open, bracket_close + 1)) }
+    if inner {
+        Some((bracket_open + 1, bracket_close))
+    } else {
+        Some((bracket_open, bracket_close + 1))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -847,7 +909,13 @@ impl ReplRenderer {
                 if in_code_block {
                     // Closing code block — highlight collected code with syntect
                     in_code_block = false;
-                    let highlighted = highlight_code_ansi(&code_buffer, &code_lang, ss, ts, &self.syntect_theme_name);
+                    let highlighted = highlight_code_ansi(
+                        &code_buffer,
+                        &code_lang,
+                        ss,
+                        ts,
+                        &self.syntect_theme_name,
+                    );
                     result.push_str(&highlighted);
                     code_buffer.clear();
                     code_lang.clear();
@@ -890,7 +958,8 @@ impl ReplRenderer {
 
         // Handle unclosed code block at end of text
         if in_code_block {
-            let highlighted = highlight_code_ansi(&code_buffer, &code_lang, ss, ts, &self.syntect_theme_name);
+            let highlighted =
+                highlight_code_ansi(&code_buffer, &code_lang, ss, ts, &self.syntect_theme_name);
             result.push_str(&highlighted);
         }
         if in_inline_code {
@@ -1009,9 +1078,7 @@ impl ReplRenderer {
 
     /// Render a code block with syntax highlighting placeholder.
     pub fn render_code_block(&self, code: &str, language: &str) -> String {
-        format!(
-            "\x1b[2m[{language}]\x1b[0m\n\x1b[32m{code}\x1b[0m\n"
-        )
+        format!("\x1b[2m[{language}]\x1b[0m\n\x1b[32m{code}\x1b[0m\n")
     }
 
     /// Render a spinner animation frame.
@@ -1060,7 +1127,10 @@ fn highlight_code_ansi(
         return format!("\x1b[32m{code}\x1b[0m\n");
     };
 
-    let theme = ts.themes.get(theme_name).unwrap_or_else(|| &ts.themes["base16-eighties.dark"]);
+    let theme = ts
+        .themes
+        .get(theme_name)
+        .unwrap_or_else(|| &ts.themes["base16-eighties.dark"]);
     let mut highlighter = HighlightLines::new(syntax, theme);
     let mut output = String::new();
 
@@ -1112,7 +1182,12 @@ pub struct SessionSummary {
 
 impl SessionSummary {
     /// Build a summary from DiffData and other metrics.
-    pub fn from_diff_data(diff_data: &DiffData, commands_run: usize, tools_invoked: usize, started_at: DateTime<Utc>) -> Self {
+    pub fn from_diff_data(
+        diff_data: &DiffData,
+        commands_run: usize,
+        tools_invoked: usize,
+        started_at: DateTime<Utc>,
+    ) -> Self {
         Self {
             total_turns: diff_data.turns.len(),
             files_modified: diff_data.total_files_modified(),
@@ -1137,7 +1212,10 @@ impl SessionSummary {
         lines.push(format!("  Files modified: {}", self.files_modified));
         lines.push(format!("  Files created:  {}", self.files_created));
         lines.push(format!("  Files deleted:  {}", self.files_deleted));
-        lines.push(format!("  Lines +{}/-{}", self.lines_added, self.lines_deleted));
+        lines.push(format!(
+            "  Lines +{}/-{}",
+            self.lines_added, self.lines_deleted
+        ));
         lines.push(format!("  Commands run:   {}", self.commands_run));
         lines.push(format!("  Tools invoked:  {}", self.tools_invoked));
         lines.push(format!("  Duration:       {}s", self.duration_secs));
@@ -1531,7 +1609,8 @@ mod tests {
     #[test]
     fn render_streaming_strips_progress_markers() {
         let r = ReplRenderer::new();
-        let input = "Thinking...\n📊 Tokens: 100 in + 50 out = $0.001\n⏳ Compressing...\nActual text";
+        let input =
+            "Thinking...\n📊 Tokens: 100 in + 50 out = $0.001\n⏳ Compressing...\nActual text";
         let output = r.render_streaming(input);
         assert!(output.contains("Thinking"));
         assert!(output.contains("Actual text"));

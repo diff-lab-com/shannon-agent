@@ -1,6 +1,6 @@
 //! File operation command handlers: search, find, add, export, import, watch, glob.
 
-use crate::{widgets::ChatRole, Result};
+use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
@@ -15,7 +15,12 @@ pub(crate) fn handle_search(repl: &mut Repl, args: &str) -> Result<()> {
         }
     };
 
-    let entries: Vec<String> = repl.command_history.entries().iter().map(|s| s.to_string()).collect();
+    let entries: Vec<String> = repl
+        .command_history
+        .entries()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     let matches = search_utils::search_history(&entries, &options);
     let output = search_utils::format_results(&matches, &options);
     repl.chat.add_message(ChatRole::System, output);
@@ -39,12 +44,12 @@ pub(crate) fn handle_find(repl: &mut Repl, args: &str) -> Result<()> {
         let content_lower = msg.content.to_lowercase();
         if content_lower.contains(&query_lower) {
             // Strip ANSI codes for display
-            let clean_content: String = msg.content.chars()
-                .filter(|c| !c.is_control())
-                .collect();
+            let clean_content: String = msg.content.chars().filter(|c| !c.is_control()).collect();
             let preview = if clean_content.len() > 200 {
                 let mut end = 200;
-                while !clean_content.is_char_boundary(end) { end -= 1; }
+                while !clean_content.is_char_boundary(end) {
+                    end -= 1;
+                }
                 format!("{}...", &clean_content[..end])
             } else {
                 clean_content
@@ -79,12 +84,15 @@ pub(crate) fn handle_find(repl: &mut Repl, args: &str) -> Result<()> {
 pub(crate) fn handle_add(repl: &mut Repl, args: &str) -> Result<()> {
     let pattern = args.trim();
     if pattern.is_empty() {
-        repl.chat.add_message(ChatRole::System,
+        repl.chat.add_message(
+            ChatRole::System,
             "Usage: /add <glob-pattern>\n\
              Examples:\n\
                /add src/**/*.rs    — add all Rust files under src/\n\
                /add *.toml         — add all TOML files in project root\n\
-               /add README.md      — add a single file".to_string());
+               /add README.md      — add a single file"
+                .to_string(),
+        );
         return Ok(());
     }
 
@@ -95,8 +103,10 @@ pub(crate) fn handle_add(repl: &mut Repl, args: &str) -> Result<()> {
     let matched_files = collect_glob_files(cwd, glob_pattern);
 
     if matched_files.is_empty() {
-        repl.chat.add_message(ChatRole::System,
-            format!("No files matched pattern: '{pattern}'"));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("No files matched pattern: '{pattern}'"),
+        );
         return Ok(());
     }
 
@@ -109,8 +119,12 @@ pub(crate) fn handle_add(repl: &mut Repl, args: &str) -> Result<()> {
         match std::fs::read_to_string(file_path) {
             Ok(content) => {
                 total_bytes += content.len();
-                let file_context = format!("\n\n--- File: {} ---\n{}\n--- End of {} ---",
-                    relative.display(), content, relative.display());
+                let file_context = format!(
+                    "\n\n--- File: {} ---\n{}\n--- End of {} ---",
+                    relative.display(),
+                    content,
+                    relative.display()
+                );
 
                 if let Some(ref mut engine) = repl.query_engine {
                     engine.append_system_prompt(&file_context);
@@ -123,7 +137,11 @@ pub(crate) fn handle_add(repl: &mut Repl, args: &str) -> Result<()> {
         }
     }
 
-    let mut msg = format!("Added {} file(s) to context ({} bytes):\n", added.len(), total_bytes);
+    let mut msg = format!(
+        "Added {} file(s) to context ({} bytes):\n",
+        added.len(),
+        total_bytes
+    );
     for file in &added {
         msg.push_str(&format!("  + {file}\n"));
     }
@@ -153,7 +171,11 @@ pub(crate) fn collect_glob_files(base: &std::path::Path, pattern: &str) -> Vec<s
     // Simple glob matching using walkdir
     let _pattern_lower = pattern.to_lowercase();
     let extensions: Vec<&str> = if pattern.contains("*.") {
-        pattern.split('.').next_back().map(|ext| vec![ext]).unwrap_or_default()
+        pattern
+            .split('.')
+            .next_back()
+            .map(|ext| vec![ext])
+            .unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -165,9 +187,17 @@ pub(crate) fn collect_glob_files(base: &std::path::Path, pattern: &str) -> Vec<s
         ""
     };
 
-    fn visit_dir(dir: &std::path::Path, results: &mut Vec<std::path::PathBuf>,
-                 extensions: &[&str], prefix: &str, recursive: bool, base: &std::path::Path) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+    fn visit_dir(
+        dir: &std::path::Path,
+        results: &mut Vec<std::path::PathBuf>,
+        extensions: &[&str],
+        prefix: &str,
+        recursive: bool,
+        base: &std::path::Path,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -178,7 +208,9 @@ pub(crate) fn collect_glob_files(base: &std::path::Path, pattern: &str) -> Vec<s
                 let relative = path.strip_prefix(base).unwrap_or(&path);
                 let rel_str = relative.to_string_lossy();
                 let matches = if !extensions.is_empty() {
-                    extensions.iter().any(|ext| rel_str.to_lowercase().ends_with(&format!(".{ext}")))
+                    extensions
+                        .iter()
+                        .any(|ext| rel_str.to_lowercase().ends_with(&format!(".{ext}")))
                 } else if !prefix.is_empty() {
                     rel_str.starts_with(prefix)
                 } else {
@@ -198,7 +230,14 @@ pub(crate) fn collect_glob_files(base: &std::path::Path, pattern: &str) -> Vec<s
     };
 
     if search_dir.is_dir() {
-        visit_dir(&search_dir, &mut results, &extensions, prefix, recursive, base);
+        visit_dir(
+            &search_dir,
+            &mut results,
+            &extensions,
+            prefix,
+            recursive,
+            base,
+        );
     }
 
     results.sort();
@@ -212,14 +251,16 @@ pub(crate) fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
     let options = match export_utils::parse_export_args(args) {
         Ok(opts) => opts,
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Export error: {e}"));
+            repl.chat
+                .add_message(ChatRole::System, format!("Export error: {e}"));
             return Ok(());
         }
     };
 
-    let filename = options.filename.clone().unwrap_or_else(|| {
-        export_utils::generate_filename(options.format)
-    });
+    let filename = options
+        .filename
+        .clone()
+        .unwrap_or_else(|| export_utils::generate_filename(options.format));
 
     let mut messages = Vec::new();
     for i in 0..repl.chat.len() {
@@ -238,14 +279,21 @@ pub(crate) fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
         }
     }
 
-    let started_at = repl.session_started_at.map(|t| t.timestamp() as u64).unwrap_or(0);
+    let started_at = repl
+        .session_started_at
+        .map(|t| t.timestamp() as u64)
+        .unwrap_or(0);
 
     let session = export_utils::ExportSession {
         title: "Shannon Session".to_string(),
         started_at,
         messages,
         metadata: export_utils::SessionMetadata {
-            model: repl.state.model.clone().unwrap_or_else(|| "default".to_string()),
+            model: repl
+                .state
+                .model
+                .clone()
+                .unwrap_or_else(|| "default".to_string()),
             tokens_used: repl.state.tokens_used as usize,
             working_dir: repl.state.working_directory.clone(),
             commands_run: repl.commands_run,
@@ -254,7 +302,9 @@ pub(crate) fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     let content = match options.format {
-        export_utils::ExportFormat::Markdown => export_utils::export_to_markdown(&session, &options),
+        export_utils::ExportFormat::Markdown => {
+            export_utils::export_to_markdown(&session, &options)
+        }
         export_utils::ExportFormat::Json => export_utils::export_to_json(&session, &options),
     };
 
@@ -264,9 +314,17 @@ pub(crate) fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
                 export_utils::ExportFormat::Markdown => "markdown",
                 export_utils::ExportFormat::Json => "JSON",
             };
-            repl.chat.add_message(ChatRole::System, format!("Session exported to: {filename} ({} messages, {format_name} format)", repl.chat.len()));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Session exported to: {filename} ({} messages, {format_name} format)",
+                    repl.chat.len()
+                ),
+            );
         }
-        Err(e) => { super::set_error(repl, &format!("exporting session: {e}")); }
+        Err(e) => {
+            super::set_error(repl, &format!("exporting session: {e}"));
+        }
     }
     Ok(())
 }
@@ -274,7 +332,8 @@ pub(crate) fn handle_export(repl: &mut Repl, args: &str) -> Result<()> {
 pub(crate) fn handle_import(repl: &mut Repl, args: &str) -> Result<()> {
     let filename = args.trim();
     if filename.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Usage: /import <filename>".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "Usage: /import <filename>".to_string());
         return Ok(());
     }
 
@@ -286,18 +345,25 @@ pub(crate) fn handle_import(repl: &mut Repl, args: &str) -> Result<()> {
         }
     };
 
-    let imported_count = if content.trim_start().starts_with('{') || content.trim_start().starts_with('[') {
-        // Try JSON import
-        import_from_json(repl, &content)?
-    } else {
-        // Try Markdown import
-        import_from_markdown(repl, &content)?
-    };
+    let imported_count =
+        if content.trim_start().starts_with('{') || content.trim_start().starts_with('[') {
+            // Try JSON import
+            import_from_json(repl, &content)?
+        } else {
+            // Try Markdown import
+            import_from_markdown(repl, &content)?
+        };
 
     if imported_count > 0 {
-        repl.chat.add_message(ChatRole::System, format!("Imported {imported_count} messages from: {filename}"));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("Imported {imported_count} messages from: {filename}"),
+        );
     } else {
-        repl.chat.add_message(ChatRole::System, format!("No messages found in: {filename}"));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("No messages found in: {filename}"),
+        );
     }
 
     Ok(())
@@ -307,7 +373,8 @@ pub(crate) fn import_from_json(repl: &mut Repl, content: &str) -> Result<usize> 
     let parsed: serde_json::Value = match serde_json::from_str(content) {
         Ok(v) => v,
         Err(e) => {
-            repl.chat.add_message(ChatRole::System, format!("Invalid JSON: {e}"));
+            repl.chat
+                .add_message(ChatRole::System, format!("Invalid JSON: {e}"));
             return Ok(0);
         }
     };
@@ -319,7 +386,10 @@ pub(crate) fn import_from_json(repl: &mut Repl, content: &str) -> Result<usize> 
             if let Some(arr) = parsed.as_array() {
                 arr
             } else {
-                repl.chat.add_message(ChatRole::System, "JSON does not contain 'messages' array".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "JSON does not contain 'messages' array".to_string(),
+                );
                 return Ok(0);
             }
         }
@@ -334,7 +404,11 @@ pub(crate) fn import_from_json(repl: &mut Repl, content: &str) -> Result<usize> 
             "tool" => ChatRole::Tool,
             _ => ChatRole::System,
         };
-        let text = msg.get("content").and_then(|c| c.as_str()).unwrap_or("").to_string();
+        let text = msg
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
         if !text.is_empty() {
             repl.chat.add_message(role, text);
             count += 1;
@@ -349,33 +423,49 @@ pub(crate) fn import_from_markdown(repl: &mut Repl, content: &str) -> Result<usi
     for line in content.lines() {
         // Markdown export uses "## role" or "**role**" headers
         if line.starts_with("## user:") || line.starts_with("## User:") {
-            let text = line.trim_start_matches('#').trim()
-                .trim_start_matches("user:").trim_start_matches("User:")
-                .trim().to_string();
+            let text = line
+                .trim_start_matches('#')
+                .trim()
+                .trim_start_matches("user:")
+                .trim_start_matches("User:")
+                .trim()
+                .to_string();
             if !text.is_empty() {
                 repl.chat.add_message(ChatRole::User, text);
                 count += 1;
             }
         } else if line.starts_with("## assistant:") || line.starts_with("## Assistant:") {
-            let text = line.trim_start_matches('#').trim()
-                .trim_start_matches("assistant:").trim_start_matches("Assistant:")
-                .trim().to_string();
+            let text = line
+                .trim_start_matches('#')
+                .trim()
+                .trim_start_matches("assistant:")
+                .trim_start_matches("Assistant:")
+                .trim()
+                .to_string();
             if !text.is_empty() {
                 repl.chat.add_message(ChatRole::Assistant, text);
                 count += 1;
             }
         } else if line.starts_with("**User**:") || line.starts_with("**user**:") {
-            let text = line.trim_start_matches('*').trim()
-                .trim_start_matches("User:").trim_start_matches("user:")
-                .trim().to_string();
+            let text = line
+                .trim_start_matches('*')
+                .trim()
+                .trim_start_matches("User:")
+                .trim_start_matches("user:")
+                .trim()
+                .to_string();
             if !text.is_empty() {
                 repl.chat.add_message(ChatRole::User, text);
                 count += 1;
             }
         } else if line.starts_with("**Assistant**:") || line.starts_with("**assistant**:") {
-            let text = line.trim_start_matches('*').trim()
-                .trim_start_matches("Assistant:").trim_start_matches("assistant:")
-                .trim().to_string();
+            let text = line
+                .trim_start_matches('*')
+                .trim()
+                .trim_start_matches("Assistant:")
+                .trim_start_matches("assistant:")
+                .trim()
+                .to_string();
             if !text.is_empty() {
                 repl.chat.add_message(ChatRole::Assistant, text);
                 count += 1;
@@ -388,14 +478,20 @@ pub(crate) fn import_from_markdown(repl: &mut Repl, content: &str) -> Result<usi
 pub(crate) fn handle_add_dir(repl: &mut Repl, args: &str) -> Result<()> {
     let path = args.trim();
     if path.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Usage: /add-dir <path>\nAdds a directory for file access during this session.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Usage: /add-dir <path>\nAdds a directory for file access during this session."
+                .to_string(),
+        );
         return Ok(());
     }
 
     // Expand ~/ to home directory
     let expanded = if path.starts_with("~/") {
         if let Some(home) = dirs::home_dir() {
-            home.join(path.strip_prefix("~/").unwrap_or(path)).to_string_lossy().to_string()
+            home.join(path.strip_prefix("~/").unwrap_or(path))
+                .to_string_lossy()
+                .to_string()
         } else {
             path.to_string()
         }
@@ -412,22 +508,33 @@ pub(crate) fn handle_add_dir(repl: &mut Repl, args: &str) -> Result<()> {
 
     let p = std::path::Path::new(&abs_path);
     if !p.exists() {
-        repl.chat.add_message(ChatRole::System, format!("Directory not found: {abs_path}"));
+        repl.chat
+            .add_message(ChatRole::System, format!("Directory not found: {abs_path}"));
         return Ok(());
     }
     if !p.is_dir() {
-        repl.chat.add_message(ChatRole::System, format!("Not a directory: {abs_path}"));
+        repl.chat
+            .add_message(ChatRole::System, format!("Not a directory: {abs_path}"));
         return Ok(());
     }
 
     if repl.state.extra_dirs.contains(&abs_path) {
-        repl.chat.add_message(ChatRole::System, format!("Directory already added: {abs_path}"));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("Directory already added: {abs_path}"),
+        );
         return Ok(());
     }
 
     repl.state.extra_dirs.push(abs_path.clone());
     let count = repl.state.extra_dirs.len();
-    repl.chat.add_message(ChatRole::System, format!("Added directory: {abs_path}\nExtra directories ({count}): {}", repl.state.extra_dirs.join(", ")));
+    repl.chat.add_message(
+        ChatRole::System,
+        format!(
+            "Added directory: {abs_path}\nExtra directories ({count}): {}",
+            repl.state.extra_dirs.join(", ")
+        ),
+    );
     Ok(())
 }
 
@@ -443,7 +550,8 @@ pub(crate) fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
                   /watch status     — Show current status\n\
                   /watch check      — Check for external changes now\n\
                   /watch track <file> — Track a specific file for changes\n\
-                  /watch list       — List tracked files".to_string();
+                  /watch list       — List tracked files"
+                .to_string();
             repl.chat.add_message(ChatRole::System, msg);
         }
         "check" | "scan" => {
@@ -456,7 +564,10 @@ pub(crate) fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
                 Ok(result) => {
                     let stdout = String::from_utf8_lossy(&result.stdout);
                     if stdout.trim().is_empty() {
-                        repl.chat.add_message(ChatRole::System, "No external file changes detected.".to_string());
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            "No external file changes detected.".to_string(),
+                        );
                     } else {
                         let count = stdout.lines().count();
                         let mut msg = format!("External changes detected ({count} files):\n\n");
@@ -473,7 +584,8 @@ pub(crate) fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Check failed: {e}"));
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Check failed: {e}"));
                 }
             }
         }
@@ -491,18 +603,23 @@ pub(crate) fn handle_watch(repl: &mut Repl, args: &str) -> Result<()> {
                         format!("Watching {count} tracked files in git repository.\nUse /watch check to scan for changes."));
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Error: {e}"));
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Error: {e}"));
                 }
             }
         }
         _ => {
             if let Some(rest) = trimmed.strip_prefix("track ") {
                 let file = rest.trim();
-                repl.chat.add_message(ChatRole::System,
-                    format!("Tracking '{file}'. Use /watch check to scan for changes."));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Tracking '{file}'. Use /watch check to scan for changes."),
+                );
             } else {
-                repl.chat.add_message(ChatRole::System,
-                    "Usage: /watch [status|check|list|track <file>]".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Usage: /watch [status|check|list|track <file>]".to_string(),
+                );
             }
         }
     }

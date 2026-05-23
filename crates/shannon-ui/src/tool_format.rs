@@ -4,9 +4,9 @@
 //! including diffs, JSON, file trees, tables, code blocks, and errors.
 
 use syntect::easy::HighlightLines;
-use syntect::parsing::SyntaxSet;
-use syntect::highlighting::ThemeSet;
 use syntect::highlighting::FontStyle;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
 /// ANSI color codes for terminal output
@@ -26,22 +26,22 @@ mod colors {
 /// Diff-specific ANSI escape codes for background fills and word highlights.
 mod diff_colors {
     // Background fills for dark terminals (subtle tints)
-    pub const BG_ADDED: &str = "\x1b[48;5;22m";       // Dark green background
-    pub const BG_REMOVED: &str = "\x1b[48;5;52m";     // Dark red background
-    pub const BG_CONTEXT: &str = "\x1b[48;5;236m";    // Very dark gray
+    pub const BG_ADDED: &str = "\x1b[48;5;22m"; // Dark green background
+    pub const BG_REMOVED: &str = "\x1b[48;5;52m"; // Dark red background
+    pub const BG_CONTEXT: &str = "\x1b[48;5;236m"; // Very dark gray
 
     // Background fills for light terminals
-    pub const BG_ADDED_LIGHT: &str = "\x1b[48;5;194m";    // Light green background
-    pub const BG_REMOVED_LIGHT: &str = "\x1b[48;5;224m";  // Light red background
-    pub const BG_CONTEXT_LIGHT: &str = "\x1b[48;5;254m";  // Very light gray
+    pub const BG_ADDED_LIGHT: &str = "\x1b[48;5;194m"; // Light green background
+    pub const BG_REMOVED_LIGHT: &str = "\x1b[48;5;224m"; // Light red background
+    pub const BG_CONTEXT_LIGHT: &str = "\x1b[48;5;254m"; // Very light gray
 
     // Word-level highlights (brighter foreground on the background)
-    pub const FG_ADDED_WORD: &str = "\x1b[38;5;82m";      // Bright green
-    pub const FG_REMOVED_WORD: &str = "\x1b[38;5;203m";   // Bright red
+    pub const FG_ADDED_WORD: &str = "\x1b[38;5;82m"; // Bright green
+    pub const FG_REMOVED_WORD: &str = "\x1b[38;5;203m"; // Bright red
 
     // Foreground for diff gutter / line numbers
-    pub const FG_GUTTER: &str = "\x1b[38;5;243m";         // Dim gray
-    pub const FG_GUTTER_SEP: &str = "\x1b[38;5;240m";     // Slightly brighter for separator
+    pub const FG_GUTTER: &str = "\x1b[38;5;243m"; // Dim gray
+    pub const FG_GUTTER_SEP: &str = "\x1b[38;5;240m"; // Slightly brighter for separator
 
     // Error background
     #[allow(dead_code)]
@@ -54,7 +54,7 @@ mod diff_colors {
     pub const BOLD: &str = "\x1b[1m";
     #[allow(dead_code)]
     pub const DIM: &str = "\x1b[2m";
-#[allow(dead_code)]
+    #[allow(dead_code)]
     pub const CYAN: &str = "\x1b[36m";
 }
 
@@ -90,22 +90,32 @@ impl SyntaxHighlight {
         let syntax_set = SyntaxSet::load_defaults_newlines();
         let theme_set = ThemeSet::load_defaults();
         let theme_name = "base16-eighties.dark".to_string();
-        Self { syntax_set, theme_set, theme_name }
+        Self {
+            syntax_set,
+            theme_set,
+            theme_name,
+        }
     }
 
     fn highlight(&self, code: &str, lang: &str) -> String {
-        let syntax = self.syntax_set
+        let syntax = self
+            .syntax_set
             .find_syntax_by_token(lang)
             .or_else(|| self.syntax_set.find_syntax_by_extension(lang))
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
 
-        let theme = self.theme_set.themes.get(&self.theme_name)
+        let theme = self
+            .theme_set
+            .themes
+            .get(&self.theme_name)
             .unwrap_or_else(|| &self.theme_set.themes["base16-eighties.dark"]);
         let mut highlighter = HighlightLines::new(syntax, theme);
         let mut output = String::new();
 
         for line in LinesWithEndings::from(code) {
-            let ranges = highlighter.highlight_line(line, &self.syntax_set).unwrap_or_default();
+            let ranges = highlighter
+                .highlight_line(line, &self.syntax_set)
+                .unwrap_or_default();
             for (style, text) in ranges {
                 let ansi = style_to_ansi(&style);
                 output.push_str(&ansi);
@@ -135,8 +145,12 @@ fn style_to_ansi(style: &syntect::highlighting::Style) -> String {
 fn rgb_to_ansi256(r: u8, g: u8, b: u8) -> u8 {
     // Check if it's a greyscale
     if r == g && g == b {
-        if r < 8 { return 16; }
-        if r > 248 { return 231; }
+        if r < 8 {
+            return 16;
+        }
+        if r > 248 {
+            return 231;
+        }
         return ((r as u16 - 8) * 24 / 247) as u8 + 232;
     }
     // Map to 6x6x6 color cube
@@ -187,12 +201,14 @@ pub fn tool_category(tool_name: &str) -> ToolCategory {
         // Bash/shell tools
         "bash" | "sh" | "shell" | "run" | "execute" => ToolCategory::Bash,
         // Search tools
-        "grep" | "search" | "ripgrep" | "rg" | "ast-grep" | "ast_grep"
-        | "glob" | "find" | "list" | "ls" => ToolCategory::Search,
+        "grep" | "search" | "ripgrep" | "rg" | "ast-grep" | "ast_grep" | "glob" | "find"
+        | "list" | "ls" => ToolCategory::Search,
         // Read-only tools
         "read" | "cat" | "head" | "tail" | "view" => ToolCategory::Read,
         // Write tools
-        "write" | "edit" | "create" | "delete" | "mkdir" | "mv" | "cp" | "patch" => ToolCategory::Write,
+        "write" | "edit" | "create" | "delete" | "mkdir" | "mv" | "cp" | "patch" => {
+            ToolCategory::Write
+        }
         // Agent tools
         "agent" | "subagent" | "delegate" | "task" => ToolCategory::Agent,
         // Skill tools (registered as skill_{id})
@@ -229,12 +245,18 @@ pub fn format_read_summary(tool_name: &str, result: &str) -> String {
     let summary = match tool_name {
         "read" | "cat" | "head" | "tail" => format!("Read {count} lines"),
         "grep" | "search" => {
-            if count == 0 { "No matches found".to_string() }
-            else { format!("Found {count} results") }
+            if count == 0 {
+                "No matches found".to_string()
+            } else {
+                format!("Found {count} results")
+            }
         }
         "glob" | "find" | "list" | "ls" => {
-            if count == 0 { "No files found".to_string() }
-            else { format!("Found {count} files") }
+            if count == 0 {
+                "No files found".to_string()
+            } else {
+                format!("Found {count} files")
+            }
         }
         _ => format!("{count} results"),
     };
@@ -243,30 +265,48 @@ pub fn format_read_summary(tool_name: &str, result: &str) -> String {
         output.push('\n');
         let preview_lines: Vec<&str> = lines.iter().take(READ_SUMMARY_MAX_LINES).copied().collect();
         for line in &preview_lines {
-            output.push_str(&format!("  {}{}{}\n", colors::DIM, &line[..line.len().min(120)], colors::RESET));
+            output.push_str(&format!(
+                "  {}{}{}\n",
+                colors::DIM,
+                &line[..line.len().min(120)],
+                colors::RESET
+            ));
         }
         if count > READ_SUMMARY_MAX_LINES {
-            output.push_str(&format!("  {}... {} more lines{}\n", colors::DIM, count - READ_SUMMARY_MAX_LINES, colors::RESET));
+            output.push_str(&format!(
+                "  {}... {} more lines{}\n",
+                colors::DIM,
+                count - READ_SUMMARY_MAX_LINES,
+                colors::RESET
+            ));
         }
     }
     output.trim_end().to_string()
 }
 
 /// Format a write tool result as a command+output block with category icon.
-pub fn format_write_result(tool_name: &str, result: &str, is_error: bool, duration_label: &str) -> String {
+pub fn format_write_result(
+    tool_name: &str,
+    result: &str,
+    is_error: bool,
+    duration_label: &str,
+) -> String {
     if is_error {
         return format_error(tool_name, result, duration_label);
     }
     let (icon, color) = match tool_category(tool_name) {
-        ToolCategory::Read => ("\u{25B8}", colors::CYAN),       // ▸ read
-        ToolCategory::Write => ("\u{270E}", colors::YELLOW),    // ✎ write
-        ToolCategory::Search => ("\u{229B}", colors::MAGENTA),  // ⊛ search
-        ToolCategory::Bash => ("$", colors::GREEN),              // $ bash
-        ToolCategory::Agent => ("\u{25C6}", colors::CYAN),      // ◆ agent
-        ToolCategory::Skill => ("\u{2726}", colors::MAGENTA),   // ✦ skill
+        ToolCategory::Read => ("\u{25B8}", colors::CYAN), // ▸ read
+        ToolCategory::Write => ("\u{270E}", colors::YELLOW), // ✎ write
+        ToolCategory::Search => ("\u{229B}", colors::MAGENTA), // ⊛ search
+        ToolCategory::Bash => ("$", colors::GREEN),       // $ bash
+        ToolCategory::Agent => ("\u{25C6}", colors::CYAN), // ◆ agent
+        ToolCategory::Skill => ("\u{2726}", colors::MAGENTA), // ✦ skill
     };
     let mut output = String::new();
-    output.push_str(&format!("{color}{icon} {tool_name}{duration_label}{}\n", colors::RESET));
+    output.push_str(&format!(
+        "{color}{icon} {tool_name}{duration_label}{}\n",
+        colors::RESET
+    ));
     let truncated = truncate_result(result);
     if !truncated.is_empty() {
         output.push_str(&truncated);
@@ -283,14 +323,21 @@ pub fn format_write_result(tool_name: &str, result: &str, is_error: bool, durati
 /// - File lists get tree-drawing characters
 /// - Tables get aligned columns
 /// - Everything else passes through as-is
-pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool, duration_secs: Option<f64>) -> String {
-    let duration_label = duration_secs.map(|d| {
-        if d >= 60.0 {
-            format!(" ({}m{:.0}s)", d as u64 / 60, d % 60.0)
-        } else {
-            format!(" ({:.1}s)", d)
-        }
-    }).unwrap_or_default();
+pub fn format_tool_result(
+    tool_name: &str,
+    result: &str,
+    is_error: bool,
+    duration_secs: Option<f64>,
+) -> String {
+    let duration_label = duration_secs
+        .map(|d| {
+            if d >= 60.0 {
+                format!(" ({}m{:.0}s)", d as u64 / 60, d % 60.0)
+            } else {
+                format!(" ({:.1}s)", d)
+            }
+        })
+        .unwrap_or_default();
     if is_error {
         return format_error(tool_name, &truncate_result(result), &duration_label);
     }
@@ -315,9 +362,10 @@ pub fn format_tool_result(tool_name: &str, result: &str, is_error: bool, duratio
                 }
                 s
             }
-            ToolCategory::Write | ToolCategory::Bash | ToolCategory::Agent | ToolCategory::Skill => {
-                format_write_result(tool_name, result, false, &duration_label)
-            }
+            ToolCategory::Write
+            | ToolCategory::Bash
+            | ToolCategory::Agent
+            | ToolCategory::Skill => format_write_result(tool_name, result, false, &duration_label),
         }
     }
 }
@@ -550,7 +598,11 @@ pub fn parse_diff_stats(diff: &str) -> DiffStats {
         files_changed = 1;
     }
 
-    DiffStats { files_changed, additions, deletions }
+    DiffStats {
+        files_changed,
+        additions,
+        deletions,
+    }
 }
 
 /// Format a diff statistics summary line.
@@ -598,7 +650,12 @@ fn parse_hunk_header(line: &str) -> Option<HunkHeader> {
     let (old_start, old_count) = parse_range(old_part)?;
     let (new_start, new_count) = parse_range(new_part)?;
 
-    Some(HunkHeader { old_start, old_count, new_start, new_count })
+    Some(HunkHeader {
+        old_start,
+        old_count,
+        new_start,
+        new_count,
+    })
 }
 
 /// Parse a range like "1,3" into (start, count). Returns (start, 1) if no comma.
@@ -703,9 +760,7 @@ fn split_words(s: &str) -> Vec<&str> {
             }
         }
         // Find the end index of this run
-        let end = chars.peek().map(|(i, _)| *i).unwrap_or_else(|| {
-            s.len()
-        });
+        let end = chars.peek().map(|(i, _)| *i).unwrap_or_else(|| s.len());
         if start < end {
             words.push(&s[start..end]);
         }
@@ -751,11 +806,7 @@ struct DiffLine<'a> {
 }
 
 /// Format a single diff line with background fills, line numbers, and optional word highlights.
-fn format_diff_line_enhanced(
-    line: &DiffLine,
-    config: &DiffConfig,
-    light: bool,
-) -> String {
+fn format_diff_line_enhanced(line: &DiffLine, config: &DiffConfig, light: bool) -> String {
     let reset = diff_colors::RESET;
     let mut out = String::new();
 
@@ -772,7 +823,11 @@ fn format_diff_line_enhanced(
         }
         DiffLineKind::Added => {
             let bg = if config.bg_fills {
-                if light { diff_colors::BG_ADDED_LIGHT } else { diff_colors::BG_ADDED }
+                if light {
+                    diff_colors::BG_ADDED_LIGHT
+                } else {
+                    diff_colors::BG_ADDED
+                }
             } else {
                 ""
             };
@@ -786,7 +841,11 @@ fn format_diff_line_enhanced(
         }
         DiffLineKind::Removed => {
             let bg = if config.bg_fills {
-                if light { diff_colors::BG_REMOVED_LIGHT } else { diff_colors::BG_REMOVED }
+                if light {
+                    diff_colors::BG_REMOVED_LIGHT
+                } else {
+                    diff_colors::BG_REMOVED
+                }
             } else {
                 ""
             };
@@ -800,7 +859,11 @@ fn format_diff_line_enhanced(
         }
         DiffLineKind::Context => {
             let bg = if config.bg_fills {
-                if light { diff_colors::BG_CONTEXT_LIGHT } else { diff_colors::BG_CONTEXT }
+                if light {
+                    diff_colors::BG_CONTEXT_LIGHT
+                } else {
+                    diff_colors::BG_CONTEXT
+                }
             } else {
                 ""
             };
@@ -895,7 +958,9 @@ fn format_diff_with_config(s: &str, config: &DiffConfig) -> String {
                     old_line: None,
                     new_line,
                 });
-                if let Some(ref mut n) = new_line { *n += 1; }
+                if let Some(ref mut n) = new_line {
+                    *n += 1;
+                }
             }
             DiffLineKind::Removed => {
                 diff_lines.push(DiffLine {
@@ -904,7 +969,9 @@ fn format_diff_with_config(s: &str, config: &DiffConfig) -> String {
                     old_line,
                     new_line: None,
                 });
-                if let Some(ref mut o) = old_line { *o += 1; }
+                if let Some(ref mut o) = old_line {
+                    *o += 1;
+                }
             }
             DiffLineKind::Context => {
                 diff_lines.push(DiffLine {
@@ -913,8 +980,12 @@ fn format_diff_with_config(s: &str, config: &DiffConfig) -> String {
                     old_line,
                     new_line,
                 });
-                if let Some(ref mut o) = old_line { *o += 1; }
-                if let Some(ref mut n) = new_line { *n += 1; }
+                if let Some(ref mut o) = old_line {
+                    *o += 1;
+                }
+                if let Some(ref mut n) = new_line {
+                    *n += 1;
+                }
             }
         }
     }
@@ -933,11 +1004,18 @@ fn format_diff_with_config(s: &str, config: &DiffConfig) -> String {
 
     if should_collapse {
         // Collapse: show all headers + first/last N context lines around each hunk
-        output.push_str(&format_diff_collapsed(&diff_lines, &word_pairs, config, light));
+        output.push_str(&format_diff_collapsed(
+            &diff_lines,
+            &word_pairs,
+            config,
+            light,
+        ));
     } else {
         // Full rendering
         for (idx, dl) in diff_lines.iter().enumerate() {
-            if let Some(&(rem_idx, add_idx)) = word_pairs.iter().find(|(r, a)| *r == idx || *a == idx) {
+            if let Some(&(rem_idx, add_idx)) =
+                word_pairs.iter().find(|(r, a)| *r == idx || *a == idx)
+            {
                 // This line is part of a word-diff pair; render with word highlights
                 if idx == rem_idx {
                     let rem_dl = &diff_lines[rem_idx];
@@ -948,8 +1026,14 @@ fn format_diff_with_config(s: &str, config: &DiffConfig) -> String {
 
                     // Render removed with word highlights
                     let bg = if config.bg_fills {
-                        if light { diff_colors::BG_REMOVED_LIGHT } else { diff_colors::BG_REMOVED }
-                    } else { "" };
+                        if light {
+                            diff_colors::BG_REMOVED_LIGHT
+                        } else {
+                            diff_colors::BG_REMOVED
+                        }
+                    } else {
+                        ""
+                    };
                     let gutter = format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
                     output.push_str(&gutter);
                     output.push_str(bg);
@@ -960,8 +1044,14 @@ fn format_diff_with_config(s: &str, config: &DiffConfig) -> String {
 
                     // Render added with word highlights
                     let bg = if config.bg_fills {
-                        if light { diff_colors::BG_ADDED_LIGHT } else { diff_colors::BG_ADDED }
-                    } else { "" };
+                        if light {
+                            diff_colors::BG_ADDED_LIGHT
+                        } else {
+                            diff_colors::BG_ADDED
+                        }
+                    } else {
+                        ""
+                    };
                     let gutter = format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
                     output.push_str(&gutter);
                     output.push_str(bg);
@@ -1035,8 +1125,13 @@ fn format_diff_collapsed(
             .collect();
 
         // Separate headers from body lines
-        let header_end = hunk_body.iter()
-            .position(|(i, dl)| *i > *start && dl.kind != DiffLineKind::FileHeader && dl.kind != DiffLineKind::HunkHeader)
+        let header_end = hunk_body
+            .iter()
+            .position(|(i, dl)| {
+                *i > *start
+                    && dl.kind != DiffLineKind::FileHeader
+                    && dl.kind != DiffLineKind::HunkHeader
+            })
             .unwrap_or(0);
 
         // Render file/hunk headers
@@ -1053,19 +1148,30 @@ fn format_diff_collapsed(
         // If body fits in context, render all
         if body_lines.len() <= ctx * 2 {
             for &(idx, dl) in body_lines {
-                if let Some(&(rem_idx, add_idx)) = word_pairs.iter().find(|(r, a)| *r == idx || *a == idx) {
+                if let Some(&(rem_idx, add_idx)) =
+                    word_pairs.iter().find(|(r, a)| *r == idx || *a == idx)
+                {
                     if idx == rem_idx && !rendered_word_add.contains(&add_idx) {
                         rendered_word_add.insert(add_idx);
                         let rem_dl = &lines[rem_idx];
                         let add_dl = &lines[add_idx];
-                        let rem_content = rem_dl.content.strip_prefix('-').unwrap_or(rem_dl.content);
-                        let add_content = add_dl.content.strip_prefix('+').unwrap_or(add_dl.content);
+                        let rem_content =
+                            rem_dl.content.strip_prefix('-').unwrap_or(rem_dl.content);
+                        let add_content =
+                            add_dl.content.strip_prefix('+').unwrap_or(add_dl.content);
                         let (rem_fmt, add_fmt) = word_diff(rem_content, add_content);
 
                         let bg = if config.bg_fills {
-                            if light { diff_colors::BG_REMOVED_LIGHT } else { diff_colors::BG_REMOVED }
-                        } else { "" };
-                        let gutter = format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
+                            if light {
+                                diff_colors::BG_REMOVED_LIGHT
+                            } else {
+                                diff_colors::BG_REMOVED
+                            }
+                        } else {
+                            ""
+                        };
+                        let gutter =
+                            format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
                         output.push('-');
@@ -1074,9 +1180,16 @@ fn format_diff_collapsed(
                         output.push('\n');
 
                         let bg = if config.bg_fills {
-                            if light { diff_colors::BG_ADDED_LIGHT } else { diff_colors::BG_ADDED }
-                        } else { "" };
-                        let gutter = format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
+                            if light {
+                                diff_colors::BG_ADDED_LIGHT
+                            } else {
+                                diff_colors::BG_ADDED
+                            }
+                        } else {
+                            ""
+                        };
+                        let gutter =
+                            format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
                         output.push('+');
@@ -1092,19 +1205,30 @@ fn format_diff_collapsed(
         } else {
             // Render first ctx lines, skip indicator, last ctx lines
             for &(idx, dl) in body_lines.iter().take(ctx) {
-                if let Some(&(rem_idx, add_idx)) = word_pairs.iter().find(|(r, a)| *r == idx || *a == idx) {
+                if let Some(&(rem_idx, add_idx)) =
+                    word_pairs.iter().find(|(r, a)| *r == idx || *a == idx)
+                {
                     if idx == rem_idx && !rendered_word_add.contains(&add_idx) {
                         rendered_word_add.insert(add_idx);
                         let rem_dl = &lines[rem_idx];
                         let add_dl = &lines[add_idx];
-                        let rem_content = rem_dl.content.strip_prefix('-').unwrap_or(rem_dl.content);
-                        let add_content = add_dl.content.strip_prefix('+').unwrap_or(add_dl.content);
+                        let rem_content =
+                            rem_dl.content.strip_prefix('-').unwrap_or(rem_dl.content);
+                        let add_content =
+                            add_dl.content.strip_prefix('+').unwrap_or(add_dl.content);
                         let (rem_fmt, add_fmt) = word_diff(rem_content, add_content);
 
                         let bg = if config.bg_fills {
-                            if light { diff_colors::BG_REMOVED_LIGHT } else { diff_colors::BG_REMOVED }
-                        } else { "" };
-                        let gutter = format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
+                            if light {
+                                diff_colors::BG_REMOVED_LIGHT
+                            } else {
+                                diff_colors::BG_REMOVED
+                            }
+                        } else {
+                            ""
+                        };
+                        let gutter =
+                            format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
                         output.push('-');
@@ -1113,9 +1237,16 @@ fn format_diff_collapsed(
                         output.push('\n');
 
                         let bg = if config.bg_fills {
-                            if light { diff_colors::BG_ADDED_LIGHT } else { diff_colors::BG_ADDED }
-                        } else { "" };
-                        let gutter = format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
+                            if light {
+                                diff_colors::BG_ADDED_LIGHT
+                            } else {
+                                diff_colors::BG_ADDED
+                            }
+                        } else {
+                            ""
+                        };
+                        let gutter =
+                            format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
                         output.push('+');
@@ -1138,19 +1269,30 @@ fn format_diff_collapsed(
             ));
 
             for &(idx, dl) in body_lines.iter().rev().take(ctx).rev() {
-                if let Some(&(rem_idx, add_idx)) = word_pairs.iter().find(|(r, a)| *r == idx || *a == idx) {
+                if let Some(&(rem_idx, add_idx)) =
+                    word_pairs.iter().find(|(r, a)| *r == idx || *a == idx)
+                {
                     if idx == rem_idx && !rendered_word_add.contains(&add_idx) {
                         rendered_word_add.insert(add_idx);
                         let rem_dl = &lines[rem_idx];
                         let add_dl = &lines[add_idx];
-                        let rem_content = rem_dl.content.strip_prefix('-').unwrap_or(rem_dl.content);
-                        let add_content = add_dl.content.strip_prefix('+').unwrap_or(add_dl.content);
+                        let rem_content =
+                            rem_dl.content.strip_prefix('-').unwrap_or(rem_dl.content);
+                        let add_content =
+                            add_dl.content.strip_prefix('+').unwrap_or(add_dl.content);
                         let (rem_fmt, add_fmt) = word_diff(rem_content, add_content);
 
                         let bg = if config.bg_fills {
-                            if light { diff_colors::BG_REMOVED_LIGHT } else { diff_colors::BG_REMOVED }
-                        } else { "" };
-                        let gutter = format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
+                            if light {
+                                diff_colors::BG_REMOVED_LIGHT
+                            } else {
+                                diff_colors::BG_REMOVED
+                            }
+                        } else {
+                            ""
+                        };
+                        let gutter =
+                            format_line_gutter(rem_dl.old_line, rem_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
                         output.push('-');
@@ -1159,9 +1301,16 @@ fn format_diff_collapsed(
                         output.push('\n');
 
                         let bg = if config.bg_fills {
-                            if light { diff_colors::BG_ADDED_LIGHT } else { diff_colors::BG_ADDED }
-                        } else { "" };
-                        let gutter = format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
+                            if light {
+                                diff_colors::BG_ADDED_LIGHT
+                            } else {
+                                diff_colors::BG_ADDED
+                            }
+                        } else {
+                            ""
+                        };
+                        let gutter =
+                            format_line_gutter(add_dl.new_line, add_dl.kind, config, light);
                         output.push_str(&gutter);
                         output.push_str(bg);
                         output.push('+');
@@ -1219,7 +1368,11 @@ fn format_file_tree(s: &str) -> String {
         .enumerate()
         .map(|(i, line)| {
             let is_last = i == lines.len() - 1;
-            let branch = if is_last { "\u{2514}\u{2500}\u{2500} " } else { "\u{251C}\u{2500}\u{2500} " };
+            let branch = if is_last {
+                "\u{2514}\u{2500}\u{2500} "
+            } else {
+                "\u{251C}\u{2500}\u{2500} "
+            };
             format!("{}{}", branch, line.trim())
         })
         .collect::<Vec<_>>()
@@ -1314,7 +1467,11 @@ fn format_error(tool_name: &str, s: &str, duration_label: &str) -> String {
     let dim = colors::DIM;
     let bold = colors::BOLD;
     let lines: Vec<&str> = s.trim().lines().collect();
-    let body = lines.iter().map(|l| format!("  {dim}{l}{reset}")).collect::<Vec<_>>().join("\n");
+    let body = lines
+        .iter()
+        .map(|l| format!("  {dim}{l}{reset}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
         "{red}{bold}╔═ \u{2717} {tool_name}{duration_label} failed ═{reset}\n{body}\n{red}{bold}╚═══{reset}",
     )
@@ -1332,7 +1489,9 @@ pub fn strip_ansi(s: &str) -> String {
             // Skip all digits and semicolons until 'm'
             while let Some(&next) = chars.peek() {
                 chars.next();
-                if next == 'm' { break; }
+                if next == 'm' {
+                    break;
+                }
             }
         } else {
             result.push(c);
@@ -1362,7 +1521,9 @@ mod tests {
     #[test]
     fn test_looks_like_diff_header() {
         assert!(looks_like_diff("+++ b/new_file.rs\n+content\n"));
-        assert!(looks_like_diff("--- a/old.rs\n+++ b/old.rs\n+line\n-line\n"));
+        assert!(looks_like_diff(
+            "--- a/old.rs\n+++ b/old.rs\n+line\n-line\n"
+        ));
     }
 
     #[test]
@@ -1571,7 +1732,11 @@ mod tests {
 
     #[test]
     fn test_format_diff_summary_singular() {
-        let stats = DiffStats { files_changed: 1, additions: 1, deletions: 1 };
+        let stats = DiffStats {
+            files_changed: 1,
+            additions: 1,
+            deletions: 1,
+        };
         let summary = format_diff_summary(&stats);
         let plain = strip_ansi(&summary);
         assert!(plain.contains("1 file changed"));
@@ -1581,7 +1746,11 @@ mod tests {
 
     #[test]
     fn test_format_diff_summary_plural() {
-        let stats = DiffStats { files_changed: 3, additions: 5, deletions: 2 };
+        let stats = DiffStats {
+            files_changed: 3,
+            additions: 5,
+            deletions: 2,
+        };
         let summary = format_diff_summary(&stats);
         let plain = strip_ansi(&summary);
         assert!(plain.contains("3 files changed"));
@@ -1641,7 +1810,8 @@ mod tests {
 
     #[test]
     fn test_diff_config_no_word_highlight() {
-        let diff = "--- a/old.rs\n+++ b/new.rs\n@@ -1 +1 @@\n-old_function_name()\n+new_function_name()\n";
+        let diff =
+            "--- a/old.rs\n+++ b/new.rs\n@@ -1 +1 @@\n-old_function_name()\n+new_function_name()\n";
         let mut config = DiffConfig::default();
         config.word_highlight = false;
         let formatted = format_diff_with_config(diff, &config);
@@ -1753,7 +1923,10 @@ mod tests {
     fn test_format_error_has_border() {
         let formatted = format_error("bash", "command not found", "");
         // Should contain box-drawing border
-        assert!(formatted.contains("╔") || formatted.contains("╚"), "Error formatting should include box border");
+        assert!(
+            formatted.contains("╔") || formatted.contains("╚"),
+            "Error formatting should include box border"
+        );
     }
 
     // ── Main entry point tests ────────────────────────────────────────
@@ -1884,11 +2057,17 @@ mod tests {
         assert_eq!(classify_diff_line("+++ b/foo.rs"), DiffLineKind::FileHeader);
         assert_eq!(classify_diff_line("--- a/foo.rs"), DiffLineKind::FileHeader);
         assert_eq!(classify_diff_line("--- /dev/null"), DiffLineKind::Removed);
-        assert_eq!(classify_diff_line("@@ -1,3 +1,4 @@"), DiffLineKind::HunkHeader);
+        assert_eq!(
+            classify_diff_line("@@ -1,3 +1,4 @@"),
+            DiffLineKind::HunkHeader
+        );
         assert_eq!(classify_diff_line("+added"), DiffLineKind::Added);
         assert_eq!(classify_diff_line("-removed"), DiffLineKind::Removed);
         assert_eq!(classify_diff_line(" context"), DiffLineKind::Context);
-        assert_eq!(classify_diff_line("\\ No newline at end of file"), DiffLineKind::NoNewline);
+        assert_eq!(
+            classify_diff_line("\\ No newline at end of file"),
+            DiffLineKind::NoNewline
+        );
     }
 
     #[test]
@@ -1904,9 +2083,18 @@ mod tests {
 
     #[test]
     fn test_display_tool_name_mcp() {
-        assert_eq!(display_tool_name("mcp__plugin_serena_serena__find_symbol"), "serena: find_symbol");
-        assert_eq!(display_tool_name("mcp__plugin_playwright_playwright__browser_click"), "playwright: browser_click");
-        assert_eq!(display_tool_name("mcp__plugin_context7_context7__resolve-library-id"), "context7: resolve-library-id");
+        assert_eq!(
+            display_tool_name("mcp__plugin_serena_serena__find_symbol"),
+            "serena: find_symbol"
+        );
+        assert_eq!(
+            display_tool_name("mcp__plugin_playwright_playwright__browser_click"),
+            "playwright: browser_click"
+        );
+        assert_eq!(
+            display_tool_name("mcp__plugin_context7_context7__resolve-library-id"),
+            "context7: resolve-library-id"
+        );
     }
 
     #[test]

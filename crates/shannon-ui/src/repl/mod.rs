@@ -9,71 +9,71 @@ mod commands;
 mod custom_commands;
 mod diagnostic_watcher;
 mod helpers;
-mod source_watcher;
 mod input;
 pub(crate) mod preferences;
 mod query;
 pub(crate) mod render;
 mod session;
 mod sidebar;
+mod source_watcher;
 pub(crate) mod state;
 
 use crate::{
+    Result,
     events::EventHandler,
     render::Renderer,
     repl_enhancement::{DiffData, ReplHistory, ReplRenderer},
     theme::Theme,
     vim::{VimHandler, VimMode},
-    widgets::{
-        ChatWidget, ChatRole, PromptWidget,
-        StreamingState,
-    },
-    Result,
+    widgets::{ChatRole, ChatWidget, PromptWidget, StreamingState},
 };
-use shannon_types::recover_lock;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal, TerminalOptions,
-    Viewport,
-};
+use ratatui::{Terminal, TerminalOptions, Viewport, backend::CrosstermBackend};
+use shannon_types::recover_lock;
 use std::collections::HashMap;
 
 /// Type alias for local (stdio) MCP server config: (name, command, args, env, oauth_scopes).
-type LocalServerEntry = (String, String, Vec<String>, HashMap<String, String>, Vec<String>);
+type LocalServerEntry = (
+    String,
+    String,
+    Vec<String>,
+    HashMap<String, String>,
+    Vec<String>,
+);
 /// Type alias for remote (HTTP/SSE) MCP server config: (name, url, headers, oauth_scopes).
 type HttpServerEntry = (String, String, HashMap<String, String>, Vec<String>);
 use std::io::{self, Write as IoWrite};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-
 // Import core functionality
-use shannon_core::{
-    api::LlmClientConfig,
-    permissions::PermissionManager,
-    PromptInfo,
-    query_engine::QueryEngine,
-    recording::SessionRecorder,
-    state::StateManager,
-    tools::ToolRegistry,
+use shannon_commands::{
+    Command, CommandBase, CommandParser, CommandRegistry, ExecutionContext, PromptCommand,
+    SharedExecutor, builtin_commands,
 };
-use shannon_commands::{Command, CommandBase, CommandRegistry, CommandParser, ExecutionContext, PromptCommand, builtin_commands, SharedExecutor};
+use shannon_core::{
+    PromptInfo, api::LlmClientConfig, permissions::PermissionManager, query_engine::QueryEngine,
+    recording::SessionRecorder, state::StateManager, tools::ToolRegistry,
+};
 
 // Tool registration
-use shannon_tools::register_default_tools_with_project_dir_ex;
 use crate::skill_bridge::register_skills_as_tools;
-use shannon_mcp::{McpProcessPool, discover_pooled_tools, discover_pooled_remote_tools, HeaderSource};
+use shannon_mcp::{
+    HeaderSource, McpProcessPool, discover_pooled_remote_tools, discover_pooled_tools,
+};
+use shannon_tools::register_default_tools_with_project_dir_ex;
 
 // Re-export public types from state submodule
-pub use state::{ReplState, LoopState, RalphState, SidebarTab, AgentDisplay, PlanState};
+pub use state::{AgentDisplay, LoopState, PlanState, RalphState, ReplState, SidebarTab};
 
 // Re-export custom_commands types used by other modules
+pub(super) use custom_commands::{
+    CustomCommandEntry, collect_custom_commands, dedup_custom_commands,
+};
 pub(crate) use custom_commands::{CustomCommandWatcher, SettingsWatcher};
-pub(super) use custom_commands::{collect_custom_commands, dedup_custom_commands, CustomCommandEntry};
 
 /// Main REPL application struct
 pub struct Repl {
@@ -102,9 +102,11 @@ pub struct Repl {
     /// Tokio runtime for async operations
     pub(crate) runtime: Runtime,
     /// Permission request receiver (from QueryEngine to REPL UI)
-    pub(crate) permission_req_rx: tokio::sync::mpsc::UnboundedReceiver<shannon_core::query_engine::PermissionRequest>,
+    pub(crate) permission_req_rx:
+        tokio::sync::mpsc::UnboundedReceiver<shannon_core::query_engine::PermissionRequest>,
     /// Permission request sender (from REPL to QueryEngine)
-    pub(crate) permission_req_tx: tokio::sync::mpsc::UnboundedSender<shannon_core::query_engine::PermissionRequest>,
+    pub(crate) permission_req_tx:
+        tokio::sync::mpsc::UnboundedSender<shannon_core::query_engine::PermissionRequest>,
     /// Last session listing cache (for /resume by number)
     pub(crate) last_session_list: Vec<shannon_core::state::SessionInfo>,
     /// Command history with cursor navigation
@@ -134,13 +136,15 @@ pub struct Repl {
     /// Throttle timestamp for agent refresh (avoids block_on on every tick)
     pub(crate) last_agent_refresh: Option<std::time::Instant>,
     /// Coordinator event receiver for agent dashboard live updates
-    pub(crate) coordinator_event_rx: Option<tokio::sync::broadcast::Receiver<shannon_agents::CoordinatorEvent>>,
+    pub(crate) coordinator_event_rx:
+        Option<tokio::sync::broadcast::Receiver<shannon_agents::CoordinatorEvent>>,
     /// MCP process pool for hot-reload support
     pub(crate) mcp_pool: std::sync::Arc<McpProcessPool>,
     /// Tool registry for MCP hot-reload tool registration
     pub(crate) tool_registry: std::sync::Arc<shannon_core::tools::ToolRegistry>,
     /// MCP progress update receiver (from McpProcessPool to REPL UI)
-    pub(crate) mcp_progress_rx: Option<tokio::sync::mpsc::UnboundedReceiver<(String, f64, Option<f64>)>>,
+    pub(crate) mcp_progress_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<(String, f64, Option<f64>)>>,
     /// Model routing rules: (pattern, model_name) pairs
     pub(crate) model_routes: Vec<(String, String)>,
     /// Checkpoint manager for undo/revert operations
@@ -262,19 +266,23 @@ fn load_permission_rules(pm: &mut PermissionManager) {
 /// Returns the URL string if the tool is a known network tool with a URL in its input.
 fn extract_domain_from_tool(tool_name: &str, tool_input: &serde_json::Value) -> Option<String> {
     let url_str = match tool_name {
-        "fetch" | "web_fetch" | "WebFetch" | "web-fetch" => {
-            tool_input.get("url").and_then(|v| v.as_str()).map(|s| s.to_string())
-        }
-        "web_search" | "WebSearch" | "web-search" | "tavily-search" => {
-            tool_input.get("query").and_then(|v| v.as_str()).map(|q| format!("search: {q}"))
-        }
+        "fetch" | "web_fetch" | "WebFetch" | "web-fetch" => tool_input
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+        "web_search" | "WebSearch" | "web-search" | "tavily-search" => tool_input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .map(|q| format!("search: {q}")),
         _ => None,
     };
     // Truncate very long URLs for display
     url_str.map(|s| {
         if s.len() > 80 {
             let mut end = 77;
-            while !s.is_char_boundary(end) { end -= 1; }
+            while !s.is_char_boundary(end) {
+                end -= 1;
+            }
             format!("{}...", &s[..end])
         } else {
             s
@@ -308,7 +316,10 @@ impl Repl {
         let permission_manager = PermissionManager::new();
         let state_manager = StateManager::new();
         let query_engine = QueryEngine::with_defaults_arc(
-            client, tool_registry.clone(), permission_manager, state_manager,
+            client,
+            tool_registry.clone(),
+            permission_manager,
+            state_manager,
         );
 
         let mut repl = Self {
@@ -366,7 +377,9 @@ impl Repl {
         };
 
         repl.sync_approval_mode_label();
-        repl.state.spinner.set_static_mode(repl.state.reduced_motion);
+        repl.state
+            .spinner
+            .set_static_mode(repl.state.reduced_motion);
         repl.renderer.set_theme(&repl.state.theme);
         repl.output_renderer.syntect_theme_name = repl.state.theme.syntect_theme_name().to_string();
         Ok(repl)
@@ -386,7 +399,9 @@ impl Repl {
         // Create tool registry and register all tools (sandboxed to project dir)
         let project_dir = std::env::current_dir().unwrap_or_default();
         let mut tool_registry = ToolRegistry::new();
-        let reg_result = register_default_tools_with_project_dir_ex(&mut tool_registry, &project_dir).map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
+        let reg_result =
+            register_default_tools_with_project_dir_ex(&mut tool_registry, &project_dir)
+                .map_err(|e| anyhow::anyhow!("Failed to register tools: {e}"))?;
         let agent_context_handle = reg_result.agent_context_handle;
         let plan_mode_flag = reg_result.plan_manager.plan_mode_flag();
 
@@ -429,9 +444,15 @@ impl Repl {
                 for config in mcp_registry.enabled_servers() {
                     // Check server approval before attempting discovery
                     let approval_transport = match config.transport_type {
-                        shannon_core::mcp_advanced::TransportType::Stdio => shannon_core::mcp_server_approval::McpTransportType::Stdio,
-                        shannon_core::mcp_advanced::TransportType::Http => shannon_core::mcp_server_approval::McpTransportType::StreamableHttp,
-                        shannon_core::mcp_advanced::TransportType::Sse => shannon_core::mcp_server_approval::McpTransportType::Sse,
+                        shannon_core::mcp_advanced::TransportType::Stdio => {
+                            shannon_core::mcp_server_approval::McpTransportType::Stdio
+                        }
+                        shannon_core::mcp_advanced::TransportType::Http => {
+                            shannon_core::mcp_server_approval::McpTransportType::StreamableHttp
+                        }
+                        shannon_core::mcp_advanced::TransportType::Sse => {
+                            shannon_core::mcp_server_approval::McpTransportType::Sse
+                        }
                     };
                     let mut approval_req = shannon_core::McpServerApprovalRequest::new(
                         &config.name,
@@ -441,7 +462,8 @@ impl Repl {
                         approval_req.server_url = Some(url.clone());
                     }
                     approval_req.capabilities.push("tools".to_string());
-                    let decision = approval_manager.request_approval(approval_req)
+                    let decision = approval_manager
+                        .request_approval(approval_req)
                         .unwrap_or(shannon_core::ApprovalDecision::Deny);
                     match decision {
                         shannon_core::ApprovalDecision::Deny => {
@@ -455,7 +477,8 @@ impl Repl {
                             tracing::warn!(
                                 "MCP server '{}' requires manual approval. \
                                  Use /mcp approve {} to enable on next startup.",
-                                config.name, config.name
+                                config.name,
+                                config.name
                             );
                             continue;
                         }
@@ -465,12 +488,23 @@ impl Repl {
                     match (&config.command, &config.url) {
                         (Some(cmd), _) => {
                             // Stdio transport
-                            let entry = (config.name.clone(), cmd.clone(), config.args.clone(), config.env.clone(), config.oauth_scopes.clone());
+                            let entry = (
+                                config.name.clone(),
+                                cmd.clone(),
+                                config.args.clone(),
+                                config.env.clone(),
+                                config.oauth_scopes.clone(),
+                            );
                             local_servers.push(entry);
                         }
                         (None, Some(url)) => {
                             // HTTP/SSE transport — discover via HTTP
-                            http_servers.push((config.name.clone(), url.clone(), config.headers.clone(), config.oauth_scopes.clone()));
+                            http_servers.push((
+                                config.name.clone(),
+                                url.clone(),
+                                config.headers.clone(),
+                                config.oauth_scopes.clone(),
+                            ));
                         }
                         (None, None) => {
                             tracing::warn!(
@@ -498,17 +532,12 @@ impl Repl {
                     let futures: Vec<_> = batch
                         .iter()
                         .map(|(name, cmd, args, env, _scopes)| {
-                            discover_pooled_tools(
-                                mcp_pool.clone(),
-                                name,
-                                cmd,
-                                args,
-                                env,
-                            )
+                            discover_pooled_tools(mcp_pool.clone(), name, cmd, args, env)
                         })
                         .collect();
                     let results = discovery_rt.block_on(futures::future::join_all(futures));
-                    for (result, (name, _, _, _, _scopes)) in results.into_iter().zip(batch.iter()) {
+                    for (result, (name, _, _, _, _scopes)) in results.into_iter().zip(batch.iter())
+                    {
                         match result {
                             Ok(discovery) => {
                                 let tool_count = discovery.tools.len();
@@ -607,7 +636,8 @@ impl Repl {
                 let pooled_prompts = discovery_rt.block_on(mcp_pool.list_all_prompts());
                 for (server_name, prompts) in pooled_prompts {
                     for p in prompts {
-                        let arg_names = p.arguments
+                        let arg_names = p
+                            .arguments
                             .map(|args| args.into_iter().map(|a| a.name).collect())
                             .unwrap_or_default();
                         discovered_mcp_prompts.push((
@@ -654,8 +684,13 @@ impl Repl {
                                         Ok(result) => {
                                             let tool_count = result.tools.len();
                                             for tool in result.tools {
-                                                if let Err(e) = tool_registry.register(Box::new(tool)) {
-                                                    tracing::debug!("Plugin tool registration skipped: {}", e);
+                                                if let Err(e) =
+                                                    tool_registry.register(Box::new(tool))
+                                                {
+                                                    tracing::debug!(
+                                                        "Plugin tool registration skipped: {}",
+                                                        e
+                                                    );
                                                 }
                                             }
                                             tracing::info!(
@@ -665,19 +700,36 @@ impl Repl {
                                             );
                                         }
                                         Err(e) => {
-                                            tracing::warn!("Plugin '{}' tool discovery failed: {e}", plugin.manifest.name);
+                                            tracing::warn!(
+                                                "Plugin '{}' tool discovery failed: {e}",
+                                                plugin.manifest.name
+                                            );
                                         }
                                     }
                                 }
                             }
                             Ok(shannon_core::plugin::PluginKind::Command { name, description }) => {
-                                tracing::info!("Command plugin '{}' ({}) loaded", name, description);
+                                tracing::info!(
+                                    "Command plugin '{}' ({}) loaded",
+                                    name,
+                                    description
+                                );
                             }
-                            Ok(shannon_core::plugin::PluginKind::Skill { trigger, template: _ }) => {
-                                tracing::info!("Skill plugin '{}' (trigger: '{}') loaded", plugin.manifest.name, trigger);
+                            Ok(shannon_core::plugin::PluginKind::Skill {
+                                trigger,
+                                template: _,
+                            }) => {
+                                tracing::info!(
+                                    "Skill plugin '{}' (trigger: '{}') loaded",
+                                    plugin.manifest.name,
+                                    trigger
+                                );
                             }
                             Err(e) => {
-                                tracing::warn!("Plugin '{}' has invalid config: {e}", plugin.manifest.name);
+                                tracing::warn!(
+                                    "Plugin '{}' has invalid config: {e}",
+                                    plugin.manifest.name
+                                );
                             }
                         }
                     }
@@ -694,21 +746,24 @@ impl Repl {
         if let Ok(mut guard) = agent_context_handle.lock() {
             let team_ctx = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(
-                        shannon_tools::AgentToolContext::new(client_config.clone())
-                    )
+                    tokio::runtime::Handle::current()
+                        .block_on(shannon_tools::AgentToolContext::new(client_config.clone()))
                 })
             }));
             match team_ctx {
                 Ok(Ok(ctx)) => {
                     // Inject shared LLM executor so teammates can make real LLM calls
                     let ctx = {
-                        let llm_client = shannon_core::api::LlmClient::new(ctx.client_config.clone());
+                        let llm_client =
+                            shannon_core::api::LlmClient::new(ctx.client_config.clone());
                         let executor = shannon_agents::shared_executor(llm_client);
                         ctx.with_executor(executor)
                     };
                     // Register team coordination tools (team_task_create/update/list)
-                    if let Err(e) = shannon_tools::register_team_tools(&mut tool_registry, ctx.coordinator.clone()) {
+                    if let Err(e) = shannon_tools::register_team_tools(
+                        &mut tool_registry,
+                        ctx.coordinator.clone(),
+                    ) {
                         tracing::warn!("Team tool registration failed: {e}");
                     }
                     shared_coordinator = Some(ctx.coordinator.clone());
@@ -770,7 +825,8 @@ impl Repl {
                     let prefix = format!("mcp__{server_name}__");
                     // Unregister old tools from this server.
                     {
-                        let tools_to_remove: Vec<String> = reg.list()
+                        let tools_to_remove: Vec<String> = reg
+                            .list()
                             .into_iter()
                             .filter(|n| n.starts_with(&prefix))
                             .collect();
@@ -790,7 +846,8 @@ impl Repl {
                         server = %server_name,
                         "Dynamically re-registered tools from notification"
                     );
-                })).await;
+                }))
+                .await;
             });
         }
 
@@ -809,9 +866,12 @@ impl Repl {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<(String, f64, Option<f64>)>();
             let pool = mcp_pool.clone();
             mcp_rt.block_on(async move {
-                pool.set_progress_callback(std::sync::Arc::new(move |tool_name, progress, total| {
-                    let _ = tx.send((tool_name.to_string(), progress, total));
-                })).await;
+                pool.set_progress_callback(std::sync::Arc::new(
+                    move |tool_name, progress, total| {
+                        let _ = tx.send((tool_name.to_string(), progress, total));
+                    },
+                ))
+                .await;
             });
             Some(rx)
         };
@@ -858,12 +918,10 @@ impl Repl {
             let mem_manager = shannon_core::project_memory::ProjectMemoryManager::new(cwd.clone());
             if let Ok(merged) = mem_manager.load_merged() {
                 if !merged.instructions.is_empty() {
-                    let resolved = shannon_core::project_memory::resolve_imports(
-                        &merged.instructions, &cwd,
-                    );
-                    query_engine.append_system_prompt(&format!(
-                        "# Project Instructions\n\n{resolved}"
-                    ));
+                    let resolved =
+                        shannon_core::project_memory::resolve_imports(&merged.instructions, &cwd);
+                    query_engine
+                        .append_system_prompt(&format!("# Project Instructions\n\n{resolved}"));
                 }
                 tracing::info!("Loaded {} project memory source(s)", merged.sources.len());
             }
@@ -892,9 +950,7 @@ impl Repl {
             let storage_dir = dirs::home_dir()
                 .map(|h| h.join(".shannon"))
                 .unwrap_or_else(|| cwd.clone());
-            let injector = shannon_core::query_engine::ContextInjector::new(
-                cwd, storage_dir,
-            );
+            let injector = shannon_core::query_engine::ContextInjector::new(cwd, storage_dir);
             query_engine = query_engine.with_context_injector(injector);
         }
 
@@ -1245,14 +1301,18 @@ impl Repl {
             instruction_watcher: {
                 let cwd = std::env::current_dir().unwrap_or_default();
                 if cwd.exists() {
-                    Some(shannon_core::project_instructions::InstructionWatcher::new(cwd))
+                    Some(shannon_core::project_instructions::InstructionWatcher::new(
+                        cwd,
+                    ))
                 } else {
                     None
                 }
             },
             command_watcher: Some(CustomCommandWatcher::new()),
             settings_watcher: Some(SettingsWatcher::new()),
-            source_watcher: Some(source_watcher::SourceWatcher::new(std::env::current_dir().unwrap_or_default())),
+            source_watcher: Some(source_watcher::SourceWatcher::new(
+                std::env::current_dir().unwrap_or_default(),
+            )),
             diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
             diagnostic_rx: None,
             update_check_rx: None,
@@ -1271,7 +1331,9 @@ impl Repl {
         }
 
         repl.sync_approval_mode_label();
-        repl.state.spinner.set_static_mode(repl.state.reduced_motion);
+        repl.state
+            .spinner
+            .set_static_mode(repl.state.reduced_motion);
         repl.renderer.set_theme(&repl.state.theme);
         repl.output_renderer.syntect_theme_name = repl.state.theme.syntect_theme_name().to_string();
         Ok(repl)
@@ -1337,9 +1399,7 @@ impl Repl {
         if let Some(ref engine) = self.query_engine {
             let session_id = engine.session_id().to_string();
             let hook_mgr = engine.hook_manager();
-            let event = shannon_core::hooks::HookEvent::SessionStart {
-                session_id,
-            };
+            let event = shannon_core::hooks::HookEvent::SessionStart { session_id };
             self.runtime.block_on(async {
                 let mgr = hook_mgr.read().await;
                 if let Err(e) = mgr.run_hooks(&event).await {
@@ -1364,10 +1424,15 @@ impl Repl {
                     .enable_all()
                     .build()
                     .ok();
-                let status = rt.as_ref().map(|rt| {
-                    rt.block_on(updater.check_for_update())
-                });
-                if let Some(shannon_core::updater::UpdateStatus::UpdateAvailable { current, latest, release }) = status {
+                let status = rt
+                    .as_ref()
+                    .map(|rt| rt.block_on(updater.check_for_update()));
+                if let Some(shannon_core::updater::UpdateStatus::UpdateAvailable {
+                    current,
+                    latest,
+                    release,
+                }) = status
+                {
                     let msg = format!(
                         "Update available: {} → {} ({}). Download: {}",
                         current, latest, release.tag_name, release.html_url
@@ -1383,9 +1448,10 @@ impl Repl {
         // Main event loop
         while self.running {
             // Poll deferred update check result
-            let update_msg = self.update_check_rx.as_ref().and_then(|rx| {
-                rx.lock().ok().and_then(|guard| guard.try_recv().ok())
-            });
+            let update_msg = self
+                .update_check_rx
+                .as_ref()
+                .and_then(|rx| rx.lock().ok().and_then(|guard| guard.try_recv().ok()));
             if let Some(msg) = update_msg {
                 self.chat.add_message(ChatRole::System, msg);
                 self.update_check_rx = None;
@@ -1440,11 +1506,19 @@ impl Repl {
                         had_updates = true;
                     }
                     let pct = if let Some(t) = total {
-                        if t > 0.0 { (progress / t).clamp(0.0, 1.0) } else { progress.clamp(0.0, 1.0) }
+                        if t > 0.0 {
+                            (progress / t).clamp(0.0, 1.0)
+                        } else {
+                            progress.clamp(0.0, 1.0)
+                        }
                     } else {
                         progress.clamp(0.0, 1.0)
                     };
-                    self.state.multi_progress.add_or_update(&tool_name, pct, self.state.theme.accent);
+                    self.state.multi_progress.add_or_update(
+                        &tool_name,
+                        pct,
+                        self.state.theme.accent,
+                    );
                 }
             }
 
@@ -1499,12 +1573,17 @@ impl Repl {
             let source_changes = self.check_source_changes();
             if !source_changes.is_empty() {
                 let count = source_changes.len();
-                let preview = source_changes.iter()
+                let preview = source_changes
+                    .iter()
                     .take(3)
                     .map(|p| p.rsplit('/').next().unwrap_or(p))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let suffix = if count > 3 { &format!(" +{} more", count - 3) } else { "" };
+                let suffix = if count > 3 {
+                    &format!(" +{} more", count - 3)
+                } else {
+                    ""
+                };
                 self.chat.add_message(
                     crate::widgets::ChatRole::System,
                     format!("[Source changed: {preview}{suffix}]"),
@@ -1546,8 +1625,8 @@ impl Repl {
             // Check scheduled routines and inject due prompts
             let due = self.state.routine_manager.drain_due();
             for (name, prompt) in due {
-                self.chat.add_message(ChatRole::System,
-                    format!("[Routine: {name}] {prompt}"));
+                self.chat
+                    .add_message(ChatRole::System, format!("[Routine: {name}] {prompt}"));
             }
 
             // Check cron-based scheduled tasks and inject due prompts
@@ -1559,8 +1638,10 @@ impl Repl {
                         Some(n) => format!(" — next: {n}"),
                         None => String::new(),
                     };
-                    self.chat.add_message(ChatRole::System,
-                        format!("[Scheduled: {:.8}]{overdue}{next} {}", job.id, job.prompt));
+                    self.chat.add_message(
+                        ChatRole::System,
+                        format!("[Scheduled: {:.8}]{overdue}{next} {}", job.id, job.prompt),
+                    );
                 }
             }
 
@@ -1585,9 +1666,7 @@ impl Repl {
         if let Some(ref engine) = self.query_engine {
             let session_id = engine.session_id().to_string();
             let hook_mgr = engine.hook_manager();
-            let event = shannon_core::hooks::HookEvent::SessionEnd {
-                session_id,
-            };
+            let event = shannon_core::hooks::HookEvent::SessionEnd { session_id };
             self.runtime.block_on(async {
                 let mgr = hook_mgr.read().await;
                 if let Err(e) = mgr.run_hooks(&event).await {
@@ -1609,11 +1688,10 @@ impl Repl {
                     parent_session_id: None,
                     branch_point_message_index: None,
                 };
-                if let Err(e) = self.state_manager.save_session(
-                    &engine.session_id(),
-                    &messages,
-                    &metadata,
-                ) {
+                if let Err(e) =
+                    self.state_manager
+                        .save_session(&engine.session_id(), &messages, &metadata)
+                {
                     tracing::debug!("Auto-save session error: {e}");
                 }
             }
@@ -1639,8 +1717,10 @@ impl Repl {
                 if tracker.total_input_tokens > 0 {
                     println!();
                     println!("── Session Summary ──");
-                    println!("  Tokens: {} in + {} out  |  Cost: ${total_cost:.4}",
-                        tracker.total_input_tokens, tracker.total_output_tokens);
+                    println!(
+                        "  Tokens: {} in + {} out  |  Cost: ${total_cost:.4}",
+                        tracker.total_input_tokens, tracker.total_output_tokens
+                    );
                     if let Some(budget) = tracker.budget_limit_usd {
                         let pct = (total_cost / budget) * 100.0;
                         println!("  Budget: ${total_cost:.4} / ${budget:.2} ({pct:.0}%)");
@@ -1666,10 +1746,8 @@ impl Repl {
             crate::events::Event::Input(key) => {
                 if let Err(e) = input::handle_input(self, key, terminal) {
                     // Display error in UI chat instead of stderr to prevent escape sequence leakage
-                    self.chat.add_message(
-                        ChatRole::System,
-                        format!("Input error: {e}")
-                    );
+                    self.chat
+                        .add_message(ChatRole::System, format!("Input error: {e}"));
                 }
             }
             crate::events::Event::Paste(content) => {
@@ -1698,7 +1776,9 @@ impl Repl {
                         StreamingState::Thinking
                     } else if self.state.streaming_active {
                         StreamingState::Generating {
-                            elapsed_secs: self.state.streaming_start
+                            elapsed_secs: self
+                                .state
+                                .streaming_start
                                 .map(|t| t.elapsed().as_secs())
                                 .unwrap_or(0),
                         }

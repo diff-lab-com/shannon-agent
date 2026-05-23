@@ -108,7 +108,10 @@ impl CheckpointManager {
     /// Set the session ID (for persistence).
     pub fn set_session_id(&mut self, session_id: &str) {
         self.session_id = session_id.to_string();
-        log_err!(self.load_from_disk(), "failed to load checkpoints from disk");
+        log_err!(
+            self.load_from_disk(),
+            "failed to load checkpoints from disk"
+        );
     }
 
     /// Check if the current directory is inside a git repo.
@@ -126,7 +129,11 @@ impl CheckpointManager {
     }
 
     /// Create a checkpoint before a tool execution.
-    pub fn create_checkpoint(&self, tool_name: &str, description: &str) -> Result<Checkpoint, String> {
+    pub fn create_checkpoint(
+        &self,
+        tool_name: &str,
+        description: &str,
+    ) -> Result<Checkpoint, String> {
         if !self.enabled {
             return Err("Not in a git repository — checkpoints unavailable".to_string());
         }
@@ -255,7 +262,10 @@ impl CheckpointManager {
 
         // Remove checkpoints after the reverted one
         recover_lock(self.checkpoints.lock()).truncate(index + 1);
-        log_err!(self.save_to_disk(), "failed to save checkpoints after revert");
+        log_err!(
+            self.save_to_disk(),
+            "failed to save checkpoints after revert"
+        );
 
         Ok(tc)
     }
@@ -273,14 +283,20 @@ impl CheckpointManager {
     /// Pop (discard) the most recent checkpoint without reverting.
     pub fn discard_last(&self) -> Option<TurnCheckpoint> {
         let popped = recover_lock(self.checkpoints.lock()).pop();
-        log_err!(self.save_to_disk(), "failed to save checkpoints after discard");
+        log_err!(
+            self.save_to_disk(),
+            "failed to save checkpoints after discard"
+        );
         popped
     }
 
     /// Clear all checkpoints.
     pub fn clear(&self) {
         recover_lock(self.checkpoints.lock()).clear();
-        log_err!(self.save_to_disk(), "failed to save checkpoints after clear");
+        log_err!(
+            self.save_to_disk(),
+            "failed to save checkpoints after clear"
+        );
     }
 
     /// Number of stored checkpoints.
@@ -311,15 +327,17 @@ impl CheckpointManager {
         };
 
         if let Some(parent) = path.parent() {
-            log_err!(fs::create_dir_all(parent), "failed to create checkpoint directory");
+            log_err!(
+                fs::create_dir_all(parent),
+                "failed to create checkpoint directory"
+            );
         }
 
         let checkpoints = recover_lock(self.checkpoints.lock());
         let json = serde_json::to_string_pretty(&*checkpoints)
             .map_err(|e| format!("Failed to serialize checkpoints: {e}"))?;
 
-        fs::write(&path, json)
-            .map_err(|e| format!("Failed to write checkpoints: {e}"))?;
+        fs::write(&path, json).map_err(|e| format!("Failed to write checkpoints: {e}"))?;
 
         Ok(())
     }
@@ -335,11 +353,11 @@ impl CheckpointManager {
             return Ok(());
         }
 
-        let data = fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read checkpoints: {e}"))?;
+        let data =
+            fs::read_to_string(&path).map_err(|e| format!("Failed to read checkpoints: {e}"))?;
 
-        let loaded: Vec<TurnCheckpoint> = serde_json::from_str(&data)
-            .map_err(|e| format!("Failed to parse checkpoints: {e}"))?;
+        let loaded: Vec<TurnCheckpoint> =
+            serde_json::from_str(&data).map_err(|e| format!("Failed to parse checkpoints: {e}"))?;
 
         let mut checkpoints = recover_lock(self.checkpoints.lock());
         *checkpoints = loaded;
@@ -378,7 +396,10 @@ impl CheckpointManager {
                         .unwrap_or_default()
                         .as_secs() as i64;
                     if mod_time < cutoff_ts {
-                        log_err!(fs::remove_file(&path), "failed to remove old checkpoint file");
+                        log_err!(
+                            fs::remove_file(&path),
+                            "failed to remove old checkpoint file"
+                        );
                         removed += 1;
                     }
                 }
@@ -484,7 +505,10 @@ mod tests {
     #[test]
     fn test_restore_modes() {
         // Just verify the enum variants exist and are distinct
-        assert_ne!(RestoreMode::CodeAndConversation, RestoreMode::ConversationOnly);
+        assert_ne!(
+            RestoreMode::CodeAndConversation,
+            RestoreMode::ConversationOnly
+        );
         assert_ne!(RestoreMode::CodeOnly, RestoreMode::ConversationOnly);
     }
 
@@ -518,7 +542,12 @@ mod tests {
             description: "before edit".to_string(),
             timestamp: 1700000000,
         };
-        mgr.record_turn(0, cp, vec!["src/main.rs".to_string()], Some("fix bug".to_string()));
+        mgr.record_turn(
+            0,
+            cp,
+            vec!["src/main.rs".to_string()],
+            Some("fix bug".to_string()),
+        );
         assert_eq!(mgr.len(), 1);
 
         let list = mgr.list_checkpoints();
@@ -600,7 +629,12 @@ mod tests {
                 description: format!("turn {i}"),
                 timestamp: 1700000000 + i as i64,
             };
-            mgr.record_turn(i, cp, vec![format!("file{i}.rs")], Some(format!("prompt {i}")));
+            mgr.record_turn(
+                i,
+                cp,
+                vec![format!("file{i}.rs")],
+                Some(format!("prompt {i}")),
+            );
         }
         assert_eq!(mgr.len(), 3);
         let list = mgr.list_checkpoints();

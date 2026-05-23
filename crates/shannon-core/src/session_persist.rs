@@ -63,8 +63,7 @@ pub struct PersistedSessionState {
 }
 
 /// Additional metadata attached to a persisted session.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PersistMetadata {
     /// User-given name for the session.
     pub name: Option<String>,
@@ -75,7 +74,6 @@ pub struct PersistMetadata {
     /// User-assigned tags for categorisation.
     pub tags: Vec<String>,
 }
-
 
 /// Lightweight summary used when listing sessions without loading full
 /// conversation history.
@@ -304,10 +302,7 @@ impl SessionPersistManager {
     ///
     /// Returns `Some(session_id)` when a session exists that was last updated
     /// within `timeout` of the current time. Returns `None` otherwise.
-    pub fn should_resume_last(
-        &self,
-        timeout: chrono::Duration,
-    ) -> Option<String> {
+    pub fn should_resume_last(&self, timeout: chrono::Duration) -> Option<String> {
         let summaries = self.list_sessions().ok()?;
 
         let latest = summaries.first()?;
@@ -340,8 +335,12 @@ impl Default for SessionPersistManager {
                 match Self::with_dir(fallback_dir.clone()) {
                     Ok(s) => s,
                     Err(fallback_err) => {
-                        tracing::error!("SessionPersistManager: temp fallback also failed: {fallback_err}. Using non-persisting instance.");
-                        Self { storage_dir: fallback_dir }
+                        tracing::error!(
+                            "SessionPersistManager: temp fallback also failed: {fallback_err}. Using non-persisting instance."
+                        );
+                        Self {
+                            storage_dir: fallback_dir,
+                        }
                     }
                 }
             }
@@ -382,7 +381,7 @@ fn compute_hash(state: &PersistedSessionState) -> String {
 
     // Use SHA-256 for collision-resistant content hashing.
     // Previously used FNV-1a 64-bit which risks collisions at scale.
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(json.as_bytes());
     let result = hasher.finalize();
@@ -463,7 +462,10 @@ mod tests {
         assert_eq!(loaded.model, state.model);
         assert_eq!(loaded.working_dir, state.working_dir);
         assert_eq!(loaded.metadata.name, state.metadata.name);
-        assert_eq!(loaded.metadata.tool_use_count, state.metadata.tool_use_count);
+        assert_eq!(
+            loaded.metadata.tool_use_count,
+            state.metadata.tool_use_count
+        );
         assert_eq!(loaded.metadata.total_tokens, state.metadata.total_tokens);
         assert_eq!(loaded.metadata.tags, state.metadata.tags);
     }
@@ -742,7 +744,10 @@ mod tests {
     #[test]
     fn test_generate_session_id_is_valid_uuid() {
         let id = SessionPersistManager::generate_session_id();
-        assert!(Uuid::parse_str(&id).is_ok(), "generated ID must be a valid UUID");
+        assert!(
+            Uuid::parse_str(&id).is_ok(),
+            "generated ID must be a valid UUID"
+        );
     }
 
     #[test]
@@ -771,8 +776,14 @@ mod tests {
 
         let contents = fs::read_to_string(mgr.session_path(id)).unwrap();
         assert!(contents.contains('\n'), "file should be pretty-printed");
-        assert!(contents.contains("session_id"), "file should contain session_id");
-        assert!(contents.contains("messages"), "file should contain messages");
+        assert!(
+            contents.contains("session_id"),
+            "file should contain session_id"
+        );
+        assert!(
+            contents.contains("messages"),
+            "file should contain messages"
+        );
     }
 
     // -- new and with_dir --

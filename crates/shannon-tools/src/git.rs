@@ -7,7 +7,7 @@
 //! - GitStash: Stash and unstash changes
 //! - GitSafety: Safety checks before destructive operations
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -21,7 +21,9 @@ use std::process::Command;
 /// Validate a user-provided git argument (branch name, etc.) to prevent injection.
 fn validate_git_arg(arg: &str) -> Result<&str, ToolError> {
     if arg.is_empty() {
-        return Err(ToolError::InvalidInput("Argument must not be empty".to_string()));
+        return Err(ToolError::InvalidInput(
+            "Argument must not be empty".to_string(),
+        ));
     }
     if arg.starts_with('-') {
         return Err(ToolError::InvalidInput(format!(
@@ -34,13 +36,19 @@ fn validate_git_arg(arg: &str) -> Result<&str, ToolError> {
         ));
     }
     if arg.contains("../") || arg.contains("..\\") {
-        return Err(ToolError::InvalidInput("Path traversal not allowed".to_string()));
+        return Err(ToolError::InvalidInput(
+            "Path traversal not allowed".to_string(),
+        ));
     }
     if arg.contains([';', '&', '|', '$', '`', '(', ')', '{', '}']) {
-        return Err(ToolError::InvalidInput("Shell metacharacters not allowed".to_string()));
+        return Err(ToolError::InvalidInput(
+            "Shell metacharacters not allowed".to_string(),
+        ));
     }
     if arg.len() > 256 {
-        return Err(ToolError::InvalidInput("Argument too long (max 256 chars)".to_string()));
+        return Err(ToolError::InvalidInput(
+            "Argument too long (max 256 chars)".to_string(),
+        ));
     }
     Ok(arg)
 }
@@ -152,10 +160,8 @@ impl GitBranchTool {
     }
 
     fn list_branches(&self, cwd: Option<&str>) -> Result<ToolOutput, ToolError> {
-        let (stdout, stderr, success) = run_git(
-            &["branch", "-a", "--color=never", "-v", "--no-abbrev"],
-            cwd,
-        )?;
+        let (stdout, stderr, success) =
+            run_git(&["branch", "-a", "--color=never", "-v", "--no-abbrev"], cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Failed to list branches: {stderr}"),
@@ -178,11 +184,14 @@ impl GitBranchTool {
         })
     }
 
-    fn create_branch(&self, input: &GitBranchInput, cwd: Option<&str>) -> Result<ToolOutput, ToolError> {
-        let name = input
-            .name
-            .as_deref()
-            .ok_or_else(|| ToolError::InvalidInput("Branch name is required for create action".to_string()))?;
+    fn create_branch(
+        &self,
+        input: &GitBranchInput,
+        cwd: Option<&str>,
+    ) -> Result<ToolOutput, ToolError> {
+        let name = input.name.as_deref().ok_or_else(|| {
+            ToolError::InvalidInput("Branch name is required for create action".to_string())
+        })?;
 
         validate_git_arg(name)?;
 
@@ -221,11 +230,14 @@ impl GitBranchTool {
         })
     }
 
-    fn switch_branch(&self, input: &GitBranchInput, cwd: Option<&str>) -> Result<ToolOutput, ToolError> {
-        let name = input
-            .name
-            .as_deref()
-            .ok_or_else(|| ToolError::InvalidInput("Branch name is required for switch action".to_string()))?;
+    fn switch_branch(
+        &self,
+        input: &GitBranchInput,
+        cwd: Option<&str>,
+    ) -> Result<ToolOutput, ToolError> {
+        let name = input.name.as_deref().ok_or_else(|| {
+            ToolError::InvalidInput("Branch name is required for switch action".to_string())
+        })?;
 
         validate_git_arg(name)?;
 
@@ -257,11 +269,14 @@ impl GitBranchTool {
         })
     }
 
-    fn delete_branch(&self, input: &GitBranchInput, cwd: Option<&str>) -> Result<ToolOutput, ToolError> {
-        let name = input
-            .name
-            .as_deref()
-            .ok_or_else(|| ToolError::InvalidInput("Branch name is required for delete action".to_string()))?;
+    fn delete_branch(
+        &self,
+        input: &GitBranchInput,
+        cwd: Option<&str>,
+    ) -> Result<ToolOutput, ToolError> {
+        let name = input.name.as_deref().ok_or_else(|| {
+            ToolError::InvalidInput("Branch name is required for delete action".to_string())
+        })?;
 
         validate_git_arg(name)?;
 
@@ -417,7 +432,8 @@ impl Default for GitDiffTool {
 impl GitDiffTool {
     pub fn new() -> Self {
         Self {
-            description: "Show git diffs with support for staged, unstaged, and commit range diffs".to_string(),
+            description: "Show git diffs with support for staged, unstaged, and commit range diffs"
+                .to_string(),
         }
     }
 
@@ -558,7 +574,9 @@ impl Tool for GitDiffTool {
     fn category(&self) -> &str {
         "git"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -604,7 +622,8 @@ impl Default for GitLogTool {
 impl GitLogTool {
     pub fn new() -> Self {
         Self {
-            description: "View git commit history with filtering and formatting options".to_string(),
+            description: "View git commit history with filtering and formatting options"
+                .to_string(),
         }
     }
 
@@ -749,7 +768,9 @@ impl Tool for GitLogTool {
     fn category(&self) -> &str {
         "git"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -797,7 +818,8 @@ impl Default for GitStashTool {
 impl GitStashTool {
     pub fn new() -> Self {
         Self {
-            description: "Manage git stashes: list, push, pop, drop, and apply stashed changes".to_string(),
+            description: "Manage git stashes: list, push, pop, drop, and apply stashed changes"
+                .to_string(),
         }
     }
 
@@ -866,15 +888,18 @@ impl GitStashTool {
         }
 
         Ok(ToolOutput {
-            content: format!(
-                "Changes stashed successfully.\n{}",
-                stdout.trim()
-            ),
+            content: format!("Changes stashed successfully.\n{}", stdout.trim()),
             is_error: false,
             metadata: {
                 let mut map = HashMap::new();
-                map.insert("message".to_string(), json!(input.message.clone().unwrap_or_default()));
-                map.insert("include_untracked".to_string(), json!(input.include_untracked.unwrap_or(false)));
+                map.insert(
+                    "message".to_string(),
+                    json!(input.message.clone().unwrap_or_default()),
+                );
+                map.insert(
+                    "include_untracked".to_string(),
+                    json!(input.include_untracked.unwrap_or(false)),
+                );
                 map
             },
         })
@@ -891,7 +916,8 @@ impl GitStashTool {
                 content: format!(
                     "Failed to pop stash {}:\n{}\n\nHint: You may need to resolve conflicts first, \
                      or try 'git stash apply' to keep the stash after applying.",
-                    index, stderr.trim()
+                    index,
+                    stderr.trim()
                 ),
                 is_error: true,
                 metadata: HashMap::new(),
@@ -899,11 +925,7 @@ impl GitStashTool {
         }
 
         Ok(ToolOutput {
-            content: format!(
-                "Applied and removed stash {}.\n{}",
-                index,
-                stdout.trim()
-            ),
+            content: format!("Applied and removed stash {}.\n{}", index, stdout.trim()),
             is_error: false,
             metadata: {
                 let mut map = HashMap::new();
@@ -951,21 +973,14 @@ impl GitStashTool {
 
         if !success {
             return Ok(ToolOutput {
-                content: format!(
-                    "Failed to apply stash {}:\n{}",
-                    index, stderr.trim()
-                ),
+                content: format!("Failed to apply stash {}:\n{}", index, stderr.trim()),
                 is_error: true,
                 metadata: HashMap::new(),
             });
         }
 
         Ok(ToolOutput {
-            content: format!(
-                "Applied stash {} (stash kept).\n{}",
-                index,
-                stdout.trim()
-            ),
+            content: format!("Applied stash {} (stash kept).\n{}", index, stdout.trim()),
             is_error: false,
             metadata: {
                 let mut map = HashMap::new();
@@ -1171,7 +1186,8 @@ impl GitSafetyTool {
                 return SafetyCheckResult {
                     allowed: true,
                     risk: "safe".to_string(),
-                    message: "Safe: 'git branch -d' only deletes fully merged branches.".to_string(),
+                    message: "Safe: 'git branch -d' only deletes fully merged branches."
+                        .to_string(),
                 };
             }
         }
@@ -1237,7 +1253,9 @@ impl Tool for GitSafetyTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid git safety input: {e}")))?;
 
         if safety_input.command.trim().is_empty() {
-            return Err(ToolError::InvalidInput("Command must not be empty".to_string()));
+            return Err(ToolError::InvalidInput(
+                "Command must not be empty".to_string(),
+            ));
         }
 
         let result = self.check_command(&safety_input.command);
@@ -1262,7 +1280,9 @@ impl Tool for GitSafetyTool {
     fn category(&self) -> &str {
         "git"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1314,20 +1334,18 @@ impl Default for AutoCommitTool {
 impl AutoCommitTool {
     pub fn new() -> Self {
         Self {
-            description: "Smart git commit tool. Stages changes (all or specific files), generates \
+            description:
+                "Smart git commit tool. Stages changes (all or specific files), generates \
                 semantic commit messages from diffs, and creates commits. Supports dry-run preview \
                 and co-author trailers. Shows git status and diff stats before committing."
-                .to_string(),
+                    .to_string(),
         }
     }
 
     /// Generate a commit message from the staged diff stats.
     fn generate_message(cwd: Option<&str>) -> Result<String, ToolError> {
         // Get short stat from diff
-        let (stat, _, success) = run_git(
-            &["diff", "--stat", "--cached"],
-            cwd,
-        )?;
+        let (stat, _, success) = run_git(&["diff", "--stat", "--cached"], cwd)?;
         if !success {
             // Fallback to unstaged diff if no cached changes yet
             let (stat2, _, _) = run_git(&["diff", "--stat"], cwd)?;
@@ -1370,35 +1388,55 @@ impl AutoCommitTool {
     /// Detect semantic commit type from the list of changed file paths.
     fn detect_commit_type(files: &[&str]) -> &'static str {
         let all_test = files.iter().all(|f| {
-            f.contains("/tests/") || f.contains("/test/") || f.starts_with("test") || f.contains("_test.") || f.contains(".test.")
+            f.contains("/tests/")
+                || f.contains("/test/")
+                || f.starts_with("test")
+                || f.contains("_test.")
+                || f.contains(".test.")
         });
         if all_test && !files.is_empty() {
             return "test";
         }
 
         let all_docs = files.iter().all(|f| {
-            f.ends_with(".md") || f.ends_with(".txt") || f.ends_with(".rst") || f.starts_with("docs/")
+            f.ends_with(".md")
+                || f.ends_with(".txt")
+                || f.ends_with(".rst")
+                || f.starts_with("docs/")
         });
         if all_docs && !files.is_empty() {
             return "docs";
         }
 
         let any_style = files.iter().any(|f| {
-            f.ends_with(".css") || f.ends_with(".scss") || f.ends_with(".less") || f.contains("lint") || f.contains("fmt") || f.contains("clippy")
+            f.ends_with(".css")
+                || f.ends_with(".scss")
+                || f.ends_with(".less")
+                || f.contains("lint")
+                || f.contains("fmt")
+                || f.contains("clippy")
         });
         if any_style {
             return "style";
         }
 
         let any_ci = files.iter().any(|f| {
-            f.starts_with(".github/") || f.contains("ci") || f.ends_with("Dockerfile") || f.ends_with(".yml") || f.ends_with(".yaml") || f.ends_with(".toml")
+            f.starts_with(".github/")
+                || f.contains("ci")
+                || f.ends_with("Dockerfile")
+                || f.ends_with(".yml")
+                || f.ends_with(".yaml")
+                || f.ends_with(".toml")
         });
         if any_ci {
             return "ci";
         }
 
         let any_feat = files.iter().any(|f| {
-            f.contains("/src/") || f.contains("/lib/") || f.contains("/commands/") || f.contains("/tools/")
+            f.contains("/src/")
+                || f.contains("/lib/")
+                || f.contains("/commands/")
+                || f.contains("/tools/")
         });
         if any_feat {
             return "feat";
@@ -1511,7 +1549,11 @@ impl Tool for AutoCommitTool {
             let message = parsed.message.clone().unwrap_or_else(|| {
                 Self::generate_message(cwd).unwrap_or_else(|_| "chore: update files".to_string())
             });
-            let co_author_line = parsed.co_author.as_deref().map(|c| format!("\nCo-Authored-By: {c}")).unwrap_or_default();
+            let co_author_line = parsed
+                .co_author
+                .as_deref()
+                .map(|c| format!("\nCo-Authored-By: {c}"))
+                .unwrap_or_default();
             return Ok(ToolOutput {
                 content: format!(
                     "[dry-run] Would commit on branch '{branch}':\n{stat}\nMessage: {message}{co_author_line}"
@@ -1534,10 +1576,7 @@ impl Tool for AutoCommitTool {
         };
 
         // Commit
-        let (_, stderr, success) = run_git(
-            &["commit", "-m", &full_message],
-            cwd,
-        )?;
+        let (_, stderr, success) = run_git(&["commit", "-m", &full_message], cwd)?;
         if !success {
             return Ok(ToolOutput {
                 content: format!("Commit failed: {stderr}"),
@@ -1551,9 +1590,7 @@ impl Tool for AutoCommitTool {
         let hash = hash.trim();
 
         Ok(ToolOutput {
-            content: format!(
-                "Committed on branch '{branch}': {hash} {message}"
-            ),
+            content: format!("Committed on branch '{branch}': {hash} {message}"),
             is_error: false,
             metadata: HashMap::new(),
         })
@@ -1629,9 +1666,7 @@ mod tests {
         std::env::set_current_dir(tmp.path()).unwrap();
 
         let tool = GitBranchTool::new();
-        let result = tool
-            .execute(json!({"action": "list"}))
-            .await;
+        let result = tool.execute(json!({"action": "list"})).await;
 
         // Should fail because not a git repo
         assert!(result.is_err());
@@ -1986,10 +2021,7 @@ mod tests {
     #[tokio::test]
     async fn test_git_safety_execute_safe() {
         let tool = GitSafetyTool::new();
-        let result = tool
-            .execute(json!({"command": "status"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"command": "status"})).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("SAFE"));
     }
@@ -2015,7 +2047,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let result = find_git_root(Some(tmp.path().to_str().unwrap()));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Not a git repository"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Not a git repository")
+        );
     }
 
     #[test]

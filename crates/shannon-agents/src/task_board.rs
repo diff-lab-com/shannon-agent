@@ -105,7 +105,10 @@ impl TaskBoard {
 
         tasks.insert(task.id, task);
 
-        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskAdded { task_id }) {
+        if let Err(e) = self
+            .event_sender
+            .send(TaskBoardEvent::TaskAdded { task_id })
+        {
             tracing::debug!("Failed to send TaskAdded event: {e}");
         }
 
@@ -118,7 +121,8 @@ impl TaskBoard {
     pub async fn get_task(&self, task_id: Uuid) -> Result<AgentTask, AgentError> {
         let tasks = self.tasks.read().await;
 
-        tasks.get(&task_id)
+        tasks
+            .get(&task_id)
             .cloned()
             .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))
     }
@@ -127,7 +131,8 @@ impl TaskBoard {
     pub async fn list_ready_tasks(&self) -> Vec<AgentTask> {
         let tasks = self.tasks.read().await;
 
-        tasks.values()
+        tasks
+            .values()
             .filter(|task| task.is_ready())
             .cloned()
             .collect()
@@ -137,7 +142,8 @@ impl TaskBoard {
     pub async fn list_tasks_by_status(&self, status: TaskStatus) -> Vec<AgentTask> {
         let tasks = self.tasks.read().await;
 
-        tasks.values()
+        tasks
+            .values()
             .filter(|task| task.status == status)
             .cloned()
             .collect()
@@ -147,7 +153,8 @@ impl TaskBoard {
     pub async fn list_tasks_by_priority(&self, priority: TaskPriority) -> Vec<AgentTask> {
         let tasks = self.tasks.read().await;
 
-        let mut result: Vec<_> = tasks.values()
+        let mut result: Vec<_> = tasks
+            .values()
             .filter(|task| task.priority == priority)
             .cloned()
             .collect();
@@ -195,7 +202,10 @@ impl TaskBoard {
         }
 
         for assignment in assignments.values() {
-            *summary.by_agent.entry(assignment.agent.clone()).or_insert(0) += 1;
+            *summary
+                .by_agent
+                .entry(assignment.agent.clone())
+                .or_insert(0) += 1;
         }
 
         summary
@@ -207,7 +217,8 @@ impl TaskBoard {
 
         let mut tasks = self.tasks.write().await;
 
-        let task = tasks.get_mut(&task_id)
+        let task = tasks
+            .get_mut(&task_id)
             .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         if !task.is_ready() {
@@ -241,21 +252,26 @@ impl TaskBoard {
     }
 
     /// Update task status
-    pub async fn update_task_status(&self, task_id: Uuid, status: TaskStatus) -> Result<(), AgentError> {
+    pub async fn update_task_status(
+        &self,
+        task_id: Uuid,
+        status: TaskStatus,
+    ) -> Result<(), AgentError> {
         let status_display = format!("{status:?}");
 
         let mut tasks = self.tasks.write().await;
 
-        let task = tasks.get_mut(&task_id)
+        let task = tasks
+            .get_mut(&task_id)
             .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         task.status = status.clone();
         task.updated_at = chrono::Utc::now();
 
-        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskStatusChanged {
-            task_id,
-            status,
-        }) {
+        if let Err(e) = self
+            .event_sender
+            .send(TaskBoardEvent::TaskStatusChanged { task_id, status })
+        {
             tracing::debug!("Failed to send TaskStatusChanged event: {e}");
         }
 
@@ -266,17 +282,21 @@ impl TaskBoard {
 
     /// Mark a task as completed
     pub async fn complete_task(&self, task_id: Uuid) -> Result<(), AgentError> {
-        let agent = self.assignments.read().await
+        let agent = self
+            .assignments
+            .read()
+            .await
             .get(&task_id)
             .map(|a| a.agent.clone());
 
-        self.update_task_status(task_id, TaskStatus::Completed).await?;
+        self.update_task_status(task_id, TaskStatus::Completed)
+            .await?;
 
         if let Some(agent) = agent {
-            if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskCompleted {
-                task_id,
-                agent,
-            }) {
+            if let Err(e) = self
+                .event_sender
+                .send(TaskBoardEvent::TaskCompleted { task_id, agent })
+            {
                 tracing::debug!("Failed to send TaskCompleted event: {e}");
             }
         }
@@ -288,15 +308,16 @@ impl TaskBoard {
     pub async fn fail_task(&self, task_id: Uuid, reason: String) -> Result<(), AgentError> {
         let mut tasks = self.tasks.write().await;
 
-        let task = tasks.get_mut(&task_id)
+        let task = tasks
+            .get_mut(&task_id)
             .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         task.mark_failed(reason.clone());
 
-        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskFailed {
-            task_id,
-            reason,
-        }) {
+        if let Err(e) = self
+            .event_sender
+            .send(TaskBoardEvent::TaskFailed { task_id, reason })
+        {
             tracing::debug!("Failed to send TaskFailed event: {e}");
         }
 
@@ -316,22 +337,29 @@ impl TaskBoard {
 
         {
             let mut deps = self.dependencies.write().await;
-            deps.entry(task_id).or_insert_with(HashSet::new).insert(depends_on);
+            deps.entry(task_id)
+                .or_insert_with(HashSet::new)
+                .insert(depends_on);
         }
 
         {
             let mut reverse_deps = self.reverse_dependencies.write().await;
-            reverse_deps.entry(depends_on).or_insert_with(HashSet::new).insert(task_id);
+            reverse_deps
+                .entry(depends_on)
+                .or_insert_with(HashSet::new)
+                .insert(task_id);
         }
 
         let mut tasks = self.tasks.write().await;
 
-        let task = tasks.get_mut(&task_id)
+        let task = tasks
+            .get_mut(&task_id)
             .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         task.add_dependency(depends_on);
 
-        let dep_task = tasks.get_mut(&depends_on)
+        let dep_task = tasks
+            .get_mut(&depends_on)
             .ok_or(AgentError::Task(TaskError::TaskNotFound(depends_on)))?;
 
         if !dep_task.blocks.contains(&task_id) {
@@ -355,7 +383,11 @@ impl TaskBoard {
     }
 
     /// Remove a dependency between tasks
-    pub async fn remove_dependency(&self, task_id: Uuid, depends_on: Uuid) -> Result<(), AgentError> {
+    pub async fn remove_dependency(
+        &self,
+        task_id: Uuid,
+        depends_on: Uuid,
+    ) -> Result<(), AgentError> {
         {
             let mut deps = self.dependencies.write().await;
             if let Some(deps_set) = deps.get_mut(&task_id) {
@@ -372,12 +404,14 @@ impl TaskBoard {
 
         let mut tasks = self.tasks.write().await;
 
-        let task = tasks.get_mut(&task_id)
+        let task = tasks
+            .get_mut(&task_id)
             .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         task.blocked_by.retain(|id| *id != depends_on);
 
-        let dep_task = tasks.get_mut(&depends_on)
+        let dep_task = tasks
+            .get_mut(&depends_on)
             .ok_or(AgentError::Task(TaskError::TaskNotFound(depends_on)))?;
 
         dep_task.blocks.retain(|id| *id != task_id);
@@ -423,9 +457,7 @@ impl TaskBoard {
 
         // Get tasks already assigned to this agent
         let assignments = self.assignments.read().await;
-        let assigned_count = assignments.values()
-            .filter(|a| a.agent == agent)
-            .count();
+        let assigned_count = assignments.values().filter(|a| a.agent == agent).count();
 
         // Return first ready task if under limit
         if assigned_count < 3 {
@@ -439,7 +471,8 @@ impl TaskBoard {
     pub async fn get_agent_tasks(&self, agent: &str) -> Vec<AgentTask> {
         let assignments = self.assignments.read().await;
 
-        assignments.values()
+        assignments
+            .values()
             .filter(|a| a.agent == agent)
             .map(|a| a.task.clone())
             .collect()
@@ -448,18 +481,14 @@ impl TaskBoard {
     /// Get count of tasks assigned to an agent
     pub async fn get_agent_task_count(&self, agent: &str) -> usize {
         let assignments = self.assignments.read().await;
-        assignments.values()
-            .filter(|a| a.agent == agent)
-            .count()
+        assignments.values().filter(|a| a.agent == agent).count()
     }
 
     /// Get all agents with assigned tasks
     pub async fn list_active_agents(&self) -> Vec<String> {
         let assignments = self.assignments.read().await;
 
-        let mut agents: Vec<_> = assignments.values()
-            .map(|a| a.agent.clone())
-            .collect();
+        let mut agents: Vec<_> = assignments.values().map(|a| a.agent.clone()).collect();
 
         agents.sort();
         agents.dedup();
@@ -472,7 +501,8 @@ impl TaskBoard {
         let mut tasks = self.tasks.write().await;
         let mut assignments = self.assignments.write().await;
 
-        tasks.remove(&task_id)
+        tasks
+            .remove(&task_id)
             .ok_or(AgentError::Task(TaskError::TaskNotFound(task_id)))?;
 
         assignments.remove(&task_id);
@@ -487,7 +517,10 @@ impl TaskBoard {
             reverse_deps.remove(&task_id);
         }
 
-        if let Err(e) = self.event_sender.send(TaskBoardEvent::TaskRemoved { task_id }) {
+        if let Err(e) = self
+            .event_sender
+            .send(TaskBoardEvent::TaskRemoved { task_id })
+        {
             tracing::debug!("Failed to send TaskRemoved event: {e}");
         }
 
@@ -527,7 +560,11 @@ mod tests {
     #[tokio::test]
     async fn task_board_add_task() {
         let board = TaskBoard::new();
-        let task = AgentTask::new("Test task".into(), "Do something".into(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Test task".into(),
+            "Do something".into(),
+            TaskPriority::Medium,
+        );
         let task_id = task.id;
         board.add_task(task).await.unwrap();
         let tasks = board.tasks.read().await;
@@ -549,7 +586,10 @@ mod tests {
         let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
         let task_id = task.id;
         board.add_task(task).await.unwrap();
-        board.fail_task(task_id, "timeout".to_string()).await.unwrap();
+        board
+            .fail_task(task_id, "timeout".to_string())
+            .await
+            .unwrap();
         let tasks = board.tasks.read().await;
         match &tasks.get(&task_id).unwrap().status {
             TaskStatus::Failed(reason) => assert_eq!(reason, "timeout"),
@@ -611,13 +651,8 @@ mod tests {
             completed_tasks: 1,
             failed_tasks: 1,
             blocked_tasks: 0,
-            by_priority: HashMap::from([
-                ("High".to_string(), 2),
-                ("Medium".to_string(), 3),
-            ]),
-            by_agent: HashMap::from([
-                ("worker-1".to_string(), 3),
-            ]),
+            by_priority: HashMap::from([("High".to_string(), 2), ("Medium".to_string(), 3)]),
+            by_agent: HashMap::from([("worker-1".to_string(), 3)]),
         };
         let json = serde_json::to_string(&summary).unwrap();
         let de: TaskBoardSummary = serde_json::from_str(&json).unwrap();
@@ -649,7 +684,10 @@ mod tests {
         let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
         let task_id = task.id;
         board.add_task(task).await.unwrap();
-        board.assign_task(task_id, "worker-1".to_string()).await.unwrap();
+        board
+            .assign_task(task_id, "worker-1".to_string())
+            .await
+            .unwrap();
         let agent_tasks = board.get_agent_tasks("worker-1").await;
         assert_eq!(agent_tasks.len(), 1);
         assert_eq!(agent_tasks[0].subject, "T1");
@@ -658,7 +696,9 @@ mod tests {
     #[tokio::test]
     async fn task_board_assign_nonexistent_fails() {
         let board = TaskBoard::new();
-        let result = board.assign_task(Uuid::new_v4(), "worker-1".to_string()).await;
+        let result = board
+            .assign_task(Uuid::new_v4(), "worker-1".to_string())
+            .await;
         assert!(result.is_err());
     }
 
@@ -671,8 +711,14 @@ mod tests {
         let id2 = t2.id;
         board.add_task(t1).await.unwrap();
         board.add_task(t2).await.unwrap();
-        board.assign_task(id1, "worker-1".to_string()).await.unwrap();
-        board.assign_task(id2, "worker-1".to_string()).await.unwrap();
+        board
+            .assign_task(id1, "worker-1".to_string())
+            .await
+            .unwrap();
+        board
+            .assign_task(id2, "worker-1".to_string())
+            .await
+            .unwrap();
         assert_eq!(board.get_agent_task_count("worker-1").await, 2);
         assert_eq!(board.get_agent_task_count("worker-2").await, 0);
     }
@@ -686,8 +732,14 @@ mod tests {
         let id2 = t2.id;
         board.add_task(t1).await.unwrap();
         board.add_task(t2).await.unwrap();
-        board.assign_task(id1, "worker-1".to_string()).await.unwrap();
-        board.assign_task(id2, "worker-2".to_string()).await.unwrap();
+        board
+            .assign_task(id1, "worker-1".to_string())
+            .await
+            .unwrap();
+        board
+            .assign_task(id2, "worker-2".to_string())
+            .await
+            .unwrap();
         let agents = board.list_active_agents().await;
         assert_eq!(agents.len(), 2);
     }
@@ -700,7 +752,10 @@ mod tests {
         let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
         let task_id = task.id;
         board.add_task(task).await.unwrap();
-        board.update_task_status(task_id, TaskStatus::InProgress).await.unwrap();
+        board
+            .update_task_status(task_id, TaskStatus::InProgress)
+            .await
+            .unwrap();
         let retrieved = board.get_task(task_id).await.unwrap();
         assert_eq!(retrieved.status, TaskStatus::InProgress);
     }
@@ -711,7 +766,10 @@ mod tests {
         let task = AgentTask::new("T1".into(), "D1".into(), TaskPriority::Medium);
         let task_id = task.id;
         board.add_task(task).await.unwrap();
-        board.assign_task(task_id, "worker-1".to_string()).await.unwrap();
+        board
+            .assign_task(task_id, "worker-1".to_string())
+            .await
+            .unwrap();
         board.complete_task(task_id).await.unwrap();
         let retrieved = board.get_task(task_id).await.unwrap();
         assert_eq!(retrieved.status, TaskStatus::Completed);
@@ -779,7 +837,10 @@ mod tests {
         let t2 = AgentTask::new("T2".into(), "D2".into(), TaskPriority::Medium);
         board.add_task(t1.clone()).await.unwrap();
         board.add_task(t2).await.unwrap();
-        board.update_task_status(t1.id, TaskStatus::InProgress).await.unwrap();
+        board
+            .update_task_status(t1.id, TaskStatus::InProgress)
+            .await
+            .unwrap();
         let pending = board.list_tasks_by_status(TaskStatus::Pending).await;
         let in_progress = board.list_tasks_by_status(TaskStatus::InProgress).await;
         assert_eq!(pending.len(), 1);
@@ -796,9 +857,14 @@ mod tests {
         let task_id = task.id;
         board.add_task(task).await.unwrap();
         let _ = rx.try_recv(); // consume TaskAdded
-        board.assign_task(task_id, "worker-1".to_string()).await.unwrap();
+        board
+            .assign_task(task_id, "worker-1".to_string())
+            .await
+            .unwrap();
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, TaskBoardEvent::TaskAssigned { task_id: tid, agent } if tid == task_id && agent == "worker-1"));
+        assert!(
+            matches!(event, TaskBoardEvent::TaskAssigned { task_id: tid, agent } if tid == task_id && agent == "worker-1")
+        );
     }
 
     #[tokio::test]
@@ -809,12 +875,17 @@ mod tests {
         let task_id = task.id;
         board.add_task(task).await.unwrap();
         let _ = rx.try_recv(); // TaskAdded
-        board.assign_task(task_id, "worker-1".to_string()).await.unwrap();
+        board
+            .assign_task(task_id, "worker-1".to_string())
+            .await
+            .unwrap();
         let _ = rx.try_recv(); // TaskAssigned
         board.complete_task(task_id).await.unwrap();
         let _ = rx.try_recv(); // TaskStatusChanged from update_task_status
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, TaskBoardEvent::TaskCompleted { task_id: tid, agent } if tid == task_id && agent == "worker-1"));
+        assert!(
+            matches!(event, TaskBoardEvent::TaskCompleted { task_id: tid, agent } if tid == task_id && agent == "worker-1")
+        );
     }
 
     #[tokio::test]

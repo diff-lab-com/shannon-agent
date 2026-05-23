@@ -4,17 +4,17 @@ use dashmap::DashMap;
 use serde_json::Value;
 use shannon_tool_interface::{ToolError, ToolOutput, ToolResult};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, oneshot};
 use tracing::{debug, info, warn};
 
-use super::types::*;
-use super::SamplingProvider;
 use super::ElicitationProvider;
+use super::SamplingProvider;
+use super::types::*;
 
 /// Manages a single persistent MCP server process.
 pub(crate) struct McpServerHandle {
@@ -175,12 +175,14 @@ impl McpServerHandle {
             )
         })?;
 
-        let stdin = child.stdin.take().ok_or_else(|| {
-            format!("MCP server '{}' stdin not available", self.name)
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            format!("MCP server '{}' stdout not available", self.name)
-        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| format!("MCP server '{}' stdin not available", self.name))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| format!("MCP server '{}' stdout not available", self.name))?;
         let stderr = child.stderr.take(); // Optional — some servers don't produce stderr
 
         // Store child and stdin
@@ -197,7 +199,17 @@ impl McpServerHandle {
         let sampling_provider = self.sampling_provider.clone();
         let elicitation_provider = self.elicitation_provider.clone();
         let handle = tokio::spawn(async move {
-            Self::read_responses(reader, &pending, &server_name, &notification_tx, stdin_clone, roots_provider, sampling_provider, elicitation_provider).await;
+            Self::read_responses(
+                reader,
+                &pending,
+                &server_name,
+                &notification_tx,
+                stdin_clone,
+                roots_provider,
+                sampling_provider,
+                elicitation_provider,
+            )
+            .await;
         });
         *self.reader_task.lock().await = Some(handle);
 
@@ -214,7 +226,8 @@ impl McpServerHandle {
                     }
                     let lower = line.to_lowercase();
                     // Route based on content severity
-                    if lower.contains("error") || lower.contains("fatal") || lower.contains("panic") {
+                    if lower.contains("error") || lower.contains("fatal") || lower.contains("panic")
+                    {
                         warn!(server = %stderr_name, stderr = %line, "MCP server stderr");
                     } else if lower.contains("warn") {
                         warn!(server = %stderr_name, stderr = %line, "MCP server stderr (warning)");
@@ -228,14 +241,18 @@ impl McpServerHandle {
         // Send initialize request (uses connection timeout, not regular request timeout)
         *self.state.write().await = ServerState::Starting;
         let init_response = self
-            .send_request_with_timeout("initialize", serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {
-                    "roots": { "listChanged": true },
-                    "sampling": {}
-                },
-                "clientInfo": {"name": "shannon-code", "version": "0.1.0"}
-            }), self.connection_timeout)
+            .send_request_with_timeout(
+                "initialize",
+                serde_json::json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {
+                        "roots": { "listChanged": true },
+                        "sampling": {}
+                    },
+                    "clientInfo": {"name": "shannon-code", "version": "0.1.0"}
+                }),
+                self.connection_timeout,
+            )
             .await?;
 
         debug!(
@@ -247,7 +264,10 @@ impl McpServerHandle {
         // Parse capabilities from init response.
         if let Some(result) = init_response.get("result") {
             if let Ok(caps) = serde_json::from_value::<crate::ServerCapabilities>(
-                result.get("capabilities").cloned().unwrap_or(serde_json::json!({})),
+                result
+                    .get("capabilities")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({})),
             ) {
                 debug!(
                     server = %self.name,
@@ -357,7 +377,10 @@ impl McpServerHandle {
                 let req_id = value.get("id").cloned();
                 let provider = sampling_provider.lock().await;
                 let response_value = if let Some(ref handler) = *provider {
-                    let params = value.get("params").cloned().unwrap_or(serde_json::json!({}));
+                    let params = value
+                        .get("params")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
                     match serde_json::from_value::<crate::CreateMessageRequest>(params) {
                         Ok(req) => match handler(req).await {
                             Ok(result) => serde_json::json!({
@@ -405,7 +428,10 @@ impl McpServerHandle {
                 let req_id = value.get("id").cloned();
                 let provider = elicitation_provider.lock().await;
                 let response_value = if let Some(ref handler) = *provider {
-                    let params = value.get("params").cloned().unwrap_or(serde_json::json!({}));
+                    let params = value
+                        .get("params")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({}));
                     match serde_json::from_value::<crate::ElicitationRequest>(params) {
                         Ok(req) => match handler(req).await {
                             Ok(result) => serde_json::json!({
@@ -455,8 +481,7 @@ impl McpServerHandle {
                 }
             }
             // Progress notifications are routed to the matching pending request.
-            else if value.get("method").and_then(|m| m.as_str())
-                == Some("notifications/progress")
+            else if value.get("method").and_then(|m| m.as_str()) == Some("notifications/progress")
             {
                 if let Some(token) = value
                     .get("params")
@@ -531,7 +556,8 @@ impl McpServerHandle {
 
     /// Send a JSON-RPC request and wait for the response.
     pub(crate) async fn send_request(&self, method: &str, params: Value) -> Result<Value, String> {
-        self.send_request_with_progress(method, params, None, None, self.request_timeout).await
+        self.send_request_with_progress(method, params, None, None, self.request_timeout)
+            .await
     }
 
     /// Send a JSON-RPC request with a specific timeout.
@@ -541,7 +567,8 @@ impl McpServerHandle {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, String> {
-        self.send_request_with_progress(method, params, None, None, timeout).await
+        self.send_request_with_progress(method, params, None, None, timeout)
+            .await
     }
 
     /// Send a JSON-RPC request with optional progress reporting.
@@ -601,13 +628,10 @@ impl McpServerHandle {
             })?;
 
             let request_str = serde_json::to_string(&request).unwrap_or_default();
-            stdin
-                .write_all(request_str.as_bytes())
-                .await
-                .map_err(|e| {
-                    self.pending.remove(&id);
-                    format!("MCP server '{}' stdin write failed: {}", self.name, e)
-                })?;
+            stdin.write_all(request_str.as_bytes()).await.map_err(|e| {
+                self.pending.remove(&id);
+                format!("MCP server '{}' stdin write failed: {}", self.name, e)
+            })?;
             stdin.write_all(b"\n").await.map_err(|e| {
                 self.pending.remove(&id);
                 format!("MCP server '{}' newline write failed: {}", self.name, e)
@@ -647,7 +671,11 @@ impl McpServerHandle {
     }
 
     /// Send a JSON-RPC notification (no id, no response expected).
-    pub(crate) async fn send_notification(&self, method: &str, params: Value) -> Result<(), String> {
+    pub(crate) async fn send_notification(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(), String> {
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -655,9 +683,9 @@ impl McpServerHandle {
         });
 
         let mut stdin_guard = self.stdin.lock().await;
-        let stdin = stdin_guard.as_mut().ok_or_else(|| {
-            format!("MCP server '{}' stdin not available", self.name)
-        })?;
+        let stdin = stdin_guard
+            .as_mut()
+            .ok_or_else(|| format!("MCP server '{}' stdin not available", self.name))?;
 
         let notification_str = serde_json::to_string(&notification).unwrap_or_default();
         stdin
@@ -675,16 +703,22 @@ impl McpServerHandle {
                 self.name, e
             )
         })?;
-        stdin.flush().await.map_err(|e| {
-            format!("MCP server '{}' flush failed: {}", self.name, e)
-        })?;
+        stdin
+            .flush()
+            .await
+            .map_err(|e| format!("MCP server '{}' flush failed: {}", self.name, e))?;
 
         Ok(())
     }
 
     /// Call a tool on this server via `tools/call`.
-    pub(crate) async fn call_tool(&self, tool_name: &str, arguments: Value) -> ToolResult<ToolOutput> {
-        self.call_tool_with_progress(tool_name, arguments, None).await
+    pub(crate) async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> ToolResult<ToolOutput> {
+        self.call_tool_with_progress(tool_name, arguments, None)
+            .await
     }
 
     /// Call a tool with optional progress reporting.
@@ -762,7 +796,10 @@ impl McpServerHandle {
                         .iter()
                         .filter_map(|block| {
                             if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                                block
+                                    .get("text")
+                                    .and_then(|t| t.as_str())
+                                    .map(|s| s.to_string())
                             } else {
                                 None
                             }
@@ -770,16 +807,23 @@ impl McpServerHandle {
                         .collect();
 
                     if !texts.is_empty() {
-                        let content = truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
+                        let content =
+                            truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
                         return Ok(ToolOutput::success(content));
                     }
                 }
             }
             // Fallback: return the result as JSON string (also truncated)
-            return Ok(ToolOutput::success(truncate_tool_result(&result.to_string(), MAX_TOOL_RESULT_CHARS)));
+            return Ok(ToolOutput::success(truncate_tool_result(
+                &result.to_string(),
+                MAX_TOOL_RESULT_CHARS,
+            )));
         }
 
-        Ok(ToolOutput::success(truncate_tool_result(&response.to_string(), MAX_TOOL_RESULT_CHARS)))
+        Ok(ToolOutput::success(truncate_tool_result(
+            &response.to_string(),
+            MAX_TOOL_RESULT_CHARS,
+        )))
     }
 
     /// Send a ping to check server health.

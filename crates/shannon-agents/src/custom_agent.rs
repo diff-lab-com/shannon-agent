@@ -455,11 +455,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("no-name.md");
 
-        fs::write(
-            &path,
-            "---\ndescription: No name agent\n---\nBody text.\n",
-        )
-        .unwrap();
+        fs::write(&path, "---\ndescription: No name agent\n---\nBody text.\n").unwrap();
 
         let result = CustomAgentDef::from_file(&path);
         assert!(result.is_err());
@@ -475,11 +471,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("no-desc.md");
 
-        fs::write(
-            &path,
-            "---\nname: no-desc\n---\nBody text.\n",
-        )
-        .unwrap();
+        fs::write(&path, "---\nname: no-desc\n---\nBody text.\n").unwrap();
 
         let result = CustomAgentDef::from_file(&path);
         assert!(result.is_err());
@@ -730,11 +722,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fm-only.md");
 
-        fs::write(
-            &path,
-            "---\nname: fm-only\ndescription: No body\n---\n",
-        )
-        .unwrap();
+        fs::write(&path, "---\nname: fm-only\ndescription: No body\n---\n").unwrap();
 
         let def = CustomAgentDef::from_file(&path).unwrap();
         assert_eq!(def.name, "fm-only");
@@ -779,8 +767,7 @@ mod tests {
 
     #[test]
     fn discover_from_nonexistent_dir_returns_empty() {
-        let loader =
-            CustomAgentLoader::with_paths(vec![PathBuf::from("/nonexistent/path/agents")]);
+        let loader = CustomAgentLoader::with_paths(vec![PathBuf::from("/nonexistent/path/agents")]);
         let agents = loader.discover().unwrap();
         assert!(agents.is_empty());
     }
@@ -805,7 +792,10 @@ Main body instructions.
         let def = CustomAgentDef::from_file(&path).unwrap();
         let suffix = def.system_prompt_suffix.unwrap();
         assert!(suffix.contains("always format"), "suffix was: {suffix:?}");
-        assert!(suffix.contains("never abbreviate"), "suffix was: {suffix:?}");
+        assert!(
+            suffix.contains("never abbreviate"),
+            "suffix was: {suffix:?}"
+        );
     }
 
     #[test]
@@ -813,7 +803,11 @@ Main body instructions.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("all-tools.md");
 
-        let tools_list: String = KNOWN_TOOLS.iter().map(|t| format!("- {t}")).collect::<Vec<_>>().join("\n");
+        let tools_list: String = KNOWN_TOOLS
+            .iter()
+            .map(|t| format!("- {t}"))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         fs::write(
             &path,

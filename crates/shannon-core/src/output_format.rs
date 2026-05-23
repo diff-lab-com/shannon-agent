@@ -119,8 +119,8 @@ impl StructuredOutputConfig {
 
     /// Generate a system prompt suffix instructing the model to return valid JSON.
     pub fn system_prompt_suffix(&self) -> String {
-        let schema_str = serde_json::to_string_pretty(&self.schema)
-            .unwrap_or_else(|_| self.schema.to_string());
+        let schema_str =
+            serde_json::to_string_pretty(&self.schema).unwrap_or_else(|_| self.schema.to_string());
         let type_name = self.name.as_deref().unwrap_or("the response");
         format!(
             "\n\nIMPORTANT: You MUST respond with a valid JSON object that conforms to this schema. \
@@ -133,7 +133,10 @@ impl StructuredOutputConfig {
     ///
     /// Returns `Ok(serde_json::Value)` if the response is valid JSON matching
     /// the schema, or `Err` with a descriptive message if validation fails.
-    pub fn validate_response(&self, response: &str) -> Result<serde_json::Value, StructuredOutputError> {
+    pub fn validate_response(
+        &self,
+        response: &str,
+    ) -> Result<serde_json::Value, StructuredOutputError> {
         // Strip markdown code fences if present
         let trimmed = response
             .trim()
@@ -149,40 +152,49 @@ impl StructuredOutputConfig {
     }
 
     /// Validate a parsed JSON value against the schema.
-    fn validate_value(&self, value: &serde_json::Value) -> Result<serde_json::Value, StructuredOutputError> {
+    fn validate_value(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<serde_json::Value, StructuredOutputError> {
         let schema_type = self.schema.get("type").and_then(|t| t.as_str());
 
         // Basic type checking
         match schema_type {
             Some("object") if !value.is_object() => {
-                return Err(StructuredOutputError::SchemaMismatch(
-                    format!("Expected object, got {}", json_type_name(value)),
-                ));
+                return Err(StructuredOutputError::SchemaMismatch(format!(
+                    "Expected object, got {}",
+                    json_type_name(value)
+                )));
             }
             Some("array") if !value.is_array() => {
-                return Err(StructuredOutputError::SchemaMismatch(
-                    format!("Expected array, got {}", json_type_name(value)),
-                ));
+                return Err(StructuredOutputError::SchemaMismatch(format!(
+                    "Expected array, got {}",
+                    json_type_name(value)
+                )));
             }
             Some("string") if !value.is_string() => {
-                return Err(StructuredOutputError::SchemaMismatch(
-                    format!("Expected string, got {}", json_type_name(value)),
-                ));
+                return Err(StructuredOutputError::SchemaMismatch(format!(
+                    "Expected string, got {}",
+                    json_type_name(value)
+                )));
             }
             Some("number") if !value.is_number() => {
-                return Err(StructuredOutputError::SchemaMismatch(
-                    format!("Expected number, got {}", json_type_name(value)),
-                ));
+                return Err(StructuredOutputError::SchemaMismatch(format!(
+                    "Expected number, got {}",
+                    json_type_name(value)
+                )));
             }
             Some("boolean") if !value.is_boolean() => {
-                return Err(StructuredOutputError::SchemaMismatch(
-                    format!("Expected boolean, got {}", json_type_name(value)),
-                ));
+                return Err(StructuredOutputError::SchemaMismatch(format!(
+                    "Expected boolean, got {}",
+                    json_type_name(value)
+                )));
             }
             Some("integer") if !value.is_i64() && !value.is_u64() => {
-                return Err(StructuredOutputError::SchemaMismatch(
-                    format!("Expected integer, got {}", json_type_name(value)),
-                ));
+                return Err(StructuredOutputError::SchemaMismatch(format!(
+                    "Expected integer, got {}",
+                    json_type_name(value)
+                )));
             }
             _ => {}
         }
@@ -195,9 +207,9 @@ impl StructuredOutputConfig {
             for req in required {
                 if let Some(key) = req.as_str() {
                     if !obj.contains_key(key) {
-                        return Err(StructuredOutputError::SchemaMismatch(
-                            format!("Missing required property: {key}"),
-                        ));
+                        return Err(StructuredOutputError::SchemaMismatch(format!(
+                            "Missing required property: {key}"
+                        )));
                     }
                 }
             }
@@ -336,9 +348,15 @@ mod tests {
 
     #[test]
     fn test_to_ndjson_one_json_per_line() {
-        let events = [OutputEvent::TextDelta { content: "a".into() },
-            OutputEvent::TextDelta { content: "b".into() },
-            OutputEvent::Done { exit_code: 0 }];
+        let events = [
+            OutputEvent::TextDelta {
+                content: "a".into(),
+            },
+            OutputEvent::TextDelta {
+                content: "b".into(),
+            },
+            OutputEvent::Done { exit_code: 0 },
+        ];
         let output: String = events.iter().map(|e| e.to_ndjson()).collect();
         // Each event produces exactly one line
         let lines: Vec<&str> = output.lines().collect();
@@ -426,7 +444,12 @@ mod tests {
         }));
         let result = config.validate_response(r#"{"name": "test"}"#);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Missing required property: age"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required property: age")
+        );
     }
 
     #[test]
@@ -477,7 +500,8 @@ mod tests {
         let config = StructuredOutputConfig::new(serde_json::json!({
             "type": "object",
             "properties": {"result": {"type": "string"}}
-        })).with_name("AnalysisResult");
+        }))
+        .with_name("AnalysisResult");
         let prompt = config.system_prompt_suffix();
         assert!(prompt.contains("AnalysisResult"));
         assert!(prompt.contains("JSON"));

@@ -193,12 +193,27 @@ mod tests {
 
     #[test]
     fn test_language_for_path() {
-        assert_eq!(language_for_path(Path::new("test.rs")).unwrap().name, "Rust");
-        assert_eq!(language_for_path(Path::new("test.py")).unwrap().name, "Python");
-        assert_eq!(language_for_path(Path::new("test.js")).unwrap().name, "JavaScript");
-        assert_eq!(language_for_path(Path::new("test.ts")).unwrap().name, "TypeScript");
+        assert_eq!(
+            language_for_path(Path::new("test.rs")).unwrap().name,
+            "Rust"
+        );
+        assert_eq!(
+            language_for_path(Path::new("test.py")).unwrap().name,
+            "Python"
+        );
+        assert_eq!(
+            language_for_path(Path::new("test.js")).unwrap().name,
+            "JavaScript"
+        );
+        assert_eq!(
+            language_for_path(Path::new("test.ts")).unwrap().name,
+            "TypeScript"
+        );
         assert_eq!(language_for_path(Path::new("test.go")).unwrap().name, "Go");
-        assert_eq!(language_for_path(Path::new("test.java")).unwrap().name, "Java");
+        assert_eq!(
+            language_for_path(Path::new("test.java")).unwrap().name,
+            "Java"
+        );
         assert!(language_for_path(Path::new("test.unknown")).is_none());
     }
 

@@ -61,7 +61,9 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
     // System prompt
     if let Some(system) = request.get("system") {
         match mode {
-            RenderMode::KindOnly => { writeln!(output, "system: present").unwrap(); }
+            RenderMode::KindOnly => {
+                writeln!(output, "system: present").unwrap();
+            }
             RenderMode::RedactedText => {
                 let hash = simple_hash(&system.to_string());
                 writeln!(output, "system: [hash:{}]", hash).unwrap();
@@ -81,11 +83,19 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
     if let Some(tools) = request.get("tools").and_then(|t| t.as_array()) {
         writeln!(output, "tools: {}", tools.len()).unwrap();
         for (i, tool) in tools.iter().enumerate() {
-            let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
+            let name = tool
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("unknown");
             match mode {
-                RenderMode::KindOnly => { writeln!(output, "  tool[{i}]: {name}").unwrap(); }
+                RenderMode::KindOnly => {
+                    writeln!(output, "  tool[{i}]: {name}").unwrap();
+                }
                 RenderMode::RedactedText | RenderMode::FullText => {
-                    let desc = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                    let desc = tool
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or("");
                     writeln!(output, "  tool[{i}]: {name} - {}", truncate(desc, 80)).unwrap();
                 }
             }
@@ -96,7 +106,10 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
     if let Some(messages) = request.get("messages").and_then(|m| m.as_array()) {
         writeln!(output, "messages: {}", messages.len()).unwrap();
         for (i, msg) in messages.iter().enumerate() {
-            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("unknown");
+            let role = msg
+                .get("role")
+                .and_then(|r| r.as_str())
+                .unwrap_or("unknown");
             let content = msg.get("content");
 
             match mode {
@@ -171,7 +184,8 @@ pub fn diff_snapshots(expected: &str, actual: &str) -> SnapshotDiff {
                     }
                 }
             } else {
-                diff.content_differences.push(format!("line {i}: {e} != {a}"));
+                diff.content_differences
+                    .push(format!("line {i}: {e} != {a}"));
             }
         }
     }
@@ -186,10 +200,20 @@ fn classify_content_kind(content: Option<&Value>) -> String {
         None => "none".to_string(),
         Some(Value::String(_)) => "text".to_string(),
         Some(Value::Array(blocks)) => {
-            let kinds: Vec<String> = blocks.iter().map(|b| {
-                b.get("type").and_then(|t| t.as_str()).unwrap_or("unknown").to_string()
-            }).collect();
-            if kinds.len() == 1 { kinds[0].clone() } else { "multi".to_string() }
+            let kinds: Vec<String> = blocks
+                .iter()
+                .map(|b| {
+                    b.get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("unknown")
+                        .to_string()
+                })
+                .collect();
+            if kinds.len() == 1 {
+                kinds[0].clone()
+            } else {
+                "multi".to_string()
+            }
         }
         Some(_) => "other".to_string(),
     }
@@ -200,28 +224,31 @@ fn content_preview(content: Option<&Value>, max_len: usize) -> String {
         None => String::new(),
         Some(Value::String(s)) => truncate(s, max_len),
         Some(Value::Array(blocks)) => {
-            let previews: Vec<String> = blocks.iter().map(|b| {
-                let kind = b.get("type").and_then(|t| t.as_str()).unwrap_or("?");
-                match kind {
-                    "text" => {
-                        let text = b.get("text").and_then(|t| t.as_str()).unwrap_or("");
-                        format!("text:{}", truncate(text, 40))
+            let previews: Vec<String> = blocks
+                .iter()
+                .map(|b| {
+                    let kind = b.get("type").and_then(|t| t.as_str()).unwrap_or("?");
+                    match kind {
+                        "text" => {
+                            let text = b.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                            format!("text:{}", truncate(text, 40))
+                        }
+                        "tool_use" => {
+                            let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                            format!("tool_use:{name}")
+                        }
+                        "tool_result" => {
+                            let id = b.get("tool_use_id").and_then(|t| t.as_str()).unwrap_or("?");
+                            format!("tool_result:{id}")
+                        }
+                        "thinking" => {
+                            let text = b.get("thinking").and_then(|t| t.as_str()).unwrap_or("");
+                            format!("thinking:{}", truncate(text, 30))
+                        }
+                        _ => kind.to_string(),
                     }
-                    "tool_use" => {
-                        let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-                        format!("tool_use:{name}")
-                    }
-                    "tool_result" => {
-                        let id = b.get("tool_use_id").and_then(|t| t.as_str()).unwrap_or("?");
-                        format!("tool_result:{id}")
-                    }
-                    "thinking" => {
-                        let text = b.get("thinking").and_then(|t| t.as_str()).unwrap_or("");
-                        format!("thinking:{}", truncate(text, 30))
-                    }
-                    _ => kind.to_string(),
-                }
-            }).collect();
+                })
+                .collect();
             truncate(&previews.join(", "), max_len)
         }
         Some(v) => truncate(&v.to_string(), max_len),
@@ -312,9 +339,24 @@ mod tests {
     #[test]
     fn test_snapshot_tool_chain() {
         let calls = vec![
-            ("Read".to_string(), json!({"path": "src/main.rs"}), "fn main() {}".to_string(), false),
-            ("Edit".to_string(), json!({"path": "src/main.rs"}), "ok".to_string(), false),
-            ("Bash".to_string(), json!({"command": "cargo check"}), "error".to_string(), true),
+            (
+                "Read".to_string(),
+                json!({"path": "src/main.rs"}),
+                "fn main() {}".to_string(),
+                false,
+            ),
+            (
+                "Edit".to_string(),
+                json!({"path": "src/main.rs"}),
+                "ok".to_string(),
+                false,
+            ),
+            (
+                "Bash".to_string(),
+                json!({"command": "cargo check"}),
+                "error".to_string(),
+                true,
+            ),
         ];
         let snapshot = snapshot_tool_chain(&calls);
         assert!(snapshot.contains("tool_chain: 3 steps"));

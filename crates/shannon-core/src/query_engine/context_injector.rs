@@ -42,10 +42,12 @@ impl ContextInjector {
     /// * `project_dir` – the working directory of the project (used for instruction discovery).
     /// * `storage_dir` – directory for preference persistence (typically `~/.shannon/`).
     pub fn new(project_dir: PathBuf, storage_dir: PathBuf) -> Self {
-        let preference_memory =
-            RwLock::new(crate::preference_memory::PreferenceMemoryManager::new(storage_dir));
-        let instruction_watcher =
-            RwLock::new(crate::project_instructions::InstructionWatcher::new(project_dir.clone()));
+        let preference_memory = RwLock::new(
+            crate::preference_memory::PreferenceMemoryManager::new(storage_dir),
+        );
+        let instruction_watcher = RwLock::new(
+            crate::project_instructions::InstructionWatcher::new(project_dir.clone()),
+        );
         Self {
             project_dir,
             preference_memory,
@@ -77,8 +79,7 @@ impl ContextInjector {
         }
 
         // Fall back to full load using the stored project_dir
-        crate::project_instructions::load_full_context(&self.project_dir)
-            .map(|ctx| ctx.content)
+        crate::project_instructions::load_full_context(&self.project_dir).map(|ctx| ctx.content)
     }
 
     /// Return the preference-memory formatted for system-prompt injection.
@@ -173,16 +174,12 @@ impl ContextInjector {
     }
 
     /// Access the underlying preference memory manager.
-    pub fn preference_memory(
-        &self,
-    ) -> &RwLock<crate::preference_memory::PreferenceMemoryManager> {
+    pub fn preference_memory(&self) -> &RwLock<crate::preference_memory::PreferenceMemoryManager> {
         &self.preference_memory
     }
 
     /// Access the underlying instruction watcher.
-    pub fn instruction_watcher(
-        &self,
-    ) -> &RwLock<crate::project_instructions::InstructionWatcher> {
+    pub fn instruction_watcher(&self) -> &RwLock<crate::project_instructions::InstructionWatcher> {
         &self.instruction_watcher
     }
 }
@@ -240,7 +237,11 @@ mod tests {
         let storage_dir = temp_dir("with_claude_md_storage");
 
         // Create a CLAUDE.md file
-        fs::write(project_dir.join("CLAUDE.md"), "# Test Instructions\nAlways use Rust.").unwrap();
+        fs::write(
+            project_dir.join("CLAUDE.md"),
+            "# Test Instructions\nAlways use Rust.",
+        )
+        .unwrap();
 
         let injector = ContextInjector::new(project_dir.clone(), storage_dir.clone());
 
@@ -268,7 +269,11 @@ mod tests {
         let project_dir = temp_dir("combine_project");
         let storage_dir = temp_dir("combine_storage");
 
-        fs::write(project_dir.join("CLAUDE.md"), "# My Project\nUse strict mode.").unwrap();
+        fs::write(
+            project_dir.join("CLAUDE.md"),
+            "# My Project\nUse strict mode.",
+        )
+        .unwrap();
 
         let injector = ContextInjector::new(project_dir.clone(), storage_dir.clone());
 

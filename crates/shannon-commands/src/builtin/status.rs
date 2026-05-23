@@ -1,6 +1,8 @@
 //! /status command - Show git repository status
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Status prompt template
 const STATUS_PROMPT: &str = r##"
@@ -38,7 +40,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[--short]".to_string()),
             when_to_use: Some(
-                "To see current git status, branch, staged/unstaged changes, and untracked files".to_string(),
+                "To see current git status, branch, staged/unstaged changes, and untracked files"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
@@ -231,7 +234,9 @@ fn format_branch_verbose(info: &GitStatusInfo) -> String {
     if let Some(ab) = &info.ahead_behind {
         output.push_str(&format!(
             "Your branch is ahead of '{}' by {} commit{}\n",
-            ab.upstream, ab.ahead, if ab.ahead == 1 { "" } else { "s" }
+            ab.upstream,
+            ab.ahead,
+            if ab.ahead == 1 { "" } else { "s" }
         ));
     }
 

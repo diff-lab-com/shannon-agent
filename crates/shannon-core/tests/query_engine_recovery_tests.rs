@@ -10,11 +10,11 @@
 #[cfg(test)]
 mod engine_recovery_tests {
     use mockito::{Server, ServerGuard};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use shannon_core::api::LlmClientConfig;
     use shannon_core::api::LlmProvider;
     use shannon_core::permissions::PermissionManager;
-    use shannon_core::query_engine::{QueryEngine, QueryEngineConfig, QueryContext, QueryMetadata};
+    use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEngineConfig, QueryMetadata};
     use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
     use std::collections::HashMap;
@@ -43,7 +43,13 @@ mod engine_recovery_tests {
         let permissions = PermissionManager::new();
         let state = StateManager::new();
 
-        QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default())
+        QueryEngine::new(
+            client,
+            tools,
+            permissions,
+            state,
+            QueryEngineConfig::default(),
+        )
     }
 
     fn make_query_context() -> QueryContext {
@@ -63,7 +69,11 @@ mod engine_recovery_tests {
     }
 
     /// Set up mock server to return an Anthropic-style error response.
-    fn setup_error_mock(server: &mut ServerGuard, status: usize, error_json: Value) -> mockito::Mock {
+    fn setup_error_mock(
+        server: &mut ServerGuard,
+        status: usize,
+        error_json: Value,
+    ) -> mockito::Mock {
         server
             .mock("POST", "/v1/messages")
             .with_status(status)
@@ -111,13 +121,17 @@ mod engine_recovery_tests {
         let history_len = engine.conversation_history().len();
 
         // Simulate an API error
-        setup_error_mock(&mut server, 500, json!({
-            "type": "error",
-            "error": {
-                "type": "api_error",
-                "message": "Internal server error"
-            }
-        }));
+        setup_error_mock(
+            &mut server,
+            500,
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "api_error",
+                    "message": "Internal server error"
+                }
+            }),
+        );
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let ctx = make_query_context();
@@ -133,14 +147,23 @@ mod engine_recovery_tests {
         });
 
         // Should have received an error event or stream error
-        let has_error = result.iter().any(|e| e.is_err()) ||
-            result.iter().any(|e| matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. })));
+        let has_error = result.iter().any(|e| e.is_err())
+            || result
+                .iter()
+                .any(|e| matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. })));
         assert!(has_error, "Expected an error from failed API call");
 
         // KEY ASSERTION: Engine should still be alive and functional
-        assert_eq!(engine.session_id(), session_id, "Session ID should be preserved");
-        assert_eq!(engine.conversation_history().len(), history_len,
-            "Conversation history should be preserved after error");
+        assert_eq!(
+            engine.session_id(),
+            session_id,
+            "Session ID should be preserved"
+        );
+        assert_eq!(
+            engine.conversation_history().len(),
+            history_len,
+            "Conversation history should be preserved after error"
+        );
 
         // Engine should accept new messages
         engine.add_user_message("After error".to_string());
@@ -162,13 +185,17 @@ mod engine_recovery_tests {
 
         let session_id = engine.session_id();
 
-        setup_error_mock(&mut server, 401, json!({
-            "type": "error",
-            "error": {
-                "type": "authentication_error",
-                "message": "invalid x-api-key"
-            }
-        }));
+        setup_error_mock(
+            &mut server,
+            401,
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "authentication_error",
+                    "message": "invalid x-api-key"
+                }
+            }),
+        );
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let ctx = make_query_context();
@@ -180,7 +207,11 @@ mod engine_recovery_tests {
 
         // Engine must survive auth errors — user needs it to retry with a valid key
         assert_eq!(engine.session_id(), session_id);
-        assert_eq!(engine.conversation_history().len(), 1, "History preserved after auth error");
+        assert_eq!(
+            engine.conversation_history().len(),
+            1,
+            "History preserved after auth error"
+        );
     }
 
     #[test]
@@ -191,13 +222,17 @@ mod engine_recovery_tests {
         let engine = create_engine(&mock_url);
         let session_id = engine.session_id();
 
-        setup_error_mock(&mut server, 429, json!({
-            "type": "error",
-            "error": {
-                "type": "rate_limit_error",
-                "message": "rate limited"
-            }
-        }));
+        setup_error_mock(
+            &mut server,
+            429,
+            json!({
+                "type": "error",
+                "error": {
+                    "type": "rate_limit_error",
+                    "message": "rate limited"
+                }
+            }),
+        );
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let ctx = make_query_context();
@@ -223,10 +258,14 @@ mod engine_recovery_tests {
         let session_id = engine.session_id();
 
         // First query fails
-        setup_error_mock(&mut server, 500, json!({
-            "type": "error",
-            "error": {"type": "api_error", "message": "internal error"}
-        }));
+        setup_error_mock(
+            &mut server,
+            500,
+            json!({
+                "type": "error",
+                "error": {"type": "api_error", "message": "internal error"}
+            }),
+        );
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let ctx1 = make_query_context();
@@ -247,10 +286,13 @@ mod engine_recovery_tests {
         });
 
         // Should have received some events (not just errors)
-        let has_content = result.iter().any(|e| {
-            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { .. }))
-        });
-        assert!(has_content, "Second query should succeed after error recovery");
+        let has_content = result
+            .iter()
+            .any(|e| matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { .. })));
+        assert!(
+            has_content,
+            "Second query should succeed after error recovery"
+        );
 
         // Session preserved across error + success
         assert_eq!(engine.session_id(), session_id);
@@ -269,10 +311,14 @@ mod engine_recovery_tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         for i in 0..3 {
-            setup_error_mock(&mut server, 500, json!({
-                "type": "error",
-                "error": {"type": "api_error", "message": format!("error #{i}")}
-            }));
+            setup_error_mock(
+                &mut server,
+                500,
+                json!({
+                    "type": "error",
+                    "error": {"type": "api_error", "message": format!("error #{i}")}
+                }),
+            );
 
             let ctx = make_query_context();
             let _ = rt.block_on(async {
@@ -282,15 +328,21 @@ mod engine_recovery_tests {
             });
 
             // Engine must survive every iteration
-            assert_eq!(engine.session_id(), session_id,
-                "Session lost after error #{i}");
+            assert_eq!(
+                engine.session_id(),
+                session_id,
+                "Session lost after error #{i}"
+            );
         }
 
         // Final state: still the same engine
         assert_eq!(engine.session_id(), session_id);
         engine.add_user_message("Still alive".to_string());
-        assert_eq!(engine.conversation_history().len(), 1,
-            "One explicit message should be in history");
+        assert_eq!(
+            engine.conversation_history().len(),
+            1,
+            "One explicit message should be in history"
+        );
     }
 
     #[test]
@@ -339,10 +391,14 @@ mod engine_recovery_tests {
         engine.set_model_for_provider("llama3".to_string(), LlmProvider::Ollama);
 
         // Now simulate a failure
-        setup_error_mock(&mut server, 500, json!({
-            "type": "error",
-            "error": {"type": "api_error", "message": "connection refused"}
-        }));
+        setup_error_mock(
+            &mut server,
+            500,
+            json!({
+                "type": "error",
+                "error": {"type": "api_error", "message": "connection refused"}
+            }),
+        );
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let ctx = make_query_context();
@@ -355,7 +411,10 @@ mod engine_recovery_tests {
         // KEY ASSERTION: Engine must still be available after model switch + error
         // This is the exact scenario that caused "Query engine not available"
         let session_id = engine.session_id();
-        assert!(!session_id.is_nil(), "Engine should have a valid session ID after error");
+        assert!(
+            !session_id.is_nil(),
+            "Engine should have a valid session ID after error"
+        );
 
         // Can still add messages and access history
         engine.add_user_message("retry after model switch".to_string());
@@ -373,7 +432,10 @@ mod engine_recovery_tests {
 
     /// Set up a mock that returns a specific text response via SSE streaming.
     fn setup_stream_mock_with_text(server: &mut ServerGuard, response_text: &str) -> mockito::Mock {
-        let escaped = response_text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+        let escaped = response_text
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n");
         let body = format!(
             "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":10,\"output_tokens\":0}}}}}}\n\n\
              event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
@@ -411,19 +473,39 @@ mod engine_recovery_tests {
 
         // Find the ConversationUpdate and Completed events
         let has_conversation_update = events.iter().any(|e| {
-            matches!(e, Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. }))
+            matches!(
+                e,
+                Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. })
+            )
         });
-        assert!(has_conversation_update, "ConversationUpdate event must be sent");
+        assert!(
+            has_conversation_update,
+            "ConversationUpdate event must be sent"
+        );
 
         // ConversationUpdate must come before Completed
-        let cu_idx = events.iter().position(|e| {
-            matches!(e, Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. }))
-        }).expect("ConversationUpdate event index");
-        let completed_idx = events.iter().position(|e| {
-            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Completed { .. }))
-        }).expect("Completed event index");
-        assert!(cu_idx < completed_idx,
-            "ConversationUpdate must come before Completed");
+        let cu_idx = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. })
+                )
+            })
+            .expect("ConversationUpdate event index");
+        let completed_idx = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    Ok(shannon_core::query_engine::QueryEvent::Completed { .. })
+                )
+            })
+            .expect("Completed event index");
+        assert!(
+            cu_idx < completed_idx,
+            "ConversationUpdate must come before Completed"
+        );
     }
 
     #[test]
@@ -449,13 +531,20 @@ mod engine_recovery_tests {
         });
 
         // Extract ConversationUpdate messages
-        let messages = events.iter().find_map(|e| {
-            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) = e {
-                Some(messages.clone())
-            } else {
-                None
-            }
-        }).expect("ConversationUpdate event must be present");
+        let messages = events
+            .iter()
+            .find_map(|e| {
+                if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate {
+                    messages,
+                    ..
+                }) = e
+                {
+                    Some(messages.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("ConversationUpdate event must be present");
 
         // Should have exactly 2 messages: user + assistant
         assert_eq!(messages.len(), 2, "Expected user + assistant messages");
@@ -464,8 +553,10 @@ mod engine_recovery_tests {
         assert_eq!(messages[0].role, "user");
         match &messages[0].content {
             shannon_core::api::MessageContent::Text(t) => {
-                assert_eq!(t, "Write a short story",
-                    "User message should be the clean input, not display-formatted");
+                assert_eq!(
+                    t, "Write a short story",
+                    "User message should be the clean input, not display-formatted"
+                );
             }
             _ => panic!("Expected Text content for user message"),
         }
@@ -474,8 +565,10 @@ mod engine_recovery_tests {
         assert_eq!(messages[1].role, "assistant");
         match &messages[1].content {
             shannon_core::api::MessageContent::Text(t) => {
-                assert_eq!(t, story_text,
-                    "Assistant message should be clean AI text, not display-formatted");
+                assert_eq!(
+                    t, story_text,
+                    "Assistant message should be clean AI text, not display-formatted"
+                );
             }
             _ => panic!("Expected Text content for assistant message"),
         }
@@ -483,15 +576,23 @@ mod engine_recovery_tests {
         // The assistant message must NOT contain display artifacts
         let assistant_text = match &messages[1].content {
             shannon_core::api::MessageContent::Text(t) => t.clone(),
-            shannon_core::api::MessageContent::Blocks(blocks) => {
-                blocks.iter().filter_map(|b| match b {
+            shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
                     shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
                     _ => None,
-                }).collect::<Vec<_>>().join("")
-            }
+                })
+                .collect::<Vec<_>>()
+                .join(""),
         };
-        assert!(!assistant_text.contains("[Turn"), "Should not contain turn markers");
-        assert!(!assistant_text.contains("Using:"), "Should not contain tool display");
+        assert!(
+            !assistant_text.contains("[Turn"),
+            "Should not contain turn markers"
+        );
+        assert!(
+            !assistant_text.contains("Using:"),
+            "Should not contain tool display"
+        );
     }
 
     #[test]
@@ -522,18 +623,28 @@ mod engine_recovery_tests {
         });
 
         // Extract and restore conversation messages (simulates what UI does)
-        let turn1_messages = events1.iter().find_map(|e| {
-            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) = e {
-                Some(messages.clone())
-            } else {
-                None
-            }
-        }).expect("Turn 1: ConversationUpdate must be present");
+        let turn1_messages = events1
+            .iter()
+            .find_map(|e| {
+                if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate {
+                    messages,
+                    ..
+                }) = e
+                {
+                    Some(messages.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("Turn 1: ConversationUpdate must be present");
 
         // Restore the proper conversation history
         engine.restore_messages(turn1_messages);
-        assert_eq!(engine.conversation_history().len(), 2,
-            "After turn 1, engine should have user + assistant messages");
+        assert_eq!(
+            engine.conversation_history().len(),
+            2,
+            "After turn 1, engine should have user + assistant messages"
+        );
 
         // ── Turn 2 ──
         // Set up a mock that captures the request body to verify conversation
@@ -553,22 +664,35 @@ mod engine_recovery_tests {
 
         // Turn 2 should also send ConversationUpdate
         let has_cu = events2.iter().any(|e| {
-            matches!(e, Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. }))
+            matches!(
+                e,
+                Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { .. })
+            )
         });
         assert!(has_cu, "Turn 2: ConversationUpdate event must also be sent");
 
         // Turn 2 conversation should have 4 messages: user1, assistant1, user2, assistant2
-        let turn2_messages = events2.iter().find_map(|e| {
-            if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate { messages, .. }) = e {
-                Some(messages.clone())
-            } else {
-                None
-            }
-        }).expect("Turn 2: ConversationUpdate must be present");
+        let turn2_messages = events2
+            .iter()
+            .find_map(|e| {
+                if let Ok(shannon_core::query_engine::QueryEvent::ConversationUpdate {
+                    messages,
+                    ..
+                }) = e
+                {
+                    Some(messages.clone())
+                } else {
+                    None
+                }
+            })
+            .expect("Turn 2: ConversationUpdate must be present");
 
-        assert_eq!(turn2_messages.len(), 4,
+        assert_eq!(
+            turn2_messages.len(),
+            4,
             "Turn 2 should have 4 messages (2 turns × user+assistant), got {}",
-            turn2_messages.len());
+            turn2_messages.len()
+        );
 
         // Verify the conversation ordering
         assert_eq!(turn2_messages[0].role, "user");
@@ -581,22 +705,28 @@ mod engine_recovery_tests {
             shannon_core::api::MessageContent::Text(t) => t.clone(),
             _ => panic!("Expected text"),
         };
-        assert!(user1_text.contains("Write a story"),
-            "Turn 1 user message must be preserved: got '{user1_text}'");
+        assert!(
+            user1_text.contains("Write a story"),
+            "Turn 1 user message must be preserved: got '{user1_text}'"
+        );
 
         let assistant1_text = match &turn2_messages[1].content {
             shannon_core::api::MessageContent::Text(t) => t.clone(),
             _ => panic!("Expected text"),
         };
-        assert!(assistant1_text.contains("Alice") && assistant1_text.contains("Bob"),
-            "Turn 1 assistant response must contain the story content: got '{assistant1_text}'");
+        assert!(
+            assistant1_text.contains("Alice") && assistant1_text.contains("Bob"),
+            "Turn 1 assistant response must contain the story content: got '{assistant1_text}'"
+        );
 
         let user2_text = match &turn2_messages[2].content {
             shannon_core::api::MessageContent::Text(t) => t.clone(),
             _ => panic!("Expected text"),
         };
-        assert!(user2_text.contains("How many characters"),
-            "Turn 2 user message must be preserved: got '{user2_text}'");
+        assert!(
+            user2_text.contains("How many characters"),
+            "Turn 2 user message must be preserved: got '{user2_text}'"
+        );
     }
 
     #[test]
@@ -622,7 +752,9 @@ mod engine_recovery_tests {
             },
             shannon_core::api::Message {
                 role: "assistant".to_string(),
-                content: shannon_core::api::MessageContent::Text("Roses are red, violets are blue...".to_string()),
+                content: shannon_core::api::MessageContent::Text(
+                    "Roses are red, violets are blue...".to_string(),
+                ),
             },
         ];
 
@@ -672,7 +804,13 @@ mod engine_recovery_tests {
         let permissions = PermissionManager::new();
         let state = StateManager::new();
 
-        QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default())
+        QueryEngine::new(
+            client,
+            tools,
+            permissions,
+            state,
+            QueryEngineConfig::default(),
+        )
     }
 
     /// Ollama streaming returns HTTP 500 with malformed output error.
@@ -779,16 +917,20 @@ mod engine_recovery_tests {
             matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { error, .. })
                 if error.contains("cannot produce valid output"))
         });
-        assert!(has_failed,
-            "Expected QueryEvent::Failed with model incompatibility message");
+        assert!(
+            has_failed,
+            "Expected QueryEvent::Failed with model incompatibility message"
+        );
 
         // Must NOT emit the raw Ollama error as AI text
         let has_warning_text = events.iter().any(|e| {
             matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { content, .. })
                 if content.contains("⚠️ Ollama model output error"))
         });
-        assert!(!has_warning_text,
-            "Raw Ollama error should NOT be emitted as AI response text");
+        assert!(
+            !has_warning_text,
+            "Raw Ollama error should NOT be emitted as AI response text"
+        );
 
         // Engine must survive for the next query
         assert_eq!(engine.session_id(), session_id);
@@ -823,12 +965,15 @@ mod engine_recovery_tests {
             matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { content, .. })
                 if content.contains("Hello from tiny model!"))
         });
-        assert!(has_content, "Expected content from successful minimal retry");
+        assert!(
+            has_content,
+            "Expected content from successful minimal retry"
+        );
 
         // Should complete successfully (not fail)
-        let has_failed = events.iter().any(|e| {
-            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. }))
-        });
+        let has_failed = events
+            .iter()
+            .any(|e| matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. })));
         assert!(!has_failed, "Should not fail when minimal retry succeeds");
     }
 
@@ -856,11 +1001,14 @@ mod engine_recovery_tests {
             matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { content, .. })
                 if content.contains("Success without tools!"))
         });
-        assert!(has_content, "Expected content from successful retry without tools");
+        assert!(
+            has_content,
+            "Expected content from successful retry without tools"
+        );
 
-        let has_failed = events.iter().any(|e| {
-            matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. }))
-        });
+        let has_failed = events
+            .iter()
+            .any(|e| matches!(e, Ok(shannon_core::query_engine::QueryEvent::Failed { .. })));
         assert!(!has_failed);
     }
 
@@ -899,7 +1047,10 @@ mod engine_recovery_tests {
             matches!(e, Ok(shannon_core::query_engine::QueryEvent::Text { content, .. })
                 if content.contains("Now working!"))
         });
-        assert!(has_content, "Second query should succeed after Ollama error recovery");
+        assert!(
+            has_content,
+            "Second query should succeed after Ollama error recovery"
+        );
         assert_eq!(engine.session_id(), session_id, "Session preserved");
     }
 }

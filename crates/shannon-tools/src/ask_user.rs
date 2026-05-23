@@ -6,7 +6,7 @@
 //! Uses a callback pattern (QuestionHandler trait) so the tool can be decoupled from
 //! the specific UI/terminal implementation, similar to plan_mode.rs shared state.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -158,7 +158,9 @@ impl QuestionHandler for TerminalQuestionHandler {
         // Free-form text (no options)
         if question.options.is_empty() {
             print!("> ");
-            io::stdout().flush().map_err(|e| AskUserError::Io(e.to_string()))?;
+            io::stdout()
+                .flush()
+                .map_err(|e| AskUserError::Io(e.to_string()))?;
             let stdin = io::stdin();
             let line = stdin
                 .lock()
@@ -186,7 +188,9 @@ impl QuestionHandler for TerminalQuestionHandler {
             ""
         };
         print!("Your choice{prompt_suffix}: ");
-        io::stdout().flush().map_err(|e| AskUserError::Io(e.to_string()))?;
+        io::stdout()
+            .flush()
+            .map_err(|e| AskUserError::Io(e.to_string()))?;
 
         let stdin = io::stdin();
         let raw = stdin
@@ -213,8 +217,7 @@ impl QuestionHandler for TerminalQuestionHandler {
             }
             Ok(selected)
         } else {
-            resolve_single_choice(input, &question.options)
-                .map(|label| vec![label])
+            resolve_single_choice(input, &question.options).map(|label| vec![label])
         }
     }
 }
@@ -224,10 +227,7 @@ impl QuestionHandler for TerminalQuestionHandler {
 /// Accepts: number index (1-based), or exact label match.
 /// If the choice equals "Other" or falls outside the range, the user is
 /// prompted for free-form text.
-fn resolve_single_choice(
-    input: &str,
-    options: &[QuestionOption],
-) -> Result<String, AskUserError> {
+fn resolve_single_choice(input: &str, options: &[QuestionOption]) -> Result<String, AskUserError> {
     // Try numeric index first
     if let Ok(idx) = input.parse::<usize>() {
         if idx >= 1 && idx <= options.len() {
@@ -264,7 +264,9 @@ fn resolve_single_choice(
 /// Prompt the user for free-form text on a new line.
 fn prompt_free_text() -> Result<String, AskUserError> {
     print!("Enter your answer: ");
-    io::stdout().flush().map_err(|e| AskUserError::Io(e.to_string()))?;
+    io::stdout()
+        .flush()
+        .map_err(|e| AskUserError::Io(e.to_string()))?;
     let stdin = io::stdin();
     let line = stdin
         .lock()
@@ -403,14 +405,8 @@ impl Tool for AskUserQuestionTool {
 
         // Build metadata with structured answers
         let mut metadata = HashMap::new();
-        metadata.insert(
-            "answers".to_string(),
-            json!(answers),
-        );
-        metadata.insert(
-            "question_count".to_string(),
-            json!(answers.len()),
-        );
+        metadata.insert("answers".to_string(), json!(answers));
+        metadata.insert("question_count".to_string(), json!(answers.len()));
 
         Ok(ToolOutput {
             content,
@@ -422,7 +418,9 @@ impl Tool for AskUserQuestionTool {
     fn category(&self) -> &str {
         "interaction"
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -562,7 +560,12 @@ mod tests {
         let tool = AskUserQuestionTool::with_terminal_handler();
         let schema = tool.input_schema();
         assert_eq!(schema["type"], "object");
-        assert!(schema["required"].as_array().unwrap().contains(&json!("questions")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("questions"))
+        );
         let questions_schema = &schema["properties"]["questions"];
         assert_eq!(questions_schema["type"], "array");
     }
@@ -571,9 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_single_select_valid_option() {
-        let handler = Arc::new(MockQuestionHandler::new(vec![
-            vec!["Option A".to_string()],
-        ]));
+        let handler = Arc::new(MockQuestionHandler::new(vec![vec!["Option A".to_string()]]));
         let tool = AskUserQuestionTool::new(handler);
 
         let input = json!({
@@ -603,9 +604,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_single_select_free_text() {
-        let handler = Arc::new(MockQuestionHandler::new(vec![
-            vec!["My custom answer".to_string()],
-        ]));
+        let handler = Arc::new(MockQuestionHandler::new(vec![vec![
+            "My custom answer".to_string(),
+        ]]));
         let tool = AskUserQuestionTool::new(handler);
 
         let input = json!({
@@ -626,9 +627,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_multi_select() {
-        let handler = Arc::new(MockQuestionHandler::new(vec![
-            vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()],
-        ]));
+        let handler = Arc::new(MockQuestionHandler::new(vec![vec![
+            "Alpha".to_string(),
+            "Beta".to_string(),
+            "Gamma".to_string(),
+        ]]));
         let tool = AskUserQuestionTool::new(handler);
 
         let input = json!({
@@ -689,9 +692,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_questions() {
-        let handler = Arc::new(MockQuestionHandler::new(vec![
-            vec!["Yes".to_string()],
-        ]));
+        let handler = Arc::new(MockQuestionHandler::new(vec![vec!["Yes".to_string()]]));
         let tool = AskUserQuestionTool::new(handler);
 
         let input = json!({
@@ -715,9 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_question_count_metadata() {
-        let handler = Arc::new(MockQuestionHandler::new(vec![
-            vec!["Ok".to_string()],
-        ]));
+        let handler = Arc::new(MockQuestionHandler::new(vec![vec!["Ok".to_string()]]));
         let tool = AskUserQuestionTool::new(handler);
 
         let input = json!({
@@ -728,17 +727,14 @@ mod tests {
         });
 
         let result = tool.execute(input).await.unwrap();
-        assert_eq!(
-            result.metadata["question_count"].as_u64().unwrap(),
-            2
-        );
+        assert_eq!(result.metadata["question_count"].as_u64().unwrap(), 2);
     }
 
     #[tokio::test]
     async fn test_free_form_question() {
-        let handler = Arc::new(MockQuestionHandler::new(vec![
-            vec!["hello world".to_string()],
-        ]));
+        let handler = Arc::new(MockQuestionHandler::new(vec![vec![
+            "hello world".to_string(),
+        ]]));
         let tool = AskUserQuestionTool::new(handler);
 
         // Question with no options at all -- pure free-form

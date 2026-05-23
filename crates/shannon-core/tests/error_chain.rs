@@ -9,7 +9,7 @@
 
 use shannon_core::api::error::ApiError;
 use shannon_core::api::types::LlmProvider;
-use shannon_core::error::{ToolError, PermissionError, ToolExecutionError};
+use shannon_core::error::{PermissionError, ToolError, ToolExecutionError};
 use shannon_core::query_engine::QueryError;
 
 // ── ApiError Variants ───────────────────────────────────────────────────
@@ -23,7 +23,9 @@ fn test_api_error_http_error() {
 
 #[test]
 fn test_api_error_rate_limit() {
-    let err = ApiError::RateLimitExceeded { retry_after_secs: None };
+    let err = ApiError::RateLimitExceeded {
+        retry_after_secs: None,
+    };
     assert!(err.to_string().contains("Rate limit"));
 }
 
@@ -82,11 +84,16 @@ fn test_api_error_from_json() {
 
 #[test]
 fn test_anthropic_error_parsing() {
-    let body = r#"{"error": {"type": "invalid_request_error", "message": "messages: required field"}}"#;
+    let body =
+        r#"{"error": {"type": "invalid_request_error", "message": "messages: required field"}}"#;
     let err = ApiError::from_provider_response(&LlmProvider::Anthropic, 400, body);
 
     match err {
-        ApiError::ProviderError { provider, error_type, message } => {
+        ApiError::ProviderError {
+            provider,
+            error_type,
+            message,
+        } => {
             assert_eq!(provider, "anthropic");
             assert_eq!(error_type, "invalid_request_error");
             assert!(message.contains("messages: required field"));
@@ -106,11 +113,16 @@ fn test_openai_error_parsing() {
 
 #[test]
 fn test_openai_error_parsing_400() {
-    let body = r#"{"error": {"message": "max tokens exceeds limit", "type": "invalid_request_error"}}"#;
+    let body =
+        r#"{"error": {"message": "max tokens exceeds limit", "type": "invalid_request_error"}}"#;
     let err = ApiError::from_provider_response(&LlmProvider::OpenAI, 400, body);
 
     match err {
-        ApiError::ProviderError { provider, error_type, message } => {
+        ApiError::ProviderError {
+            provider,
+            error_type,
+            message,
+        } => {
             assert_eq!(provider, "openai");
             assert_eq!(error_type, "invalid_request_error");
             assert!(message.contains("max tokens"));
@@ -125,7 +137,11 @@ fn test_ollama_error_parsing() {
     let err = ApiError::from_provider_response(&LlmProvider::Ollama, 404, body);
 
     match err {
-        ApiError::ProviderError { provider, error_type, message } => {
+        ApiError::ProviderError {
+            provider,
+            error_type,
+            message,
+        } => {
             assert_eq!(provider, "ollama");
             assert_eq!(error_type, "ollama_error");
             assert!(message.contains("model not found"));
@@ -175,7 +191,11 @@ fn test_unknown_provider_fallback() {
     let err = ApiError::from_provider_response(&LlmProvider::Custom, 418, body);
 
     match err {
-        ApiError::ProviderError { error_type, message, .. } => {
+        ApiError::ProviderError {
+            error_type,
+            message,
+            ..
+        } => {
             assert_eq!(error_type, "http_418");
             assert_eq!(message, "some plain text error");
         }

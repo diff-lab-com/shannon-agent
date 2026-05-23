@@ -4,9 +4,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::config::{
-    HookDecision, HookDef, HookResult, HookType, HooksFile,
-};
+use super::config::{HookDecision, HookDef, HookResult, HookType, HooksFile};
 use super::events::{HookEvent, HookEventType};
 use super::types::HookError;
 
@@ -190,7 +188,13 @@ impl HookManager {
                         }
                         HookType::McpTool | HookType::Agent => {
                             // MCP tool and agent hooks are always blocking
-                            let result = self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?;
+                            let result = self
+                                .execute_hook(
+                                    &hook_def.command,
+                                    hook_def.timeout_duration(),
+                                    &event_json,
+                                )
+                                .await?;
                             results.push(result);
                         }
                         HookType::Llm => {
@@ -203,20 +207,24 @@ impl HookManager {
                 } else {
                     match &hook_def.r#type {
                         HookType::Command => {
-                            self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?
+                            self.execute_hook(
+                                &hook_def.command,
+                                hook_def.timeout_duration(),
+                                &event_json,
+                            )
+                            .await?
                         }
-                        HookType::Http => {
-                            self.execute_http_hook(hook_def, &event_json).await?
-                        }
-                        HookType::Prompt => {
-                            self.execute_prompt_hook(hook_def, &event_json).await?
-                        }
+                        HookType::Http => self.execute_http_hook(hook_def, &event_json).await?,
+                        HookType::Prompt => self.execute_prompt_hook(hook_def, &event_json).await?,
                         HookType::McpTool | HookType::Agent => {
-                            self.execute_hook(&hook_def.command, hook_def.timeout_duration(), &event_json).await?
+                            self.execute_hook(
+                                &hook_def.command,
+                                hook_def.timeout_duration(),
+                                &event_json,
+                            )
+                            .await?
                         }
-                        HookType::Llm => {
-                            self.execute_llm_hook(hook_def, &event_json).await?
-                        }
+                        HookType::Llm => self.execute_llm_hook(hook_def, &event_json).await?,
                     }
                 };
 
@@ -236,15 +244,17 @@ impl HookManager {
     ) -> Result<HookResult, HookError> {
         // Validate command before execution
         if command.trim().is_empty() {
-            return Err(HookError::InvalidMatcher("Hook command is empty".to_string()));
+            return Err(HookError::InvalidMatcher(
+                "Hook command is empty".to_string(),
+            ));
         }
         // Warn about potentially dangerous patterns in hook commands
         crate::sandbox::audit_shell_command(command);
         for pattern in &["rm -rf /", "mkfs", "dd if=", "> /dev/sd", "chmod 777"] {
             if command.contains(pattern) {
-                return Err(HookError::InvalidMatcher(
-                    format!("Hook command contains dangerous pattern: {pattern}")
-                ));
+                return Err(HookError::InvalidMatcher(format!(
+                    "Hook command contains dangerous pattern: {pattern}"
+                )));
             }
         }
 
@@ -358,38 +368,46 @@ impl HookManager {
             let parsed = reqwest::Url::parse(url)
                 .map_err(|e| HookError::InvalidMatcher(format!("Invalid hook URL: {e}")))?;
             if parsed.scheme() != "http" && parsed.scheme() != "https" {
-                return Err(HookError::InvalidMatcher(
-                    format!("Blocked: hook URL scheme '{}' not allowed (only http/https)", parsed.scheme()),
-                ));
+                return Err(HookError::InvalidMatcher(format!(
+                    "Blocked: hook URL scheme '{}' not allowed (only http/https)",
+                    parsed.scheme()
+                )));
             }
             if let Some(host) = parsed.host_str() {
                 let host_lower = host.to_lowercase();
                 if host_lower == "localhost" || host_lower.ends_with(".localhost") {
-                    return Err(HookError::InvalidMatcher("Blocked: hook URL points to localhost".into()));
+                    return Err(HookError::InvalidMatcher(
+                        "Blocked: hook URL points to localhost".into(),
+                    ));
                 }
                 let ip_str = host.trim_start_matches('[').trim_end_matches(']');
                 if let Ok(ip) = ip_str.parse::<std::net::IpAddr>() {
                     match ip {
                         std::net::IpAddr::V4(v4) => {
-                            if v4.is_loopback() || v4.is_private() || v4.is_link_local()
-                                || v4.is_unspecified() || v4.is_broadcast()
+                            if v4.is_loopback()
+                                || v4.is_private()
+                                || v4.is_link_local()
+                                || v4.is_unspecified()
+                                || v4.is_broadcast()
                             {
-                                return Err(HookError::InvalidMatcher(
-                                    format!("Blocked: hook URL points to non-public IP {ip}"),
-                                ));
+                                return Err(HookError::InvalidMatcher(format!(
+                                    "Blocked: hook URL points to non-public IP {ip}"
+                                )));
                             }
                         }
                         std::net::IpAddr::V6(v6) => {
                             if v6.is_loopback() || v6.is_unspecified() {
-                                return Err(HookError::InvalidMatcher(
-                                    format!("Blocked: hook URL points to non-public IP {ip}"),
-                                ));
+                                return Err(HookError::InvalidMatcher(format!(
+                                    "Blocked: hook URL points to non-public IP {ip}"
+                                )));
                             }
                         }
                     }
                 }
                 if host == "169.254.169.254" || host == "metadata.google.internal" {
-                    return Err(HookError::InvalidMatcher("Blocked: cloud metadata endpoint".into()));
+                    return Err(HookError::InvalidMatcher(
+                        "Blocked: cloud metadata endpoint".into(),
+                    ));
                 }
             }
         }
@@ -558,7 +576,13 @@ impl HookManager {
         event_json: &[u8],
     ) -> Result<HookResult, HookError> {
         let timeout = hook_def.timeout_duration();
-        let command_label = format!("llm: {}", hook_def.prompt_template.as_deref().unwrap_or(&hook_def.command));
+        let command_label = format!(
+            "llm: {}",
+            hook_def
+                .prompt_template
+                .as_deref()
+                .unwrap_or(&hook_def.command)
+        );
 
         let client = match &self.llm_client {
             Some(c) => c.clone(),
@@ -579,9 +603,10 @@ impl HookManager {
         // Build the user prompt from the template or fall back to the command field
         let event_json_str = String::from_utf8_lossy(event_json);
         let user_prompt = match &hook_def.prompt_template {
-            Some(template) => template
-                .replace("{{event_json}}", &event_json_str)
-                .replace("{{event_type}}", &Self::extract_event_type_from_json(&event_json_str)),
+            Some(template) => template.replace("{{event_json}}", &event_json_str).replace(
+                "{{event_type}}",
+                &Self::extract_event_type_from_json(&event_json_str),
+            ),
             None => hook_def.command.clone(),
         };
 
@@ -651,7 +676,10 @@ Do not include any other text, explanation, or formatting.";
                 })
             }
             Err(_) => {
-                tracing::warn!("LLM hook timed out after {}s, denying by default", timeout.as_secs());
+                tracing::warn!(
+                    "LLM hook timed out after {}s, denying by default",
+                    timeout.as_secs()
+                );
                 Ok(HookResult {
                     exit_code: -1,
                     stdout: String::new(),
@@ -672,8 +700,7 @@ Do not include any other text, explanation, or formatting.";
             .and_then(|v| {
                 // HookEvent is serialized with PascalCase; iterate keys looking
                 // for a known event-type object and return its key name.
-                v.as_object()
-                    .and_then(|obj| obj.keys().next().cloned())
+                v.as_object().and_then(|obj| obj.keys().next().cloned())
             })
             .unwrap_or_else(|| "Unknown".to_string())
     }
@@ -760,7 +787,9 @@ mod tests {
             exit_code: 2,
             stdout: String::new(),
             stderr: reason.into(),
-            decision: HookDecision::Deny { reason: reason.into() },
+            decision: HookDecision::Deny {
+                reason: reason.into(),
+            },
             command: "echo deny".into(),
         }
     }
@@ -784,7 +813,11 @@ mod tests {
     fn test_new_creates_manager() {
         let mgr = HookManager::new();
         assert!(mgr.user_config_path().to_string_lossy().contains("shannon"));
-        assert!(mgr.project_config_path().to_string_lossy().contains("hooks.json"));
+        assert!(
+            mgr.project_config_path()
+                .to_string_lossy()
+                .contains("hooks.json")
+        );
     }
 
     #[test]
@@ -851,20 +884,14 @@ mod tests {
 
     #[test]
     fn test_resolve_modify_last_wins_over_allow() {
-        let results = vec![
-            allow_result(),
-            modify_result(Some(json!("modified")), None),
-        ];
+        let results = vec![allow_result(), modify_result(Some(json!("modified")), None)];
         let decision = HookManager::resolve_results(&results);
         assert!(matches!(decision, HookDecision::Modify { .. }));
     }
 
     #[test]
     fn test_resolve_deny_overrides_modify() {
-        let results = vec![
-            modify_result(None, Some(json!("out"))),
-            deny_result("nope"),
-        ];
+        let results = vec![modify_result(None, Some(json!("out"))), deny_result("nope")];
         let decision = HookManager::resolve_results(&results);
         assert!(matches!(decision, HookDecision::Deny { .. }));
     }

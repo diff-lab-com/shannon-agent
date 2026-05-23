@@ -9,12 +9,10 @@ use std::time::Instant;
 
 use serde_json::json;
 
-use shannon_core::api::{
-    ContentBlock, Message, MessageContent, ToolResultContent,
-};
+use shannon_core::api::{ContentBlock, Message, MessageContent, ToolResultContent};
 use shannon_core::compact::{CompactConfig, CompactEngine, RuleBasedSummarizer};
 use shannon_core::recording::RecordingEntry;
-use shannon_core::testing::snapshot::{render_request_snapshot, RenderMode};
+use shannon_core::testing::snapshot::{RenderMode, render_request_snapshot};
 use shannon_core::token_estimation::{ConversationMessageSummary, TokenEstimator};
 
 // ---------------------------------------------------------------------------
@@ -242,7 +240,10 @@ fn streaming_parse_throughput_over_10mb_s() {
     }
 
     let stream_len = sse_stream.len();
-    assert!(stream_len > 1_000_000, "stream should be > 1MB, got {stream_len} bytes");
+    assert!(
+        stream_len > 1_000_000,
+        "stream should be > 1MB, got {stream_len} bytes"
+    );
 
     let start = Instant::now();
 
@@ -322,7 +323,11 @@ fn token_estimation_1000_messages_under_50ms() {
     let estimator = TokenEstimator::new();
     let messages: Vec<ConversationMessageSummary> = (0..1000)
         .map(|i| ConversationMessageSummary {
-            role: if i % 2 == 0 { "user".into() } else { "assistant".into() },
+            role: if i % 2 == 0 {
+                "user".into()
+            } else {
+                "assistant".into()
+            },
             content: format!(
                 "This is message {i} with typical code analysis content discussing \
                  refactoring patterns and best practices in Rust."
@@ -457,8 +462,16 @@ fn cache_accumulation_from_sse_events_under_100ms() {
         let msg = event_json.get("message").unwrap();
         let usage = msg.get("usage").unwrap();
         total_input += usage.get("input_tokens").unwrap().as_u64().unwrap();
-        total_creation += usage.get("cache_creation_input_tokens").unwrap().as_u64().unwrap();
-        total_read += usage.get("cache_read_input_tokens").unwrap().as_u64().unwrap();
+        total_creation += usage
+            .get("cache_creation_input_tokens")
+            .unwrap()
+            .as_u64()
+            .unwrap();
+        total_read += usage
+            .get("cache_read_input_tokens")
+            .unwrap()
+            .as_u64()
+            .unwrap();
     }
 
     let elapsed = start.elapsed();
@@ -468,7 +481,10 @@ fn cache_accumulation_from_sse_events_under_100ms() {
     assert_eq!(total_input, 5000 * event_count as u64);
 
     let hit_rate = total_read as f64 / (total_read + total_creation) as f64;
-    assert!(hit_rate > 0.3, "Accumulated hit rate should be > 30%, got {hit_rate:.2}");
+    assert!(
+        hit_rate > 0.3,
+        "Accumulated hit rate should be > 30%, got {hit_rate:.2}"
+    );
 
     assert!(
         elapsed.as_millis() < 100,
@@ -488,7 +504,10 @@ fn cache_hit_rate_edge_cases() {
     // All hits
     let all_hits = vec![(1000, 0, 5000); 10];
     let rate = calculate_hit_rate(&all_hits);
-    assert!((rate - 1.0).abs() < f64::EPSILON, "All hits should give 100% hit rate");
+    assert!(
+        (rate - 1.0).abs() < f64::EPSILON,
+        "All hits should give 100% hit rate"
+    );
 
     // Empty
     let empty: Vec<(u32, u32, u32)> = vec![];

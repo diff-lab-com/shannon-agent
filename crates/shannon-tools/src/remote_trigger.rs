@@ -28,13 +28,13 @@
 //! server.start().unwrap();
 //! ```
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -52,10 +52,7 @@ pub enum TriggerAction {
         project: Option<String>,
     },
     /// Run a specific tool by name with a JSON input payload.
-    RunTool {
-        tool: String,
-        input: Value,
-    },
+    RunTool { tool: String, input: Value },
     /// Deliver a webhook payload to an external URL.
     Webhook {
         url: String,
@@ -377,7 +374,10 @@ fn handle_trigger(
         }
         TriggerAction::RunTool { tool, input } => {
             // Validate tool name: alphanumeric + underscore/dash only
-            if !tool.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+            if !tool
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
                 return TriggerResponse {
                     status: 400,
                     status_text: "Bad Request",
@@ -585,12 +585,14 @@ mod tests {
         let server = RemoteTriggerServer::new(
             format!("127.0.0.1:{}", free_port()),
             Arc::new(move |prompt, project| {
-                plog.lock().unwrap_or_else(|e| e.into_inner()).push(format!(
-                    "prompt:{prompt}|project:{project:?}"
-                ));
+                plog.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(format!("prompt:{prompt}|project:{project:?}"));
             }),
             Arc::new(move |tool, input| {
-                tlog.lock().unwrap_or_else(|e| e.into_inner()).push(format!("tool:{tool}|input:{input}"));
+                tlog.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(format!("tool:{tool}|input:{input}"));
             }),
         );
 
@@ -612,12 +614,14 @@ mod tests {
         let request = if let Some(b) = body {
             format!(
                 "{} {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                method, path, addr, b.len(), b
+                method,
+                path,
+                addr,
+                b.len(),
+                b
             )
         } else {
-            format!(
-                "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
-            )
+            format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
         };
 
         stream.write_all(request.as_bytes()).await.unwrap();
@@ -1003,7 +1007,10 @@ mod tests {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        assert_eq!(prompt_log.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+        assert_eq!(
+            prompt_log.lock().unwrap_or_else(|e| e.into_inner()).len(),
+            1
+        );
         assert_eq!(tool_log.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
 
         server.stop().unwrap();
@@ -1016,10 +1023,7 @@ mod tests {
         let (server, _, _) = make_server();
         let tool = RemoteTriggerTool::new(server);
 
-        let result = tool
-            .execute(json!({"action": "start"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"action": "start"})).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("started"));
     }
@@ -1043,10 +1047,7 @@ mod tests {
         let (server, _, _) = make_server();
         let tool = RemoteTriggerTool::new(server);
 
-        let result = tool
-            .execute(json!({"action": "status"}))
-            .await
-            .unwrap();
+        let result = tool.execute(json!({"action": "status"})).await.unwrap();
         assert!(!result.is_error);
         assert!(result.content.contains("not running"));
         assert_eq!(result.metadata.get("running"), Some(&json!(false)));

@@ -4,7 +4,7 @@
 //! and clearing its associated task list.
 
 use crate::todo::TaskStore;
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -307,10 +307,10 @@ mod tests {
     async fn test_team_delete_empty_team() {
         let (team_registry, task_store, tool) = setup();
 
-        team_registry
-            .write()
-            .unwrap()
-            .insert("empty-team".to_string(), make_team("empty-team", "No tasks"));
+        team_registry.write().unwrap().insert(
+            "empty-team".to_string(),
+            make_team("empty-team", "No tasks"),
+        );
 
         let result = tool
             .delete_team(TeamDeleteInput {

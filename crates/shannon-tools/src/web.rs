@@ -4,7 +4,7 @@
 //! - WebFetch: Fetch and extract content from URLs (with HTML-to-text conversion)
 //! - WebSearch: Search the web via Tavily API (or other configurable providers)
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -80,17 +80,21 @@ pub struct WebFetchOutput {
 /// - Cloud metadata endpoints (169.254.169.254)
 /// - Hostname-only URLs without a TLD that resolve to loopback
 fn validate_fetch_url(url_str: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let parsed = reqwest::Url::parse(url_str)
-        .map_err(|e| format!("Invalid URL: {e}"))?;
+    let parsed = reqwest::Url::parse(url_str).map_err(|e| format!("Invalid URL: {e}"))?;
 
     // Only allow http and https schemes
     match parsed.scheme() {
         "http" | "https" => {}
-        other => return Err(format!("Blocked: URL scheme '{other}' is not allowed (only http/https)").into()),
+        other => {
+            return Err(
+                format!("Blocked: URL scheme '{other}' is not allowed (only http/https)").into(),
+            );
+        }
     }
 
     // Check host
-    let host = parsed.host_str()
+    let host = parsed
+        .host_str()
         .ok_or_else(|| "Blocked: URL has no host".to_string())?;
 
     // Block empty host (e.g., "http:///path")
@@ -140,7 +144,10 @@ fn validate_fetch_url(url_str: &str) -> Result<(), Box<dyn std::error::Error + S
 
     // Block obvious localhost-like hostnames
     let host_lower = host.to_lowercase();
-    if host_lower == "localhost" || host_lower.ends_with(".localhost") || host_lower == "localtest.me" {
+    if host_lower == "localhost"
+        || host_lower.ends_with(".localhost")
+        || host_lower == "localtest.me"
+    {
         return Err(format!("Blocked: localhost-like hostname '{host}'").into());
     }
 
@@ -162,7 +169,8 @@ impl Default for WebFetchTool {
 impl WebFetchTool {
     pub fn new() -> Self {
         Self {
-            description: "Fetches a URL from the internet and optionally extracts its contents".to_string(),
+            description: "Fetches a URL from the internet and optionally extracts its contents"
+                .to_string(),
             client: Client::builder()
                 .user_agent("ShannonCode/1.0")
                 .timeout(std::time::Duration::from_secs(30))
@@ -240,7 +248,10 @@ impl Tool for WebFetchTool {
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch URL: {e}")))?;
 
         Ok(ToolOutput {
-            content: format!("Successfully fetched {} bytes from {}", output.content_length, output.url),
+            content: format!(
+                "Successfully fetched {} bytes from {}",
+                output.content_length, output.url
+            ),
             is_error: false,
             metadata: {
                 let mut map = HashMap::new();
@@ -289,7 +300,9 @@ impl Tool for WebFetchTool {
             "required": ["url"]
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -555,10 +568,7 @@ impl WebSearchTool {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(format!(
-                "Tavily API returned HTTP {status}: {body}"
-            )
-            .into());
+            return Err(format!("Tavily API returned HTTP {status}: {body}").into());
         }
 
         let tavily_response: TavilyResponse = response.json().await?;
@@ -601,18 +611,25 @@ impl Tool for WebSearchTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Search failed: {e}")))?;
 
-        let results_json: Vec<serde_json::Value> = output.results.iter().map(|r| {
-            json!({
-                "title": r.title,
-                "url": r.url,
-                "snippet": r.snippet,
-                "score": r.score,
-                "published_date": r.published_date
+        let results_json: Vec<serde_json::Value> = output
+            .results
+            .iter()
+            .map(|r| {
+                json!({
+                    "title": r.title,
+                    "url": r.url,
+                    "snippet": r.snippet,
+                    "score": r.score,
+                    "published_date": r.published_date
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(ToolOutput {
-            content: format!("Found {} search results for: {}", output.count, output.query),
+            content: format!(
+                "Found {} search results for: {}",
+                output.count, output.query
+            ),
             is_error: false,
             metadata: {
                 let mut map = HashMap::new();
@@ -663,7 +680,9 @@ impl Tool for WebSearchTool {
             "required": ["query"]
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -773,7 +792,9 @@ fn decode_html_entity(chars: &mut std::iter::Peekable<std::str::Chars>) -> Strin
                 num_str.parse::<u32>().ok()
             };
             match codepoint {
-                Some(cp) => char::from_u32(cp).map(|c| c.to_string()).unwrap_or_default(),
+                Some(cp) => char::from_u32(cp)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
                 None => "&".to_string(),
             }
         }

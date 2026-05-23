@@ -2,7 +2,6 @@ use anyhow::Result;
 use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
-use similar::{ChangeTag, TextDiff};
 use shannon_core::{
     api::LlmClientConfig,
     i18n,
@@ -14,6 +13,7 @@ use shannon_core::{
 };
 use shannon_tools::register_default_tools_with_project_dir_ex;
 use shannon_ui::Repl;
+use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
 use std::io::Write;
 use std::time::Instant;
@@ -110,10 +110,17 @@ enum CiEvent {
     Start { prompt: String, model: String },
     /// Tool was invoked.
     #[serde(rename = "tool_call")]
-    ToolCall { name: String, input: serde_json::Value },
+    ToolCall {
+        name: String,
+        input: serde_json::Value,
+    },
     /// Tool execution completed.
     #[serde(rename = "tool_result")]
-    ToolResult { name: String, output: String, success: bool },
+    ToolResult {
+        name: String,
+        output: String,
+        success: bool,
+    },
     /// Message/response content.
     #[serde(rename = "message")]
     #[allow(dead_code)]
@@ -127,7 +134,11 @@ enum CiEvent {
     Error { message: String },
     /// Session completed.
     #[serde(rename = "done")]
-    Done { exit_code: i32, turns_used: u32, tokens_used: u64 },
+    Done {
+        exit_code: i32,
+        turns_used: u32,
+        tokens_used: u64,
+    },
 }
 
 /// CLI configuration passed explicitly instead of via environment variables.
@@ -164,7 +175,9 @@ impl CliConfig {
 
     /// Get the provider, with fallback to environment variable.
     fn provider(&self) -> Option<String> {
-        self.provider.clone().or_else(|| std::env::var("SHANNON_PROVIDER").ok())
+        self.provider
+            .clone()
+            .or_else(|| std::env::var("SHANNON_PROVIDER").ok())
     }
 
     /// Get max_tokens, with fallback to environment variable.
@@ -258,15 +271,33 @@ fn load_toml_config() -> ShannonTomlConfig {
         match toml::from_str::<ShannonTomlConfig>(&content) {
             Ok(cfg) => {
                 // Merge: local overrides global
-                if cfg.model.is_some() { merged.model = cfg.model; }
-                if cfg.provider.is_some() { merged.provider = cfg.provider; }
-                if cfg.max_tokens.is_some() { merged.max_tokens = cfg.max_tokens; }
-                if cfg.temperature.is_some() { merged.temperature = cfg.temperature; }
-                if cfg.timeout.is_some() { merged.timeout = cfg.timeout; }
-                if cfg.debug.is_some() { merged.debug = cfg.debug; }
-                if cfg.api_key.is_some() { merged.api_key = cfg.api_key; }
-                if cfg.base_url.is_some() { merged.base_url = cfg.base_url; }
-                if cfg.enable_tools.is_some() { merged.enable_tools = cfg.enable_tools; }
+                if cfg.model.is_some() {
+                    merged.model = cfg.model;
+                }
+                if cfg.provider.is_some() {
+                    merged.provider = cfg.provider;
+                }
+                if cfg.max_tokens.is_some() {
+                    merged.max_tokens = cfg.max_tokens;
+                }
+                if cfg.temperature.is_some() {
+                    merged.temperature = cfg.temperature;
+                }
+                if cfg.timeout.is_some() {
+                    merged.timeout = cfg.timeout;
+                }
+                if cfg.debug.is_some() {
+                    merged.debug = cfg.debug;
+                }
+                if cfg.api_key.is_some() {
+                    merged.api_key = cfg.api_key;
+                }
+                if cfg.base_url.is_some() {
+                    merged.base_url = cfg.base_url;
+                }
+                if cfg.enable_tools.is_some() {
+                    merged.enable_tools = cfg.enable_tools;
+                }
             }
             Err(e) => eprintln!("Warning: failed to parse .shannon.toml: {e}"),
         }
@@ -362,7 +393,6 @@ struct Cli {
     // NOTE: `--allowed-tools` is defined above as `team_allowed_tools` (shared
     // by both --team-agent and --prompt headless modes).  Do not add a second
     // field with the same long option name — clap rejects duplicate longs.
-
     /// Output format for headless mode (text or json).
     #[arg(long = "output-format", default_value = "text")]
     output_format: OutputFormat,
@@ -565,7 +595,8 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
     let cli_overrides = ShannonConfig {
         model: cli_config.model(),
         provider: cli_config.provider(),
-        api_key: cli_config.get_env("SHANNON_API_KEY")
+        api_key: cli_config
+            .get_env("SHANNON_API_KEY")
             .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
             .or_else(|| std::env::var("OPENAI_API_KEY").ok()),
         base_url: cli_config.get_env("SHANNON_BASE_URL"),
@@ -601,11 +632,14 @@ fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_core::sta
     let state_mgr = StateManager::new();
 
     if let Some(id_str) = session_id_str {
-        let uuid = uuid::Uuid::parse_str(id_str)
-            .map_err(|e| {
-                let display = if id_str.len() > 36 { &id_str[..36] } else { id_str };
-                anyhow::anyhow!("Invalid session UUID '{display}': {e}")
-            })?;
+        let uuid = uuid::Uuid::parse_str(id_str).map_err(|e| {
+            let display = if id_str.len() > 36 {
+                &id_str[..36]
+            } else {
+                id_str
+            };
+            anyhow::anyhow!("Invalid session UUID '{display}': {e}")
+        })?;
         state_mgr
             .load_session(&uuid)?
             .ok_or_else(|| anyhow::anyhow!("Session {uuid} not found"))
@@ -937,9 +971,16 @@ enum OutputEvent {
     #[serde(rename = "text_delta")]
     TextDelta { content: String },
     #[serde(rename = "tool_use")]
-    ToolUse { name: String, input: serde_json::Value },
+    ToolUse {
+        name: String,
+        input: serde_json::Value,
+    },
     #[serde(rename = "tool_result")]
-    ToolResult { name: String, output: String, is_error: bool },
+    ToolResult {
+        name: String,
+        output: String,
+        is_error: bool,
+    },
     #[serde(rename = "error")]
     Error { message: String },
     #[serde(rename = "done")]
@@ -1467,7 +1508,9 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
         // Inject team context into AgentTool for sub-agent execution + team coordination
         match shannon_tools::AgentToolContext::new(client_config.clone()).await {
             Ok(ctx) => {
-                if let Err(e) = shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone()) {
+                if let Err(e) =
+                    shannon_tools::register_team_tools(&mut tools, ctx.coordinator.clone())
+                {
                     eprintln!("Warning: Team tool registration failed: {e}");
                 }
                 if let Ok(mut guard) = agent_context_handle.lock() {
@@ -1515,10 +1558,8 @@ async fn agent_notify(method: &str, params: serde_json::Value) {
 
 /// Send a JSON-RPC success response.
 async fn agent_respond(id: i64, result: serde_json::Value) {
-    let msg = shannon_agents::JsonRpcMessage::response(
-        shannon_agents::JsonRpcId::Number(id),
-        result,
-    );
+    let msg =
+        shannon_agents::JsonRpcMessage::response(shannon_agents::JsonRpcId::Number(id), result);
     match shannon_agents::frame_message(&msg) {
         Ok(line) => agent_write_line(&line).await,
         Err(e) => tracing::error!("Failed to frame response: {e}"),
@@ -1555,7 +1596,8 @@ fn run_team_agent_mode(
 ) -> Result<()> {
     // Change working directory if specified
     if let Some(dir) = workdir {
-        let canonical = std::path::Path::new(dir).canonicalize()
+        let canonical = std::path::Path::new(dir)
+            .canonicalize()
             .map_err(|e| anyhow::anyhow!("Invalid working directory '{dir}': {e}"))?;
         std::env::set_current_dir(&canonical)
             .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
@@ -1947,7 +1989,7 @@ fn main() -> Result<()> {
             .with_writer(std::io::stderr)
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("shannon_cli=info".parse().expect("valid log directive"))
+                    .add_directive("shannon_cli=info".parse().expect("valid log directive")),
             )
             .init();
         return run_team_agent_mode(
@@ -1991,9 +2033,7 @@ fn main() -> Result<()> {
             .as_deref()
             .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
         // Parse --schema: load from file or parse inline JSON
-        let schema_config = cli.schema.as_deref().map(|s| {
-            load_schema(s)
-        }).transpose()?;
+        let schema_config = cli.schema.as_deref().map(|s| load_schema(s)).transpose()?;
 
         return run_headless_query(
             headless_prompt,
@@ -2086,8 +2126,7 @@ fn main() -> Result<()> {
             file: _,
             local,
         }) => {
-            let env_overrides = parse_cli_env(env)
-                .map_err(|e| anyhow::anyhow!(e))?;
+            let env_overrides = parse_cli_env(env).map_err(|e| anyhow::anyhow!(e))?;
             let resolved_provider = if *local {
                 Some("ollama".to_string())
             } else {
@@ -2113,19 +2152,21 @@ fn main() -> Result<()> {
             provider,
             max_tokens,
             ..
-        }) => {
-            build_cli_config(
-                model.as_deref(),
-                provider.as_deref(),
-                *max_tokens,
-                None,
-                None,
-                false,
-                HashMap::new(),
-            )
-        }
+        }) => build_cli_config(
+            model.as_deref(),
+            provider.as_deref(),
+            *max_tokens,
+            None,
+            None,
+            false,
+            HashMap::new(),
+        ),
         // No subcommand, Version, Config, and Serve commands don't need config in the same way
-        None | Some(Commands::Version { .. }) | Some(Commands::Config { .. }) | Some(Commands::Serve { .. }) | Some(Commands::Screenshot { .. }) => CliConfig::default(),
+        None
+        | Some(Commands::Version { .. })
+        | Some(Commands::Config { .. })
+        | Some(Commands::Serve { .. })
+        | Some(Commands::Screenshot { .. }) => CliConfig::default(),
     };
 
     // Initialize tracing if debug mode enabled
@@ -2134,7 +2175,7 @@ fn main() -> Result<()> {
             .with_writer(std::io::stderr)
             .with_env_filter(
                 tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("info".parse().expect("valid log directive"))
+                    .add_directive("info".parse().expect("valid log directive")),
             )
             .init();
     }
@@ -2156,7 +2197,8 @@ fn main() -> Result<()> {
         }
         Some(Commands::Repl { cwd, .. }) => {
             if let Some(dir) = cwd {
-                let canonical = std::path::Path::new(&dir).canonicalize()
+                let canonical = std::path::Path::new(&dir)
+                    .canonicalize()
                     .map_err(|e| anyhow::anyhow!("Invalid working directory '{dir}': {e}"))?;
                 std::env::set_current_dir(&canonical)
                     .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
@@ -2192,7 +2234,10 @@ fn main() -> Result<()> {
                     // List all config keys
                     let keys = manager.list(None);
                     if keys.is_empty() {
-                        println!("No configuration set. Config file: {}", manager.config_path().display());
+                        println!(
+                            "No configuration set. Config file: {}",
+                            manager.config_path().display()
+                        );
                     } else {
                         println!("Configuration ({} key(s)):", keys.len());
                         for key in &keys {
@@ -2429,8 +2474,10 @@ mod tests {
             Some("custom_value".to_string())
         );
         // Non-existent key returns None (unless set in actual env)
-        assert!(config.get_env("NON_EXISTENT_KEY").is_none()
-            || config.get_env("NON_EXISTENT_KEY").is_some());
+        assert!(
+            config.get_env("NON_EXISTENT_KEY").is_none()
+                || config.get_env("NON_EXISTENT_KEY").is_some()
+        );
     }
 
     #[test]
@@ -2482,15 +2529,9 @@ mod tests {
 
     #[test]
     fn test_cli_parse_repl_with_env() {
-        let cli = Cli::try_parse_from([
-            "shannon",
-            "repl",
-            "-e",
-            "MODEL=gpt-4o",
-            "-e",
-            "TOKENS=4096",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["shannon", "repl", "-e", "MODEL=gpt-4o", "-e", "TOKENS=4096"])
+                .unwrap();
         match cli.command {
             Some(Commands::Repl { env, .. }) => {
                 assert_eq!(env.len(), 2);
@@ -2867,15 +2908,7 @@ mod tests {
     #[test]
     fn test_cli_repl_local_resolves_provider_and_model() {
         // --local should resolve to provider=ollama and model=llama3
-        let _config = build_cli_config(
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            HashMap::new(),
-        );
+        let _config = build_cli_config(None, None, None, None, None, false, HashMap::new());
         // Without --local, default provider depends on env
         let local_config = build_cli_config(
             Some("llama3"),
@@ -2919,7 +2952,9 @@ mod tests {
     fn test_cli_parse_query_with_provider() {
         let cli = Cli::try_parse_from(["shannon", "query", "-p", "anthropic", "test"]).unwrap();
         match cli.command {
-            Some(Commands::Query { query, provider, .. }) => {
+            Some(Commands::Query {
+                query, provider, ..
+            }) => {
                 assert_eq!(query, "test");
                 assert_eq!(provider.as_deref(), Some("anthropic"));
             }
@@ -2929,9 +2964,12 @@ mod tests {
 
     #[test]
     fn test_cli_parse_query_with_max_tokens() {
-        let cli = Cli::try_parse_from(["shannon", "query", "--max-tokens", "8192", "test"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["shannon", "query", "--max-tokens", "8192", "test"]).unwrap();
         match cli.command {
-            Some(Commands::Query { query, max_tokens, .. }) => {
+            Some(Commands::Query {
+                query, max_tokens, ..
+            }) => {
                 assert_eq!(query, "test");
                 assert_eq!(max_tokens, Some(8192));
             }
@@ -2943,7 +2981,9 @@ mod tests {
     fn test_cli_parse_query_with_no_stream() {
         let cli = Cli::try_parse_from(["shannon", "query", "--no-stream", "test"]).unwrap();
         match cli.command {
-            Some(Commands::Query { query, no_stream, .. }) => {
+            Some(Commands::Query {
+                query, no_stream, ..
+            }) => {
                 assert_eq!(query, "test");
                 assert!(no_stream);
             }
@@ -2978,7 +3018,14 @@ mod tests {
     fn test_cli_parse_query_defaults() {
         let cli = Cli::try_parse_from(["shannon", "query", "test"]).unwrap();
         match cli.command {
-            Some(Commands::Query { query, model, provider, max_tokens, output, no_stream }) => {
+            Some(Commands::Query {
+                query,
+                model,
+                provider,
+                max_tokens,
+                output,
+                no_stream,
+            }) => {
                 assert_eq!(query, "test");
                 assert!(model.is_none());
                 assert!(provider.is_none());
@@ -3001,15 +3048,27 @@ mod tests {
         let cli = Cli::try_parse_from([
             "shannon",
             "query",
-            "-m", "claude-sonnet-4",
-            "-p", "anthropic",
-            "--max-tokens", "4096",
-            "--output", "json",
+            "-m",
+            "claude-sonnet-4",
+            "-p",
+            "anthropic",
+            "--max-tokens",
+            "4096",
+            "--output",
+            "json",
             "--no-stream",
             "你用的什么模型",
-        ]).unwrap();
+        ])
+        .unwrap();
         match cli.command {
-            Some(Commands::Query { query, model, provider, max_tokens, output, no_stream }) => {
+            Some(Commands::Query {
+                query,
+                model,
+                provider,
+                max_tokens,
+                output,
+                no_stream,
+            }) => {
                 assert_eq!(query, "你用的什么模型");
                 assert_eq!(model.as_deref(), Some("claude-sonnet-4"));
                 assert_eq!(provider.as_deref(), Some("anthropic"));
@@ -3025,7 +3084,10 @@ mod tests {
     fn test_parse_env_chinese_value() {
         let input = vec!["SHANNON_MODEL=你用的什么模型".to_string()];
         let result = parse_cli_env(&input).unwrap();
-        assert_eq!(result.get("SHANNON_MODEL"), Some(&"你用的什么模型".to_string()));
+        assert_eq!(
+            result.get("SHANNON_MODEL"),
+            Some(&"你用的什么模型".to_string())
+        );
     }
 
     // ── build_cli_config integration tests ─────────────────────────────────
@@ -3140,7 +3202,10 @@ mod tests {
         assert_eq!(config.timeout, Some(120));
         assert!(config.debug.unwrap());
         assert_eq!(config.api_key.as_deref(), Some("sk-test"));
-        assert_eq!(config.base_url.as_deref(), Some("https://api.openai.com/v1"));
+        assert_eq!(
+            config.base_url.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
     }
 
     #[test]
@@ -3170,9 +3235,9 @@ mod tests {
         let config = build_cli_config(
             cli.model.as_deref(),
             cli.provider.as_deref(),
-            None, // no max_tokens
-            None, // no temperature
-            None, // no timeout
+            None,  // no max_tokens
+            None,  // no temperature
+            None,  // no timeout
             false, // no debug
             HashMap::new(),
         );
@@ -3184,14 +3249,25 @@ mod tests {
     fn test_query_subcommand_config_construction() {
         // Simulates: shannon query -m gpt-4o -p openai --max-tokens 4096 "test"
         let cli = Cli::try_parse_from([
-            "shannon", "query",
-            "-m", "gpt-4o",
-            "-p", "openai",
-            "--max-tokens", "4096",
+            "shannon",
+            "query",
+            "-m",
+            "gpt-4o",
+            "-p",
+            "openai",
+            "--max-tokens",
+            "4096",
             "test",
-        ]).unwrap();
+        ])
+        .unwrap();
 
-        if let Some(Commands::Query { model, provider, max_tokens, .. }) = cli.command {
+        if let Some(Commands::Query {
+            model,
+            provider,
+            max_tokens,
+            ..
+        }) = cli.command
+        {
             let config = build_cli_config(
                 model.as_deref(),
                 provider.as_deref(),
@@ -3211,9 +3287,7 @@ mod tests {
 
     #[test]
     fn test_cli_team_agent_flag() {
-        let cli = Cli::try_parse_from([
-            "shannon", "--team-agent", "--name", "worker-1",
-        ]).unwrap();
+        let cli = Cli::try_parse_from(["shannon", "--team-agent", "--name", "worker-1"]).unwrap();
         assert!(cli.team_agent);
         assert_eq!(cli.name.as_deref(), Some("worker-1"));
     }
@@ -3221,9 +3295,16 @@ mod tests {
     #[test]
     fn test_cli_team_agent_with_model() {
         let cli = Cli::try_parse_from([
-            "shannon", "--team-agent", "--name", "worker-2",
-            "--model", "claude-sonnet-4", "--provider", "anthropic",
-        ]).unwrap();
+            "shannon",
+            "--team-agent",
+            "--name",
+            "worker-2",
+            "--model",
+            "claude-sonnet-4",
+            "--provider",
+            "anthropic",
+        ])
+        .unwrap();
         assert!(cli.team_agent);
         assert_eq!(cli.name.as_deref(), Some("worker-2"));
         assert_eq!(cli.model.as_deref(), Some("claude-sonnet-4"));
@@ -3233,22 +3314,29 @@ mod tests {
     #[test]
     fn test_cli_team_agent_with_system_prompt() {
         let cli = Cli::try_parse_from([
-            "shannon", "--team-agent", "--name", "coder",
-            "--system-prompt", "You are a Rust expert",
-        ]).unwrap();
+            "shannon",
+            "--team-agent",
+            "--name",
+            "coder",
+            "--system-prompt",
+            "You are a Rust expert",
+        ])
+        .unwrap();
         assert!(cli.team_agent);
-        assert_eq!(
-            cli.system_prompt.as_deref(),
-            Some("You are a Rust expert"),
-        );
+        assert_eq!(cli.system_prompt.as_deref(), Some("You are a Rust expert"),);
     }
 
     #[test]
     fn test_cli_team_agent_with_workdir() {
         let cli = Cli::try_parse_from([
-            "shannon", "--team-agent", "--name", "worker",
-            "--workdir", "/tmp/worktree-1",
-        ]).unwrap();
+            "shannon",
+            "--team-agent",
+            "--name",
+            "worker",
+            "--workdir",
+            "/tmp/worktree-1",
+        ])
+        .unwrap();
         assert!(cli.team_agent);
         assert_eq!(cli.workdir.as_deref(), Some("/tmp/worktree-1"));
     }
@@ -3258,12 +3346,18 @@ mod tests {
         let cli = Cli::try_parse_from([
             "shannon",
             "--team-agent",
-            "--name", "researcher",
-            "--model", "claude-opus-4",
-            "--provider", "anthropic",
-            "--system-prompt", "Research agent",
-            "--workdir", "/project/research",
-        ]).unwrap();
+            "--name",
+            "researcher",
+            "--model",
+            "claude-opus-4",
+            "--provider",
+            "anthropic",
+            "--system-prompt",
+            "Research agent",
+            "--workdir",
+            "/project/research",
+        ])
+        .unwrap();
         assert!(cli.team_agent);
         assert_eq!(cli.name.as_deref(), Some("researcher"));
         assert_eq!(cli.model.as_deref(), Some("claude-opus-4"));
@@ -3334,7 +3428,9 @@ mod tests {
 
     #[test]
     fn test_output_event_text_delta_ndjson() {
-        let event = OutputEvent::TextDelta { content: "hello".into() };
+        let event = OutputEvent::TextDelta {
+            content: "hello".into(),
+        };
         let line = event.to_ndjson();
         assert!(line.ends_with('\n'));
         let parsed: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
@@ -3398,9 +3494,15 @@ mod tests {
 
     #[test]
     fn test_ndjson_stream_multiple_events() {
-        let events = [OutputEvent::TextDelta { content: "line1".into() },
-            OutputEvent::TextDelta { content: "line2".into() },
-            OutputEvent::Done { exit_code: 0 }];
+        let events = [
+            OutputEvent::TextDelta {
+                content: "line1".into(),
+            },
+            OutputEvent::TextDelta {
+                content: "line2".into(),
+            },
+            OutputEvent::Done { exit_code: 0 },
+        ];
         let output: String = events.iter().map(|e| e.to_ndjson()).collect();
         let lines: Vec<&str> = output.lines().collect();
         assert_eq!(lines.len(), 3);
@@ -3447,13 +3549,22 @@ mod tests {
     fn test_load_schema_file_not_found() {
         let result = load_schema("/nonexistent/path/schema.json");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to read schema file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to read schema file")
+        );
     }
 
     #[test]
     fn test_load_schema_from_file() {
         let tmp = std::env::temp_dir().join("shannon_test_schema.json");
-        std::fs::write(&tmp, r#"{"type":"object","properties":{"x":{"type":"number"}}}"#).unwrap();
+        std::fs::write(
+            &tmp,
+            r#"{"type":"object","properties":{"x":{"type":"number"}}}"#,
+        )
+        .unwrap();
         let config = load_schema(tmp.to_str().unwrap()).unwrap();
         assert!(config.schema["properties"]["x"]["type"].is_string());
         let _ = std::fs::remove_file(&tmp);

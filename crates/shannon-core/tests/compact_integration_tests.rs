@@ -77,7 +77,11 @@ mod compact_integration_tests {
     }
 
     impl Summarizer for MockLlmSummarizer {
-        fn summarize(&self, messages: &[Message], _max_tokens: usize) -> Result<String, CompactError> {
+        fn summarize(
+            &self,
+            messages: &[Message],
+            _max_tokens: usize,
+        ) -> Result<String, CompactError> {
             let summary = format!(
                 "LLM Summary: {} messages covered. Key topics: {}",
                 messages.len(),
@@ -96,7 +100,11 @@ mod compact_integration_tests {
             Ok(self.summary_response.clone())
         }
 
-        fn micro_summarize(&self, _message: &Message, _max_tokens: usize) -> Result<String, CompactError> {
+        fn micro_summarize(
+            &self,
+            _message: &Message,
+            _max_tokens: usize,
+        ) -> Result<String, CompactError> {
             Ok(format!("{} [micro-compressed]", self.micro_response))
         }
     }
@@ -106,12 +114,24 @@ mod compact_integration_tests {
     struct FailingSummarizer;
 
     impl Summarizer for FailingSummarizer {
-        fn summarize(&self, _messages: &[Message], _max_tokens: usize) -> Result<String, CompactError> {
-            Err(CompactError::SummarizationFailed("LLM API unavailable".to_string()))
+        fn summarize(
+            &self,
+            _messages: &[Message],
+            _max_tokens: usize,
+        ) -> Result<String, CompactError> {
+            Err(CompactError::SummarizationFailed(
+                "LLM API unavailable".to_string(),
+            ))
         }
 
-        fn micro_summarize(&self, _message: &Message, _max_tokens: usize) -> Result<String, CompactError> {
-            Err(CompactError::SummarizationFailed("LLM API unavailable".to_string()))
+        fn micro_summarize(
+            &self,
+            _message: &Message,
+            _max_tokens: usize,
+        ) -> Result<String, CompactError> {
+            Err(CompactError::SummarizationFailed(
+                "LLM API unavailable".to_string(),
+            ))
         }
     }
 
@@ -217,7 +237,10 @@ mod compact_integration_tests {
         match result {
             Ok(r) => {
                 // If it succeeded, messages should still be valid
-                assert!(messages.len() < 31, "Should have reduced or maintained messages");
+                assert!(
+                    messages.len() < 31,
+                    "Should have reduced or maintained messages"
+                );
                 let _ = r;
             }
             Err(CompactError::SummarizationFailed(_)) => {
@@ -399,7 +422,9 @@ mod compact_integration_tests {
             "fn main() { println!(\"hello\"); }",
             false,
         ));
-        messages.push(assistant_msg("I've read the file. It has a simple main function."));
+        messages.push(assistant_msg(
+            "I've read the file. It has a simple main function.",
+        ));
 
         // Turn 2: Edit file
         messages.push(user_msg("Add a greet function"));

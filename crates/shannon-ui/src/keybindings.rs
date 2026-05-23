@@ -146,19 +146,71 @@ pub fn load_keybindings() -> KeyBindings {
 
     let defaults = KeyBindings::default();
     KeyBindings {
-        quit: file.quit.as_deref().and_then(parse_key).unwrap_or(defaults.quit),
-        toggle_sidebar: file.toggle_sidebar.as_deref().and_then(parse_key).unwrap_or(defaults.toggle_sidebar),
-        toggle_tool_collapse: file.toggle_tool_collapse.as_deref().and_then(parse_key).unwrap_or(defaults.toggle_tool_collapse),
-        command_palette: file.command_palette.as_deref().and_then(parse_key).unwrap_or(defaults.command_palette),
-        reverse_search: file.reverse_search.as_deref().and_then(parse_key).unwrap_or(defaults.reverse_search),
-        model_picker: file.model_picker.as_deref().and_then(parse_key).unwrap_or(defaults.model_picker),
-        leader: file.leader.as_deref().and_then(parse_key).unwrap_or(defaults.leader),
-        external_editor: file.external_editor.as_deref().and_then(parse_key).unwrap_or(defaults.external_editor),
-        focus_mode: file.focus_mode.as_deref().and_then(parse_key).unwrap_or(defaults.focus_mode),
-        fullscreen: file.fullscreen.as_deref().and_then(parse_key).unwrap_or(defaults.fullscreen),
-        transcript: file.transcript.as_deref().and_then(parse_key).unwrap_or(defaults.transcript),
-        chat_search: file.chat_search.as_deref().and_then(parse_key).unwrap_or(defaults.chat_search),
-        toggle_agent_dashboard: file.toggle_agent_dashboard.as_deref().and_then(parse_key).unwrap_or(defaults.toggle_agent_dashboard),
+        quit: file
+            .quit
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.quit),
+        toggle_sidebar: file
+            .toggle_sidebar
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.toggle_sidebar),
+        toggle_tool_collapse: file
+            .toggle_tool_collapse
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.toggle_tool_collapse),
+        command_palette: file
+            .command_palette
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.command_palette),
+        reverse_search: file
+            .reverse_search
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.reverse_search),
+        model_picker: file
+            .model_picker
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.model_picker),
+        leader: file
+            .leader
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.leader),
+        external_editor: file
+            .external_editor
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.external_editor),
+        focus_mode: file
+            .focus_mode
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.focus_mode),
+        fullscreen: file
+            .fullscreen
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.fullscreen),
+        transcript: file
+            .transcript
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.transcript),
+        chat_search: file
+            .chat_search
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.chat_search),
+        toggle_agent_dashboard: file
+            .toggle_agent_dashboard
+            .as_deref()
+            .and_then(parse_key)
+            .unwrap_or(defaults.toggle_agent_dashboard),
     }
 }
 

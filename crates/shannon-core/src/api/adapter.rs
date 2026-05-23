@@ -4,7 +4,7 @@
 //! internally and the wire formats expected/returned by each LLM provider.
 
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::error::ApiError;
 use super::types::{
@@ -112,10 +112,10 @@ fn inject_cache_control_on_last_block(msg: &mut Value) {
             for block in blocks.iter_mut().rev() {
                 let block_type = block.get("type").and_then(|t| t.as_str());
                 if block_type == Some("text") || block_type == Some("image") {
-                    block.as_object_mut().expect("text/image block is always a JSON object").insert(
-                        "cache_control".to_string(),
-                        cache_marker,
-                    );
+                    block
+                        .as_object_mut()
+                        .expect("text/image block is always a JSON object")
+                        .insert("cache_control".to_string(), cache_marker);
                     return;
                 }
             }
@@ -127,7 +127,8 @@ fn inject_cache_control_on_last_block(msg: &mut Value) {
                 Some(Value::String(s)) => s.clone(),
                 _ => unreachable!("already matched String above"),
             };
-            *msg.get_mut("content").expect("content field exists in String branch") = serde_json::json!([{
+            *msg.get_mut("content")
+                .expect("content field exists in String branch") = serde_json::json!([{
                 "type": "text",
                 "text": text,
                 "cache_control": cache_marker,
@@ -156,9 +157,10 @@ fn serialize_openai_request(request: &MessageRequest) -> Value {
     } else if let Some(ref blocks) = request.system_blocks {
         // Use structured content array for OpenAI to preserve block boundaries
         // for better automatic prompt caching alignment.
-        let content_parts: Vec<Value> = blocks.iter().map(|b| {
-            json!({"type": "text", "text": b.text})
-        }).collect();
+        let content_parts: Vec<Value> = blocks
+            .iter()
+            .map(|b| json!({"type": "text", "text": b.text}))
+            .collect();
         if !content_parts.is_empty() {
             messages.push(json!({
                 "role": "system",
@@ -240,7 +242,11 @@ fn serialize_ollama_request(request: &MessageRequest) -> Value {
             "content": system
         }));
     } else if let Some(ref blocks) = request.system_blocks {
-        let text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<&str>>().join("\n\n");
+        let text: String = blocks
+            .iter()
+            .map(|b| b.text.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n\n");
         if !text.is_empty() {
             messages.push(json!({
                 "role": "system",
@@ -352,7 +358,9 @@ fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
                 })]
             } else {
                 // Check for image blocks — OpenAI uses a different content format
-                let has_images = blocks.iter().any(|b| matches!(b, ContentBlock::Image { .. }));
+                let has_images = blocks
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Image { .. }));
 
                 if has_images {
                     // Build OpenAI vision content array
@@ -364,7 +372,8 @@ fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
                                 "text": text
                             })),
                             ContentBlock::Image { source } => {
-                                let data_url = format!("data:{};base64,{}", source.media_type, source.data);
+                                let data_url =
+                                    format!("data:{};base64,{}", source.media_type, source.data);
                                 Some(json!({
                                     "type": "image_url",
                                     "image_url": { "url": data_url }
@@ -399,14 +408,16 @@ fn convert_message_for_openai(msg: &Message) -> Vec<Value> {
                             ..
                         } => {
                             let result_text = match content {
-                                Some(crate::api::types::ToolResultContent::Single(s)) => {
-                                    s.clone()
-                                }
+                                Some(crate::api::types::ToolResultContent::Single(s)) => s.clone(),
                                 Some(crate::api::types::ToolResultContent::Multiple(blocks)) => {
-                                    blocks.iter().filter_map(|b| match b {
-                                        ContentBlock::Text { text } => Some(text.as_str()),
-                                        _ => None,
-                                    }).collect::<Vec<_>>().join("\n")
+                                    blocks
+                                        .iter()
+                                        .filter_map(|b| match b {
+                                            ContentBlock::Text { text } => Some(text.as_str()),
+                                            _ => None,
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
                                 }
                                 None => String::new(),
                             };
@@ -449,14 +460,12 @@ pub fn normalize_sse_event(
     openai_state: &mut OpenaiStreamState,
 ) -> Vec<Result<StreamEvent, ApiError>> {
     match provider.wire_format() {
-        WireFormat::Anthropic => {
-            match serde_json::from_str::<StreamEvent>(json_str) {
-                Ok(event) => vec![Ok(event)],
-                Err(e) => vec![Err(ApiError::InvalidResponse(format!(
-                    "Failed to parse Anthropic SSE event: {e} (data: {json_str})"
-                )))],
-            }
-        }
+        WireFormat::Anthropic => match serde_json::from_str::<StreamEvent>(json_str) {
+            Ok(event) => vec![Ok(event)],
+            Err(e) => vec![Err(ApiError::InvalidResponse(format!(
+                "Failed to parse Anthropic SSE event: {e} (data: {json_str})"
+            )))],
+        },
         WireFormat::OpenAI => normalize_openai_event(json_str, openai_state),
         WireFormat::Ollama => normalize_ollama_event(json_str),
         WireFormat::Gemini => normalize_gemini_event(json_str, openai_state),
@@ -534,21 +543,20 @@ pub fn normalize_response(
     provider: &LlmProvider,
 ) -> Result<super::types::MessageResponse, ApiError> {
     match provider.wire_format() {
-        WireFormat::Anthropic => {
-            serde_json::from_str(json_str).map_err(|e| {
-                ApiError::InvalidResponse(format!(
-                    "Failed to parse Anthropic response: {e}"
-                ))
-            })
-        }
+        WireFormat::Anthropic => serde_json::from_str(json_str).map_err(|e| {
+            ApiError::InvalidResponse(format!("Failed to parse Anthropic response: {e}"))
+        }),
         WireFormat::OpenAI => {
             let resp: OpenAiMessageResponse = serde_json::from_str(json_str).map_err(|e| {
-                ApiError::InvalidResponse(format!("Failed to parse OpenAI-compatible response: {e}"))
+                ApiError::InvalidResponse(format!(
+                    "Failed to parse OpenAI-compatible response: {e}"
+                ))
             })?;
 
-            let choice = resp.choices.into_iter().next().ok_or_else(|| {
-                ApiError::InvalidResponse("Response has no choices".to_string())
-            })?;
+            let choice =
+                resp.choices.into_iter().next().ok_or_else(|| {
+                    ApiError::InvalidResponse("Response has no choices".to_string())
+                })?;
 
             let mut content = Vec::new();
 
@@ -562,10 +570,14 @@ pub fn normalize_response(
             // Tool calls
             if let Some(tool_calls) = choice.message.tool_calls {
                 for tc in tool_calls {
-                    let input: Value = serde_json::from_str(&tc.function.arguments).unwrap_or_else(|e| {
-                        tracing::warn!("Malformed tool arguments for '{}': {e}", tc.function.name);
-                        Value::Null
-                    });
+                    let input: Value =
+                        serde_json::from_str(&tc.function.arguments).unwrap_or_else(|e| {
+                            tracing::warn!(
+                                "Malformed tool arguments for '{}': {e}",
+                                tc.function.name
+                            );
+                            Value::Null
+                        });
                     content.push(ContentBlock::ToolUse {
                         id: tc.id,
                         name: tc.function.name,
@@ -585,8 +597,16 @@ pub fn normalize_response(
                 }),
                 usage: resp
                     .usage
-                    .map(|u| super::types::Usage { input_tokens: u.prompt_tokens.unwrap_or(0), output_tokens: u.completion_tokens.unwrap_or(0), ..Default::default() })
-                    .unwrap_or(super::types::Usage { input_tokens: 0, output_tokens: 0, ..Default::default() }),
+                    .map(|u| super::types::Usage {
+                        input_tokens: u.prompt_tokens.unwrap_or(0),
+                        output_tokens: u.completion_tokens.unwrap_or(0),
+                        ..Default::default()
+                    })
+                    .unwrap_or(super::types::Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        ..Default::default()
+                    }),
             })
         }
         WireFormat::Ollama => {
@@ -663,7 +683,11 @@ pub fn normalize_response(
                 } else {
                     None
                 },
-                usage: super::types::Usage { input_tokens: resp.prompt_eval_count.unwrap_or(0), output_tokens: resp.eval_count.unwrap_or(0), ..Default::default() },
+                usage: super::types::Usage {
+                    input_tokens: resp.prompt_eval_count.unwrap_or(0),
+                    output_tokens: resp.eval_count.unwrap_or(0),
+                    ..Default::default()
+                },
             })
         }
         WireFormat::Gemini => normalize_gemini_response(json_str),
@@ -764,10 +788,7 @@ fn normalize_openai_event(
 
     // If we have usage info, emit a MessageDelta with usage
     if let Some(usage) = chunk.usage {
-        let raw_reason = chunk
-            .choices
-            .first()
-            .and_then(|c| c.finish_reason.clone());
+        let raw_reason = chunk.choices.first().and_then(|c| c.finish_reason.clone());
         let normalized_reason = raw_reason.map(|r| match r.as_str() {
             "stop" | "STOP" => "end_turn".to_string(),
             other => other.to_string(),
@@ -905,7 +926,10 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
         Err(e) => {
             // Ollama sometimes sends incomplete JSON chunks during streaming.
             // Log and skip rather than killing the entire query.
-            tracing::warn!("Skipping malformed Ollama chunk: {e} (data: {} bytes)", json_str.len());
+            tracing::warn!(
+                "Skipping malformed Ollama chunk: {e} (data: {} bytes)",
+                json_str.len()
+            );
             return vec![];
         }
     };
@@ -1053,20 +1077,15 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
                             is_error,
                         } => {
                             let result_text = match content {
-                                Some(super::types::ToolResultContent::Single(s)) => {
-                                    s.clone()
-                                }
-                                Some(super::types::ToolResultContent::Multiple(bs)) => {
-                                    bs.iter()
-                                        .filter_map(|b| match b {
-                                            ContentBlock::Text { text } => {
-                                                Some(text.as_str())
-                                            }
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                }
+                                Some(super::types::ToolResultContent::Single(s)) => s.clone(),
+                                Some(super::types::ToolResultContent::Multiple(bs)) => bs
+                                    .iter()
+                                    .filter_map(|b| match b {
+                                        ContentBlock::Text { text } => Some(text.as_str()),
+                                        _ => None,
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n"),
                                 None => String::new(),
                             };
                             let response = json!({
@@ -1127,7 +1146,11 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
             "parts": [{ "text": merged }]
         });
     } else if let Some(ref blocks) = request.system_blocks {
-        let mut text: String = blocks.iter().map(|b| b.text.as_str()).collect::<Vec<&str>>().join("\n\n");
+        let mut text: String = blocks
+            .iter()
+            .map(|b| b.text.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n\n");
         if let Some(extra) = &extra_system {
             text = format!("{text}\n\n{extra}");
         }
@@ -1156,7 +1179,11 @@ fn serialize_gemini_request(request: &MessageRequest) -> Value {
     if let Some(ref seqs) = request.stop_sequences {
         gen_config["stopSequences"] = json!(seqs);
     }
-    if gen_config.as_object().map(|o| !o.is_empty()).unwrap_or(false) {
+    if gen_config
+        .as_object()
+        .map(|o| !o.is_empty())
+        .unwrap_or(false)
+    {
         body["generationConfig"] = gen_config;
     }
 
@@ -1234,12 +1261,9 @@ struct GeminiUsageMetadata {
     candidates_token_count: Option<u32>,
 }
 
-fn normalize_gemini_response(
-    json_str: &str,
-) -> Result<super::types::MessageResponse, ApiError> {
-    let resp: GeminiResponse = serde_json::from_str(json_str).map_err(|e| {
-        ApiError::InvalidResponse(format!("Failed to parse Gemini response: {e}"))
-    })?;
+fn normalize_gemini_response(json_str: &str) -> Result<super::types::MessageResponse, ApiError> {
+    let resp: GeminiResponse = serde_json::from_str(json_str)
+        .map_err(|e| ApiError::InvalidResponse(format!("Failed to parse Gemini response: {e}")))?;
 
     let candidate = resp
         .candidates
@@ -1284,8 +1308,16 @@ fn normalize_gemini_response(
         stop_reason,
         usage: resp
             .usage_metadata
-            .map(|u| super::types::Usage { input_tokens: u.prompt_token_count.unwrap_or(0), output_tokens: u.candidates_token_count.unwrap_or(0), ..Default::default() })
-            .unwrap_or(super::types::Usage { input_tokens: 0, output_tokens: 0, ..Default::default() }),
+            .map(|u| super::types::Usage {
+                input_tokens: u.prompt_token_count.unwrap_or(0),
+                output_tokens: u.candidates_token_count.unwrap_or(0),
+                ..Default::default()
+            })
+            .unwrap_or(super::types::Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+                ..Default::default()
+            }),
     })
 }
 
@@ -1346,7 +1378,11 @@ fn normalize_gemini_event(
                         stop_reason: Some(stop_reason),
                         stop_sequence: None,
                     },
-                    usage: Usage { input_tokens: 0, output_tokens: 0, ..Default::default() },
+                    usage: Usage {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        ..Default::default()
+                    },
                 });
             }
         }
@@ -1359,7 +1395,11 @@ fn normalize_gemini_event(
                 stop_reason: None,
                 stop_sequence: None,
             },
-            usage: Usage { input_tokens: usage.prompt_token_count.unwrap_or(0), output_tokens: usage.candidates_token_count.unwrap_or(0), ..Default::default() },
+            usage: Usage {
+                input_tokens: usage.prompt_token_count.unwrap_or(0),
+                output_tokens: usage.candidates_token_count.unwrap_or(0),
+                ..Default::default()
+            },
         });
     }
 
@@ -1630,7 +1670,8 @@ mod tests {
 
     #[test]
     fn test_anthropic_text_delta() {
-        let event_json = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
+        let event_json =
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
         let result = normalize_sse_event(event_json, &LlmProvider::Anthropic, &mut fresh_state());
         match &result[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
@@ -1695,15 +1736,13 @@ mod tests {
         let chunk_json = r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"bash","arguments":""}}]},"index":0}]}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
         match &result[0] {
-            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => {
-                match content_block {
-                    ContentBlock::ToolUse { id, name, .. } => {
-                        assert_eq!(id, "call_abc");
-                        assert_eq!(name, "bash");
-                    }
-                    other => panic!("Expected ToolUse block, got {other:?}"),
+            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => match content_block {
+                ContentBlock::ToolUse { id, name, .. } => {
+                    assert_eq!(id, "call_abc");
+                    assert_eq!(name, "bash");
                 }
-            }
+                other => panic!("Expected ToolUse block, got {other:?}"),
+            },
             other => panic!("Expected ContentBlockStart, got {other:?}"),
         }
     }
@@ -1715,14 +1754,27 @@ mod tests {
         let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut state);
         // Both tool calls should produce events (not just the first).
         // Each produces ContentBlockStart + ContentBlockDelta (for the empty arguments).
-        assert!(result.len() >= 2, "Expected >= 2 events for 2 tool calls, got {}", result.len());
+        assert!(
+            result.len() >= 2,
+            "Expected >= 2 events for 2 tool calls, got {}",
+            result.len()
+        );
         // Verify we got events for BOTH tool indices
-        let indices: Vec<usize> = result.iter().filter_map(|e| match e {
-            Ok(StreamEvent::ContentBlockStart { index, .. }) => Some(*index),
-            _ => None,
-        }).collect();
-        assert!(indices.contains(&0), "Missing ContentBlockStart for tool index 0");
-        assert!(indices.contains(&1), "Missing ContentBlockStart for tool index 1");
+        let indices: Vec<usize> = result
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::ContentBlockStart { index, .. }) => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            indices.contains(&0),
+            "Missing ContentBlockStart for tool index 0"
+        );
+        assert!(
+            indices.contains(&1),
+            "Missing ContentBlockStart for tool index 1"
+        );
     }
 
     // -- Ollama SSE normalization --
@@ -1770,7 +1822,12 @@ mod tests {
         let chunk_json = r#"{"message":{"role":"assistant","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}},{"function":{"name":"read","arguments":{"path":"foo.rs"}}}]}}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         // 2 tool calls × (start + stop) = 4 events
-        assert_eq!(result.len(), 4, "Expected 4 events for 2 Ollama tool calls, got {}", result.len());
+        assert_eq!(
+            result.len(),
+            4,
+            "Expected 4 events for 2 Ollama tool calls, got {}",
+            result.len()
+        );
     }
 
     // -- Round-trip: no panic on malformed JSON --
@@ -1809,10 +1866,14 @@ mod tests {
         let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
         assert_eq!(result.stop_reason, Some("tool_calls".to_string()));
         // Should have 1 tool_use block
-        let tool_blocks: Vec<_> = result.content.iter().filter_map(|b| match b {
-            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
-            _ => None,
-        }).collect();
+        let tool_blocks: Vec<_> = result
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(tool_blocks, vec!["bash"]);
     }
 
@@ -1831,10 +1892,14 @@ mod tests {
     fn test_normalize_ollama_response_with_tool_calls() {
         let resp = r#"{"model":"llama3","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"read","arguments":{"path":"foo.rs"}}}]},"done":true,"eval_count":10}"#;
         let result = normalize_response(resp, &LlmProvider::Ollama).unwrap();
-        let tool_blocks: Vec<_> = result.content.iter().filter_map(|b| match b {
-            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
-            _ => None,
-        }).collect();
+        let tool_blocks: Vec<_> = result
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(tool_blocks, vec!["read"]);
     }
 
@@ -1873,9 +1938,12 @@ mod tests {
         assert_eq!(result.len(), 1);
         match &result[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::InputJsonDelta {
-                    partial_json: r#"{"command""#.to_string()
-                });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::InputJsonDelta {
+                        partial_json: r#"{"command""#.to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -1888,16 +1956,14 @@ mod tests {
         let result = normalize_sse_event(chunk_json, &LlmProvider::OpenAI, &mut fresh_state());
         assert_eq!(result.len(), 1);
         match &result[0] {
-            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => {
-                match content_block {
-                    ContentBlock::ToolUse { id, name, input } => {
-                        assert_eq!(id, "call_123");
-                        assert_eq!(name, "bash");
-                        assert_eq!(input, &serde_json::Value::Null);
-                    }
-                    other => panic!("Expected ToolUse block, got {other:?}"),
+            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => match content_block {
+                ContentBlock::ToolUse { id, name, input } => {
+                    assert_eq!(id, "call_123");
+                    assert_eq!(name, "bash");
+                    assert_eq!(input, &serde_json::Value::Null);
                 }
-            }
+                other => panic!("Expected ToolUse block, got {other:?}"),
+            },
             other => panic!("Expected ContentBlockStart, got {other:?}"),
         }
     }
@@ -1947,7 +2013,12 @@ mod tests {
 
         match &r1[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "Hello".to_string()
+                    }
+                );
             }
             _ => panic!("Expected text delta"),
         }
@@ -1964,18 +2035,17 @@ mod tests {
     #[test]
     fn test_ollama_tool_call_with_empty_arguments() {
         // Tool call with empty arguments object
-        let chunk_json = r#"{"message":{"tool_calls":[{"function":{"name":"bash","arguments":{}}}]}}"#;
+        let chunk_json =
+            r#"{"message":{"tool_calls":[{"function":{"name":"bash","arguments":{}}}]}}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(result.len(), 2); // start + stop
         match &result[0] {
-            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => {
-                match content_block {
-                    ContentBlock::ToolUse { input, .. } => {
-                        assert_eq!(input, &serde_json::json!({}));
-                    }
-                    _ => panic!("Expected ToolUse"),
+            Ok(StreamEvent::ContentBlockStart { content_block, .. }) => match content_block {
+                ContentBlock::ToolUse { input, .. } => {
+                    assert_eq!(input, &serde_json::json!({}));
                 }
-            }
+                _ => panic!("Expected ToolUse"),
+            },
             _ => panic!("Expected ContentBlockStart"),
         }
     }
@@ -2018,7 +2088,8 @@ mod tests {
     #[test]
     fn test_normalize_ollama_response_no_usage() {
         // Ollama response without usage counts
-        let resp = r#"{"model":"llama3","message":{"role":"assistant","content":"Hello"},"done":true}"#;
+        let resp =
+            r#"{"model":"llama3","message":{"role":"assistant","content":"Hello"},"done":true}"#;
         let result = normalize_response(resp, &LlmProvider::Ollama).unwrap();
         assert_eq!(result.usage.input_tokens, 0);
         assert_eq!(result.usage.output_tokens, 0);
@@ -2082,7 +2153,9 @@ mod tests {
             messages: vec![Message {
                 role: "user".to_string(),
                 content: MessageContent::Blocks(vec![
-                    ContentBlock::Text { text: "What is this?".to_string() },
+                    ContentBlock::Text {
+                        text: "What is this?".to_string(),
+                    },
                     ContentBlock::Image {
                         source: ImageSource::base64("image/png", "iVBOR..."),
                     },
@@ -2126,7 +2199,9 @@ mod tests {
             messages: vec![Message {
                 role: "user".to_string(),
                 content: MessageContent::Blocks(vec![
-                    ContentBlock::Text { text: "Describe this".to_string() },
+                    ContentBlock::Text {
+                        text: "Describe this".to_string(),
+                    },
                     ContentBlock::Image {
                         source: ImageSource::base64("image/jpeg", "/9j/4AAQ"),
                     },
@@ -2163,7 +2238,10 @@ mod tests {
     fn test_mistral_serialize_uses_openai_format() {
         let req = make_request();
         let val = serialize_request(&req, &LlmProvider::Mistral);
-        assert!(val.get("system").is_none(), "Mistral should use OpenAI format");
+        assert!(
+            val.get("system").is_none(),
+            "Mistral should use OpenAI format"
+        );
         let messages = val["messages"].as_array().unwrap();
         assert_eq!(messages[0]["role"], "system");
     }
@@ -2196,7 +2274,12 @@ mod tests {
         let result = normalize_sse_event(chunk_json, &LlmProvider::Mistral, &mut fresh_state());
         match &result[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "bonjour".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "bonjour".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -2208,7 +2291,10 @@ mod tests {
     fn test_gemini_serialize_system_instruction() {
         let req = make_request();
         let val = serialize_gemini_request(&req);
-        assert!(val.get("system").is_none(), "Gemini should not use top-level system");
+        assert!(
+            val.get("system").is_none(),
+            "Gemini should not use top-level system"
+        );
         let sys = val["systemInstruction"]["parts"].as_array().unwrap();
         assert_eq!(sys[0]["text"], "You are helpful.");
     }
@@ -2247,9 +2333,17 @@ mod tests {
         let val = serialize_gemini_request(&req);
 
         // systemInstruction should contain both base + extracted
-        let sys_text = val["systemInstruction"]["parts"][0]["text"].as_str().unwrap();
-        assert!(sys_text.contains("Base system prompt."), "missing base: {sys_text}");
-        assert!(sys_text.contains("Summary"), "missing extracted: {sys_text}");
+        let sys_text = val["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(
+            sys_text.contains("Base system prompt."),
+            "missing base: {sys_text}"
+        );
+        assert!(
+            sys_text.contains("Summary"),
+            "missing extracted: {sys_text}"
+        );
 
         // contents should only have the user message
         let contents = val["contents"].as_array().unwrap();
@@ -2275,8 +2369,14 @@ mod tests {
             system: None,
             system_blocks: None,
             messages: vec![
-                Message { role: "user".to_string(), content: crate::api::types::MessageContent::Text("Hi".to_string()) },
-                Message { role: "assistant".to_string(), content: crate::api::types::MessageContent::Text("Hello!".to_string()) },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Hi".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Text("Hello!".to_string()),
+                },
             ],
             tools: None,
             stream: None,
@@ -2330,20 +2430,30 @@ mod tests {
     fn test_gemini_normalize_response_with_tool_calls() {
         let resp = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"bash","args":{"command":"ls"}}}],"role":"model"},"finishReason":"STOP"}]}"#;
         let result = normalize_response(resp, &LlmProvider::Gemini).unwrap();
-        let tool_blocks: Vec<_> = result.content.iter().filter_map(|b| match b {
-            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
-            _ => None,
-        }).collect();
+        let tool_blocks: Vec<_> = result
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(tool_blocks, vec!["bash"]);
     }
 
     #[test]
     fn test_gemini_sse_normalization() {
-        let chunk_json = r#"{"candidates":[{"content":{"parts":[{"text":"hello"}],"role":"model"}}]}"#;
+        let chunk_json =
+            r#"{"candidates":[{"content":{"parts":[{"text":"hello"}],"role":"model"}}]}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Gemini, &mut fresh_state());
         match &result[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "hello".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "hello".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -2363,17 +2473,24 @@ mod tests {
         // as-is rather than mapped to the incorrect "stop" value.
         let chunk_json = r#"{"candidates":[{"finishReason":"RECITATION"}]}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Gemini, &mut fresh_state());
-        let found = result.iter().any(|e| matches!(e, Ok(StreamEvent::MessageDelta { delta, .. })
-            if delta.stop_reason.as_deref() != Some("stop")));
-        assert!(found, "Unknown Gemini finish reasons should NOT be mapped to 'stop'");
+        let found = result.iter().any(|e| {
+            matches!(e, Ok(StreamEvent::MessageDelta { delta, .. })
+            if delta.stop_reason.as_deref() != Some("stop"))
+        });
+        assert!(
+            found,
+            "Unknown Gemini finish reasons should NOT be mapped to 'stop'"
+        );
     }
 
     #[test]
     fn test_gemini_sse_max_tokens_finish_reason() {
         let chunk_json = r#"{"candidates":[{"finishReason":"MAX_TOKENS"}]}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Gemini, &mut fresh_state());
-        let found = result.iter().any(|e| matches!(e, Ok(StreamEvent::MessageDelta { delta, .. })
-            if delta.stop_reason == Some("max_tokens".to_string())));
+        let found = result.iter().any(|e| {
+            matches!(e, Ok(StreamEvent::MessageDelta { delta, .. })
+            if delta.stop_reason == Some("max_tokens".to_string()))
+        });
         assert!(found, "MAX_TOKENS should be preserved as-is");
     }
 
@@ -2385,7 +2502,12 @@ mod tests {
         let result = normalize_sse_event(chunk_json, &LlmProvider::DeepSeek, &mut fresh_state());
         match &result[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "Hello".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "Hello".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -2415,9 +2537,18 @@ mod tests {
         let args_events = normalize_sse_event(args, &LlmProvider::DeepSeek, &mut state);
         let end_events = normalize_sse_event(end, &LlmProvider::DeepSeek, &mut state);
 
-        assert!(matches!(&start_events[0], Ok(StreamEvent::ContentBlockStart { .. })));
-        assert!(matches!(&args_events[0], Ok(StreamEvent::ContentBlockDelta { .. })));
-        assert!(matches!(&end_events[0], Ok(StreamEvent::MessageDelta { .. })));
+        assert!(matches!(
+            &start_events[0],
+            Ok(StreamEvent::ContentBlockStart { .. })
+        ));
+        assert!(matches!(
+            &args_events[0],
+            Ok(StreamEvent::ContentBlockDelta { .. })
+        ));
+        assert!(matches!(
+            &end_events[0],
+            Ok(StreamEvent::MessageDelta { .. })
+        ));
     }
 
     // -- Groq tests (OpenAI-compatible) --
@@ -2428,7 +2559,12 @@ mod tests {
         let result = normalize_sse_event(chunk_json, &LlmProvider::Groq, &mut fresh_state());
         match &result[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "Fast".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "Fast".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -2459,7 +2595,11 @@ mod tests {
         let usage_events = normalize_sse_event(usage_chunk, &LlmProvider::Gemini, &mut state);
 
         // First chunk: exactly one MessageDelta with stop_reason
-        assert_eq!(stop_events.len(), 1, "stop chunk should produce exactly 1 event");
+        assert_eq!(
+            stop_events.len(),
+            1,
+            "stop chunk should produce exactly 1 event"
+        );
         match &stop_events[0] {
             Ok(StreamEvent::MessageDelta { delta, usage }) => {
                 assert_eq!(delta.stop_reason.as_deref(), Some("end_turn"));
@@ -2470,10 +2610,17 @@ mod tests {
         }
 
         // Second chunk: exactly one MessageDelta with usage, no stop_reason
-        assert_eq!(usage_events.len(), 1, "usage chunk should produce exactly 1 event");
+        assert_eq!(
+            usage_events.len(),
+            1,
+            "usage chunk should produce exactly 1 event"
+        );
         match &usage_events[0] {
             Ok(StreamEvent::MessageDelta { delta, usage }) => {
-                assert!(delta.stop_reason.is_none(), "usage chunk should have no stop_reason");
+                assert!(
+                    delta.stop_reason.is_none(),
+                    "usage chunk should have no stop_reason"
+                );
                 assert_eq!(usage.input_tokens, 10);
                 assert_eq!(usage.output_tokens, 20);
             }
@@ -2518,11 +2665,17 @@ mod tests {
 
     #[test]
     fn test_bedrock_sse_normalization() {
-        let event_json = r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
+        let event_json =
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#;
         let result = normalize_sse_event(event_json, &LlmProvider::Bedrock, &mut fresh_state());
         match &result[0] {
             Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                assert_eq!(delta, &ContentDelta::TextDelta { text: "hi".to_string() });
+                assert_eq!(
+                    delta,
+                    &ContentDelta::TextDelta {
+                        text: "hi".to_string()
+                    }
+                );
             }
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
@@ -2532,10 +2685,17 @@ mod tests {
 
     #[test]
     fn test_normalize_response_malformed_json() {
-        let providers = [&LlmProvider::OpenAI, &LlmProvider::Ollama, &LlmProvider::Gemini];
+        let providers = [
+            &LlmProvider::OpenAI,
+            &LlmProvider::Ollama,
+            &LlmProvider::Gemini,
+        ];
         for provider in &providers {
             let result = normalize_response("not json at all", provider);
-            assert!(result.is_err(), "Expected error for malformed JSON with {provider:?}");
+            assert!(
+                result.is_err(),
+                "Expected error for malformed JSON with {provider:?}"
+            );
         }
     }
 
@@ -2544,7 +2704,10 @@ mod tests {
         let resp = r#"{"id":"chatcmpl-123","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":null},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":0}}"#;
         let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
         assert_eq!(result.role, "assistant");
-        assert!(result.content.is_empty() || matches!(&result.content[0], ContentBlock::Text { text } if text.is_empty()));
+        assert!(
+            result.content.is_empty()
+                || matches!(&result.content[0], ContentBlock::Text { text } if text.is_empty())
+        );
     }
 
     #[test]
@@ -2557,7 +2720,8 @@ mod tests {
 
     #[test]
     fn test_normalize_gemini_response_empty_candidates() {
-        let resp = r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"totalTokenCount":1}}"#;
+        let resp =
+            r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"totalTokenCount":1}}"#;
         let result = normalize_response(resp, &LlmProvider::Gemini);
         // Should handle gracefully — either error or empty response
         match result {
@@ -2568,7 +2732,12 @@ mod tests {
 
     #[test]
     fn test_normalize_sse_event_empty_string() {
-        let providers = [&LlmProvider::Anthropic, &LlmProvider::OpenAI, &LlmProvider::Ollama, &LlmProvider::Gemini];
+        let providers = [
+            &LlmProvider::Anthropic,
+            &LlmProvider::OpenAI,
+            &LlmProvider::Ollama,
+            &LlmProvider::Gemini,
+        ];
         for provider in &providers {
             let result = normalize_sse_event("", provider, &mut fresh_state());
             // Should not panic — empty string is invalid JSON
@@ -2580,13 +2749,27 @@ mod tests {
     fn test_wire_format_covers_all_providers() {
         use crate::api::types::WireFormat;
         let providers = [
-            LlmProvider::Anthropic, LlmProvider::Custom, LlmProvider::Bedrock,
-            LlmProvider::OpenAI, LlmProvider::Azure, LlmProvider::Mistral,
-            LlmProvider::DeepSeek, LlmProvider::Groq, LlmProvider::Together,
-            LlmProvider::OpenRouter, LlmProvider::Cohere, LlmProvider::Fireworks,
-            LlmProvider::Perplexity, LlmProvider::Xai, LlmProvider::Ai21,
-            LlmProvider::Cloudflare, LlmProvider::Replicate, LlmProvider::SiliconFlow,
-            LlmProvider::Zhipu, LlmProvider::ZhipuInternational, LlmProvider::Moonshot,
+            LlmProvider::Anthropic,
+            LlmProvider::Custom,
+            LlmProvider::Bedrock,
+            LlmProvider::OpenAI,
+            LlmProvider::Azure,
+            LlmProvider::Mistral,
+            LlmProvider::DeepSeek,
+            LlmProvider::Groq,
+            LlmProvider::Together,
+            LlmProvider::OpenRouter,
+            LlmProvider::Cohere,
+            LlmProvider::Fireworks,
+            LlmProvider::Perplexity,
+            LlmProvider::Xai,
+            LlmProvider::Ai21,
+            LlmProvider::Cloudflare,
+            LlmProvider::Replicate,
+            LlmProvider::SiliconFlow,
+            LlmProvider::Zhipu,
+            LlmProvider::ZhipuInternational,
+            LlmProvider::Moonshot,
             LlmProvider::Minimax,
             LlmProvider::DashScope,
             LlmProvider::Ollama,
@@ -2595,7 +2778,13 @@ mod tests {
         for provider in &providers {
             let wf = provider.wire_format();
             assert!(
-                matches!(wf, WireFormat::Anthropic | WireFormat::OpenAI | WireFormat::Ollama | WireFormat::Gemini),
+                matches!(
+                    wf,
+                    WireFormat::Anthropic
+                        | WireFormat::OpenAI
+                        | WireFormat::Ollama
+                        | WireFormat::Gemini
+                ),
                 "Provider {provider:?} returned unrecognized WireFormat {wf:?}"
             );
         }
@@ -2613,12 +2802,18 @@ mod tests {
     fn test_serialize_request_all_wire_formats() {
         let req = make_request();
         let providers = [
-            LlmProvider::Anthropic, LlmProvider::OpenAI, LlmProvider::Ollama, LlmProvider::Gemini,
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::Ollama,
+            LlmProvider::Gemini,
         ];
         for provider in &providers {
             let val = serialize_request(&req, provider);
             // Every wire format must produce a valid JSON object
-            assert!(val.is_object(), "serialize_request produced non-object for {provider:?}");
+            assert!(
+                val.is_object(),
+                "serialize_request produced non-object for {provider:?}"
+            );
         }
     }
 
@@ -2628,9 +2823,14 @@ mod tests {
     fn test_ollama_stream_error_in_chunk() {
         // Ollama errors in chunks are non-fatal: logged as warnings, stream continues.
         // A chunk with only error (no content) produces no events (skipped).
-        let chunk_json = r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
+        let chunk_json =
+            r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 0, "Error-only chunk should be skipped (non-fatal)");
+        assert_eq!(
+            result.len(),
+            0,
+            "Error-only chunk should be skipped (non-fatal)"
+        );
     }
 
     #[test]
@@ -2638,7 +2838,11 @@ mod tests {
         // Error-only chunk is non-fatal: skipped, stream continues
         let chunk_json = r#"{"error":"model not found"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 0, "Error-only chunk should be skipped (non-fatal)");
+        assert_eq!(
+            result.len(),
+            0,
+            "Error-only chunk should be skipped (non-fatal)"
+        );
     }
 
     #[test]
@@ -2647,10 +2851,17 @@ mod tests {
         let resp = r#"{"error":"model 'foo' not found"}"#;
         let result = normalize_response(resp, &LlmProvider::Ollama);
         match result {
-            Err(ApiError::ProviderError { provider, error_type, message }) => {
+            Err(ApiError::ProviderError {
+                provider,
+                error_type,
+                message,
+            }) => {
                 assert_eq!(provider, "ollama");
                 assert_eq!(error_type, "ollama_error");
-                assert!(message.contains("not found"), "Should contain error: {message}");
+                assert!(
+                    message.contains("not found"),
+                    "Should contain error: {message}"
+                );
             }
             other => panic!("Expected ProviderError, got {other:?}"),
         }
@@ -2661,14 +2872,16 @@ mod tests {
         // Error is non-fatal: content is preserved, error is just logged
         let chunk_json = r#"{"message":{"content":"hello"},"error":"something went wrong"}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 1, "Should produce content delta only (error is non-fatal)");
+        assert_eq!(
+            result.len(),
+            1,
+            "Should produce content delta only (error is non-fatal)"
+        );
         match &result[0] {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                match delta {
-                    ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
-                    other => panic!("Expected TextDelta, got {other:?}"),
-                }
-            }
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
+                ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
+                other => panic!("Expected TextDelta, got {other:?}"),
+            },
             other => panic!("Expected content delta, got {other:?}"),
         }
     }
@@ -2680,12 +2893,10 @@ mod tests {
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
         assert_eq!(result.len(), 1);
         match &result[0] {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                match delta {
-                    ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
-                    other => panic!("Expected TextDelta, got {other:?}"),
-                }
-            }
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
+                ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
+                other => panic!("Expected TextDelta, got {other:?}"),
+            },
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
@@ -2696,14 +2907,16 @@ mod tests {
         // `"error":""` as a default placeholder. This must NOT kill the stream.
         let chunk_json = r#"{"message":{"content":"hello","role":"assistant"},"error":""}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 1, "Empty error string should not produce an error event");
+        assert_eq!(
+            result.len(),
+            1,
+            "Empty error string should not produce an error event"
+        );
         match &result[0] {
-            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                match delta {
-                    ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
-                    other => panic!("Expected TextDelta, got {other:?}"),
-                }
-            }
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
+                ContentDelta::TextDelta { text } => assert_eq!(text, "hello"),
+                other => panic!("Expected TextDelta, got {other:?}"),
+            },
             other => panic!("Expected ContentBlockDelta, got {other:?}"),
         }
     }
@@ -2805,8 +3018,12 @@ mod tests {
                 Message {
                     role: "user".to_string(),
                     content: MessageContent::Blocks(vec![
-                        ContentBlock::Text { text: "Part 1".to_string() },
-                        ContentBlock::Text { text: "Part 2".to_string() },
+                        ContentBlock::Text {
+                            text: "Part 1".to_string(),
+                        },
+                        ContentBlock::Text {
+                            text: "Part 2".to_string(),
+                        },
                     ]),
                 },
             ],
@@ -2822,7 +3039,9 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
-        let blocks = val["messages"].as_array().unwrap()[2]["content"].as_array().unwrap();
+        let blocks = val["messages"].as_array().unwrap()[2]["content"]
+            .as_array()
+            .unwrap();
         assert!(blocks[0].get("cache_control").is_none());
         assert_eq!(blocks[1]["cache_control"]["type"], "ephemeral");
     }
@@ -2880,10 +3099,14 @@ mod tests {
                 Message {
                     role: "user".to_string(),
                     content: MessageContent::Blocks(vec![
-                        ContentBlock::Text { text: "Some text".to_string() },
+                        ContentBlock::Text {
+                            text: "Some text".to_string(),
+                        },
                         ContentBlock::ToolResult {
                             tool_use_id: "tool_123".to_string(),
-                            content: Some(crate::api::types::ToolResultContent::Single("result".to_string())),
+                            content: Some(crate::api::types::ToolResultContent::Single(
+                                "result".to_string(),
+                            )),
                             is_error: None,
                         },
                     ]),
@@ -2901,7 +3124,9 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
-        let blocks = val["messages"].as_array().unwrap()[1]["content"].as_array().unwrap();
+        let blocks = val["messages"].as_array().unwrap()[1]["content"]
+            .as_array()
+            .unwrap();
         assert_eq!(blocks[0]["cache_control"]["type"], "ephemeral");
         assert!(blocks[1].get("cache_control").is_none());
     }
@@ -2912,9 +3137,9 @@ mod tests {
             model: "claude-sonnet-4-20250514".to_string(),
             max_tokens: 4096,
             system: None,
-            system_blocks: Some(vec![
-                crate::api::types::SystemContentBlock::cached("System prompt"),
-            ]),
+            system_blocks: Some(vec![crate::api::types::SystemContentBlock::cached(
+                "System prompt",
+            )]),
             messages: vec![
                 Message {
                     role: "user".to_string(),
@@ -2943,5 +3168,4 @@ mod tests {
         let last_content = messages[1]["content"].as_array().unwrap();
         assert_eq!(last_content[0]["cache_control"]["type"], "ephemeral");
     }
-
 }

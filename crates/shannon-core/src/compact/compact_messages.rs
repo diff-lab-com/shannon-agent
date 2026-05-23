@@ -606,12 +606,7 @@ mod tests {
     fn test_keep_recent_preserves_tool_pairs() {
         let msgs = make_tool_conversation(3);
         // Use small max_tokens to force compaction (messages are ~100 tokens).
-        let result = compact_messages(
-            &msgs,
-            &CompactionStrategy::KeepRecent { count: 3 },
-            10,
-            10,
-        );
+        let result = compact_messages(&msgs, &CompactionStrategy::KeepRecent { count: 3 }, 10, 10);
         assert!(result.did_compact);
         assert!(
             super::validate_tool_pairs(&result.messages),
@@ -622,12 +617,7 @@ mod tests {
     #[test]
     fn test_summarize_preserves_tool_pairs() {
         let msgs = make_tool_conversation(3);
-        let result = compact_messages(
-            &msgs,
-            &CompactionStrategy::Summarize,
-            10,
-            4,
-        );
+        let result = compact_messages(&msgs, &CompactionStrategy::Summarize, 10, 4);
         assert!(result.did_compact);
         assert!(
             super::validate_tool_pairs(&result.messages),
@@ -638,12 +628,7 @@ mod tests {
     #[test]
     fn test_prioritize_code_preserves_tool_pairs() {
         let msgs = make_tool_conversation(3);
-        let result = compact_messages(
-            &msgs,
-            &CompactionStrategy::PrioritizeCode,
-            10,
-            4,
-        );
+        let result = compact_messages(&msgs, &CompactionStrategy::PrioritizeCode, 10, 4);
         assert!(result.did_compact);
         assert!(
             super::validate_tool_pairs(&result.messages),

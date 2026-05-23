@@ -1,6 +1,6 @@
 //! Session management command handlers
 
-use crate::{widgets::ChatRole, Result};
+use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
@@ -16,19 +16,27 @@ pub(crate) fn handle_sessions(repl: &mut Repl, args: &str) -> Result<()> {
         };
 
         if sessions.is_empty() {
-            repl.chat.add_message(ChatRole::System, "No saved sessions found.".to_string());
+            repl.chat
+                .add_message(ChatRole::System, "No saved sessions found.".to_string());
             return Ok(());
         }
 
-        let items: Vec<crate::widgets::select::SelectItem<String>> = sessions.iter().map(|s| {
-            let title = s.title.as_deref().unwrap_or("Untitled");
-            let date = s.updated_at.format("%Y-%m-%d %H:%M");
-            let label = format!("{}  \"{}\"  {} turns  [{}]", date, title, s.turn_count, s.model);
-            crate::widgets::select::SelectItem::new(label, s.session_id.to_string())
-        }).collect();
+        let items: Vec<crate::widgets::select::SelectItem<String>> = sessions
+            .iter()
+            .map(|s| {
+                let title = s.title.as_deref().unwrap_or("Untitled");
+                let date = s.updated_at.format("%Y-%m-%d %H:%M");
+                let label = format!(
+                    "{}  \"{}\"  {} turns  [{}]",
+                    date, title, s.turn_count, s.model
+                );
+                crate::widgets::select::SelectItem::new(label, s.session_id.to_string())
+            })
+            .collect();
 
-        let mut picker = crate::widgets::select::FuzzyPickerWidget::new("Resume session...".to_string())
-            .with_items(items);
+        let mut picker =
+            crate::widgets::select::FuzzyPickerWidget::new("Resume session...".to_string())
+                .with_items(items);
         picker.start_search();
         repl.state.fuzzy_picker = Some(picker);
         repl.state.session_picker_active = true;
@@ -44,7 +52,8 @@ pub(crate) fn handle_sessions(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     if sessions.is_empty() {
-        repl.chat.add_message(ChatRole::System, "No saved sessions found.".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "No saved sessions found.".to_string());
         repl.last_session_list.clear();
         return Ok(());
     }
@@ -52,24 +61,35 @@ pub(crate) fn handle_sessions(repl: &mut Repl, args: &str) -> Result<()> {
     let show_all = args.contains("--all");
     let search_query = if let Some(idx) = args.find("--search") {
         let after = &args[idx + "--search".len()..].trim();
-        if after.is_empty() { None } else { Some(after.to_lowercase()) }
+        if after.is_empty() {
+            None
+        } else {
+            Some(after.to_lowercase())
+        }
     } else if !args.is_empty() && !args.starts_with("--") {
         Some(args.to_lowercase())
     } else {
         None
     };
 
-    let mut filtered: Vec<_> = sessions.into_iter().filter(|s| {
-        if let Some(ref q) = search_query {
-            let title = s.title.as_deref().unwrap_or("").to_lowercase();
-            let preview = s.preview.as_deref().unwrap_or("").to_lowercase();
-            title.contains(q) || preview.contains(q) || s.model.to_lowercase().contains(q)
-        } else {
-            true
-        }
-    }).collect();
+    let mut filtered: Vec<_> = sessions
+        .into_iter()
+        .filter(|s| {
+            if let Some(ref q) = search_query {
+                let title = s.title.as_deref().unwrap_or("").to_lowercase();
+                let preview = s.preview.as_deref().unwrap_or("").to_lowercase();
+                title.contains(q) || preview.contains(q) || s.model.to_lowercase().contains(q)
+            } else {
+                true
+            }
+        })
+        .collect();
 
-    let limit = if show_all { filtered.len() } else { 10.min(filtered.len()) };
+    let limit = if show_all {
+        filtered.len()
+    } else {
+        10.min(filtered.len())
+    };
     filtered.truncate(limit);
 
     repl.last_session_list = filtered.clone();
@@ -81,7 +101,12 @@ pub(crate) fn handle_sessions(repl: &mut Repl, args: &str) -> Result<()> {
         let tokens = (session.total_input_tokens + session.total_output_tokens) as f64 / 1000.0;
         output.push_str(&format!(
             "  #{}  {}  \"{}\"  {} turns  {:.1}k tokens  [{}]\n",
-            i + 1, date, title, session.turn_count, tokens, session.model,
+            i + 1,
+            date,
+            title,
+            session.turn_count,
+            tokens,
+            session.model,
         ));
     }
 
@@ -97,7 +122,10 @@ pub(crate) fn handle_sessions(repl: &mut Repl, args: &str) -> Result<()> {
 pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
     let arg = args.trim();
     if arg.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Usage: /resume <number-or-uuid>\nUse /sessions to see available sessions.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Usage: /resume <number-or-uuid>\nUse /sessions to see available sessions.".to_string(),
+        );
         return Ok(());
     }
 
@@ -105,12 +133,18 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
         uuid
     } else if let Ok(num) = arg.parse::<usize>() {
         if num == 0 || num > repl.last_session_list.len() {
-            repl.chat.add_message(ChatRole::System, format!("Invalid session number: {num}. Use /sessions to see available sessions."));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Invalid session number: {num}. Use /sessions to see available sessions."),
+            );
             return Ok(());
         }
         repl.last_session_list[num - 1].session_id
     } else {
-        repl.chat.add_message(ChatRole::System, format!("Invalid session identifier: {arg}. Use a number from /sessions or a UUID."));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("Invalid session identifier: {arg}. Use a number from /sessions or a UUID."),
+        );
         return Ok(());
     };
 
@@ -120,12 +154,17 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
             let title = data.metadata.title.as_deref().unwrap_or("Untitled");
             let msg_count = data.messages.len();
 
-            repl.chat.add_message(ChatRole::System, format!(
-                "Resumed session: \"{}\" ({} messages, model: {})\nCreated: {} | Updated: {}",
-                title, msg_count, data.metadata.model,
-                data.metadata.created_at.format("%Y-%m-%d %H:%M"),
-                data.metadata.updated_at.format("%Y-%m-%d %H:%M"),
-            ));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Resumed session: \"{}\" ({} messages, model: {})\nCreated: {} | Updated: {}",
+                    title,
+                    msg_count,
+                    data.metadata.model,
+                    data.metadata.created_at.format("%Y-%m-%d %H:%M"),
+                    data.metadata.updated_at.format("%Y-%m-%d %H:%M"),
+                ),
+            );
 
             for msg in &data.messages {
                 let role = match msg.role.as_str() {
@@ -135,12 +174,14 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
                 };
                 let content = match &msg.content {
                     shannon_core::api::MessageContent::Text(t) => t.clone(),
-                    shannon_core::api::MessageContent::Blocks(blocks) => {
-                        blocks.iter().filter_map(|b| match b {
+                    shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                        .iter()
+                        .filter_map(|b| match b {
                             shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
                             _ => None,
-                        }).collect::<Vec<_>>().join("\n")
-                    }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                 };
                 if !content.is_empty() {
                     repl.chat.add_message(role, content);
@@ -150,7 +191,8 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
             if !data.metadata.model.is_empty() {
                 repl.state.model = Some(data.metadata.model.clone());
             }
-            repl.state.tokens_used = data.metadata.total_input_tokens + data.metadata.total_output_tokens;
+            repl.state.tokens_used =
+                data.metadata.total_input_tokens + data.metadata.total_output_tokens;
 
             if let Some(ref mut engine) = repl.query_engine {
                 match engine.restore_session(session_id) {
@@ -203,7 +245,10 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
     } else {
         repl.chat.add_message(
             ChatRole::System,
-            format!("Invalid session identifier: {}. Use a number from /sessions or a UUID.", parts[0]),
+            format!(
+                "Invalid session identifier: {}. Use a number from /sessions or a UUID.",
+                parts[0]
+            ),
         );
         return Ok(());
     };
@@ -212,7 +257,8 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
     let parent_data = match repl.state_manager.load_session(&session_id) {
         Ok(Some(data)) => data,
         Ok(None) => {
-            repl.chat.add_message(ChatRole::System, format!("Session not found: {session_id}"));
+            repl.chat
+                .add_message(ChatRole::System, format!("Session not found: {session_id}"));
             return Ok(());
         }
         Err(e) => {
@@ -230,7 +276,9 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
             Ok(idx) => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!("Branch point {idx} is out of range. Session has {total_messages} messages."),
+                    format!(
+                        "Branch point {idx} is out of range. Session has {total_messages} messages."
+                    ),
                 );
                 return Ok(());
             }
@@ -247,7 +295,10 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
     };
 
     // Create the branch
-    match repl.state_manager.create_branch(&session_id, branch_point, None) {
+    match repl
+        .state_manager
+        .create_branch(&session_id, branch_point, None)
+    {
         Ok(branch_data) => {
             let title = parent_data.metadata.title.as_deref().unwrap_or("Untitled");
             let branch_id = branch_data.session_id;
@@ -273,7 +324,10 @@ pub(crate) fn handle_history(repl: &mut Repl, args: &str) -> Result<()> {
     if let Some(rest) = arg.strip_prefix("--export") {
         let export_path = rest.trim();
         if export_path.is_empty() {
-            repl.chat.add_message(ChatRole::System, "Usage: /history --export <file-path>".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Usage: /history --export <file-path>".to_string(),
+            );
             return Ok(());
         }
 
@@ -291,8 +345,15 @@ pub(crate) fn handle_history(repl: &mut Repl, args: &str) -> Result<()> {
         }
 
         match std::fs::write(export_path, md) {
-            Ok(_) => { repl.chat.add_message(ChatRole::System, format!("Session exported to: {export_path}")); }
-            Err(e) => { super::set_error(repl, &format!("exporting session: {e}")); }
+            Ok(_) => {
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Session exported to: {export_path}"),
+                );
+            }
+            Err(e) => {
+                super::set_error(repl, &format!("exporting session: {e}"));
+            }
         };
         return Ok(());
     }
@@ -315,8 +376,15 @@ pub(crate) fn handle_history(repl: &mut Repl, args: &str) -> Result<()> {
 
     let mut stats = format!(
         "Current session stats:\n  Messages: {} total ({} user, {} assistant)\n  Tokens used: {} ({:.1}k)\n  Model: {}\n  Working dir: {}\n  Commands run: {}\n  Tools invoked: {}",
-        msg_count, user_count, assistant_count, tokens, tokens as f64 / 1000.0,
-        model, repl.state.working_directory, repl.commands_run, repl.tools_invoked,
+        msg_count,
+        user_count,
+        assistant_count,
+        tokens,
+        tokens as f64 / 1000.0,
+        model,
+        repl.state.working_directory,
+        repl.commands_run,
+        repl.tools_invoked,
     );
 
     if let Some(started) = &repl.session_started_at {
@@ -326,11 +394,16 @@ pub(crate) fn handle_history(repl: &mut Repl, args: &str) -> Result<()> {
         stats.push_str(&format!("\n  Session duration: {mins}m {secs}s"));
     }
 
-    if repl.diff_data.total_files_modified() > 0 || repl.diff_data.total_files_created() > 0 || repl.diff_data.total_files_deleted() > 0 {
+    if repl.diff_data.total_files_modified() > 0
+        || repl.diff_data.total_files_created() > 0
+        || repl.diff_data.total_files_deleted() > 0
+    {
         stats.push_str(&format!(
             "\n  Files: +{}/-{}/{} modified, {} created, {} deleted",
-            repl.diff_data.total_additions(), repl.diff_data.total_deletions(),
-            repl.diff_data.total_files_modified(), repl.diff_data.total_files_created(),
+            repl.diff_data.total_additions(),
+            repl.diff_data.total_deletions(),
+            repl.diff_data.total_files_modified(),
+            repl.diff_data.total_files_created(),
             repl.diff_data.total_files_deleted(),
         ));
     }
@@ -373,7 +446,11 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
             } else {
                 format!(" [{} files]", tc.files_changed.len())
             };
-            let preview = tc.prompt_preview.as_deref().map(|p| format!(" — {p}")).unwrap_or_default();
+            let preview = tc
+                .prompt_preview
+                .as_deref()
+                .map(|p| format!(" — {p}"))
+                .unwrap_or_default();
             msg.push_str(&format!(
                 "  [{}] {} {}{}{} — {}\n",
                 i, tc.checkpoint.short_hash, time, files, preview, tc.checkpoint.description
@@ -391,14 +468,15 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
             Ok(tc) => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!("Reverted to checkpoint [{}] ({})\n{}", index, tc.checkpoint.short_hash, tc.checkpoint.description),
+                    format!(
+                        "Reverted to checkpoint [{}] ({})\n{}",
+                        index, tc.checkpoint.short_hash, tc.checkpoint.description
+                    ),
                 );
             }
             Err(e) => {
-                repl.chat.add_message(
-                    ChatRole::System,
-                    format!("Revert failed: {e}"),
-                );
+                repl.chat
+                    .add_message(ChatRole::System, format!("Revert failed: {e}"));
             }
         }
         return Ok(());
@@ -410,7 +488,10 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
             Ok(cp) => {
                 repl.chat.add_message(
                     ChatRole::System,
-                    format!("Undid last checkpoint ({})\n{}", cp.short_hash, cp.description),
+                    format!(
+                        "Undid last checkpoint ({})\n{}",
+                        cp.short_hash, cp.description
+                    ),
                 );
             }
             Err(e) => {
@@ -423,10 +504,8 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    repl.chat.add_message(
-        ChatRole::System,
-        "Usage: /undo [list|<number>]".to_string(),
-    );
+    repl.chat
+        .add_message(ChatRole::System, "Usage: /undo [list|<number>]".to_string());
     Ok(())
 }
 
@@ -455,8 +534,20 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
             } else {
                 format!(" [{} files]", tc.files_changed.len())
             };
-            let preview = tc.prompt_preview.as_deref()
-                .map(|p| if p.len() > 60 { let mut end = 60; while !p.is_char_boundary(end) { end -= 1; } format!("{}...", &p[..end]) } else { p.to_string() })
+            let preview = tc
+                .prompt_preview
+                .as_deref()
+                .map(|p| {
+                    if p.len() > 60 {
+                        let mut end = 60;
+                        while !p.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        format!("{}...", &p[..end])
+                    } else {
+                        p.to_string()
+                    }
+                })
                 .unwrap_or_default();
             msg.push_str(&format!(
                 "  [{}] turn {} {}{} — {}\n",
@@ -473,7 +564,10 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
     // /rewind code <n> — revert file changes to checkpoint index n
     if let Some(rest) = trimmed.strip_prefix("code ") {
         if let Ok(index) = rest.trim().parse::<usize>() {
-            match repl.checkpoint_manager.revert_to(index, shannon_core::RestoreMode::CodeOnly) {
+            match repl
+                .checkpoint_manager
+                .revert_to(index, shannon_core::RestoreMode::CodeOnly)
+            {
                 Ok(tc) => {
                     let files = if tc.files_changed.is_empty() {
                         "no files".to_string()
@@ -489,7 +583,8 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
                     );
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Code revert failed: {e}"));
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Code revert failed: {e}"));
                 }
             }
             return Ok(());
@@ -499,12 +594,19 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
     // /rewind both <n> — revert code + rewind conversation to checkpoint index n
     if let Some(rest) = trimmed.strip_prefix("both ") {
         if let Ok(index) = rest.trim().parse::<usize>() {
-            match repl.checkpoint_manager.revert_to(index, shannon_core::RestoreMode::CodeAndConversation) {
+            match repl
+                .checkpoint_manager
+                .revert_to(index, shannon_core::RestoreMode::CodeAndConversation)
+            {
                 Ok(tc) => {
                     // Remove the "/rewind both" command message
                     repl.chat.pop_last();
                     // Calculate turns to rewind from conversation
-                    let turns_to_rewind = repl.checkpoint_manager.list_checkpoints().len().saturating_sub(index);
+                    let turns_to_rewind = repl
+                        .checkpoint_manager
+                        .list_checkpoints()
+                        .len()
+                        .saturating_sub(index);
                     if turns_to_rewind > 0 {
                         repl.chat.rewind(turns_to_rewind);
                         if let Some(ref mut engine) = repl.query_engine {
@@ -525,7 +627,8 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
                     );
                 }
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Rewind failed: {e}"));
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Rewind failed: {e}"));
                 }
             }
             return Ok(());
@@ -538,15 +641,19 @@ pub(crate) fn handle_rewind(repl: &mut Repl, args: &str) -> Result<()> {
     } else if let Ok(n) = trimmed.parse::<usize>() {
         if n == 0 {
             repl.chat.pop_last();
-            repl.chat.add_message(ChatRole::System,
-                "Usage: /rewind [n | history | code <n> | both <n>]".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Usage: /rewind [n | history | code <n> | both <n>]".to_string(),
+            );
             return Ok(());
         }
         n
     } else {
         repl.chat.pop_last();
-        repl.chat.add_message(ChatRole::System,
-            "Usage: /rewind [n | history | code <n> | both <n>]".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Usage: /rewind [n | history | code <n> | both <n>]".to_string(),
+        );
         return Ok(());
     };
 
@@ -588,7 +695,10 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
         }
         repl.state.plan.active = false;
         repl.state.plan.approved = false;
-        repl.chat.add_message(ChatRole::System, "Plan mode deactivated. Write operations are now enabled.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Plan mode deactivated. Write operations are now enabled.".to_string(),
+        );
         return Ok(());
     }
 
@@ -610,7 +720,8 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_core::compact::{CompactEngine, CompactStrategy};
 
     let Some(ref engine) = repl.query_engine else {
-        repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "No query engine available.".to_string());
         return Ok(());
     };
 
@@ -622,12 +733,14 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         // Create compact engine using the REPL's existing tokio runtime handle.
         let client = engine.client().clone();
         let rt_handle = repl.runtime.handle().clone();
-        let compact_engine = match CompactEngine::with_llm_summarizer_on_runtime(client, rt_handle) {
+        let compact_engine = match CompactEngine::with_llm_summarizer_on_runtime(client, rt_handle)
+        {
             Ok(e) => e,
             Err(_) => match CompactEngine::with_defaults() {
                 Ok(e) => e,
                 Err(e) => {
-                    repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Compact engine error: {e}"));
                     return Ok(());
                 }
             },
@@ -649,7 +762,8 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Early exit for other subcommands when there's nothing to compact
     if history.is_empty() {
-        repl.chat.add_message(ChatRole::System, "No conversation to compact.".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "No conversation to compact.".to_string());
         return Ok(());
     }
 
@@ -662,7 +776,8 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         Err(_) => match CompactEngine::with_defaults() {
             Ok(e) => e,
             Err(e) => {
-                repl.chat.add_message(ChatRole::System, format!("Compact engine error: {e}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("Compact engine error: {e}"));
                 return Ok(());
             }
         },
@@ -688,20 +803,30 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
                 let role = &msg.role;
                 let preview_text: String = match &msg.content {
                     shannon_core::api::MessageContent::Text(t) => t.chars().take(60).collect(),
-                    shannon_core::api::MessageContent::Blocks(blocks) => {
-                        blocks.iter().take(1).filter_map(|b| match b {
-                            shannon_core::api::ContentBlock::Text { text } => Some(text.chars().take(60).collect::<String>()),
+                    shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                        .iter()
+                        .take(1)
+                        .filter_map(|b| match b {
+                            shannon_core::api::ContentBlock::Text { text } => {
+                                Some(text.chars().take(60).collect::<String>())
+                            }
                             _ => None,
-                        }).next().unwrap_or_default()
-                    }
+                        })
+                        .next()
+                        .unwrap_or_default(),
                 };
-                preview.push_str(&format!("\n  {}. [{role}] {preview_text}{}", i + 1, if preview_text.len() >= 60 { "..." } else { "" }));
+                preview.push_str(&format!(
+                    "\n  {}. [{role}] {preview_text}{}",
+                    i + 1,
+                    if preview_text.len() >= 60 { "..." } else { "" }
+                ));
             }
             if old_count > preview_count {
                 preview.push_str(&format!("\n  ... and {} more", old_count - preview_count));
             }
         }
-        preview.push_str("\n\nUse /compact to proceed, or /compact <strategy> to choose a strategy.");
+        preview
+            .push_str("\n\nUse /compact to proceed, or /compact <strategy> to choose a strategy.");
         repl.chat.add_message(ChatRole::System, preview);
         return Ok(());
     }
@@ -713,7 +838,10 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
             "Focus compact: preserving messages matching '{}'\nCompacting remaining messages...",
             keywords.join("', '")
         ));
-        (CompactStrategy::SummarizeOld, Some(keywords.into_iter().map(String::from).collect::<Vec<_>>()))
+        (
+            CompactStrategy::SummarizeOld,
+            Some(keywords.into_iter().map(String::from).collect::<Vec<_>>()),
+        )
     } else {
         let strategy = match subcmd {
             "truncate" => CompactStrategy::TruncateOld,
@@ -743,9 +871,10 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         CompactStrategy::SummarizeOld => "summarize",
         _ => "auto",
     };
-    repl.chat.add_message(ChatRole::System, format!(
-        "Compacting context ({compactable} messages, {strategy_name} strategy)..."
-    ));
+    repl.chat.add_message(
+        ChatRole::System,
+        format!("Compacting context ({compactable} messages, {strategy_name} strategy)..."),
+    );
 
     let (messages, compact_result) = if let Some(ref keywords) = focus_keywords {
         // For focus mode, compact only non-matching messages
@@ -754,9 +883,15 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         for msg in history {
             let text = match &msg.content {
                 shannon_core::api::MessageContent::Text(t) => t.to_lowercase(),
-                shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter()
-                    .filter_map(|b| match b { shannon_core::api::ContentBlock::Text { text } => Some(text.clone()), _ => None })
-                    .collect::<Vec<_>>().join(" ").to_lowercase(),
+                shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .filter_map(|b| match b {
+                        shannon_core::api::ContentBlock::Text { text } => Some(text.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase(),
             };
             let matches_focus = keywords.iter().any(|kw| text.contains(&kw.to_lowercase()));
             if matches_focus || msg.role == "system" {
@@ -806,7 +941,10 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
         }
         repl.chat.add_message(ChatRole::System, report);
     } else if focus_keywords.is_some() {
-        repl.chat.add_message(ChatRole::System, "Focus compact complete (no compaction needed for focused messages).".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Focus compact complete (no compaction needed for focused messages).".to_string(),
+        );
     }
 
     Ok(())
@@ -825,9 +963,15 @@ fn handle_compact_with_focus(
     for msg in history {
         let text = match &msg.content {
             shannon_core::api::MessageContent::Text(t) => t.to_lowercase(),
-            shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter()
-                .filter_map(|b| match b { shannon_core::api::ContentBlock::Text { text } => Some(text.clone()), _ => None })
-                .collect::<Vec<_>>().join(" ").to_lowercase(),
+            shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| match b {
+                    shannon_core::api::ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase(),
         };
         let matches_focus = keywords.iter().any(|kw| text.contains(&kw.to_lowercase()));
         if matches_focus || msg.role == "system" {
@@ -838,10 +982,13 @@ fn handle_compact_with_focus(
     }
     let compact_result = if !to_compact.is_empty() {
         let count = to_compact.len();
-        repl.chat.add_message(ChatRole::System, format!(
-            "Focus compacting {count} messages (preserving matches for '{}')...",
-            keyword_strings.join("', '")
-        ));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Focus compacting {count} messages (preserving matches for '{}')...",
+                keyword_strings.join("', '")
+            ),
+        );
         let mut compact_engine = compact_engine;
         let cr = compact_engine.compact(&mut to_compact);
         to_keep.append(&mut to_compact);
@@ -862,7 +1009,10 @@ fn handle_compact_with_focus(
             cr.messages_removed,
         ));
     } else {
-        repl.chat.add_message(ChatRole::System, "Focus compact complete (no compaction needed for focused messages).".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Focus compact complete (no compaction needed for focused messages).".to_string(),
+        );
     }
 
     Ok(())
@@ -875,24 +1025,34 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
 
     match subcmd {
         "list" | "ls" | "" => {
-            let sessions = repl.state_manager.list_persisted_sessions()
+            let sessions = repl
+                .state_manager
+                .list_persisted_sessions()
                 .unwrap_or_default();
 
             if sessions.is_empty() {
-                repl.chat.add_message(ChatRole::System, "No saved sessions found.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No saved sessions found.".to_string());
                 return Ok(());
             }
 
             let mut msg = String::from("Saved Sessions:\n\n");
             for (i, s) in sessions.iter().take(20).enumerate() {
-                let title = s.title.as_deref()
+                let title = s
+                    .title
+                    .as_deref()
                     .or(s.preview.as_deref())
                     .unwrap_or("(untitled)");
                 let time = s.updated_at.format("%m/%d %H:%M");
                 let tokens = s.total_input_tokens + s.total_output_tokens;
                 msg.push_str(&format!(
                     "  {:>2}. {}  {}  {} turns  {} tokens\n      ID: {}\n\n",
-                    i + 1, title, time, s.turn_count, tokens, s.session_id,
+                    i + 1,
+                    title,
+                    time,
+                    s.turn_count,
+                    tokens,
+                    s.session_id,
                 ));
             }
 
@@ -908,19 +1068,22 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
             let engine = match repl.query_engine.as_ref() {
                 Some(e) => e,
                 None => {
-                    repl.chat.add_message(ChatRole::System, "No active session to export.".to_string());
+                    repl.chat
+                        .add_message(ChatRole::System, "No active session to export.".to_string());
                     return Ok(());
                 }
             };
 
             let messages = engine.conversation_history();
             if messages.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Current session is empty.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "Current session is empty.".to_string());
                 return Ok(());
             }
 
             let mut md = String::from("# Shannon Session Export\n\n");
-            md.push_str(&format!("Date: {}\nModel: {}\n\n---\n\n",
+            md.push_str(&format!(
+                "Date: {}\nModel: {}\n\n---\n\n",
                 chrono::Utc::now().format("%Y-%m-%d %H:%M UTC"),
                 repl.state.model.as_deref().unwrap_or("unknown"),
             ));
@@ -934,22 +1097,32 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
                 };
                 let text = match &msg.content {
                     shannon_core::api::MessageContent::Text(t) => t.clone(),
-                    shannon_core::api::MessageContent::Blocks(blocks) => {
-                        blocks.iter().filter_map(|b| match b {
+                    shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                        .iter()
+                        .filter_map(|b| match b {
                             shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
                             _ => None,
-                        }).collect::<Vec<_>>().join("\n")
-                    }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n"),
                 };
                 md.push_str(&format!("{role}\n\n{text}\n\n---\n\n"));
             }
 
-            let filename = format!("shannon-session-{}.md", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+            let filename = format!(
+                "shannon-session-{}.md",
+                chrono::Utc::now().format("%Y%m%d-%H%M%S")
+            );
             let path = std::path::Path::new(&filename);
             match std::fs::write(path, &md) {
                 Ok(()) => {
-                    repl.chat.add_message(ChatRole::System,
-                        format!("Session exported to {filename} ({} messages)", messages.len()));
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "Session exported to {filename} ({} messages)",
+                            messages.len()
+                        ),
+                    );
                 }
                 Err(e) => {
                     super::set_error(repl, &format!("exporting session: {e}"));
@@ -957,8 +1130,10 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         _ => {
-            repl.chat.add_message(ChatRole::System,
-                "Usage: /session list | /session export".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Usage: /session list | /session export".to_string(),
+            );
         }
     }
 
@@ -971,10 +1146,16 @@ pub(crate) fn handle_rename(repl: &mut Repl, args: &str) -> Result<()> {
         // Show current title
         match &repl.state.session_title {
             Some(title) => {
-                repl.chat.add_message(ChatRole::System, format!("Current session: {title}\nUsage: /rename <new-name>"));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Current session: {title}\nUsage: /rename <new-name>"),
+                );
             }
             None => {
-                repl.chat.add_message(ChatRole::System, "No custom session name set.\nUsage: /rename <new-name>".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No custom session name set.\nUsage: /rename <new-name>".to_string(),
+                );
             }
         }
         return Ok(());
@@ -982,12 +1163,16 @@ pub(crate) fn handle_rename(repl: &mut Repl, args: &str) -> Result<()> {
 
     if name == "reset" || name == "clear" {
         repl.state.session_title = None;
-        repl.chat.add_message(ChatRole::System, "Session name reset to default.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Session name reset to default.".to_string(),
+        );
         return Ok(());
     }
 
     repl.state.session_title = Some(name.to_string());
-    repl.chat.add_message(ChatRole::System, format!("Session renamed to: {name}"));
+    repl.chat
+        .add_message(ChatRole::System, format!("Session renamed to: {name}"));
     Ok(())
 }
 
@@ -998,7 +1183,10 @@ pub(crate) fn handle_rename(repl: &mut Repl, args: &str) -> Result<()> {
 pub(crate) fn handle_recap(repl: &mut Repl, _args: &str) -> Result<()> {
     let total = repl.chat.len();
     if total == 0 {
-        repl.chat.add_message(ChatRole::System, "No messages in this session yet.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "No messages in this session yet.".to_string(),
+        );
         return Ok(());
     }
 
@@ -1066,10 +1254,17 @@ pub(crate) fn handle_effort(repl: &mut Repl, args: &str) -> Result<()> {
     if level.is_empty() {
         match &repl.state.effort_level {
             Some(effort) => {
-                repl.chat.add_message(ChatRole::System, format!("Current effort level: {effort}\nUsage: /effort <low|medium|high>"));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Current effort level: {effort}\nUsage: /effort <low|medium|high>"),
+                );
             }
             None => {
-                repl.chat.add_message(ChatRole::System, "No effort level set (using model default).\nUsage: /effort <low|medium|high>".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No effort level set (using model default).\nUsage: /effort <low|medium|high>"
+                        .to_string(),
+                );
             }
         }
         return Ok(());
@@ -1078,10 +1273,14 @@ pub(crate) fn handle_effort(repl: &mut Repl, args: &str) -> Result<()> {
     match level.as_str() {
         "low" | "medium" | "high" => {
             repl.state.effort_level = Some(level.clone());
-            repl.chat.add_message(ChatRole::System, format!("Effort level set to: {level}"));
+            repl.chat
+                .add_message(ChatRole::System, format!("Effort level set to: {level}"));
         }
         _ => {
-            repl.chat.add_message(ChatRole::System, "Invalid effort level. Use: low, medium, or high.".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Invalid effort level. Use: low, medium, or high.".to_string(),
+            );
         }
     }
 
@@ -1099,10 +1298,17 @@ pub(crate) fn handle_focus(repl: &mut Repl, args: &str) -> Result<()> {
     if area.is_empty() {
         match &repl.state.focus_area {
             Some(focus) => {
-                repl.chat.add_message(ChatRole::System, format!("Current focus: {focus}\nUsage: /focus <area> | /focus off"));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Current focus: {focus}\nUsage: /focus <area> | /focus off"),
+                );
             }
             None => {
-                repl.chat.add_message(ChatRole::System, "No focus area set.\nUsage: /focus <area> (e.g., frontend, backend, security)".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No focus area set.\nUsage: /focus <area> (e.g., frontend, backend, security)"
+                        .to_string(),
+                );
             }
         }
         return Ok(());
@@ -1111,10 +1317,12 @@ pub(crate) fn handle_focus(repl: &mut Repl, args: &str) -> Result<()> {
     let area_lower = area.to_lowercase();
     if area_lower == "off" || area_lower == "clear" {
         repl.state.focus_area = None;
-        repl.chat.add_message(ChatRole::System, "Focus area cleared.".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "Focus area cleared.".to_string());
     } else {
         repl.state.focus_area = Some(area.to_string());
-        repl.chat.add_message(ChatRole::System, format!("Focus area set to: {area}"));
+        repl.chat
+            .add_message(ChatRole::System, format!("Focus area set to: {area}"));
     }
 
     Ok(())

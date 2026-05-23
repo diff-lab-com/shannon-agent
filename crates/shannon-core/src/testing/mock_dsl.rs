@@ -6,7 +6,7 @@
 
 #[cfg(test)]
 use mockito::{Mock, ServerGuard};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A provider-agnostic mock response that can be rendered to any provider's SSE format.
 #[derive(Debug, Clone)]
@@ -19,9 +19,17 @@ pub struct MockResponse {
 /// A single content block in a mock response.
 #[derive(Debug, Clone)]
 pub enum MockContentBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: Value },
-    Thinking { text: String },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+    Thinking {
+        text: String,
+    },
 }
 
 /// Token usage for a mock response.
@@ -59,7 +67,9 @@ impl Default for MockResponse {
 /// Create a simple text response.
 pub fn text_response(text: &str) -> MockResponse {
     MockResponse {
-        content_blocks: vec![MockContentBlock::Text { text: text.to_string() }],
+        content_blocks: vec![MockContentBlock::Text {
+            text: text.to_string(),
+        }],
         ..Default::default()
     }
 }
@@ -80,17 +90,25 @@ pub fn tool_call_response(id: &str, name: &str, input: Value) -> MockResponse {
 /// Create a response with thinking content.
 pub fn thinking_response(text: &str) -> MockResponse {
     MockResponse {
-        content_blocks: vec![MockContentBlock::Thinking { text: text.to_string() }],
+        content_blocks: vec![MockContentBlock::Thinking {
+            text: text.to_string(),
+        }],
         ..Default::default()
     }
 }
 
 /// Create a multi-block response (e.g., thinking + text, text + tool call).
 pub fn multi_block_response(blocks: Vec<MockContentBlock>) -> MockResponse {
-    let has_tool_use = blocks.iter().any(|b| matches!(b, MockContentBlock::ToolUse { .. }));
+    let has_tool_use = blocks
+        .iter()
+        .any(|b| matches!(b, MockContentBlock::ToolUse { .. }));
     MockResponse {
         content_blocks: blocks,
-        stop_reason: if has_tool_use { "tool_use".to_string() } else { "end_turn".to_string() },
+        stop_reason: if has_tool_use {
+            "tool_use".to_string()
+        } else {
+            "end_turn".to_string()
+        },
         ..Default::default()
     }
 }
@@ -98,15 +116,26 @@ pub fn multi_block_response(blocks: Vec<MockContentBlock>) -> MockResponse {
 /// Create a thinking + text response (common pattern).
 pub fn thinking_and_text_response(thinking: &str, text: &str) -> MockResponse {
     multi_block_response(vec![
-        MockContentBlock::Thinking { text: thinking.to_string() },
-        MockContentBlock::Text { text: text.to_string() },
+        MockContentBlock::Thinking {
+            text: thinking.to_string(),
+        },
+        MockContentBlock::Text {
+            text: text.to_string(),
+        },
     ])
 }
 
 /// Create a text + tool call response.
-pub fn text_and_tool_response(text: &str, tool_id: &str, tool_name: &str, tool_input: Value) -> MockResponse {
+pub fn text_and_tool_response(
+    text: &str,
+    tool_id: &str,
+    tool_name: &str,
+    tool_input: Value,
+) -> MockResponse {
     multi_block_response(vec![
-        MockContentBlock::Text { text: text.to_string() },
+        MockContentBlock::Text {
+            text: text.to_string(),
+        },
         MockContentBlock::ToolUse {
             id: tool_id.to_string(),
             name: tool_name.to_string(),
@@ -118,7 +147,9 @@ pub fn text_and_tool_response(text: &str, tool_id: &str, tool_name: &str, tool_i
 /// Create a response simulating a cache hit (high cache_read, zero cache_creation).
 pub fn cached_response(text: &str, cached_tokens: u32) -> MockResponse {
     MockResponse {
-        content_blocks: vec![MockContentBlock::Text { text: text.to_string() }],
+        content_blocks: vec![MockContentBlock::Text {
+            text: text.to_string(),
+        }],
         usage: MockUsage {
             input_tokens: 100,
             output_tokens: 20,
@@ -132,7 +163,9 @@ pub fn cached_response(text: &str, cached_tokens: u32) -> MockResponse {
 /// Create a response simulating a cache miss (high cache_creation, zero cache_read).
 pub fn cache_miss_response(text: &str, creation_tokens: u32) -> MockResponse {
     MockResponse {
-        content_blocks: vec![MockContentBlock::Text { text: text.to_string() }],
+        content_blocks: vec![MockContentBlock::Text {
+            text: text.to_string(),
+        }],
         usage: MockUsage {
             input_tokens: 100,
             output_tokens: 20,
@@ -146,7 +179,9 @@ pub fn cache_miss_response(text: &str, creation_tokens: u32) -> MockResponse {
 /// Create a response with mixed cache activity (both creation and read).
 pub fn mixed_cache_response(text: &str, creation_tokens: u32, read_tokens: u32) -> MockResponse {
     MockResponse {
-        content_blocks: vec![MockContentBlock::Text { text: text.to_string() }],
+        content_blocks: vec![MockContentBlock::Text {
+            text: text.to_string(),
+        }],
         usage: MockUsage {
             input_tokens: 100,
             output_tokens: 20,
@@ -238,10 +273,7 @@ pub fn anthropic_sse(response: &MockResponse) -> String {
         "data: {}\n\n",
         json!({"type": "message_delta", "delta": {"stop_reason": response.stop_reason}, "usage": {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}})
     ));
-    body.push_str(&format!(
-        "data: {}\n\n",
-        json!({"type": "message_stop"})
-    ));
+    body.push_str(&format!("data: {}\n\n", json!({"type": "message_stop"})));
 
     body
 }
@@ -283,7 +315,11 @@ pub fn openai_sse(response: &MockResponse) -> String {
     }
 
     // Final chunk with finish_reason
-    let finish_reason = if response.stop_reason == "tool_use" { "tool_calls" } else { "stop" };
+    let finish_reason = if response.stop_reason == "tool_use" {
+        "tool_calls"
+    } else {
+        "stop"
+    };
     body.push_str(&format!(
         "data: {}\n\n",
         json!({"id": "chatcmpl-1", "object": "chat.completion.chunk", "created": 1, "model": "test",
@@ -332,12 +368,14 @@ pub fn ollama_sse(response: &MockResponse) -> String {
 
 /// Render a non-streaming Ollama JSON response.
 pub fn ollama_non_streaming(response: &MockResponse) -> String {
-    let content: String = response.content_blocks.iter().map(|b| {
-        match b {
+    let content: String = response
+        .content_blocks
+        .iter()
+        .map(|b| match b {
             MockContentBlock::Text { text } => text.clone(),
             _ => String::new(),
-        }
-    }).collect();
+        })
+        .collect();
 
     let escaped = escape_sse(&content);
     format!(
@@ -399,15 +437,25 @@ pub fn mount_sse_once(server: &mut ServerGuard, provider: &str, response: &MockR
 
 /// Mount a sequence of mock responses for multi-turn testing.
 #[cfg(test)]
-pub fn mount_sse_sequence(server: &mut ServerGuard, provider: &str, responses: Vec<MockResponse>) -> Vec<Mock> {
-    responses.into_iter().map(|response| {
-        mount_sse_once(server, provider, &response)
-    }).collect()
+pub fn mount_sse_sequence(
+    server: &mut ServerGuard,
+    provider: &str,
+    responses: Vec<MockResponse>,
+) -> Vec<Mock> {
+    responses
+        .into_iter()
+        .map(|response| mount_sse_once(server, provider, &response))
+        .collect()
 }
 
 /// Mount a streaming response with multiple chunks separated by delay simulation.
 #[cfg(test)]
-pub fn mount_sse_streaming(server: &mut ServerGuard, provider: &str, chunks: Vec<&str>, _delay_ms: u64) -> Mock {
+pub fn mount_sse_streaming(
+    server: &mut ServerGuard,
+    provider: &str,
+    chunks: Vec<&str>,
+    _delay_ms: u64,
+) -> Mock {
     let full_text = chunks.join("");
     let response = text_response(&full_text);
     mount_sse_once(server, provider, &response)
@@ -415,7 +463,12 @@ pub fn mount_sse_streaming(server: &mut ServerGuard, provider: &str, chunks: Vec
 
 /// Mount an error response on the server.
 #[cfg(test)]
-pub fn mount_error(server: &mut ServerGuard, provider: &str, status: usize, error_body: &str) -> Mock {
+pub fn mount_error(
+    server: &mut ServerGuard,
+    provider: &str,
+    status: usize,
+    error_body: &str,
+) -> Mock {
     let endpoint = provider_endpoint(provider);
     server
         .mock("POST", endpoint)
@@ -428,7 +481,12 @@ pub fn mount_error(server: &mut ServerGuard, provider: &str, status: usize, erro
 
 /// Mount an Anthropic API error response.
 #[cfg(test)]
-pub fn mount_anthropic_error(server: &mut ServerGuard, status: usize, error_type: &str, message: &str) -> Mock {
+pub fn mount_anthropic_error(
+    server: &mut ServerGuard,
+    status: usize,
+    error_type: &str,
+    message: &str,
+) -> Mock {
     mount_error(
         server,
         "anthropic",
@@ -623,13 +681,19 @@ mod tests {
         // Simulate a multi-turn conversation with cache tokens
         let responses = vec![
             cache_miss_response("Turn 1", 10000), // First turn: cache miss
-            cached_response("Turn 2", 8000),       // Second turn: cache hit
-            cached_response("Turn 3", 9000),       // Third turn: cache hit
+            cached_response("Turn 2", 8000),      // Second turn: cache hit
+            cached_response("Turn 3", 9000),      // Third turn: cache hit
             mixed_cache_response("Turn 4", 2000, 7000), // Partial hit
         ];
 
-        let total_cache_read: u32 = responses.iter().map(|r| r.usage.cache_read_input_tokens).sum();
-        let total_cache_creation: u32 = responses.iter().map(|r| r.usage.cache_creation_input_tokens).sum();
+        let total_cache_read: u32 = responses
+            .iter()
+            .map(|r| r.usage.cache_read_input_tokens)
+            .sum();
+        let total_cache_creation: u32 = responses
+            .iter()
+            .map(|r| r.usage.cache_creation_input_tokens)
+            .sum();
         let total_input: u32 = responses.iter().map(|r| r.usage.input_tokens).sum();
 
         // cache_read / (cache_read + cache_creation + input_tokens) = hit rate
@@ -641,7 +705,10 @@ mod tests {
         assert!(hit_rate > 0.0, "Hit rate should be positive");
         assert!(hit_rate <= 1.0, "Hit rate should be <= 1.0");
         // 24000 / (24000 + 12000 + 400) ≈ 0.66
-        assert!(hit_rate > 0.5, "Hit rate should be > 50% for this scenario, got {hit_rate:.2}");
+        assert!(
+            hit_rate > 0.5,
+            "Hit rate should be > 50% for this scenario, got {hit_rate:.2}"
+        );
     }
 
     #[test]
@@ -650,7 +717,13 @@ mod tests {
             text_response("No cache here"),
             text_response("No cache either"),
         ];
-        let total_cache_read: u32 = responses.iter().map(|r| r.usage.cache_read_input_tokens).sum();
-        assert_eq!(total_cache_read, 0, "Default responses should have zero cache read");
+        let total_cache_read: u32 = responses
+            .iter()
+            .map(|r| r.usage.cache_read_input_tokens)
+            .sum();
+        assert_eq!(
+            total_cache_read, 0,
+            "Default responses should have zero cache read"
+        );
     }
 }

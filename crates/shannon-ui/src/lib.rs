@@ -5,41 +5,44 @@
 // Initialize i18n translations — path is relative to this crate's src/ dir
 rust_i18n::i18n!("../../locales", fallback = "en");
 
-pub mod repl;
-pub mod theme;
-pub mod keybindings;
-mod widgets;
-mod events;
-mod render;
-pub mod adapter;
-pub mod stream_buffer;
-pub mod vim;
-pub mod repl_enhancement;
-pub mod skill_bridge;
-pub mod tool_format;
-pub mod terminal_image;
-pub mod screenshot;
-pub mod lsp_bridge;
 pub mod a11y;
-pub mod voice;
-pub mod stream_render;
+pub mod adapter;
 pub mod ansi_render;
+mod events;
+pub mod keybindings;
+pub mod lsp_bridge;
+mod render;
+pub mod repl;
+pub mod repl_enhancement;
+pub mod screenshot;
+pub mod skill_bridge;
+pub mod stream_buffer;
+pub mod stream_render;
+pub mod terminal_image;
+pub mod theme;
+pub mod tool_format;
 pub mod tui;
+pub mod vim;
+pub mod voice;
+mod widgets;
 
-pub use repl::{Repl, ReplState};
+pub use adapter::{
+    DefaultUiAdapter, DisplayMessage, MessageSeverity, NullUiAdapter, UiAdapter, UiError, UiResult,
+    UserChoice,
+};
 pub use events::{Event, EventHandler};
 pub use render::Renderer;
 pub use render::render_diff;
-pub use widgets::{ChatWidget, ChatRole, ChatMessage, PromptWidget, MainLayoutWidget, HeaderWidget, StatusBarWidget, SidebarInfo};
-pub use theme::Theme;
+pub use repl::{Repl, ReplState};
 pub use terminal_image::{
-    ImageProtocol, ImageRenderConfig,
-    detect_protocol, render_image_base64, render_image_bytes, image_placeholder,
+    ImageProtocol, ImageRenderConfig, detect_protocol, image_placeholder, render_image_base64,
+    render_image_bytes,
 };
-pub use vim::{VimHandler, VimMode, VimAction};
-pub use adapter::{
-    UiAdapter, UiResult, UiError, NullUiAdapter,
-    DefaultUiAdapter, DisplayMessage, MessageSeverity, UserChoice,
+pub use theme::Theme;
+pub use vim::{VimAction, VimHandler, VimMode};
+pub use widgets::{
+    ChatMessage, ChatRole, ChatWidget, HeaderWidget, MainLayoutWidget, PromptWidget, SidebarInfo,
+    StatusBarWidget,
 };
 
 /// Terminal UI application result type

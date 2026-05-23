@@ -155,17 +155,17 @@ impl SessionData {
             .find(|m| m.role == "user")
             .and_then(|m| match &m.content {
                 crate::api::MessageContent::Text(t) => Some(t.clone()),
-                crate::api::MessageContent::Blocks(blocks) => blocks
-                    .iter()
-                    .find_map(|b| match b {
-                        crate::api::ContentBlock::Text { text } => Some(text.clone()),
-                        _ => None,
-                    }),
+                crate::api::MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                    crate::api::ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                }),
             })
             .map(|t| {
                 if t.len() > max_len {
                     let mut end = max_len.saturating_sub(3);
-                    while !t.is_char_boundary(end) { end -= 1; }
+                    while !t.is_char_boundary(end) {
+                        end -= 1;
+                    }
                     format!("{}...", &t[..end])
                 } else {
                     t
@@ -339,14 +339,13 @@ impl StateManager {
             .iter()
             .map(|entry| (*entry.key(), entry.value().clone()))
             .collect();
-        serde_json::to_string(&sessions)
-            .map_err(|e| StateError::SerializationError(e.to_string()))
+        serde_json::to_string(&sessions).map_err(|e| StateError::SerializationError(e.to_string()))
     }
 
     /// Deserialize sessions from JSON into memory.
     pub fn deserialize_sessions(&self, data: &str) -> Result<(), StateError> {
-        let sessions: Vec<(Uuid, SessionState)> =
-            serde_json::from_str(data).map_err(|e| StateError::DeserializationError(e.to_string()))?;
+        let sessions: Vec<(Uuid, SessionState)> = serde_json::from_str(data)
+            .map_err(|e| StateError::DeserializationError(e.to_string()))?;
 
         for (id, session) in sessions {
             self.sessions.insert(id, session);
@@ -409,8 +408,8 @@ impl StateManager {
         }
 
         let contents = fs::read_to_string(&path)?;
-        let session_data: SessionData =
-            serde_json::from_str(&contents).map_err(|e| StateError::DeserializationError(e.to_string()))?;
+        let session_data: SessionData = serde_json::from_str(&contents)
+            .map_err(|e| StateError::DeserializationError(e.to_string()))?;
 
         Ok(Some(session_data))
     }
@@ -508,15 +507,15 @@ impl StateManager {
             .ok_or(StateError::SessionNotFound(*parent_session_id))?;
 
         // Truncate messages at the branch point
-        let branched_messages: Vec<Message> = parent
-            .messages
-            .into_iter()
-            .take(branch_point)
-            .collect();
+        let branched_messages: Vec<Message> =
+            parent.messages.into_iter().take(branch_point).collect();
 
         let new_id = Uuid::new_v4();
         let now = chrono::Utc::now();
-        let turn_count = branched_messages.iter().filter(|m| m.role == "user").count();
+        let turn_count = branched_messages
+            .iter()
+            .filter(|m| m.role == "user")
+            .count();
 
         let metadata = SessionPersistMetadata {
             model: parent.metadata.model.clone(),
@@ -692,14 +691,19 @@ mod tests {
         let metadata = make_metadata("claude-3-5-sonnet-20241022");
 
         // Save
-        manager.save_session(&session_id, &messages, &metadata).unwrap();
+        manager
+            .save_session(&session_id, &messages, &metadata)
+            .unwrap();
 
         // Verify file exists
         let path = manager.session_file_path(&session_id);
         assert!(path.exists(), "session file should exist after save");
 
         // Load
-        let loaded = manager.load_session(&session_id).unwrap().expect("session should load");
+        let loaded = manager
+            .load_session(&session_id)
+            .unwrap()
+            .expect("session should load");
         assert_eq!(loaded.session_id, session_id);
         assert_eq!(loaded.messages.len(), 3);
         assert_eq!(loaded.metadata.model, "claude-3-5-sonnet-20241022");
@@ -818,9 +822,7 @@ mod tests {
     #[test]
     fn test_delete_nonexistent_session_returns_false() {
         let manager = test_manager();
-        let deleted = manager
-            .delete_persisted_session(&Uuid::new_v4())
-            .unwrap();
+        let deleted = manager.delete_persisted_session(&Uuid::new_v4()).unwrap();
         assert!(!deleted);
     }
 
@@ -857,7 +859,9 @@ mod tests {
         // Small sleep to ensure a different timestamp
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        manager.save_session(&session_id, &messages, &metadata).unwrap();
+        manager
+            .save_session(&session_id, &messages, &metadata)
+            .unwrap();
 
         let loaded = manager.load_session(&session_id).unwrap().unwrap();
         assert!(loaded.metadata.updated_at >= before);
@@ -961,7 +965,9 @@ mod tests {
             .unwrap();
 
         // Branch at message index 1 (keep only first message)
-        let branch = manager.create_branch(&parent_id, 1, Some("Partial branch".to_string())).unwrap();
+        let branch = manager
+            .create_branch(&parent_id, 1, Some("Partial branch".to_string()))
+            .unwrap();
 
         assert_eq!(branch.messages.len(), 1);
         assert_eq!(branch.metadata.title, Some("Partial branch".to_string()));
@@ -1016,8 +1022,12 @@ mod tests {
             .unwrap();
 
         // Create two branches
-        let branch1 = manager.create_branch(&parent_id, 1, Some("Branch 1".to_string())).unwrap();
-        let branch2 = manager.create_branch(&parent_id, 2, Some("Branch 2".to_string())).unwrap();
+        let branch1 = manager
+            .create_branch(&parent_id, 1, Some("Branch 1".to_string()))
+            .unwrap();
+        let branch2 = manager
+            .create_branch(&parent_id, 2, Some("Branch 2".to_string()))
+            .unwrap();
 
         // Also save an unrelated session
         let other_id = Uuid::new_v4();
@@ -1054,10 +1064,15 @@ mod tests {
             .save_session(&parent_id, &make_messages(), &make_metadata("model"))
             .unwrap();
 
-        let _branch = manager.create_branch(&parent_id, 2, Some("Info test".to_string())).unwrap();
+        let _branch = manager
+            .create_branch(&parent_id, 2, Some("Info test".to_string()))
+            .unwrap();
 
         let sessions = manager.list_persisted_sessions().unwrap();
-        let branch_info = sessions.iter().find(|s| s.parent_session_id == Some(parent_id)).unwrap();
+        let branch_info = sessions
+            .iter()
+            .find(|s| s.parent_session_id == Some(parent_id))
+            .unwrap();
         assert_eq!(branch_info.branch_point_message_index, Some(2));
         assert_eq!(branch_info.title, Some("Info test".to_string()));
     }
@@ -1089,10 +1104,8 @@ mod tests {
             let manager_clone = manager.clone();
             let handle = tokio::spawn(async move {
                 for i in 0..inserts_per_thread {
-                    let _ = manager_clone.create_session(
-                        Some(format!("user_{i}")),
-                        "test-model".to_string(),
-                    );
+                    let _ = manager_clone
+                        .create_session(Some(format!("user_{i}")), "test-model".to_string());
                 }
             });
             handles.push(handle);
@@ -1142,7 +1155,10 @@ mod tests {
 
         // Verify final state - manager is an Arc, so we need to get the inner DashMap length
         let final_len = manager.global.len();
-        assert_eq!(final_len, num_threads as usize * operations_per_thread as usize);
+        assert_eq!(
+            final_len,
+            num_threads as usize * operations_per_thread as usize
+        );
     }
 
     #[tokio::test]

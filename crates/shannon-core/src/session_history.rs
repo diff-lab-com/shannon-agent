@@ -191,10 +191,8 @@ impl SessionHistoryManager {
             return Err(SessionHistoryError::SessionNotFound(*session_id));
         }
         let contents = fs::read_to_string(&path)?;
-        let data: SessionData =
-            serde_json::from_str(&contents).map_err(|e| {
-                SessionHistoryError::DeserializationError(e.to_string())
-            })?;
+        let data: SessionData = serde_json::from_str(&contents)
+            .map_err(|e| SessionHistoryError::DeserializationError(e.to_string()))?;
         Ok(data)
     }
 
@@ -206,22 +204,17 @@ impl SessionHistoryManager {
         let path = self.session_file_path(&data.session_id);
         let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
 
-        let total_tokens =
-            data.metadata.total_input_tokens + data.metadata.total_output_tokens;
+        let total_tokens = data.metadata.total_input_tokens + data.metadata.total_output_tokens;
         let total_cost = CostTracker::calculate_cost(
             &data.metadata.model,
             data.metadata.total_input_tokens,
             data.metadata.total_output_tokens,
         );
 
-        let title = data
-            .metadata
-            .title
-            .clone()
-            .unwrap_or_else(|| {
-                data.first_user_message_preview(60)
-                    .unwrap_or_else(|| "Untitled session".to_string())
-            });
+        let title = data.metadata.title.clone().unwrap_or_else(|| {
+            data.first_user_message_preview(60)
+                .unwrap_or_else(|| "Untitled session".to_string())
+        });
 
         Ok(SessionHistoryEntry {
             session_id: data.session_id,
@@ -303,12 +296,7 @@ impl SessionHistoryManager {
 
         // Project path
         if let Some(ref proj) = filter.project_path {
-            entries.retain(|e| {
-                e.project_path
-                    .as_ref()
-                    .map(|p| p == proj)
-                    .unwrap_or(false)
-            });
+            entries.retain(|e| e.project_path.as_ref().map(|p| p == proj).unwrap_or(false));
         }
 
         // -- Sort --
@@ -457,8 +445,8 @@ impl SessionHistoryManager {
     ///
     /// Returns the number of sessions that were cleaned up.
     pub fn cleanup_old_sessions(&self) -> Result<usize, SessionHistoryError> {
-        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(self.max_session_age)
-            .unwrap_or(chrono::Duration::zero());
+        let cutoff = chrono::Utc::now()
+            - chrono::Duration::from_std(self.max_session_age).unwrap_or(chrono::Duration::zero());
 
         let all = self.list_sessions(&SessionFilter {
             limit: self.max_sessions * 2, // fetch more so we can trim
@@ -469,10 +457,9 @@ impl SessionHistoryManager {
         let mut removed = 0usize;
 
         for entry in &all {
-            if entry.updated_at < cutoff
-                && self.archive_session(&entry.session_id).is_ok() {
-                    removed += 1;
-                }
+            if entry.updated_at < cutoff && self.archive_session(&entry.session_id).is_ok() {
+                removed += 1;
+            }
         }
 
         // Enforce max_sessions by archiving the oldest beyond the limit.
@@ -521,20 +508,13 @@ impl SessionHistoryManager {
     }
 
     /// Build a `ResumeInfo` bundle for resuming a session.
-    pub fn resume_session(
-        &self,
-        session_id: &Uuid,
-    ) -> Result<ResumeInfo, SessionHistoryError> {
+    pub fn resume_session(&self, session_id: &Uuid) -> Result<ResumeInfo, SessionHistoryError> {
         let data = self.read_session_file(session_id)?;
 
-        let title = data
-            .metadata
-            .title
-            .clone()
-            .unwrap_or_else(|| {
-                data.first_user_message_preview(60)
-                    .unwrap_or_else(|| "Untitled session".to_string())
-            });
+        let title = data.metadata.title.clone().unwrap_or_else(|| {
+            data.first_user_message_preview(60)
+                .unwrap_or_else(|| "Untitled session".to_string())
+        });
 
         let mut cost_tracker = CostTracker::new(data.metadata.model.clone());
         cost_tracker.record_usage(
@@ -751,25 +731,19 @@ mod tests {
             },
             Message {
                 role: "assistant".into(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolUse {
-                        id: "tool_1".into(),
-                        name: "file_read".into(),
-                        input: serde_json::json!({"file_path": "/tmp/config.toml"}),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tool_1".into(),
+                    name: "file_read".into(),
+                    input: serde_json::json!({"file_path": "/tmp/config.toml"}),
+                }]),
             },
             Message {
                 role: "user".into(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "tool_1".into(),
-                        content: Some(crate::api::ToolResultContent::Single(
-                            "key = value".into(),
-                        )),
-                        is_error: Some(false),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "tool_1".into(),
+                    content: Some(crate::api::ToolResultContent::Single("key = value".into())),
+                    is_error: Some(false),
+                }]),
             },
         ]
     }
@@ -787,8 +761,7 @@ mod tests {
     #[test]
     fn test_manager_with_config() {
         let dir = temp_dir();
-        let mgr =
-            SessionHistoryManager::with_config(dir, 10, Duration::from_secs(60)).unwrap();
+        let mgr = SessionHistoryManager::with_config(dir, 10, Duration::from_secs(60)).unwrap();
         assert_eq!(mgr.max_sessions, 10);
         assert_eq!(mgr.max_session_age, Duration::from_secs(60));
     }
@@ -944,7 +917,11 @@ mod tests {
 
         let info = mgr.resume_session(&id).unwrap();
         assert!(info.metadata.tools_used.contains(&"file_read".to_string()));
-        assert!(info.metadata.files_accessed.contains(&"/tmp/config.toml".to_string()));
+        assert!(
+            info.metadata
+                .files_accessed
+                .contains(&"/tmp/config.toml".to_string())
+        );
     }
 
     #[test]

@@ -5,11 +5,11 @@
 use std::process::Stdio;
 
 use lsp_types::{
-    DocumentSymbolParams, GotoDefinitionParams, Hover, HoverParams, InitializeParams,
-    Location, Position, TextDocumentIdentifier, TextDocumentPositionParams, Url,
+    DocumentSymbolParams, GotoDefinitionParams, Hover, HoverParams, InitializeParams, Location,
+    Position, TextDocumentIdentifier, TextDocumentPositionParams, Url,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 use tokio::process::Command;
@@ -103,21 +103,19 @@ impl LspClient {
             .stderr(Stdio::inherit()) // Pass through stderr for debugging
             .spawn()?;
 
-        let stdin = process
-            .stdin
-            .take()
-            .ok_or_else(|| LspClientError::SpawnError(std::io::Error::new(
+        let stdin = process.stdin.take().ok_or_else(|| {
+            LspClientError::SpawnError(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "Failed to open stdin",
-            )))?;
+            ))
+        })?;
 
-        let stdout = process
-            .stdout
-            .take()
-            .ok_or_else(|| LspClientError::SpawnError(std::io::Error::new(
+        let stdout = process.stdout.take().ok_or_else(|| {
+            LspClientError::SpawnError(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "Failed to open stdout",
-            )))?;
+            ))
+        })?;
 
         Ok(Self {
             process,
@@ -129,11 +127,7 @@ impl LspClient {
     }
 
     /// Send a JSON-RPC request and wait for the response
-    async fn request<R: Serialize>(
-        &mut self,
-        method: &str,
-        params: R,
-    ) -> LspResult<Value> {
+    async fn request<R: Serialize>(&mut self, method: &str, params: R) -> LspResult<Value> {
         let id = self.next_id;
         self.next_id += 1;
 
@@ -197,10 +191,9 @@ impl LspClient {
 
         // Skip the blank line
         let mut blank_line = String::new();
-        self.reader
-            .read_line(&mut blank_line)
-            .await
-            .map_err(|e| LspClientError::ProtocolError(format!("Failed to read blank line: {e}")))?;
+        self.reader.read_line(&mut blank_line).await.map_err(|e| {
+            LspClientError::ProtocolError(format!("Failed to read blank line: {e}"))
+        })?;
 
         // Read the response body
         let mut body_buffer = vec![0u8; content_length];
@@ -209,8 +202,9 @@ impl LspClient {
             .await
             .map_err(|e| LspClientError::ProtocolError(format!("Failed to read body: {e}")))?;
 
-        let body = String::from_utf8(body_buffer)
-            .map_err(|e| LspClientError::ProtocolError(format!("Invalid UTF-8 in response: {e}")))?;
+        let body = String::from_utf8(body_buffer).map_err(|e| {
+            LspClientError::ProtocolError(format!("Invalid UTF-8 in response: {e}"))
+        })?;
 
         tracing::trace!("Received LSP response: {}", body);
 
@@ -264,8 +258,8 @@ impl LspClient {
 
         let result = self.request("initialize", params).await?;
 
-        let init_result: lsp_types::InitializeResult = serde_json::from_value(result)
-            .map_err(|_e| LspClientError::InvalidResponse)?;
+        let init_result: lsp_types::InitializeResult =
+            serde_json::from_value(result).map_err(|_e| LspClientError::InvalidResponse)?;
 
         self.initialized = true;
 
@@ -364,8 +358,7 @@ impl LspClient {
 
         let result = self.request("textDocument/references", params).await?;
 
-        let locations: Vec<Location> = serde_json::from_value(result)
-            .unwrap_or_default();
+        let locations: Vec<Location> = serde_json::from_value(result).unwrap_or_default();
 
         Ok(locations)
     }
@@ -382,8 +375,7 @@ impl LspClient {
 
         let result = self.request("textDocument/hover", params).await?;
 
-        let hover: Option<Hover> = serde_json::from_value(result)
-            .ok();
+        let hover: Option<Hover> = serde_json::from_value(result).ok();
 
         Ok(hover)
     }
@@ -438,13 +430,44 @@ mod tests {
 
     #[test]
     fn lsp_client_error_display_messages() {
-        assert!(LspClientError::SpawnError(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")).to_string().contains("Failed to spawn"));
-        assert!(LspClientError::JsonRpcError("bad request".into()).to_string().contains("bad request"));
-        assert!(LspClientError::ProtocolError("handshake failed".into()).to_string().contains("handshake failed"));
-        assert!(LspClientError::ServerNotFound("brainfuck".into()).to_string().contains("brainfuck"));
-        assert!(LspClientError::InvalidUri.to_string().contains("Invalid URI"));
-        assert!(LspClientError::ServerError("crash".into()).to_string().contains("crash"));
-        assert!(LspClientError::InvalidResponse.to_string().contains("Invalid response"));
+        assert!(
+            LspClientError::SpawnError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "missing"
+            ))
+            .to_string()
+            .contains("Failed to spawn")
+        );
+        assert!(
+            LspClientError::JsonRpcError("bad request".into())
+                .to_string()
+                .contains("bad request")
+        );
+        assert!(
+            LspClientError::ProtocolError("handshake failed".into())
+                .to_string()
+                .contains("handshake failed")
+        );
+        assert!(
+            LspClientError::ServerNotFound("brainfuck".into())
+                .to_string()
+                .contains("brainfuck")
+        );
+        assert!(
+            LspClientError::InvalidUri
+                .to_string()
+                .contains("Invalid URI")
+        );
+        assert!(
+            LspClientError::ServerError("crash".into())
+                .to_string()
+                .contains("crash")
+        );
+        assert!(
+            LspClientError::InvalidResponse
+                .to_string()
+                .contains("Invalid response")
+        );
         assert!(LspClientError::Timeout.to_string().contains("timed out"));
     }
 
@@ -486,7 +509,8 @@ mod tests {
 
     #[test]
     fn json_rpc_response_with_error() {
-        let json = r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid Request"}}"#;
+        let json =
+            r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32600,"message":"Invalid Request"}}"#;
         let resp: JsonRpcResponse = serde_json::from_str(json).unwrap();
         let err = resp.error.unwrap();
         assert_eq!(err.code, -32600);

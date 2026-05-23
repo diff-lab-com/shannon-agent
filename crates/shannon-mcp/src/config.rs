@@ -61,7 +61,9 @@ impl HeaderSource {
     /// Returns a warning message if suspicious patterns are found, None otherwise.
     pub fn validate_command(command: &str) -> Option<&'static str> {
         // Block shell chaining/metacharacters that could chain commands
-        let dangerous_chars = [';', '&', '|', '`', '$', '(', ')', '{', '}', '<', '>', '\n', '\r'];
+        let dangerous_chars = [
+            ';', '&', '|', '`', '$', '(', ')', '{', '}', '<', '>', '\n', '\r',
+        ];
         if command.contains(|c: char| dangerous_chars.contains(&c)) {
             return Some("shell metacharacters in command");
         }
@@ -100,7 +102,9 @@ impl HeaderSource {
             HeaderSource::Static(s) => Ok(s.clone()),
             HeaderSource::Command { command } => {
                 if let Some(desc) = Self::validate_command(command) {
-                    warn!("Header command contains potentially dangerous pattern ({desc}): {command}");
+                    warn!(
+                        "Header command contains potentially dangerous pattern ({desc}): {command}"
+                    );
                     return Err(format!("Refusing to execute header command: {desc}"));
                 }
                 warn!("Executing header command: {command}");
@@ -453,7 +457,10 @@ pub fn expand_env_vars(input: &str) -> String {
                 // Bare $VAR form: consume identifier characters [A-Za-z_][A-Za-z0-9_]*
                 let mut var_name = String::new();
                 while let Some(&next) = chars.peek() {
-                    if next.is_ascii_alphabetic() || next == '_' || (!var_name.is_empty() && next.is_ascii_digit()) {
+                    if next.is_ascii_alphabetic()
+                        || next == '_'
+                        || (!var_name.is_empty() && next.is_ascii_digit())
+                    {
                         var_name.push(next);
                         chars.next();
                     } else {
@@ -487,11 +494,7 @@ fn expand_auth_config(auth: &mut Option<McpAuthConfig>) {
 /// Expand env vars in all values of a server config (D2).
 pub fn expand_server_config(config: &mut McpServerConfig) {
     match config {
-        McpServerConfig::Stdio {
-            command,
-            args,
-            env,
-        } => {
+        McpServerConfig::Stdio { command, args, env } => {
             *command = expand_env_vars(command);
             for arg in args.iter_mut() {
                 *arg = expand_env_vars(arg);
@@ -618,7 +621,9 @@ pub fn discover_config(project_dir: &Path) -> Result<McpConfig, ConfigError> {
     }
 
     // Validate all server configs, removing invalid ones
-    let invalid_servers: Vec<String> = merged.mcp_servers.iter()
+    let invalid_servers: Vec<String> = merged
+        .mcp_servers
+        .iter()
         .filter_map(|(name, conf)| {
             if let Err(e) = conf.validate() {
                 warn!(server = %name, error = %e, "Removing invalid server config");
@@ -716,20 +721,28 @@ mod tests {
 
     #[test]
     fn test_expand_simple_var() {
-        unsafe { std::env::set_var("TEST_MCP_KEY", "hello"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_KEY", "hello");
+        }
         assert_eq!(expand_env_vars("${TEST_MCP_KEY}"), "hello");
-        unsafe { std::env::remove_var("TEST_MCP_KEY"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_KEY");
+        }
     }
 
     #[test]
     fn test_expand_missing_var_empty() {
-        unsafe { std::env::remove_var("TEST_MCP_MISSING_VAR"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_MISSING_VAR");
+        }
         assert_eq!(expand_env_vars("${TEST_MCP_MISSING_VAR}"), "");
     }
 
     #[test]
     fn test_expand_default_value() {
-        unsafe { std::env::remove_var("TEST_MCP_NO_SUCH_VAR"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_NO_SUCH_VAR");
+        }
         assert_eq!(
             expand_env_vars("${TEST_MCP_NO_SUCH_VAR:-fallback}"),
             "fallback"
@@ -738,22 +751,27 @@ mod tests {
 
     #[test]
     fn test_expand_var_present_ignores_default() {
-        unsafe { std::env::set_var("TEST_MCP_EXISTS", "actual"); }
-        assert_eq!(
-            expand_env_vars("${TEST_MCP_EXISTS:-fallback}"),
-            "actual"
-        );
-        unsafe { std::env::remove_var("TEST_MCP_EXISTS"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_EXISTS", "actual");
+        }
+        assert_eq!(expand_env_vars("${TEST_MCP_EXISTS:-fallback}"), "actual");
+        unsafe {
+            std::env::remove_var("TEST_MCP_EXISTS");
+        }
     }
 
     #[test]
     fn test_expand_in_string() {
-        unsafe { std::env::set_var("TEST_MCP_HOST", "localhost"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_HOST", "localhost");
+        }
         assert_eq!(
             expand_env_vars("http://${TEST_MCP_HOST}:3000"),
             "http://localhost:3000"
         );
-        unsafe { std::env::remove_var("TEST_MCP_HOST"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_HOST");
+        }
     }
 
     #[test]
@@ -779,11 +797,7 @@ mod tests {
 
         let config = McpServerConfig::from_json_value(json).unwrap();
         match config {
-            McpServerConfig::Stdio {
-                command,
-                args,
-                env,
-            } => {
+            McpServerConfig::Stdio { command, args, env } => {
                 assert_eq!(command, "npx");
                 assert_eq!(args, vec!["-y", "some-package"]);
                 assert_eq!(env.get("KEY").unwrap(), "value");
@@ -881,7 +895,9 @@ mod tests {
 
     #[test]
     fn test_env_expansion_in_config() {
-        unsafe { std::env::set_var("TEST_MCP_EXPAND_PATH", "/expanded/path"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_EXPAND_PATH", "/expanded/path");
+        }
         let json = serde_json::json!({
             "mcpServers": {
                 "test": {
@@ -907,18 +923,16 @@ mod tests {
         let server = config.mcp_servers.get("test").unwrap();
 
         match server {
-            McpServerConfig::Stdio {
-                command,
-                args,
-                env,
-            } => {
+            McpServerConfig::Stdio { command, args, env } => {
                 assert_eq!(command, "node");
                 assert_eq!(args[0], "/expanded/path/server.js");
                 assert_eq!(env.get("ROOT").unwrap(), "/expanded/path/root");
             }
             _ => panic!("Expected Stdio"),
         }
-        unsafe { std::env::remove_var("TEST_MCP_EXPAND_PATH"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_EXPAND_PATH");
+        }
     }
 
     #[test]
@@ -1049,7 +1063,11 @@ mod tests {
             McpServerConfig::Sse { auth, .. } => {
                 let auth = auth.as_ref().expect("auth should be set");
                 match auth {
-                    McpAuthConfig::ApiKey { key, header, prefix } => {
+                    McpAuthConfig::ApiKey {
+                        key,
+                        header,
+                        prefix,
+                    } => {
                         assert_eq!(key, "my-secret-key");
                         assert_eq!(header.as_deref(), Some("Authorization"));
                         assert_eq!(prefix.as_deref(), Some("Bearer"));
@@ -1086,7 +1104,9 @@ mod tests {
             McpServerConfig::Sse { auth, .. } => {
                 let auth = auth.as_ref().expect("auth should be set");
                 match auth {
-                    McpAuthConfig::OAuth { client_id, scopes, .. } => {
+                    McpAuthConfig::OAuth {
+                        client_id, scopes, ..
+                    } => {
                         assert_eq!(client_id, "my-client");
                         assert_eq!(*scopes, vec!["read", "write"]);
                     }
@@ -1099,7 +1119,9 @@ mod tests {
 
     #[test]
     fn test_auth_env_expansion() {
-        unsafe { std::env::set_var("TEST_MCP_API_KEY", "expanded-key-123"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_API_KEY", "expanded-key-123");
+        }
         let json = serde_json::json!({
             "mcpServers": {
                 "remote": {
@@ -1130,13 +1152,19 @@ mod tests {
             }
             _ => panic!("Expected Sse config"),
         }
-        unsafe { std::env::remove_var("TEST_MCP_API_KEY"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_API_KEY");
+        }
     }
 
     #[test]
     fn test_expand_stdio_config() {
-        unsafe { std::env::set_var("TEST_MCP_MY_CMD", "/usr/bin/my-cmd"); }
-        unsafe { std::env::set_var("TEST_MCP_SECRET", "abc123"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_MY_CMD", "/usr/bin/my-cmd");
+        }
+        unsafe {
+            std::env::set_var("TEST_MCP_SECRET", "abc123");
+        }
 
         let mut config = McpServerConfig::Stdio {
             command: "${TEST_MCP_MY_CMD}".to_string(),
@@ -1151,11 +1179,7 @@ mod tests {
         expand_server_config(&mut config);
 
         match config {
-            McpServerConfig::Stdio {
-                command,
-                args,
-                env,
-            } => {
+            McpServerConfig::Stdio { command, args, env } => {
                 assert_eq!(command, "/usr/bin/my-cmd");
                 assert_eq!(args[1], "abc123");
                 assert_eq!(env.get("API_KEY").unwrap(), "abc123");
@@ -1163,13 +1187,19 @@ mod tests {
             _ => panic!("Expected Stdio"),
         }
 
-        unsafe { std::env::remove_var("TEST_MCP_MY_CMD"); }
-        unsafe { std::env::remove_var("TEST_MCP_SECRET"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_MY_CMD");
+        }
+        unsafe {
+            std::env::remove_var("TEST_MCP_SECRET");
+        }
     }
 
     #[test]
     fn test_expand_url_config() {
-        unsafe { std::env::set_var("TEST_MCP_SVC_HOST", "my-server.example.com"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_SVC_HOST", "my-server.example.com");
+        }
 
         let mut config = McpServerConfig::Sse {
             url: "https://${TEST_MCP_SVC_HOST}/sse".to_string(),
@@ -1186,42 +1216,55 @@ mod tests {
             _ => panic!("Expected Sse"),
         }
 
-        unsafe { std::env::remove_var("TEST_MCP_SVC_HOST"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_SVC_HOST");
+        }
     }
 
     // ── Bare $VAR expansion tests ──────────────────────────────────────
 
     #[test]
     fn test_expand_bare_var() {
-        unsafe { std::env::set_var("TEST_MCP_BARE", "bare-value"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_BARE", "bare-value");
+        }
         assert_eq!(expand_env_vars("$TEST_MCP_BARE"), "bare-value");
-        unsafe { std::env::remove_var("TEST_MCP_BARE"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_BARE");
+        }
     }
 
     #[test]
     fn test_expand_bare_var_missing() {
-        unsafe { std::env::remove_var("TEST_MCP_BARE_MISSING"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_BARE_MISSING");
+        }
         assert_eq!(expand_env_vars("$TEST_MCP_BARE_MISSING"), "");
     }
 
     #[test]
     fn test_expand_bare_var_in_url() {
-        unsafe { std::env::set_var("TEST_MCP_BARE_HOST", "api.example.com"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_BARE_HOST", "api.example.com");
+        }
         assert_eq!(
             expand_env_vars("https://$TEST_MCP_BARE_HOST/v1/mcp"),
             "https://api.example.com/v1/mcp"
         );
-        unsafe { std::env::remove_var("TEST_MCP_BARE_HOST"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_BARE_HOST");
+        }
     }
 
     #[test]
     fn test_expand_bare_var_adjacent_to_text() {
-        unsafe { std::env::set_var("TEST_MCP_PREFIX", "hello"); }
-        assert_eq!(
-            expand_env_vars("${TEST_MCP_PREFIX}_world"),
-            "hello_world"
-        );
-        unsafe { std::env::remove_var("TEST_MCP_PREFIX"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_PREFIX", "hello");
+        }
+        assert_eq!(expand_env_vars("${TEST_MCP_PREFIX}_world"), "hello_world");
+        unsafe {
+            std::env::remove_var("TEST_MCP_PREFIX");
+        }
     }
 
     #[test]
@@ -1237,12 +1280,16 @@ mod tests {
 
     #[test]
     fn test_expand_bare_var_in_bearer_header() {
-        unsafe { std::env::set_var("TEST_MCP_TOKEN_VAR", "tok123"); }
+        unsafe {
+            std::env::set_var("TEST_MCP_TOKEN_VAR", "tok123");
+        }
         assert_eq!(
             expand_env_vars("Bearer $TEST_MCP_TOKEN_VAR"),
             "Bearer tok123"
         );
-        unsafe { std::env::remove_var("TEST_MCP_TOKEN_VAR"); }
+        unsafe {
+            std::env::remove_var("TEST_MCP_TOKEN_VAR");
+        }
     }
 
     // ── Multi-file merging (last-wins) tests ──────────────────────────
@@ -1481,7 +1528,10 @@ mod tests {
             "args": ["just-args"]
         });
         let result = McpServerConfig::from_json_value(json);
-        assert!(result.is_err(), "Expected error when neither command nor url present");
+        assert!(
+            result.is_err(),
+            "Expected error when neither command nor url present"
+        );
     }
 
     // ── Header command validation tests ─────────────────────────────────

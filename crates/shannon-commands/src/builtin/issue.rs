@@ -3,7 +3,9 @@
 //! Provides the `/issue` slash command which wraps `gh issue` operations:
 //! create, list, view, comment, close, reopen.
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Create the /issue command
 pub fn command() -> Command {

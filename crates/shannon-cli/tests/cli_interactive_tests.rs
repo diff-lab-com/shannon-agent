@@ -16,7 +16,11 @@ const BIN: &str = "shannon";
 
 fn shannon_bin_path() -> String {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     format!("{manifest_dir}/../../target/{profile}/{BIN}")
 }
 
@@ -92,7 +96,7 @@ fn test_repl_exit_command() {
     p.send_line("/exit").unwrap();
     // Should exit cleanly — rexpect will detect EOF
     match p.exp_eof() {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => eprintln!("Note: exp_eof returned: {e} (may be normal)"),
     }
 }
@@ -298,8 +302,7 @@ fn test_repl_multiple_commands_sequence() {
 
     // First command
     p.send_line("/model").unwrap();
-    p.exp_regex("(?i)test|model")
-        .expect("/model should work");
+    p.exp_regex("(?i)test|model").expect("/model should work");
 
     // Second command — REPL should still be responsive
     p.send_line("/context").unwrap();

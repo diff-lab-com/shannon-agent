@@ -9,9 +9,9 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use shannon_core::{Tool, ToolOutput, ToolResult};
+use serde_json::{Value, json};
 use shannon_core::tools::ToolError;
+use shannon_core::{Tool, ToolOutput, ToolResult};
 use tokio::process::Command;
 
 const GH_TIMEOUT_SECS: u64 = 30;
@@ -24,9 +24,7 @@ const GH_TIMEOUT_SECS: u64 = 30;
 async fn run_gh(args: &[&str]) -> Result<(String, String, bool), ToolError> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(GH_TIMEOUT_SECS),
-        Command::new("gh")
-            .args(args)
-            .output(),
+        Command::new("gh").args(args).output(),
     )
     .await
     .map_err(|_| ToolError::ExecutionFailed("gh command timed out".to_string()))?
@@ -39,9 +37,11 @@ async fn run_gh(args: &[&str]) -> Result<(String, String, bool), ToolError> {
 
 /// Check if gh is installed and authenticated.
 async fn check_gh_available() -> Result<(), ToolError> {
-    let (_, _, success) = run_gh(&["--version"])
-        .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("gh CLI not found: {e}. Please install from https://cli.github.com/")))?;
+    let (_, _, success) = run_gh(&["--version"]).await.map_err(|e| {
+        ToolError::ExecutionFailed(format!(
+            "gh CLI not found: {e}. Please install from https://cli.github.com/"
+        ))
+    })?;
 
     if !success {
         return Err(ToolError::ExecutionFailed(
@@ -67,9 +67,7 @@ async fn check_gh_available() -> Result<(), ToolError> {
 async fn check_github_repo() -> Result<(), ToolError> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        Command::new("git")
-            .args(["remote", "-v"])
-            .output(),
+        Command::new("git").args(["remote", "-v"]).output(),
     )
     .await
     .map_err(|_| ToolError::ExecutionFailed("git remote check timed out".to_string()))?
@@ -257,16 +255,22 @@ impl Tool for GhIssueListTool {
             Some("open") | Some("closed") | Some("all") | None => {
                 input.state.as_deref().unwrap_or("open").to_string()
             }
-            _ => return Err(ToolError::InvalidInput(
-                "state must be one of: open, closed, all".to_string(),
-            )),
+            _ => {
+                return Err(ToolError::InvalidInput(
+                    "state must be one of: open, closed, all".to_string(),
+                ));
+            }
         };
 
         let mut args = vec![
-            "issue", "list",
-            "--json", "number,title,state,htmlUrl,user,comments,createdAt,updatedAt,body",
-            "--limit", &limit_str,
-            "--state", &state,
+            "issue",
+            "list",
+            "--json",
+            "number,title,state,htmlUrl,user,comments,createdAt,updatedAt,body",
+            "--limit",
+            &limit_str,
+            "--state",
+            &state,
         ];
 
         if let Some(assignee) = &input.assignee {
@@ -280,7 +284,9 @@ impl Tool for GhIssueListTool {
         let (stdout, stderr, success) = run_gh(&args).await?;
 
         if !success {
-            return Ok(ToolOutput::error(format!("Failed to list issues: {stderr}")));
+            return Ok(ToolOutput::error(format!(
+                "Failed to list issues: {stderr}"
+            )));
         }
 
         let issues: Vec<GhIssue> = serde_json::from_str(&stdout)
@@ -294,9 +300,7 @@ impl Tool for GhIssueListTool {
         for issue in &issues {
             content.push_str(&format!(
                 "#{} {} - {}\n",
-                issue.number,
-                issue.title,
-                issue.state
+                issue.number, issue.title, issue.state
             ));
             content.push_str(&format!("  URL: {}\n", issue.html_url));
             content.push_str(&format!("  Author: {}\n", issue.user.login));
@@ -304,7 +308,11 @@ impl Tool for GhIssueListTool {
             content.push_str(&format!("  Created: {}\n", issue.created_at));
             if let Some(body) = &issue.body {
                 let preview = body.lines().next().unwrap_or("");
-                content.push_str(&format!("  Preview: {}{}\n", preview, if body.len() > 100 { "..." } else { "" }));
+                content.push_str(&format!(
+                    "  Preview: {}{}\n",
+                    preview,
+                    if body.len() > 100 { "..." } else { "" }
+                ));
             }
             content.push('\n');
         }
@@ -384,8 +392,11 @@ impl Tool for GhIssueViewTool {
 
         // Get issue details
         let issue_args = [
-            "issue", "view", &input.number.to_string(),
-            "--json", "number,title,state,htmlUrl,user,comments,createdAt,updatedAt,body"
+            "issue",
+            "view",
+            &input.number.to_string(),
+            "--json",
+            "number,title,state,htmlUrl,user,comments,createdAt,updatedAt,body",
         ];
 
         let (stdout, stderr, success) = run_gh(&issue_args).await?;
@@ -397,10 +408,7 @@ impl Tool for GhIssueViewTool {
         let issue: GhIssue = serde_json::from_str(&stdout)
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to parse issue: {e}")))?;
 
-        let mut content = format!(
-            "#{}: {}\n\n",
-            issue.number, issue.title
-        );
+        let mut content = format!("#{}: {}\n\n", issue.number, issue.title);
         content.push_str(&format!("State: {}\n", issue.state));
         content.push_str(&format!("URL: {}\n", issue.html_url));
         content.push_str(&format!("Author: {}\n", issue.user.login));
@@ -415,11 +423,17 @@ impl Tool for GhIssueViewTool {
         // Get comments if requested
         if include_comments && issue.comments > 0 {
             let comments_args = [
-                "issue", "view", &input.number.to_string(),
-                "--json", "comments", "--jq", ".comments"
+                "issue",
+                "view",
+                &input.number.to_string(),
+                "--json",
+                "comments",
+                "--jq",
+                ".comments",
             ];
 
-            let (comments_stdout, _comments_stderr, comments_success) = run_gh(&comments_args).await?;
+            let (comments_stdout, _comments_stderr, comments_success) =
+                run_gh(&comments_args).await?;
 
             if comments_success {
                 if let Ok(comments) = serde_json::from_str::<Vec<GhComment>>(&comments_stdout) {
@@ -569,7 +583,9 @@ impl Tool for GhPrCreateTool {
             return Ok(ToolOutput::error(format!("Failed to create PR: {stderr}")));
         }
 
-        Ok(ToolOutput::success(format!("Pull request created:\n{stdout}")))
+        Ok(ToolOutput::success(format!(
+            "Pull request created:\n{stdout}"
+        )))
     }
 }
 
@@ -653,16 +669,22 @@ impl Tool for GhPrListTool {
             Some("open") | Some("closed") | Some("merged") | Some("all") | None => {
                 input.state.as_deref().unwrap_or("open").to_string()
             }
-            _ => return Err(ToolError::InvalidInput(
-                "state must be one of: open, closed, merged, all".to_string(),
-            )),
+            _ => {
+                return Err(ToolError::InvalidInput(
+                    "state must be one of: open, closed, merged, all".to_string(),
+                ));
+            }
         };
 
         let mut args = vec![
-            "pr", "list",
-            "--json", "number,title,state,htmlUrl,user,head,base,createdAt,updatedAt,body,mergeable,reviewDecision,additions,deletions,changedFiles",
-            "--limit", &limit_str,
-            "--state", &state,
+            "pr",
+            "list",
+            "--json",
+            "number,title,state,htmlUrl,user,head,base,createdAt,updatedAt,body,mergeable,reviewDecision,additions,deletions,changedFiles",
+            "--limit",
+            &limit_str,
+            "--state",
+            &state,
         ];
 
         if let Some(author) = &input.author {
@@ -684,14 +706,17 @@ impl Tool for GhPrListTool {
 
         let mut content = String::new();
         for pr in &prs {
-            content.push_str(&format!(
-                "#{} {} - {}\n",
-                pr.number, pr.title, pr.state
-            ));
+            content.push_str(&format!("#{} {} - {}\n", pr.number, pr.title, pr.state));
             content.push_str(&format!("  URL: {}\n", pr.html_url));
             content.push_str(&format!("  Author: {}\n", pr.user.login));
-            content.push_str(&format!("  Branch: {} → {}\n", pr.head.ref_name, pr.base.ref_name));
-            content.push_str(&format!("  Changes: +{} -{} ({} files)\n", pr.additions, pr.deletions, pr.changed_files));
+            content.push_str(&format!(
+                "  Branch: {} → {}\n",
+                pr.head.ref_name, pr.base.ref_name
+            ));
+            content.push_str(&format!(
+                "  Changes: +{} -{} ({} files)\n",
+                pr.additions, pr.deletions, pr.changed_files
+            ));
 
             if let Some(mergeable) = pr.mergeable {
                 content.push_str(&format!("  Mergeable: {mergeable}\n"));
@@ -781,8 +806,11 @@ impl Tool for GhPrViewTool {
 
         // Get PR details
         let pr_args = [
-            "pr", "view", &input.number.to_string(),
-            "--json", "number,title,state,htmlUrl,user,head,base,createdAt,updatedAt,body,mergeable,reviewDecision,additions,deletions,changedFiles"
+            "pr",
+            "view",
+            &input.number.to_string(),
+            "--json",
+            "number,title,state,htmlUrl,user,head,base,createdAt,updatedAt,body,mergeable,reviewDecision,additions,deletions,changedFiles",
         ];
 
         let (stdout, stderr, success) = run_gh(&pr_args).await?;
@@ -794,17 +822,20 @@ impl Tool for GhPrViewTool {
         let pr: GhPullRequest = serde_json::from_str(&stdout)
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to parse PR: {e}")))?;
 
-        let mut content = format!(
-            "#{}: {}\n\n",
-            pr.number, pr.title
-        );
+        let mut content = format!("#{}: {}\n\n", pr.number, pr.title);
         content.push_str(&format!("State: {}\n", pr.state));
         content.push_str(&format!("URL: {}\n", pr.html_url));
         content.push_str(&format!("Author: {}\n", pr.user.login));
-        content.push_str(&format!("Branch: {} → {}\n", pr.head.ref_name, pr.base.ref_name));
+        content.push_str(&format!(
+            "Branch: {} → {}\n",
+            pr.head.ref_name, pr.base.ref_name
+        ));
         content.push_str(&format!("Created: {}\n", pr.created_at));
         content.push_str(&format!("Updated: {}\n", pr.updated_at));
-        content.push_str(&format!("Changes: +{} -{} ({} files)\n", pr.additions, pr.deletions, pr.changed_files));
+        content.push_str(&format!(
+            "Changes: +{} -{} ({} files)\n",
+            pr.additions, pr.deletions, pr.changed_files
+        ));
 
         if let Some(mergeable) = pr.mergeable {
             content.push_str(&format!("Mergeable: {mergeable}\n"));
@@ -874,7 +905,10 @@ mod tests {
 
         assert_eq!(schema["type"], "object");
         assert!(schema["required"].is_array());
-        assert_eq!(schema["properties"]["title"]["description"], "Pull request title");
+        assert_eq!(
+            schema["properties"]["title"]["description"],
+            "Pull request title"
+        );
     }
 
     #[test]

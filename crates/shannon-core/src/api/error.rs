@@ -86,7 +86,11 @@ impl ApiError {
         // Special-case well-known HTTP status codes regardless of body.
         match status {
             401 => return ApiError::AuthenticationFailed,
-            429 => return ApiError::RateLimitExceeded { retry_after_secs: None },
+            429 => {
+                return ApiError::RateLimitExceeded {
+                    retry_after_secs: None,
+                };
+            }
             // Server errors: use ApiError variant so the retry system can match
             // on the status code. ProviderError is for client errors with
             // structured provider info.
@@ -259,7 +263,9 @@ impl ApiError {
     pub fn is_ollama_malformed_output(&self) -> bool {
         let message = match self {
             // In-stream chunk errors (ProviderError from normalize_ollama_event)
-            ApiError::ProviderError { provider, message, .. } => {
+            ApiError::ProviderError {
+                provider, message, ..
+            } => {
                 if provider != "ollama" {
                     return false;
                 }
@@ -348,7 +354,10 @@ mod tests {
         let display = format!("{err}");
         assert!(display.contains("Provider error (openai)"), "{display}");
         assert!(display.contains("invalid_request_error"), "{display}");
-        assert!(!display.contains("[invalid_request_error]"), "No brackets: {display}");
+        assert!(
+            !display.contains("[invalid_request_error]"),
+            "No brackets: {display}"
+        );
     }
 
     // ── Ollama error parsing tests ──────────────────────────────────────
@@ -377,9 +386,18 @@ mod tests {
         match err {
             ApiError::ProviderError { message, .. } => {
                 // The message should be the raw Ollama error only — no appended suggestion
-                assert!(message.contains("can't find closing"), "Should contain original error: {message}");
-                assert!(!message.contains("Try switching models"), "Should NOT contain suggestion text: {message}");
-                assert!(!message.contains("simplify your prompt"), "Should NOT contain suggestion text: {message}");
+                assert!(
+                    message.contains("can't find closing"),
+                    "Should contain original error: {message}"
+                );
+                assert!(
+                    !message.contains("Try switching models"),
+                    "Should NOT contain suggestion text: {message}"
+                );
+                assert!(
+                    !message.contains("simplify your prompt"),
+                    "Should NOT contain suggestion text: {message}"
+                );
             }
             other => panic!("Expected ProviderError for status 400, got {other:?}"),
         }
@@ -391,7 +409,11 @@ mod tests {
         let body = r#"{"error":"json: cannot unmarshal"}"#;
         let err = ApiError::from_provider_response(&LlmProvider::Ollama, 400, body);
         match err {
-            ApiError::ProviderError { provider, error_type, message } => {
+            ApiError::ProviderError {
+                provider,
+                error_type,
+                message,
+            } => {
                 assert_eq!(provider, "ollama");
                 assert_eq!(error_type, "ollama_error");
                 assert!(message.contains("json: cannot unmarshal"), "{message}");
@@ -431,7 +453,10 @@ mod tests {
             error_type: "ollama_error".to_string(),
             message: "can't find closing '}' symbol".to_string(),
         };
-        assert!(!err.is_token_overflow(), "Malformed output is NOT a token overflow");
+        assert!(
+            !err.is_token_overflow(),
+            "Malformed output is NOT a token overflow"
+        );
     }
 
     /// Regression: HTTP 500 from Ollama maps to ApiError::ApiError, but
@@ -441,9 +466,13 @@ mod tests {
     fn test_ollama_malformed_output_http_500_detected() {
         let err = ApiError::ApiError {
             status: 500,
-            message: r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#.to_string(),
+            message: r#"{"error":"Value looks like object, but can't find closing '}' symbol"}"#
+                .to_string(),
         };
-        assert!(err.is_ollama_malformed_output(), "HTTP 500 malformed output must be detected for retry");
+        assert!(
+            err.is_ollama_malformed_output(),
+            "HTTP 500 malformed output must be detected for retry"
+        );
     }
 
     #[test]
@@ -452,7 +481,10 @@ mod tests {
             status: 400,
             message: r#"{"error":"can't find closing"}"#.to_string(),
         };
-        assert!(!err.is_ollama_malformed_output(), "Status 400 should not match");
+        assert!(
+            !err.is_ollama_malformed_output(),
+            "Status 400 should not match"
+        );
     }
 
     #[test]
@@ -463,7 +495,10 @@ mod tests {
             message: "Value looks like object, but can't find closing '}' symbol".to_string(),
         };
         let suggestion = err.user_suggestion();
-        assert!(suggestion.is_some(), "Should have a suggestion for malformed output");
+        assert!(
+            suggestion.is_some(),
+            "Should have a suggestion for malformed output"
+        );
         let s = suggestion.unwrap();
         assert!(s.contains("/model"), "Should suggest /model: {s}");
     }
@@ -475,7 +510,10 @@ mod tests {
             error_type: "ollama_error".to_string(),
             message: "model not found".to_string(),
         };
-        assert!(err.user_suggestion().is_none(), "Generic ProviderError should have no suggestion");
+        assert!(
+            err.user_suggestion().is_none(),
+            "Generic ProviderError should have no suggestion"
+        );
     }
 
     // ── Regression: error message formatting ────────────────────────────
@@ -491,17 +529,27 @@ mod tests {
             error_type: "ollama_error".to_string(),
             message: "Value looks like object, but can't find closing '}' symbol".to_string(),
         };
-        let suggestion = err.user_suggestion()
+        let suggestion = err
+            .user_suggestion()
             .map(|s| format!(" {s}"))
             .unwrap_or_default();
         let combined = format!("{err}.{suggestion}");
 
         // No double periods
-        assert!(!combined.contains(".."), "Should not contain double periods: {combined}");
+        assert!(
+            !combined.contains(".."),
+            "Should not contain double periods: {combined}"
+        );
         // No triple periods either (ellipsis is fine)
         // The error and suggestion should both be present
-        assert!(combined.contains("can't find closing"), "Should contain error: {combined}");
-        assert!(combined.contains("/model"), "Should contain suggestion: {combined}");
+        assert!(
+            combined.contains("can't find closing"),
+            "Should contain error: {combined}"
+        );
+        assert!(
+            combined.contains("/model"),
+            "Should contain suggestion: {combined}"
+        );
     }
 
     /// All user_suggestion() returns must end with a period — the engine.rs
@@ -509,10 +557,15 @@ mod tests {
     #[test]
     fn test_all_user_suggestions_end_with_period() {
         let cases: Vec<ApiError> = vec![
-            ApiError::RateLimitExceeded { retry_after_secs: None },
+            ApiError::RateLimitExceeded {
+                retry_after_secs: None,
+            },
             ApiError::AuthenticationFailed,
             ApiError::Timeout,
-            ApiError::ApiError { status: 500, message: "server error".to_string() },
+            ApiError::ApiError {
+                status: 500,
+                message: "server error".to_string(),
+            },
             ApiError::ProviderError {
                 provider: "ollama".to_string(),
                 error_type: "ollama_error".to_string(),
@@ -521,7 +574,10 @@ mod tests {
         ];
         for err in cases {
             if let Some(s) = err.user_suggestion() {
-                assert!(s.ends_with('.'), "user_suggestion for {err:?} must end with period: \"{s}\"");
+                assert!(
+                    s.ends_with('.'),
+                    "user_suggestion for {err:?} must end with period: \"{s}\""
+                );
             }
         }
     }

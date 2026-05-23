@@ -57,11 +57,7 @@ pub struct InternalLogEntry {
 
 impl InternalLogEntry {
     /// Create a new log entry.
-    pub fn new(
-        level: InternalLogLevel,
-        component: &str,
-        message: &str,
-    ) -> Self {
+    pub fn new(level: InternalLogLevel, component: &str, message: &str) -> Self {
         Self {
             timestamp: chrono::Utc::now().to_rfc3339(),
             level: level.to_string(),
@@ -176,7 +172,9 @@ impl InternalLogger {
     /// Read the K8s namespace from the service account namespace file.
     fn read_k8s_namespace_from_file() -> Option<String> {
         let namespace_path = "/var/run/secrets/kubernetes.io/serviceaccount/namespace";
-        std::fs::read_to_string(namespace_path).ok().map(|s| s.trim().to_string())
+        std::fs::read_to_string(namespace_path)
+            .ok()
+            .map(|s| s.trim().to_string())
     }
 
     /// Get the number of stored log entries.
@@ -257,7 +255,10 @@ mod tests {
     fn test_log_with_metadata() {
         let logger = InternalLogger::new();
         let mut metadata = HashMap::new();
-        metadata.insert("request_id".to_string(), Value::String("abc-123".to_string()));
+        metadata.insert(
+            "request_id".to_string(),
+            Value::String("abc-123".to_string()),
+        );
         metadata.insert("duration_ms".to_string(), Value::Number(42.into()));
 
         logger.log_with_metadata(

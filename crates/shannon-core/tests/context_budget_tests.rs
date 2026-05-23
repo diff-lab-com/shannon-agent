@@ -5,8 +5,7 @@
 mod context_budget_tests {
     use shannon_core::api::ToolDefinition;
     use shannon_core::context_budget::{
-        ContextBudget, SYSTEM_PROMPT_FRACTION,
-        TOOL_SCHEMA_FRACTION, CONVERSATION_FRACTION,
+        CONVERSATION_FRACTION, ContextBudget, SYSTEM_PROMPT_FRACTION, TOOL_SCHEMA_FRACTION,
     };
     use shannon_core::context_pressure::PressureLevel;
 
@@ -43,9 +42,8 @@ mod context_budget_tests {
         assert_eq!(budget.conversation_budget, 120_000); // 60%
 
         // Sum of buckets should be close to total (within rounding)
-        let sum = budget.system_prompt_budget
-            + budget.tool_schema_budget
-            + budget.conversation_budget;
+        let sum =
+            budget.system_prompt_budget + budget.tool_schema_budget + budget.conversation_budget;
         assert!(
             (sum as f32 - budget.total_tokens as f32).abs() < 10.0,
             "buckets sum to {sum}, expected close to {}",
@@ -189,9 +187,8 @@ mod context_budget_tests {
         // total close to but under 200_000 chars.
         let under_tool = make_tool(tool_name, 190_000);
         let _under_json = serde_json::to_string(&under_tool).unwrap();
-        let under_tokens = ContextBudget::estimate_schema_tokens(
-            &serde_json::to_value(&under_tool).unwrap(),
-        );
+        let under_tokens =
+            ContextBudget::estimate_schema_tokens(&serde_json::to_value(&under_tool).unwrap());
         assert!(
             under_tokens <= budget.tool_schema_budget,
             "under_tokens ({under_tokens}) should fit in budget ({})",
@@ -273,7 +270,8 @@ mod context_budget_tests {
         assert!(haiku.conversation_budget > ollama.conversation_budget);
 
         // A set of tools that fits in gemini but not ollama
-        let tools: Vec<ToolDefinition> = (0..30).map(|i| make_tool(&format!("t{i}"), 500)).collect();
+        let tools: Vec<ToolDefinition> =
+            (0..30).map(|i| make_tool(&format!("t{i}"), 500)).collect();
         assert!(gemini.check_schema_budget(&tools).is_ok());
         assert!(ollama.check_schema_budget(&tools).is_err());
     }

@@ -1,6 +1,8 @@
 //! /effort command - Control model reasoning depth
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 const EFFORT_PROMPT: &str = r##"
 Control the model's reasoning depth and effort level.
@@ -52,9 +54,7 @@ pub fn command() -> Command {
             is_enabled: true,
             is_hidden: false,
             argument_hint: Some("[low|medium|high|max|show|reset]".to_string()),
-            when_to_use: Some(
-                "Adjust how deeply the model reasons before responding".to_string(),
-            ),
+            when_to_use: Some("Adjust how deeply the model reasons before responding".to_string()),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
             user_invocable: true,

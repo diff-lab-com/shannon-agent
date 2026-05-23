@@ -8,19 +8,16 @@
 use std::io::{self, Write as IoWrite};
 
 use crossterm::{
-    event::{DisableBracketedPaste, EnableBracketedPaste, DisableMouseCapture, EnableMouseCapture},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::{
-        EnableLineWrap, EnterAlternateScreen,
-        LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+        EnableLineWrap, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
     },
 };
 use ratatui::{
-    backend::CrosstermBackend,
-    layout::Rect,
-    prelude::Widget,
-    widgets::Paragraph,
-    Frame, Terminal, TerminalOptions, Viewport,
+    Frame, Terminal, TerminalOptions, Viewport, backend::CrosstermBackend, layout::Rect,
+    prelude::Widget, widgets::Paragraph,
 };
 
 /// Detected terminal multiplexer environment.
@@ -69,7 +66,10 @@ impl TerminalEnv {
         let multiplexer = Multiplexer::detect();
         let colorterm = std::env::var("COLORTERM").unwrap_or_default();
         let truecolor = colorterm == "truecolor" || colorterm == "24bit";
-        Self { multiplexer, truecolor }
+        Self {
+            multiplexer,
+            truecolor,
+        }
     }
 }
 
@@ -89,7 +89,12 @@ impl Tui {
     pub fn init(viewport_height: u16) -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnableLineWrap, EnableBracketedPaste, EnableMouseCapture)?;
+        execute!(
+            stdout,
+            EnableLineWrap,
+            EnableBracketedPaste,
+            EnableMouseCapture
+        )?;
 
         let (_w, h) = crossterm::terminal::size().unwrap_or((80, 24));
         let height = viewport_height.min(h.saturating_sub(2)).max(5);
@@ -149,7 +154,10 @@ impl Tui {
 
     /// Get the viewport area (drawable region).
     pub fn viewport_area(&self) -> Rect {
-        let s = self.terminal.size().unwrap_or_else(|_| ratatui::layout::Size::new(80, 24));
+        let s = self
+            .terminal
+            .size()
+            .unwrap_or_else(|_| ratatui::layout::Size::new(80, 24));
         Rect::new(0, 0, s.width, s.height)
     }
 
@@ -239,7 +247,10 @@ impl Tui {
     /// Only works if the terminal/multiplexer supports it.
     pub fn set_clipboard_osc52(&mut self, text: &str) -> io::Result<()> {
         if !self.env.multiplexer.supports_osc52() {
-            return Err(io::Error::new(io::ErrorKind::Unsupported, "OSC 52 not supported"));
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "OSC 52 not supported",
+            ));
         }
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
@@ -252,7 +263,10 @@ impl Tui {
 
     /// Clear only from cursor to end of screen (cheaper than full clear).
     pub fn clear_to_end(&mut self) -> io::Result<()> {
-        execute!(self.terminal.backend_mut(), crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown))?;
+        execute!(
+            self.terminal.backend_mut(),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+        )?;
         Ok(())
     }
 

@@ -1,13 +1,16 @@
 //! Custom command discovery, frontmatter parsing, file watching, and hot-reload.
 
-use std::collections::HashMap;
 use shannon_commands::{Command, CommandBase, CommandRegistry, ExecutionContext, PromptCommand};
+use std::collections::HashMap;
 
 /// Extract a field value from simple YAML-like frontmatter text.
 pub(crate) fn parse_frontmatter_field(frontmatter: &str, field: &str) -> Option<String> {
     for line in frontmatter.lines() {
         let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix(field).and_then(|s| s.strip_prefix(':')) {
+        if let Some(rest) = trimmed
+            .strip_prefix(field)
+            .and_then(|s| s.strip_prefix(':'))
+        {
             let val = rest.trim().trim_matches('"').trim_matches('\'').to_string();
             if !val.is_empty() {
                 return Some(val);
@@ -60,7 +63,11 @@ pub(crate) fn collect_custom_commands(
                 collect_custom_commands(&path, &subdir_prefix, results);
             }
         } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let stem = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             if stem.is_empty() {
                 continue;
             }
@@ -70,28 +77,48 @@ pub(crate) fn collect_custom_commands(
                 Err(_) => continue,
             };
             // Parse YAML frontmatter (---\n...\n---)
-            let (template, description, arguments, model, allowed_tools, agent) = if content.starts_with("---") {
-                let parts: Vec<&str> = content.splitn(3, "---").collect();
-                let frontmatter = parts.get(1).unwrap_or(&"");
-                let body = parts.get(2).map(|s| s.trim_start()).unwrap_or("");
-                let desc = parse_frontmatter_field(frontmatter, "description");
-                let args_str = parse_frontmatter_field(frontmatter, "arguments")
-                    .or_else(|| parse_frontmatter_field(frontmatter, "args"));
-                let args = args_str
-                    .map(|s| s.split(',').map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect())
-                    .unwrap_or_default();
-                let m = parse_frontmatter_field(frontmatter, "model");
-                let tools_str = parse_frontmatter_field(frontmatter, "allowed-tools")
-                    .or_else(|| parse_frontmatter_field(frontmatter, "allowed_tools"));
-                let tools = tools_str
-                    .map(|s| s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect())
-                    .unwrap_or_default();
-                let a = parse_frontmatter_field(frontmatter, "agent");
-                (body.to_string(), desc, args, m, tools, a)
-            } else {
-                (content, None, Vec::new(), None, Vec::new(), None)
-            };
-            results.push(CustomCommandEntry { name: command_name, template, path, description, arguments, model, allowed_tools, agent });
+            let (template, description, arguments, model, allowed_tools, agent) =
+                if content.starts_with("---") {
+                    let parts: Vec<&str> = content.splitn(3, "---").collect();
+                    let frontmatter = parts.get(1).unwrap_or(&"");
+                    let body = parts.get(2).map(|s| s.trim_start()).unwrap_or("");
+                    let desc = parse_frontmatter_field(frontmatter, "description");
+                    let args_str = parse_frontmatter_field(frontmatter, "arguments")
+                        .or_else(|| parse_frontmatter_field(frontmatter, "args"));
+                    let args = args_str
+                        .map(|s| {
+                            s.split(',')
+                                .map(|a| a.trim().to_string())
+                                .filter(|a| !a.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let m = parse_frontmatter_field(frontmatter, "model");
+                    let tools_str = parse_frontmatter_field(frontmatter, "allowed-tools")
+                        .or_else(|| parse_frontmatter_field(frontmatter, "allowed_tools"));
+                    let tools = tools_str
+                        .map(|s| {
+                            s.split(',')
+                                .map(|t| t.trim().to_string())
+                                .filter(|t| !t.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let a = parse_frontmatter_field(frontmatter, "agent");
+                    (body.to_string(), desc, args, m, tools, a)
+                } else {
+                    (content, None, Vec::new(), None, Vec::new(), None)
+                };
+            results.push(CustomCommandEntry {
+                name: command_name,
+                template,
+                path,
+                description,
+                arguments,
+                model,
+                allowed_tools,
+                agent,
+            });
         }
     }
 }
@@ -136,10 +163,9 @@ impl CustomCommandWatcher {
         let handler = move |event: notify::Result<notify::Event>| {
             if let Ok(event) = event {
                 use notify::EventKind;
-                if matches!(event.kind,
-                    EventKind::Create(_) |
-                    EventKind::Modify(_) |
-                    EventKind::Remove(_)
+                if matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                 ) {
                     dirty_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -161,7 +187,12 @@ impl CustomCommandWatcher {
             Err(_) => None,
         };
 
-        Self { dirs, watcher, dirty, registered_names: Vec::new() }
+        Self {
+            dirs,
+            watcher,
+            dirty,
+            registered_names: Vec::new(),
+        }
     }
 
     /// Check if filesystem events were received and reload if needed.
@@ -185,7 +216,9 @@ impl CustomCommandWatcher {
         dedup_custom_commands(&mut current_files);
 
         for entry in &current_files {
-            let description = entry.description.clone()
+            let description = entry
+                .description
+                .clone()
                 .unwrap_or_else(|| format!("Custom command (from {})", entry.path.display()));
             let arg_names = if entry.arguments.is_empty() {
                 vec!["$ARGUMENTS".to_string()]
@@ -285,10 +318,9 @@ impl SettingsWatcher {
         let handler = move |event: notify::Result<notify::Event>| {
             if let Ok(event) = event {
                 use notify::EventKind;
-                if matches!(event.kind,
-                    EventKind::Create(_) |
-                    EventKind::Modify(_) |
-                    EventKind::Remove(_)
+                if matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                 ) {
                     dirty_flag.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
@@ -304,12 +336,16 @@ impl SettingsWatcher {
                     let watch_target = if path.exists() {
                         path.clone()
                     } else {
-                        path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| path.clone())
+                        path.parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| path.clone())
                     };
                     if watch_target.exists()
-                        && w.watch(&watch_target, notify::RecursiveMode::NonRecursive).is_ok() {
-                            watched.push(path.clone());
-                        }
+                        && w.watch(&watch_target, notify::RecursiveMode::NonRecursive)
+                            .is_ok()
+                    {
+                        watched.push(path.clone());
+                    }
                 }
                 if watched.is_empty() {
                     None
@@ -335,7 +371,8 @@ impl SettingsWatcher {
         }
 
         // Collect which files actually changed by checking mtimes
-        let changed: Vec<String> = self.watched_paths
+        let changed: Vec<String> = self
+            .watched_paths
             .iter()
             .filter(|p| p.exists())
             .map(|p| p.to_string_lossy().to_string())
@@ -373,14 +410,20 @@ mod tests {
     #[test]
     fn frontmatter_simple_field() {
         let fm = "description: hello world\nmodel: opus";
-        assert_eq!(parse_frontmatter_field(fm, "description"), Some("hello world".into()));
+        assert_eq!(
+            parse_frontmatter_field(fm, "description"),
+            Some("hello world".into())
+        );
         assert_eq!(parse_frontmatter_field(fm, "model"), Some("opus".into()));
     }
 
     #[test]
     fn frontmatter_quoted_values() {
         let fm = "description: \"a quoted desc\"\nmodel: 'single'";
-        assert_eq!(parse_frontmatter_field(fm, "description"), Some("a quoted desc".into()));
+        assert_eq!(
+            parse_frontmatter_field(fm, "description"),
+            Some("a quoted desc".into())
+        );
         assert_eq!(parse_frontmatter_field(fm, "model"), Some("single".into()));
     }
 
@@ -400,25 +443,37 @@ mod tests {
     #[test]
     fn frontmatter_comma_separated_arguments() {
         let fm = "arguments: arg1, arg2, arg3";
-        assert_eq!(parse_frontmatter_field(fm, "arguments"), Some("arg1, arg2, arg3".into()));
+        assert_eq!(
+            parse_frontmatter_field(fm, "arguments"),
+            Some("arg1, arg2, arg3".into())
+        );
     }
 
     #[test]
     fn frontmatter_leading_whitespace() {
         let fm = "  description: padded";
-        assert_eq!(parse_frontmatter_field(fm, "description"), Some("padded".into()));
+        assert_eq!(
+            parse_frontmatter_field(fm, "description"),
+            Some("padded".into())
+        );
     }
 
     #[test]
     fn frontmatter_field_is_prefix_not_substring() {
         let fm = "description-extra: nope\ndescription: yes";
-        assert_eq!(parse_frontmatter_field(fm, "description"), Some("yes".into()));
+        assert_eq!(
+            parse_frontmatter_field(fm, "description"),
+            Some("yes".into())
+        );
     }
 
     #[test]
     fn frontmatter_allowed_tools_with_hyphen() {
         let fm = "allowed-tools: Bash, Read, Write";
-        assert_eq!(parse_frontmatter_field(fm, "allowed-tools"), Some("Bash, Read, Write".into()));
+        assert_eq!(
+            parse_frontmatter_field(fm, "allowed-tools"),
+            Some("Bash, Read, Write".into())
+        );
     }
 
     // --- dedup_custom_commands ---
@@ -497,7 +552,11 @@ mod tests {
     fn collect_parses_frontmatter() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test.md");
-        std::fs::write(&file_path, "---\ndescription: My desc\nmodel: opus\n---\nDo stuff").unwrap();
+        std::fs::write(
+            &file_path,
+            "---\ndescription: My desc\nmodel: opus\n---\nDo stuff",
+        )
+        .unwrap();
 
         let mut results = Vec::new();
         collect_custom_commands(dir.path(), "", &mut results);
@@ -553,7 +612,8 @@ mod tests {
         std::fs::write(
             &file_path,
             "---\narguments: arg1, arg2\nallowed-tools: Bash, Read\n---\nBody",
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut results = Vec::new();
         collect_custom_commands(dir.path(), "", &mut results);

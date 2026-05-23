@@ -5,16 +5,12 @@
 
 use std::path::Path;
 
-use ratatui::{
-    backend::TestBackend,
-    buffer::Buffer,
-    Terminal,
-};
+use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
 use crate::repl::ReplState;
-use crate::widgets::{ChatWidget, ChatRole, MainLayoutWidget, PromptWidget};
 use crate::repl::render::{render_completion_suggestions, render_permission_dialog};
-use crate::widgets::progress::{SpinnerWidget, ProgressBarWidget};
+use crate::widgets::progress::{ProgressBarWidget, SpinnerWidget};
+use crate::widgets::{ChatRole, ChatWidget, MainLayoutWidget, PromptWidget};
 
 // ── Scene data ─────────────────────────────────────────────────────
 
@@ -29,7 +25,9 @@ struct SceneData {
 // ── Public entry point ─────────────────────────────────────────────
 
 /// Render all predefined scenes to text files in the given directory.
-pub fn render_all_scenes(output_dir: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn render_all_scenes(
+    output_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     std::fs::create_dir_all(output_dir)?;
 
     let scenes = vec![
@@ -84,7 +82,8 @@ fn render_scene(scene: &SceneData) -> String {
             };
 
             // Base layout — always rendered
-            let mut render_ctx = crate::widgets::RenderContext::new(chat, prompt, &state.theme, &state.status);
+            let mut render_ctx =
+                crate::widgets::RenderContext::new(chat, prompt, &state.theme, &state.status);
             render_ctx.model = state.model.as_deref();
             render_ctx.tokens_used = Some(state.tokens_used);
             render_ctx.spinner = Some(spinner);
@@ -168,10 +167,7 @@ fn scene_completion() -> SceneData {
     // Simulate typing "/he"
     prompt.set_input("/he".to_string());
 
-    state.completion_suggestions = vec![
-        "/help".to_string(),
-        "/help-models".to_string(),
-    ];
+    state.completion_suggestions = vec!["/help".to_string(), "/help-models".to_string()];
     state.completion_suggestion_index = 0;
 
     // Add prior messages so the chat area isn't empty
@@ -195,9 +191,9 @@ fn scene_model_picker() -> SceneData {
     let chat = ChatWidget::new(100);
     let prompt = PromptWidget::new();
 
-    state.model_picker = Some(
-        crate::widgets::select::ModelPickerWidget::new(Some("claude-sonnet-4-20250514")),
-    );
+    state.model_picker = Some(crate::widgets::select::ModelPickerWidget::new(Some(
+        "claude-sonnet-4-20250514",
+    )));
 
     SceneData {
         state,
@@ -216,7 +212,10 @@ fn scene_chat() -> SceneData {
     state.status = "Ready".to_string();
     state.tokens_used = 4237;
 
-    chat.add_message(ChatRole::User, "Explain the ownership system in Rust".to_string());
+    chat.add_message(
+        ChatRole::User,
+        "Explain the ownership system in Rust".to_string(),
+    );
     chat.add_message(
         ChatRole::Assistant,
         "Rust ownership is based on three rules:\n\
@@ -247,7 +246,10 @@ fn scene_permission() -> SceneData {
     let mut chat = ChatWidget::new(100);
     let prompt = PromptWidget::new();
 
-    chat.add_message(ChatRole::User, "Add error handling to src/main.rs".to_string());
+    chat.add_message(
+        ChatRole::User,
+        "Add error handling to src/main.rs".to_string(),
+    );
     chat.add_message(
         ChatRole::Assistant,
         "I will modify src/main.rs to add proper error handling.".to_string(),
@@ -274,7 +276,7 @@ fn scene_permission() -> SceneData {
              +        Err(e) => eprintln!(\"Error: {e}\"),\n\
              +    }\n\
              }"
-                .to_string(),
+            .to_string(),
         ),
         is_destructive: false,
         risk_reason: "File write operation".to_string(),
@@ -323,7 +325,10 @@ fn scene_many_messages() -> SceneData {
     // Add 15 messages to overflow the visible chat area
     for i in 1..=5 {
         chat.add_message(ChatRole::User, format!("Question {i}: explain concept {i}"));
-        chat.add_message(ChatRole::Assistant, format!("Answer {i}: Here is the explanation for concept {i}."));
+        chat.add_message(
+            ChatRole::Assistant,
+            format!("Answer {i}: Here is the explanation for concept {i}."),
+        );
         chat.add_message(ChatRole::Tool, format!("bash: cargo build #{i}"));
     }
 
@@ -345,13 +350,17 @@ fn scene_long_message() -> SceneData {
     state.tokens_used = 8_920;
 
     // Very long single-line message
-    chat.add_message(ChatRole::User, "Explain all the features of Rust's type system in detail".to_string());
+    chat.add_message(
+        ChatRole::User,
+        "Explain all the features of Rust's type system in detail".to_string(),
+    );
     chat.add_message(
         ChatRole::Assistant,
         "Rust has a rich type system that includes: ownership and borrowing rules, \
          lifetimes ('a, 'static), traits (impl Trait, dyn Trait), generics (T: Clone + Send), \
          enums with variants, structs (unit, tuple, named), pattern matching, \
-         type aliases, associated types, const generics, and macro types.".to_string(),
+         type aliases, associated types, const generics, and macro types."
+            .to_string(),
     );
 
     // Message with many short lines (code block simulation)
@@ -381,7 +390,10 @@ fn scene_progress() -> SceneData {
     state.spinner.tick();
 
     chat.add_message(ChatRole::User, "Add error handling to main.rs".to_string());
-    chat.add_message(ChatRole::Assistant, "I'll add error handling. Let me write the file.".to_string());
+    chat.add_message(
+        ChatRole::Assistant,
+        "I'll add error handling. Let me write the file.".to_string(),
+    );
 
     SceneData {
         state,
@@ -403,7 +415,10 @@ fn scene_overflow() -> SceneData {
     // Add 30 messages — way more than the ~17 visible content rows
     for i in 1..=10 {
         chat.add_message(ChatRole::User, format!("Question {i}"));
-        chat.add_message(ChatRole::Assistant, format!("Answer {i} with some explanation text."));
+        chat.add_message(
+            ChatRole::Assistant,
+            format!("Answer {i} with some explanation text."),
+        );
         chat.add_message(ChatRole::Tool, format!("bash: command #{i}"));
     }
 

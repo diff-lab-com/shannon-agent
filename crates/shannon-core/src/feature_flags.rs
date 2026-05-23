@@ -410,10 +410,7 @@ impl FeatureFlagManager {
         let config: FeaturesConfig = match serde_json::from_str(&content) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(
-                    "Failed to parse feature flags from {}: {e}",
-                    path.display()
-                );
+                tracing::warn!("Failed to parse feature flags from {}: {e}", path.display());
                 return HashMap::new();
             }
         };
@@ -432,10 +429,7 @@ impl FeatureFlagManager {
             return Err(FlagError::UnknownFlag(flag_name));
         }
 
-        let path = self
-            .config_file
-            .as_ref()
-            .ok_or(FlagError::HomeNotFound)?;
+        let path = self.config_file.as_ref().ok_or(FlagError::HomeNotFound)?;
 
         // Ensure parent directory exists.
         if let Some(parent) = path.parent() {
@@ -466,10 +460,7 @@ impl FeatureFlagManager {
             .or_insert_with(|| serde_json::Value::Object(Default::default()));
 
         if let Some(map) = features.as_object_mut() {
-            map.insert(
-                flag_name.clone(),
-                serde_json::Value::Bool(enabled),
-            );
+            map.insert(flag_name.clone(), serde_json::Value::Bool(enabled));
         }
 
         // Write back.
@@ -752,7 +743,10 @@ mod tests {
         let path = dir.path().join("settings.json");
         let content = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["features"]["agent_teams"], serde_json::Value::Bool(true));
+        assert_eq!(
+            parsed["features"]["agent_teams"],
+            serde_json::Value::Bool(true)
+        );
 
         // Verify the manager now sees it enabled (from fresh cache).
         let manager2 = FeatureFlagManager::with_config_file(path);
@@ -769,14 +763,21 @@ mod tests {
         let path = dir.path().join("settings.json");
         let content = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(parsed["features"]["auto_memory"], serde_json::Value::Bool(false));
+        assert_eq!(
+            parsed["features"]["auto_memory"],
+            serde_json::Value::Bool(false)
+        );
     }
 
     #[test]
     fn test_enable_preserves_existing_config() {
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"model": "opus", "features": {"voice_mode": true}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"model": "opus", "features": {"voice_mode": true}}"#,
+        )
+        .unwrap();
 
         let manager = FeatureFlagManager::with_config_file(path.clone());
         manager.enable("agent_teams").unwrap();
@@ -784,10 +785,19 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
         // Original keys preserved.
-        assert_eq!(parsed["model"], serde_json::Value::String("opus".to_string()));
-        assert_eq!(parsed["features"]["voice_mode"], serde_json::Value::Bool(true));
+        assert_eq!(
+            parsed["model"],
+            serde_json::Value::String("opus".to_string())
+        );
+        assert_eq!(
+            parsed["features"]["voice_mode"],
+            serde_json::Value::Bool(true)
+        );
         // New flag added.
-        assert_eq!(parsed["features"]["agent_teams"], serde_json::Value::Bool(true));
+        assert_eq!(
+            parsed["features"]["agent_teams"],
+            serde_json::Value::Bool(true)
+        );
     }
 
     #[test]

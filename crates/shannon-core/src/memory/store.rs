@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
+use super::consolidator::{ConsolidationResult, MemoryConsolidator};
 use super::error::MemoryError;
 use super::types::{MemoryCategory, MemoryEntry, MemoryType, SessionMemoryConfig};
-use super::consolidator::{ConsolidationResult, MemoryConsolidator};
 
 // Hash a project path to a safe filename.
 fn project_hash(project: &str) -> String {
@@ -102,7 +102,9 @@ impl MemoryStore {
         results.sort_by(|a, b| {
             let score_a = relevance_score(a);
             let score_b = relevance_score(b);
-            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         results
     }
@@ -288,57 +290,102 @@ impl MemoryStore {
             let lower = msg.content.to_lowercase();
 
             // --- UserPreference detection ---
-            for kw in &["i always", "i never", "i prefer", "please always", "please never", "don't use", "do not use"] {
+            for kw in &[
+                "i always",
+                "i never",
+                "i prefer",
+                "please always",
+                "please never",
+                "don't use",
+                "do not use",
+            ] {
                 if lower.contains(kw) {
-                    memories.push(MemoryEntry::with_confidence(
-                        "auto",
-                        MemoryCategory::Preference,
-                        &msg.content,
-                        0.7,
-                        vec!["auto-extracted".to_string(), "preference".to_string()],
-                    ).unwrap_or_else(|_| MemoryEntry::new("auto", MemoryCategory::Preference, &msg.content)));
+                    memories.push(
+                        MemoryEntry::with_confidence(
+                            "auto",
+                            MemoryCategory::Preference,
+                            &msg.content,
+                            0.7,
+                            vec!["auto-extracted".to_string(), "preference".to_string()],
+                        )
+                        .unwrap_or_else(|_| {
+                            MemoryEntry::new("auto", MemoryCategory::Preference, &msg.content)
+                        }),
+                    );
                     break;
                 }
             }
 
             // --- ProjectConvention detection ---
-            for kw in &["in this project we", "our convention", "naming convention", "the standard approach"] {
+            for kw in &[
+                "in this project we",
+                "our convention",
+                "naming convention",
+                "the standard approach",
+            ] {
                 if lower.contains(kw) {
-                    memories.push(MemoryEntry::with_confidence(
-                        "auto",
-                        MemoryCategory::Pattern,
-                        &msg.content,
-                        0.7,
-                        vec!["auto-extracted".to_string(), "convention".to_string()],
-                    ).unwrap_or_else(|_| MemoryEntry::new("auto", MemoryCategory::Pattern, &msg.content)));
+                    memories.push(
+                        MemoryEntry::with_confidence(
+                            "auto",
+                            MemoryCategory::Pattern,
+                            &msg.content,
+                            0.7,
+                            vec!["auto-extracted".to_string(), "convention".to_string()],
+                        )
+                        .unwrap_or_else(|_| {
+                            MemoryEntry::new("auto", MemoryCategory::Pattern, &msg.content)
+                        }),
+                    );
                     break;
                 }
             }
 
             // --- TechnicalDecision detection ---
-            for kw in &["we decided", "let's use", "going with", "the decision", "decided to"] {
+            for kw in &[
+                "we decided",
+                "let's use",
+                "going with",
+                "the decision",
+                "decided to",
+            ] {
                 if lower.contains(kw) {
-                    memories.push(MemoryEntry::with_confidence(
-                        "auto",
-                        MemoryCategory::Decision,
-                        &msg.content,
-                        0.7,
-                        vec!["auto-extracted".to_string(), "decision".to_string()],
-                    ).unwrap_or_else(|_| MemoryEntry::new("auto", MemoryCategory::Decision, &msg.content)));
+                    memories.push(
+                        MemoryEntry::with_confidence(
+                            "auto",
+                            MemoryCategory::Decision,
+                            &msg.content,
+                            0.7,
+                            vec!["auto-extracted".to_string(), "decision".to_string()],
+                        )
+                        .unwrap_or_else(|_| {
+                            MemoryEntry::new("auto", MemoryCategory::Decision, &msg.content)
+                        }),
+                    );
                     break;
                 }
             }
 
             // --- DebuggingInsight detection ---
-            for kw in &["the issue was", "the error was", "the fix was", "root cause", "the workaround"] {
+            for kw in &[
+                "the issue was",
+                "the error was",
+                "the fix was",
+                "root cause",
+                "the workaround",
+            ] {
                 if lower.contains(kw) {
-                    memories.push(MemoryEntry::with_confidence(
-                        "auto",
-                        MemoryCategory::Error,
-                        &msg.content,
-                        0.7,
-                        vec!["auto-extracted".to_string(), "debugging".to_string()],
-                    ).unwrap_or_else(|_| MemoryEntry::new("auto", MemoryCategory::Error, &msg.content)));
+                    memories.push(
+                        MemoryEntry::with_confidence(
+                            "auto",
+                            MemoryCategory::Error,
+                            &msg.content,
+                            0.7,
+                            vec!["auto-extracted".to_string(), "debugging".to_string()],
+                        )
+                        .unwrap_or_else(|_| {
+                            MemoryEntry::new("auto", MemoryCategory::Error, &msg.content)
+                        }),
+                    );
                     break;
                 }
             }
@@ -447,8 +494,7 @@ impl MemoryStore {
         max_results: usize,
     ) -> Vec<MemoryEntry> {
         let query_lower = query.to_lowercase();
-        let query_terms: std::collections::HashSet<&str> =
-            query_lower.split_whitespace().collect();
+        let query_terms: std::collections::HashSet<&str> = query_lower.split_whitespace().collect();
 
         let mut scored: Vec<(f64, MemoryEntry)> = self
             .entries
@@ -524,9 +570,9 @@ fn deduplicate_memories(memories: Vec<MemoryEntry>) -> Vec<MemoryEntry> {
     let mut unique: Vec<MemoryEntry> = Vec::new();
 
     for memory in memories {
-        let is_dup = unique.iter().any(|existing| {
-            content_similarity(&existing.content, &memory.content) > 0.8
-        });
+        let is_dup = unique
+            .iter()
+            .any(|existing| content_similarity(&existing.content, &memory.content) > 0.8);
 
         if !is_dup {
             unique.push(memory);
@@ -565,12 +611,17 @@ fn semantic_relevance_score(
 
     // Term overlap: fraction of query terms found in content or tags
     let content_lower: String = entry.content.to_lowercase();
-    let tag_text: String = entry.tags.iter().map(|t| t.to_lowercase()).collect::<Vec<_>>().join(" ");
+    let tag_text: String = entry
+        .tags
+        .iter()
+        .map(|t| t.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
     let combined = format!("{content_lower} {tag_text}");
     let content_terms: std::collections::HashSet<&str> = combined.split_whitespace().collect();
 
-    let overlap = query_terms.intersection(&content_terms).count() as f64
-        / query_terms.len() as f64;
+    let overlap =
+        query_terms.intersection(&content_terms).count() as f64 / query_terms.len() as f64;
 
     // Temporal decay: half-life of 2 weeks (336 hours)
     let age_hours = (Utc::now() - entry.created_at).num_hours().max(0) as f64;
@@ -636,19 +687,34 @@ mod tests {
     }
 
     fn make_entry_with_confidence(
-        project: &str, category: MemoryCategory, content: &str, confidence: f64,
+        project: &str,
+        category: MemoryCategory,
+        content: &str,
+        confidence: f64,
     ) -> MemoryEntry {
         MemoryEntry::with_confidence(project, category, content, confidence, vec![]).unwrap()
     }
 
     fn make_entry_with_timestamps(
-        id: &str, project: &str, category: MemoryCategory, content: &str,
-        confidence: f64, created_at: DateTime<Utc>, accessed_at: DateTime<Utc>, access_count: u32,
+        id: &str,
+        project: &str,
+        category: MemoryCategory,
+        content: &str,
+        confidence: f64,
+        created_at: DateTime<Utc>,
+        accessed_at: DateTime<Utc>,
+        access_count: u32,
     ) -> MemoryEntry {
         MemoryEntry {
-            id: id.to_string(), project: project.to_string(), category,
-            content: content.to_string(), tags: vec![], confidence,
-            created_at, accessed_at, access_count,
+            id: id.to_string(),
+            project: project.to_string(),
+            category,
+            content: content.to_string(),
+            tags: vec![],
+            confidence,
+            created_at,
+            accessed_at,
+            access_count,
         }
     }
 
@@ -697,8 +763,16 @@ mod tests {
     fn test_search_content_match() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("p", MemoryCategory::Preference, "I prefer dark mode")).unwrap();
-        store.add(make_entry("p", MemoryCategory::Decision, "Use PostgreSQL")).unwrap();
+        store
+            .add(make_entry(
+                "p",
+                MemoryCategory::Preference,
+                "I prefer dark mode",
+            ))
+            .unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Decision, "Use PostgreSQL"))
+            .unwrap();
         let results = store.search("dark mode", None);
         assert_eq!(results.len(), 1);
         assert!(results[0].content.contains("dark mode"));
@@ -718,7 +792,9 @@ mod tests {
     fn test_search_case_insensitive() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("p", MemoryCategory::Decision, "Use PostgreSQL")).unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Decision, "Use PostgreSQL"))
+            .unwrap();
         assert_eq!(store.search("postgresql", None).len(), 1);
         assert_eq!(store.search("POSTGRESQL", None).len(), 1);
     }
@@ -727,8 +803,16 @@ mod tests {
     fn test_search_with_project_filter() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("proj-a", MemoryCategory::Preference, "Use tabs")).unwrap();
-        store.add(make_entry("proj-b", MemoryCategory::Preference, "Use spaces")).unwrap();
+        store
+            .add(make_entry("proj-a", MemoryCategory::Preference, "Use tabs"))
+            .unwrap();
+        store
+            .add(make_entry(
+                "proj-b",
+                MemoryCategory::Preference,
+                "Use spaces",
+            ))
+            .unwrap();
         let results = store.search("use", Some("proj-a"));
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].project, "proj-a");
@@ -738,7 +822,9 @@ mod tests {
     fn test_search_no_match_returns_empty() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("p", MemoryCategory::Context, "hello")).unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Context, "hello"))
+            .unwrap();
         assert!(store.search("xyz", None).is_empty());
     }
 
@@ -746,10 +832,12 @@ mod tests {
     fn test_search_sorted_by_relevance() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        let mut high = make_entry_with_confidence("p", MemoryCategory::Preference, "test query", 0.95);
+        let mut high =
+            make_entry_with_confidence("p", MemoryCategory::Preference, "test query", 0.95);
         high.access_count = 10;
         high.touch();
-        let low = make_entry_with_confidence("p", MemoryCategory::Preference, "test query other", 0.5);
+        let low =
+            make_entry_with_confidence("p", MemoryCategory::Preference, "test query other", 0.5);
         store.add(high).unwrap();
         store.add(low).unwrap();
         let results = store.search("test query", None);
@@ -763,9 +851,15 @@ mod tests {
     fn test_project_memories_filters_by_project() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("proj-a", MemoryCategory::Context, "a1")).unwrap();
-        store.add(make_entry("proj-b", MemoryCategory::Context, "b1")).unwrap();
-        store.add(make_entry("proj-a", MemoryCategory::Context, "a2")).unwrap();
+        store
+            .add(make_entry("proj-a", MemoryCategory::Context, "a1"))
+            .unwrap();
+        store
+            .add(make_entry("proj-b", MemoryCategory::Context, "b1"))
+            .unwrap();
+        store
+            .add(make_entry("proj-a", MemoryCategory::Context, "a2"))
+            .unwrap();
         let results = store.project_memories("proj-a");
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|e| e.project == "proj-a"));
@@ -776,12 +870,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         let older = make_entry_with_timestamps(
-            "p1", "p", MemoryCategory::Context, "old", 1.0,
-            Utc::now() - Duration::hours(2), Utc::now(), 0,
+            "p1",
+            "p",
+            MemoryCategory::Context,
+            "old",
+            1.0,
+            Utc::now() - Duration::hours(2),
+            Utc::now(),
+            0,
         );
         let newer = make_entry_with_timestamps(
-            "p2", "p", MemoryCategory::Context, "new", 1.0,
-            Utc::now(), Utc::now(), 0,
+            "p2",
+            "p",
+            MemoryCategory::Context,
+            "new",
+            1.0,
+            Utc::now(),
+            Utc::now(),
+            0,
         );
         store.add(older).unwrap();
         store.add(newer).unwrap();
@@ -854,12 +960,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         let old = make_entry_with_timestamps(
-            "1", "p", MemoryCategory::Context, "old", 1.0,
-            Utc::now() - Duration::days(100), Utc::now(), 0,
+            "1",
+            "p",
+            MemoryCategory::Context,
+            "old",
+            1.0,
+            Utc::now() - Duration::days(100),
+            Utc::now(),
+            0,
         );
         let recent = make_entry_with_timestamps(
-            "2", "p", MemoryCategory::Context, "recent", 1.0,
-            Utc::now(), Utc::now(), 0,
+            "2",
+            "p",
+            MemoryCategory::Context,
+            "recent",
+            1.0,
+            Utc::now(),
+            Utc::now(),
+            0,
         );
         store.add(old).unwrap();
         store.add(recent).unwrap();
@@ -875,8 +993,14 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         for i in 0..5u32 {
             let mut entry = make_entry_with_timestamps(
-                &format!("{}", i), "p", MemoryCategory::Context, &format!("entry-{}", i),
-                1.0, Utc::now(), Utc::now() - Duration::hours(i as i64 + 1), i,
+                &format!("{}", i),
+                "p",
+                MemoryCategory::Context,
+                &format!("entry-{}", i),
+                1.0,
+                Utc::now(),
+                Utc::now() - Duration::hours(i as i64 + 1),
+                i,
             );
             entry.access_count = i;
             store.add(entry).unwrap();
@@ -892,8 +1016,22 @@ mod tests {
     fn test_merge_duplicates_removes_similar_same_category() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "always use tabs for indentation", 0.9)).unwrap();
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "always use tabs for indentation", 0.7)).unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+                0.9,
+            ))
+            .unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+                0.7,
+            ))
+            .unwrap();
         assert_eq!(store.len(), 2);
         let merged = store.merge_duplicates(0.8).unwrap();
         assert_eq!(merged, 1);
@@ -906,8 +1044,22 @@ mod tests {
     fn test_merge_duplicates_different_category_keeps_both() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "always use tabs for indentation", 0.9)).unwrap();
-        store.add(make_entry_with_confidence("p", MemoryCategory::Decision, "always use tabs for indentation", 0.9)).unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+                0.9,
+            ))
+            .unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Decision,
+                "always use tabs for indentation",
+                0.9,
+            ))
+            .unwrap();
         let merged = store.merge_duplicates(0.8).unwrap();
         assert_eq!(merged, 0);
         assert_eq!(store.len(), 2);
@@ -917,8 +1069,22 @@ mod tests {
     fn test_merge_duplicates_below_threshold_keeps_both() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "use rust programming language", 0.9)).unwrap();
-        store.add(make_entry_with_confidence("p", MemoryCategory::Preference, "deploy with kubernetes cluster", 0.9)).unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "use rust programming language",
+                0.9,
+            ))
+            .unwrap();
+        store
+            .add(make_entry_with_confidence(
+                "p",
+                MemoryCategory::Preference,
+                "deploy with kubernetes cluster",
+                0.9,
+            ))
+            .unwrap();
         let merged = store.merge_duplicates(0.8).unwrap();
         assert_eq!(merged, 0);
         assert_eq!(store.len(), 2);
@@ -931,12 +1097,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         let old = make_entry_with_timestamps(
-            "1", "p", MemoryCategory::Context, "old", 1.0,
-            Utc::now() - Duration::days(60), Utc::now(), 0,
+            "1",
+            "p",
+            MemoryCategory::Context,
+            "old",
+            1.0,
+            Utc::now() - Duration::days(60),
+            Utc::now(),
+            0,
         );
         let fresh = make_entry_with_timestamps(
-            "2", "p", MemoryCategory::Context, "fresh", 1.0,
-            Utc::now(), Utc::now(), 0,
+            "2",
+            "p",
+            MemoryCategory::Context,
+            "fresh",
+            1.0,
+            Utc::now(),
+            Utc::now(),
+            0,
         );
         store.add(old).unwrap();
         store.add(fresh).unwrap();
@@ -950,7 +1128,9 @@ mod tests {
     fn test_remove_stale_nothing_to_remove() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("p", MemoryCategory::Context, "fresh")).unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Context, "fresh"))
+            .unwrap();
         let removed = store.remove_stale(Duration::days(365)).unwrap();
         assert_eq!(removed, 0);
     }
@@ -963,8 +1143,14 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         for i in 0..3u32 {
             let mut entry = make_entry_with_timestamps(
-                &format!("p{}", i), "proj", MemoryCategory::Preference,
-                &format!("pref {}", i), 0.8, Utc::now(), Utc::now(), i,
+                &format!("p{}", i),
+                "proj",
+                MemoryCategory::Preference,
+                &format!("pref {}", i),
+                0.8,
+                Utc::now(),
+                Utc::now(),
+                i,
             );
             entry.access_count = i;
             store.add(entry).unwrap();
@@ -980,8 +1166,12 @@ mod tests {
     fn test_enforce_category_caps_no_removal_when_under_cap() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("p", MemoryCategory::Context, "one")).unwrap();
-        store.add(make_entry("p", MemoryCategory::Decision, "two")).unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Context, "one"))
+            .unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Decision, "two"))
+            .unwrap();
         store.enforce_category_caps(10);
         assert_eq!(store.len(), 2);
     }
@@ -993,14 +1183,24 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         let older = make_entry_with_timestamps(
-            "1", "p", MemoryCategory::Preference,
-            "always use spaces for formatting code", 0.9,
-            Utc::now() - Duration::hours(2), Utc::now(), 0,
+            "1",
+            "p",
+            MemoryCategory::Preference,
+            "always use spaces for formatting code",
+            0.9,
+            Utc::now() - Duration::hours(2),
+            Utc::now(),
+            0,
         );
         let newer = make_entry_with_timestamps(
-            "2", "p", MemoryCategory::Preference,
-            "never use spaces for formatting code", 0.9,
-            Utc::now(), Utc::now(), 0,
+            "2",
+            "p",
+            MemoryCategory::Preference,
+            "never use spaces for formatting code",
+            0.9,
+            Utc::now(),
+            Utc::now(),
+            0,
         );
         store.add(older).unwrap();
         store.add(newer).unwrap();
@@ -1014,8 +1214,16 @@ mod tests {
     fn test_resolve_conflicts_no_conflicts() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("p", MemoryCategory::Preference, "I prefer dark mode")).unwrap();
-        store.add(make_entry("p", MemoryCategory::Decision, "Use PostgreSQL")).unwrap();
+        store
+            .add(make_entry(
+                "p",
+                MemoryCategory::Preference,
+                "I prefer dark mode",
+            ))
+            .unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Decision, "Use PostgreSQL"))
+            .unwrap();
         let resolved = store.resolve_conflicts().unwrap();
         assert_eq!(resolved, 0);
     }
@@ -1026,8 +1234,20 @@ mod tests {
     fn test_search_by_relevance_returns_relevant() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("p", MemoryCategory::Preference, "I prefer rust programming language")).unwrap();
-        store.add(make_entry("p", MemoryCategory::Decision, "Deploy with kubernetes")).unwrap();
+        store
+            .add(make_entry(
+                "p",
+                MemoryCategory::Preference,
+                "I prefer rust programming language",
+            ))
+            .unwrap();
+        store
+            .add(make_entry(
+                "p",
+                MemoryCategory::Decision,
+                "Deploy with kubernetes",
+            ))
+            .unwrap();
         let results = store.search_by_relevance("rust programming", None, 10);
         assert!(!results.is_empty());
         // The most relevant result should mention rust
@@ -1039,7 +1259,13 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         for i in 0..5 {
-            store.add(make_entry("p", MemoryCategory::Context, &format!("test entry number {}", i))).unwrap();
+            store
+                .add(make_entry(
+                    "p",
+                    MemoryCategory::Context,
+                    &format!("test entry number {}", i),
+                ))
+                .unwrap();
         }
         let results = store.search_by_relevance("test", None, 2);
         assert!(results.len() <= 2);
@@ -1049,8 +1275,20 @@ mod tests {
     fn test_search_by_relevance_filters_by_project() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("proj-a", MemoryCategory::Context, "test content here")).unwrap();
-        store.add(make_entry("proj-b", MemoryCategory::Context, "test content here")).unwrap();
+        store
+            .add(make_entry(
+                "proj-a",
+                MemoryCategory::Context,
+                "test content here",
+            ))
+            .unwrap();
+        store
+            .add(make_entry(
+                "proj-b",
+                MemoryCategory::Context,
+                "test content here",
+            ))
+            .unwrap();
         let results = store.search_by_relevance("test", Some("proj-a"), 10);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].project, "proj-a");
@@ -1074,7 +1312,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = MemoryStore::new(dir.path().to_path_buf());
         let config = SessionMemoryConfig::default();
-        let msgs = vec![MessageSummary::new("user", "We decided to use Rust for the backend")];
+        let msgs = vec![MessageSummary::new(
+            "user",
+            "We decided to use Rust for the backend",
+        )];
         let extracted = store.auto_extract_from_messages(&msgs, &config);
         assert_eq!(extracted.len(), 1);
         assert_eq!(extracted[0].category, MemoryCategory::Decision);
@@ -1085,7 +1326,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = MemoryStore::new(dir.path().to_path_buf());
         let config = SessionMemoryConfig::default();
-        let msgs = vec![MessageSummary::new("user", "The error was a null pointer dereference")];
+        let msgs = vec![MessageSummary::new(
+            "user",
+            "The error was a null pointer dereference",
+        )];
         let extracted = store.auto_extract_from_messages(&msgs, &config);
         assert_eq!(extracted.len(), 1);
         assert_eq!(extracted[0].category, MemoryCategory::Error);
@@ -1096,7 +1340,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = MemoryStore::new(dir.path().to_path_buf());
         let config = SessionMemoryConfig::default();
-        let msgs = vec![MessageSummary::new("user", "In this project we use snake_case for variables")];
+        let msgs = vec![MessageSummary::new(
+            "user",
+            "In this project we use snake_case for variables",
+        )];
         let extracted = store.auto_extract_from_messages(&msgs, &config);
         assert_eq!(extracted.len(), 1);
         assert_eq!(extracted[0].category, MemoryCategory::Pattern);
@@ -1106,7 +1353,10 @@ mod tests {
     fn test_auto_extract_disabled_returns_empty() {
         let dir = TempDir::new().unwrap();
         let store = MemoryStore::new(dir.path().to_path_buf());
-        let config = SessionMemoryConfig { auto_extract_enabled: false, ..SessionMemoryConfig::default() };
+        let config = SessionMemoryConfig {
+            auto_extract_enabled: false,
+            ..SessionMemoryConfig::default()
+        };
         let msgs = vec![MessageSummary::new("user", "I always use tabs")];
         assert!(store.auto_extract_from_messages(&msgs, &config).is_empty());
     }
@@ -1149,7 +1399,9 @@ mod tests {
 
     #[test]
     fn test_content_similarity_identical() {
-        assert!((content_similarity("hello world foo bar", "hello world foo bar") - 1.0).abs() < 0.001);
+        assert!(
+            (content_similarity("hello world foo bar", "hello world foo bar") - 1.0).abs() < 0.001
+        );
     }
 
     #[test]
@@ -1171,7 +1423,9 @@ mod tests {
         let mut store = MemoryStore::new(dir.path().to_path_buf());
         assert!(store.is_empty());
         assert_eq!(store.len(), 0);
-        store.add(make_entry("p", MemoryCategory::Context, "data")).unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Context, "data"))
+            .unwrap();
         assert!(!store.is_empty());
         assert_eq!(store.len(), 1);
     }
@@ -1182,9 +1436,15 @@ mod tests {
     fn test_get_memories_by_type() {
         let dir = TempDir::new().unwrap();
         let mut store = MemoryStore::new(dir.path().to_path_buf());
-        store.add(make_entry("p", MemoryCategory::Preference, "pref")).unwrap();
-        store.add(make_entry("p", MemoryCategory::Decision, "dec")).unwrap();
-        store.add(make_entry("p", MemoryCategory::Preference, "pref2")).unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Preference, "pref"))
+            .unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Decision, "dec"))
+            .unwrap();
+        store
+            .add(make_entry("p", MemoryCategory::Preference, "pref2"))
+            .unwrap();
         let prefs = store.get_memories_by_type(&MemoryType::UserPreference);
         assert_eq!(prefs.len(), 2);
     }
@@ -1210,7 +1470,10 @@ mod tests {
         assert!(are_contradictory("always use tabs", "never use tabs"));
         assert!(are_contradictory("enable feature X", "disable feature X"));
         // "prefer" vs "avoid" -- neither word contains the other
-        assert!(are_contradictory("prefer tabs for indentation", "avoid tabs for indentation"));
+        assert!(are_contradictory(
+            "prefer tabs for indentation",
+            "avoid tabs for indentation"
+        ));
     }
 
     #[test]

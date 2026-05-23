@@ -6,7 +6,7 @@
 //!
 //! These tools enable safe, isolated experimentation in parallel git branches.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -206,7 +206,10 @@ impl WorktreeTool {
     }
 
     /// Enter a new worktree session
-    async fn enter_worktree(&self, input: EnterWorktreeInput) -> Result<EnterWorktreeOutput, ToolError> {
+    async fn enter_worktree(
+        &self,
+        input: EnterWorktreeInput,
+    ) -> Result<EnterWorktreeOutput, ToolError> {
         // Check if already in a worktree session
         {
             let session = CURRENT_WORKTREE_SESSION
@@ -242,7 +245,10 @@ impl WorktreeTool {
         };
 
         // Create worktree directory path
-        let worktree_path = git_root.join(".claude").join("worktrees").join(&worktree_name);
+        let worktree_path = git_root
+            .join(".claude")
+            .join("worktrees")
+            .join(&worktree_name);
 
         // Create worktree using git
         let branch_name = format!("worktree/{worktree_name}");
@@ -252,13 +258,7 @@ impl WorktreeTool {
         })?;
 
         let output = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                &branch_name,
-                worktree_path_str,
-            ])
+            .args(["worktree", "add", "-b", &branch_name, worktree_path_str])
             .output()
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create worktree: {e}")))?;
 
@@ -305,7 +305,10 @@ impl WorktreeTool {
     }
 
     /// Count changes in worktree
-    fn count_worktree_changes(worktree_path: &Path, original_head: Option<&String>) -> Result<(usize, usize), ToolError> {
+    fn count_worktree_changes(
+        worktree_path: &Path,
+        original_head: Option<&String>,
+    ) -> Result<(usize, usize), ToolError> {
         let worktree_str = worktree_path.to_str().ok_or_else(|| {
             ToolError::ExecutionFailed("Worktree path contains invalid UTF-8".to_string())
         })?;
@@ -354,16 +357,17 @@ impl WorktreeTool {
     }
 
     /// Exit current worktree session
-    async fn exit_worktree(&self, input: ExitWorktreeInput) -> Result<ExitWorktreeOutput, ToolError> {
+    async fn exit_worktree(
+        &self,
+        input: ExitWorktreeInput,
+    ) -> Result<ExitWorktreeOutput, ToolError> {
         // Get current session
         let session = {
             let guard = CURRENT_WORKTREE_SESSION
                 .read()
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to acquire lock: {e}")))?;
             guard.as_ref().cloned().ok_or_else(|| {
-                ToolError::ExecutionFailed(
-                    "No active worktree session to exit".to_string(),
-                )
+                ToolError::ExecutionFailed("No active worktree session to exit".to_string())
             })?
         };
 
@@ -373,28 +377,30 @@ impl WorktreeTool {
         )?;
 
         // Check for uncommitted changes when removing
-        if input.action == ExitAction::Remove && !input.discard_changes.unwrap_or(false)
-            && (changed_files > 0 || commits > 0) {
-                let mut parts = Vec::new();
-                if changed_files > 0 {
-                    parts.push(format!(
-                        "{} uncommitted {}",
-                        changed_files,
-                        if changed_files == 1 { "file" } else { "files" }
-                    ));
-                }
-                if commits > 0 {
-                    parts.push(format!(
-                        "{} {}",
-                        commits,
-                        if commits == 1 { "commit" } else { "commits" }
-                    ));
-                }
-                return Err(ToolError::ExecutionFailed(format!(
-                    "Worktree has {}. Set discard_changes: true to proceed, or use action: keep to preserve the worktree.",
-                    parts.join(" and ")
-                )));
+        if input.action == ExitAction::Remove
+            && !input.discard_changes.unwrap_or(false)
+            && (changed_files > 0 || commits > 0)
+        {
+            let mut parts = Vec::new();
+            if changed_files > 0 {
+                parts.push(format!(
+                    "{} uncommitted {}",
+                    changed_files,
+                    if changed_files == 1 { "file" } else { "files" }
+                ));
             }
+            if commits > 0 {
+                parts.push(format!(
+                    "{} {}",
+                    commits,
+                    if commits == 1 { "commit" } else { "commits" }
+                ));
+            }
+            return Err(ToolError::ExecutionFailed(format!(
+                "Worktree has {}. Set discard_changes: true to proceed, or use action: keep to preserve the worktree.",
+                parts.join(" and ")
+            )));
+        }
 
         match input.action {
             ExitAction::Keep => {
@@ -404,13 +410,11 @@ impl WorktreeTool {
             ExitAction::Remove => {
                 // Remove worktree
                 let output = Command::new("git")
-                    .args([
-                        "worktree",
-                        "remove",
-                        &session.worktree_path,
-                    ])
+                    .args(["worktree", "remove", &session.worktree_path])
                     .output()
-                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to remove worktree: {e}")))?;
+                    .map_err(|e| {
+                        ToolError::ExecutionFailed(format!("Failed to remove worktree: {e}"))
+                    })?;
 
                 if !output.status.success() {
                     return Err(ToolError::ExecutionFailed(format!(
@@ -433,7 +437,9 @@ impl WorktreeTool {
         }
 
         let tmux_note = if let Some(ref tmux_name) = session.tmux_session_name {
-            format!(" Tmux session {tmux_name} is still running; reattach with: tmux attach -t {tmux_name}")
+            format!(
+                " Tmux session {tmux_name} is still running; reattach with: tmux attach -t {tmux_name}"
+            )
         } else {
             String::new()
         };
@@ -451,7 +457,11 @@ impl WorktreeTool {
             ExitAction::Remove => {
                 let mut discard_parts = Vec::new();
                 if commits > 0 {
-                    discard_parts.push(format!("{} {}", commits, if commits == 1 { "commit" } else { "commits" }));
+                    discard_parts.push(format!(
+                        "{} {}",
+                        commits,
+                        if commits == 1 { "commit" } else { "commits" }
+                    ));
                 }
                 if changed_files > 0 {
                     discard_parts.push(format!(
@@ -504,8 +514,10 @@ impl Tool for WorktreeTool {
 
         match operation {
             "Enter" => {
-                let enter_input: EnterWorktreeInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid enter worktree input: {e}")))?;
+                let enter_input: EnterWorktreeInput =
+                    serde_json::from_value(input).map_err(|e| {
+                        ToolError::InvalidInput(format!("Invalid enter worktree input: {e}"))
+                    })?;
                 let output = self.enter_worktree(enter_input).await?;
                 Ok(ToolOutput {
                     content: output.message.clone(),
@@ -519,8 +531,9 @@ impl Tool for WorktreeTool {
                 })
             }
             "Exit" => {
-                let exit_input: ExitWorktreeInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid exit worktree input: {e}")))?;
+                let exit_input: ExitWorktreeInput = serde_json::from_value(input).map_err(|e| {
+                    ToolError::InvalidInput(format!("Invalid exit worktree input: {e}"))
+                })?;
                 let output = self.exit_worktree(exit_input).await?;
                 Ok(ToolOutput {
                     content: output.message.clone(),
@@ -678,15 +691,12 @@ mod tests {
 
     #[test]
     fn exit_worktree_input_deserialize() {
-        let input: ExitWorktreeInput = serde_json::from_str(
-            "{\"action\": \"remove\", \"discard_changes\": true}",
-        ).unwrap();
+        let input: ExitWorktreeInput =
+            serde_json::from_str("{\"action\": \"remove\", \"discard_changes\": true}").unwrap();
         assert_eq!(input.action, ExitAction::Remove);
         assert_eq!(input.discard_changes, Some(true));
 
-        let input: ExitWorktreeInput = serde_json::from_str(
-            "{\"action\": \"keep\"}",
-        ).unwrap();
+        let input: ExitWorktreeInput = serde_json::from_str("{\"action\": \"keep\"}").unwrap();
         assert_eq!(input.action, ExitAction::Keep);
         assert!(input.discard_changes.is_none());
     }

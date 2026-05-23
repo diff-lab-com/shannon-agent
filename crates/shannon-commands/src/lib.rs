@@ -16,32 +16,31 @@
 // - **LocalCommand**: Commands executed locally without AI
 // - **LocalJSXCommand**: Commands with rich UI (TUI components)
 
-mod registry;
-mod parser;
-mod executor;
 mod command;
 mod context;
+mod executor;
+mod parser;
+mod registry;
 mod repl_command;
 
 mod builtin;
 
-pub use command::{
-    Command, CommandBase, PromptCommand, LocalCommand, LocalJSXCommand,
-    CommandResult, CommandAvailability, CommandSource,
-    Executable, PluginExecutable, ExecutionContext,
-};
-pub use registry::CommandRegistry;
-pub use parser::{CommandParser, ParsedCommand};
 pub use command::ExecutionResult;
+pub use command::{
+    Command, CommandAvailability, CommandBase, CommandResult, CommandSource, Executable,
+    ExecutionContext, LocalCommand, LocalJSXCommand, PluginExecutable, PromptCommand,
+};
+pub use context::{CommandContext, ToolUseContext};
 pub use executor::CommandExecutor;
 pub use executor::SharedExecutor;
-pub use context::{CommandContext, ToolUseContext};
-pub use repl_command::{ReplCommand, CommandAdapter};
+pub use parser::{CommandParser, ParsedCommand};
+pub use registry::CommandRegistry;
+pub use repl_command::{CommandAdapter, ReplCommand};
 
 /// Re-export built-in commands
 pub mod builtin_commands {
     pub use crate::builtin::commands::*;
-    pub use crate::builtin::{register_all, all_commands};
+    pub use crate::builtin::{all_commands, register_all};
 }
 
 /// Re-export help utilities for REPL integration
@@ -102,7 +101,6 @@ pub mod review_utils {
 pub mod doctor_utils {
     pub use crate::builtin::doctor_utils::*;
 }
-
 
 /// Create a new command registry with all built-in commands registered
 pub fn create_registry() -> CommandRegistry {

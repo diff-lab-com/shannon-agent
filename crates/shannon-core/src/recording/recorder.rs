@@ -78,8 +78,11 @@ impl SessionRecorder {
                 tool_input,
                 ..
             } => {
-                self.current_tool_input =
-                    Some((tool_name.clone(), tool_input.clone(), std::time::Instant::now()));
+                self.current_tool_input = Some((
+                    tool_name.clone(),
+                    tool_input.clone(),
+                    std::time::Instant::now(),
+                ));
             }
             QueryEvent::ToolUseResult {
                 tool_name: _,
@@ -99,8 +102,9 @@ impl SessionRecorder {
                     });
                 }
                 // Also record as query event
-                self.entries
-                    .push(RecordingEntry::QueryEvent { event: event.clone() });
+                self.entries.push(RecordingEntry::QueryEvent {
+                    event: event.clone(),
+                });
                 return;
             }
             QueryEvent::TurnCompleted { tokens_used, .. } => {
@@ -108,8 +112,9 @@ impl SessionRecorder {
             }
             _ => {}
         }
-        self.entries
-            .push(RecordingEntry::QueryEvent { event: event.clone() });
+        self.entries.push(RecordingEntry::QueryEvent {
+            event: event.clone(),
+        });
     }
 
     /// Finish recording, write JSONL to disk.
@@ -183,7 +188,9 @@ fn sha256_compact(s: &str) -> [u8; 32] {
     ];
     for (i, &byte) in bytes.iter().enumerate() {
         let idx = i % 8;
-        state[idx] = state[idx].wrapping_mul(0x517cc1b727220a95).wrapping_add(byte as u64);
+        state[idx] = state[idx]
+            .wrapping_mul(0x517cc1b727220a95)
+            .wrapping_add(byte as u64);
     }
     let mut result = [0u8; 32];
     for (i, &s) in state.iter().enumerate() {
@@ -197,7 +204,11 @@ fn sha256_compact(s: &str) -> [u8; 32] {
 fn truncate_result(s: &str) -> String {
     const MAX_RESULT_LEN: usize = 10_000;
     if s.len() > MAX_RESULT_LEN {
-        format!("{}...[truncated, {} bytes total]", &s[..MAX_RESULT_LEN], s.len())
+        format!(
+            "{}...[truncated, {} bytes total]",
+            &s[..MAX_RESULT_LEN],
+            s.len()
+        )
     } else {
         s.to_string()
     }
@@ -370,7 +381,10 @@ mod tests {
 
         let path = recorder.finish(100).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("[truncated"), "Large tool result should be truncated");
+        assert!(
+            content.contains("[truncated"),
+            "Large tool result should be truncated"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

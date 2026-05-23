@@ -1,18 +1,17 @@
 //! REPL keyboard input handling
 
-use crate::{
-    widgets::ChatRole,
-    Result,
-};
+use crate::vim::{Direction, TextObject, TextObjectScope, VimAction};
+use crate::{Result, widgets::ChatRole};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-use crate::vim::{Direction, VimAction, TextObjectScope, TextObject};
 use rust_i18n::t;
 
 use super::Repl;
 
 /// Open an external editor ($VISUAL or $EDITOR, fallback to vi) with a temp file.
 /// Returns the edited content on success.
-fn open_external_editor(content: &str) -> std::result::Result<String, Box<dyn std::error::Error + Send + Sync>> {
+fn open_external_editor(
+    content: &str,
+) -> std::result::Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let dir = std::env::temp_dir();
     let path = dir.join("shannon-input.md");
 
@@ -66,7 +65,11 @@ pub fn handle_mouse(repl: &mut Repl, mouse: MouseEvent) {
 }
 
 /// Handle keyboard input — dispatches to the appropriate sub-handler.
-pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super::query::Term>) -> Result<()> {
+pub fn handle_input(
+    repl: &mut Repl,
+    key: KeyEvent,
+    terminal: Option<&mut super::query::Term>,
+) -> Result<()> {
     // Dismiss onboarding overlay on user interaction
     if repl.state.onboarding_active {
         match key.code {
@@ -164,7 +167,12 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
     }
 
     // If agent dashboard overlay is expanded, handle dashboard keys
-    if repl.state.agent_dashboard.as_ref().is_some_and(|d| d.expanded) {
+    if repl
+        .state
+        .agent_dashboard
+        .as_ref()
+        .is_some_and(|d| d.expanded)
+    {
         return handle_dashboard_input(repl, key);
     }
 
@@ -292,10 +300,8 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
                     }
                 }
                 Err(e) => {
-                    repl.chat.add_message(
-                        ChatRole::System,
-                        format!("Editor error: {e}"),
-                    );
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Editor error: {e}"));
                 }
             }
             // Re-enable raw mode for the TUI
@@ -330,7 +336,10 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
                         repl.state.queued_messages.push(input);
                         repl.prompt.clear();
                         repl.state.status = t!("ui.message_queued", count => count).to_string();
-                        repl.state.toast = Some((t!("ui.message_queued", count => count).to_string(), std::time::Instant::now()));
+                        repl.state.toast = Some((
+                            t!("ui.message_queued", count => count).to_string(),
+                            std::time::Instant::now(),
+                        ));
                     } else {
                         repl.state.toast =
                             Some(("Queue full (50 max)".to_string(), std::time::Instant::now()));
@@ -359,7 +368,10 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         }
         // Ctrl+L: clear screen / force full redraw
         KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::Clear(crossterm::terminal::ClearType::All));
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+            );
             Ok(())
         }
         // Ctrl+A: toggle agent dashboard
@@ -408,14 +420,18 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         // Home: move cursor to start of input line
         KeyCode::Home => {
             let col = repl.prompt.cursor_position();
-            for _ in 0..col { repl.prompt.cursor_left(); }
+            for _ in 0..col {
+                repl.prompt.cursor_left();
+            }
             Ok(())
         }
         // End: move cursor to end of input line
         KeyCode::End => {
             let len = repl.prompt.current_line_len();
             let col = repl.prompt.cursor_position();
-            for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
+            for _ in 0..len.saturating_sub(col) {
+                repl.prompt.cursor_right();
+            }
             Ok(())
         }
         // Ctrl+T: toggle transcript pager (alternative keybinding)
@@ -437,12 +453,15 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if let Some(content) = super::commands::copy_nth_response(repl, 1) {
                 if super::commands::copy_to_clipboard(&content) {
-                    repl.chat.copy_feedback = Some((repl.chat.messages.len(), std::time::Instant::now()));
+                    repl.chat.copy_feedback =
+                        Some((repl.chat.messages.len(), std::time::Instant::now()));
                 } else {
                     let tmp = std::env::temp_dir().join("shannon-clipboard.txt");
                     let _ = std::fs::write(&tmp, &content);
-                    repl.chat.add_message(crate::widgets::chat::ChatRole::System,
-                        format!("Copied to {}", tmp.display()));
+                    repl.chat.add_message(
+                        crate::widgets::chat::ChatRole::System,
+                        format!("Copied to {}", tmp.display()),
+                    );
                 }
             }
             Ok(())
@@ -464,11 +483,13 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         KeyCode::Char('@') => {
             // Open fuzzy file picker
             let files = collect_project_files(&repl.state.working_directory);
-            let items: Vec<crate::widgets::select::SelectItem<String>> = files.into_iter()
+            let items: Vec<crate::widgets::select::SelectItem<String>> = files
+                .into_iter()
                 .map(|f| crate::widgets::select::SelectItem::new(f.clone(), f))
                 .collect();
-            let mut picker = crate::widgets::select::FuzzyPickerWidget::new("Pick file...".to_string())
-                .with_items(items);
+            let mut picker =
+                crate::widgets::select::FuzzyPickerWidget::new("Pick file...".to_string())
+                    .with_items(items);
             picker.start_search();
             repl.state.fuzzy_picker = Some(picker);
             repl.state.file_selector_for_at = true;
@@ -489,7 +510,9 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         // Ctrl+A: move to start of line (readline convention)
         KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             let col = repl.prompt.cursor_position();
-            for _ in 0..col { repl.prompt.cursor_left(); }
+            for _ in 0..col {
+                repl.prompt.cursor_left();
+            }
             Ok(())
         }
         KeyCode::Char(c) => {
@@ -536,7 +559,9 @@ pub fn handle_input(repl: &mut Repl, key: KeyEvent, terminal: Option<&mut super:
         }
         KeyCode::Down => {
             if !repl.state.completion_suggestions.is_empty() {
-                if repl.state.completion_suggestion_index + 1 < repl.state.completion_suggestions.len() {
+                if repl.state.completion_suggestion_index + 1
+                    < repl.state.completion_suggestions.len()
+                {
                     repl.state.completion_suggestion_index += 1;
                 }
                 return Ok(());
@@ -649,7 +674,8 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
         }
         VimAction::SubmitInput => {
             if let Err(e) = super::commands::submit_input(repl, None) {
-                repl.chat.add_message(ChatRole::System, format!("Input error: {e}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("Input error: {e}"));
             }
         }
         VimAction::MoveCursor { direction, count } => {
@@ -661,30 +687,42 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
                     Direction::Down => repl.prompt.cursor_down(),
                     Direction::LineStart => {
                         let col = repl.prompt.cursor_position();
-                        for _ in 0..col { repl.prompt.cursor_left(); }
+                        for _ in 0..col {
+                            repl.prompt.cursor_left();
+                        }
                     }
                     Direction::LineEnd => {
                         let len = repl.prompt.current_line_len();
                         let col = repl.prompt.cursor_position();
-                        for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
+                        for _ in 0..len.saturating_sub(col) {
+                            repl.prompt.cursor_right();
+                        }
                     }
                     Direction::FileStart => {
                         // Move to first line first
                         let row = repl.prompt.cursor_row();
-                        for _ in 0..row { repl.prompt.cursor_up(); }
+                        for _ in 0..row {
+                            repl.prompt.cursor_up();
+                        }
                         // Then move to start of line
                         let col = repl.prompt.cursor_position();
-                        for _ in 0..col { repl.prompt.cursor_left(); }
+                        for _ in 0..col {
+                            repl.prompt.cursor_left();
+                        }
                     }
                     Direction::FileEnd => {
                         // Move to last line first
                         let row = repl.prompt.cursor_row();
                         let last_row = repl.prompt.line_count().saturating_sub(1);
-                        for _ in 0..last_row.saturating_sub(row) { repl.prompt.cursor_down(); }
+                        for _ in 0..last_row.saturating_sub(row) {
+                            repl.prompt.cursor_down();
+                        }
                         // Then move to end of line
                         let len = repl.prompt.current_line_len();
                         let col = repl.prompt.cursor_position();
-                        for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
+                        for _ in 0..len.saturating_sub(col) {
+                            repl.prompt.cursor_right();
+                        }
                     }
                     Direction::WordForward => {
                         repl.prompt.cursor_word_forward();
@@ -735,12 +773,16 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
         VimAction::EnterInsertModeBelow => {
             let len = repl.prompt.current_line_len();
             let col = repl.prompt.cursor_position();
-            for _ in 0..len.saturating_sub(col) { repl.prompt.cursor_right(); }
+            for _ in 0..len.saturating_sub(col) {
+                repl.prompt.cursor_right();
+            }
             repl.prompt.insert_newline();
         }
         VimAction::EnterInsertModeAbove => {
             let col = repl.prompt.cursor_position();
-            for _ in 0..col { repl.prompt.cursor_left(); }
+            for _ in 0..col {
+                repl.prompt.cursor_left();
+            }
             repl.prompt.insert_newline();
             repl.prompt.cursor_up();
         }
@@ -748,7 +790,9 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
             let mut deleted = String::new();
             for _ in 0..count {
                 let word = repl.prompt.current_word();
-                if word.is_empty() { break; }
+                if word.is_empty() {
+                    break;
+                }
                 deleted.push_str(&word);
                 for _ in 0..word.chars().count() {
                     repl.prompt.delete_forward();
@@ -762,7 +806,9 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
             let mut yanked = String::new();
             for _ in 0..count {
                 let word = repl.prompt.current_word();
-                if word.is_empty() { break; }
+                if word.is_empty() {
+                    break;
+                }
                 yanked.push_str(&word);
             }
             if !yanked.is_empty() {
@@ -773,7 +819,9 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
             let mut deleted = String::new();
             for _ in 0..count {
                 let word = repl.prompt.current_word();
-                if word.is_empty() { break; }
+                if word.is_empty() {
+                    break;
+                }
                 deleted.push_str(&word);
                 for _ in 0..word.chars().count() {
                     repl.prompt.delete_forward();
@@ -788,7 +836,9 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
             for _ in 0..count {
                 let line = repl.prompt.delete_current_line();
                 if !line.is_empty() {
-                    if !deleted.is_empty() { deleted.push('\n'); }
+                    if !deleted.is_empty() {
+                        deleted.push('\n');
+                    }
                     deleted.push_str(&line);
                 }
             }
@@ -797,7 +847,11 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
         VimAction::Quit => {
             repl.running = false;
         }
-        VimAction::DeleteTextObject { scope, object, count } => {
+        VimAction::DeleteTextObject {
+            scope,
+            object,
+            count,
+        } => {
             let inner = matches!(scope, TextObjectScope::Inner);
             let target = text_object_target(object);
             let mut all_deleted = String::new();
@@ -813,7 +867,11 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
                 repl.vim_handler.set_yank_buffer(all_deleted);
             }
         }
-        VimAction::ChangeTextObject { scope, object, count } => {
+        VimAction::ChangeTextObject {
+            scope,
+            object,
+            count,
+        } => {
             let inner = matches!(scope, TextObjectScope::Inner);
             let target = text_object_target(object);
             let mut all_deleted = String::new();
@@ -829,7 +887,11 @@ fn handle_vim_action(repl: &mut Repl, action: VimAction) {
                 repl.vim_handler.set_yank_buffer(all_deleted);
             }
         }
-        VimAction::YankTextObject { scope, object, count: _ } => {
+        VimAction::YankTextObject {
+            scope,
+            object,
+            count: _,
+        } => {
             let inner = matches!(scope, TextObjectScope::Inner);
             let target = text_object_target(object);
             if let Some((start, end)) = repl.prompt.find_text_object_range(inner, target) {
@@ -848,7 +910,11 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
     let input = repl.prompt.input().to_string();
 
     let command_names = repl.runtime.block_on(async {
-        repl.shared_executor.registry().await.list_names_with_aliases().await
+        repl.shared_executor
+            .registry()
+            .await
+            .list_names_with_aliases()
+            .await
     });
 
     // Plugin commands are included via shared_executor registry above
@@ -856,7 +922,8 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
     if let Some((completion, start, end)) = tab_complete(repl, &input, &command_names) {
         let mut new_input = String::new();
         if start > 0 {
-            let safe_start = input.char_indices()
+            let safe_start = input
+                .char_indices()
                 .take_while(|(i, _)| *i < start)
                 .last()
                 .map(|(i, c)| i + c.len_utf8())
@@ -865,7 +932,8 @@ fn handle_tab_completion(repl: &mut Repl) -> Result<()> {
         }
         new_input.push_str(&completion);
         if end < input.len() {
-            let safe_end = input.char_indices()
+            let safe_end = input
+                .char_indices()
                 .take_while(|(i, _)| *i < end)
                 .last()
                 .map(|(i, c)| i + c.len_utf8())
@@ -918,7 +986,9 @@ pub(crate) fn complete_file_path(prefix: &str) -> Vec<String> {
         (path.clone(), String::new())
     } else {
         (
-            path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf(),
+            path.parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf(),
             path.file_name()
                 .map(|f| f.to_string_lossy().to_string())
                 .unwrap_or_default(),
@@ -964,13 +1034,26 @@ pub(crate) fn complete_file_path(prefix: &str) -> Vec<String> {
 /// - `/debug` → subcommands (info, log, profile, trace)
 pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String> {
     let candidates: &[&str] = match cmd_name {
-        "team" => &["create", "add", "task", "assign", "status", "list", "run", "shutdown", "help"],
+        "team" => &[
+            "create", "add", "task", "assign", "status", "list", "run", "shutdown", "help",
+        ],
         "model" | "models" => &[
-            "claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5",
-            "claude-sonnet-4-5", "claude-opus-4-5",
-            "claude-3-5-sonnet", "claude-3-opus",
-            "gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3", "o4-mini",
-            "ollama/llama3", "ollama/mistral", "ollama/codellama", "ollama/qwen3",
+            "claude-sonnet-4-6",
+            "claude-opus-4-7",
+            "claude-haiku-4-5",
+            "claude-sonnet-4-5",
+            "claude-opus-4-5",
+            "claude-3-5-sonnet",
+            "claude-3-opus",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "o3",
+            "o4-mini",
+            "ollama/llama3",
+            "ollama/mistral",
+            "ollama/codellama",
+            "ollama/qwen3",
         ],
         "doctor" | "check" | "diagnostics" => &[],
         "config" => &["list", "get", "set", "reset", "help"],
@@ -979,7 +1062,14 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "debug" | "dbg" | "dev" => &["info", "log", "profile", "trace", "help"],
         "diff" => &["--staged", "--stat", "--overview", "--word-diff"],
         "ci" | "gh-actions" => &["status", "runs", "workflows", "view", "trigger"],
-        "compact" => &["status", "truncate", "micro", "group", "preview", "--preview"],
+        "compact" => &[
+            "status",
+            "truncate",
+            "micro",
+            "group",
+            "preview",
+            "--preview",
+        ],
         "permissions" | "perm" | "perms" => &["allow", "deny", "reset", "status"],
         "plan" => &["create", "approve", "reject", "done", "status"],
         "review" => &["HEAD~1", "main...HEAD", "--staged", "--full"],
@@ -987,13 +1077,27 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "export" | "save" => &["--format json", "--format markdown"],
         "import" | "load" => &["--format json", "--format markdown"],
         "theme" => &[
-            "dark", "light", "dracula", "tokyonight", "catppuccin_mocha",
-            "gruvbox_dark", "nord", "kanagawa", "monokai", "onedark",
-            "everforest", "ayu", "flexoki", "dark_daltonized", "light_daltonized",
+            "dark",
+            "light",
+            "dracula",
+            "tokyonight",
+            "catppuccin_mocha",
+            "gruvbox_dark",
+            "nord",
+            "kanagawa",
+            "monokai",
+            "onedark",
+            "everforest",
+            "ayu",
+            "flexoki",
+            "dark_daltonized",
+            "light_daltonized",
             "pick",
         ],
         "loop" => &["stop", "status", "--max"],
-        "schedule" | "cron" => &["list", "remove", "--cron", "--once", "5m", "10m", "30m", "1h"],
+        "schedule" | "cron" => &[
+            "list", "remove", "--cron", "--once", "5m", "10m", "30m", "1h",
+        ],
         "ralph" => &["stop", "status", "--max", "--done"],
         "routine" => &["list", "add", "remove", "toggle", "fire", "save"],
         "status" | "st" | "git-status" => &["--short", "--verbose"],
@@ -1071,21 +1175,30 @@ pub(crate) fn update_auto_completions(repl: &mut Repl) {
     }
 
     let command_names = repl.runtime.block_on(async {
-        repl.shared_executor.registry().await.list_names_with_aliases().await
+        repl.shared_executor
+            .registry()
+            .await
+            .list_names_with_aliases()
+            .await
     });
 
     let (prefix, _word_start, _word_end) = extract_completion_word(&input, repl);
 
     let has_space = input.trim_end_matches(' ').contains(' ');
     let candidates: Vec<String> = if !has_space && prefix.starts_with('/') {
-        command_names.iter()
+        command_names
+            .iter()
             .filter(|cmd| format!("/{cmd}").starts_with(&prefix))
             .map(|cmd| format!("/{cmd}"))
             .collect()
     } else if has_space && looks_like_path(&prefix) {
         complete_file_path(&prefix)
     } else if has_space {
-        let cmd_name = input.split_whitespace().next().unwrap_or("").trim_start_matches('/');
+        let cmd_name = input
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('/');
         complete_command_args(cmd_name, &prefix)
     } else {
         Vec::new()
@@ -1107,7 +1220,8 @@ fn accept_completion(repl: &mut Repl) {
 
         let mut new_input = String::new();
         if word_start > 0 {
-            let safe_end = input.char_indices()
+            let safe_end = input
+                .char_indices()
                 .take_while(|(i, _)| *i < word_start)
                 .last()
                 .map(|(i, c)| i + c.len_utf8())
@@ -1136,11 +1250,17 @@ fn accept_completion(repl: &mut Repl) {
 /// 3. No completion (fallback)
 ///
 /// Returns the completed text and the range to replace (start, end).
-fn tab_complete(repl: &mut Repl, input: &str, available_commands: &[String]) -> Option<(String, usize, usize)> {
+fn tab_complete(
+    repl: &mut Repl,
+    input: &str,
+    available_commands: &[String],
+) -> Option<(String, usize, usize)> {
     let (prefix, word_start, word_end) = extract_completion_word(input, repl);
 
     // Reset completion state if the prefix changed
-    if repl.tab_completion_state.last_prefix != prefix || repl.tab_completion_state.candidates.is_empty() {
+    if repl.tab_completion_state.last_prefix != prefix
+        || repl.tab_completion_state.candidates.is_empty()
+    {
         repl.tab_completion_state.last_prefix = prefix.clone();
         repl.tab_completion_state.current_index = 0;
 
@@ -1165,7 +1285,11 @@ fn tab_complete(repl: &mut Repl, input: &str, available_commands: &[String]) -> 
             complete_file_path(&prefix)
         } else if has_space {
             // Command argument completion
-            let cmd_name = input.split_whitespace().next().unwrap_or("").trim_start_matches('/');
+            let cmd_name = input
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_start_matches('/');
             complete_command_args(cmd_name, &prefix)
         } else {
             Vec::new()
@@ -1182,8 +1306,8 @@ fn tab_complete(repl: &mut Repl, input: &str, available_commands: &[String]) -> 
 
     let completion = &repl.tab_completion_state.candidates[repl.tab_completion_state.current_index];
     repl.state.completion_suggestion_index = repl.tab_completion_state.current_index;
-    repl.tab_completion_state.current_index = (repl.tab_completion_state.current_index + 1)
-        % repl.tab_completion_state.candidates.len();
+    repl.tab_completion_state.current_index =
+        (repl.tab_completion_state.current_index + 1) % repl.tab_completion_state.candidates.len();
 
     Some((completion.clone(), word_start, word_end))
 }
@@ -1214,12 +1338,17 @@ pub(crate) fn extract_completion_word(input: &str, _repl: &Repl) -> (String, usi
             // Argument mode — extract last word after space
             let byte_pos = trimmed[..=space_pos].len();
             let word_start = byte_pos.min(trimmed.len());
-            let word = trimmed.char_indices()
+            let word = trimmed
+                .char_indices()
                 .take_while(|(i, _)| *i < word_start)
                 .last()
                 .map(|(i, c)| i + c.len_utf8())
                 .and_then(|safe_start| {
-                    if safe_start < trimmed.len() { Some(&trimmed[safe_start..]) } else { None }
+                    if safe_start < trimmed.len() {
+                        Some(&trimmed[safe_start..])
+                    } else {
+                        None
+                    }
                 })
                 .unwrap_or("");
             (word.to_string(), word_start, input.len())
@@ -1270,7 +1399,10 @@ fn handle_active_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let action = repl.state.active_dialog.as_ref()
+            let action = repl
+                .state
+                .active_dialog
+                .as_ref()
                 .and_then(|d| d.selected_action().map(|a| a.to_string()));
             let pending = repl.state.pending_dialog_action.take();
             repl.state.active_dialog = None;
@@ -1309,7 +1441,10 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let value = repl.state.input_dialog.as_ref()
+            let value = repl
+                .state
+                .input_dialog
+                .as_ref()
                 .map(|d| d.value().to_string())
                 .unwrap_or_default();
             let action = repl.state.input_dialog_action.take();
@@ -1320,7 +1455,9 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     "set_api_key" => {
                         if !value.is_empty() {
                             // SAFETY: REPL event loop is single-threaded; no concurrent reads of SHANNON_API_KEY.
-                            unsafe { std::env::set_var("SHANNON_API_KEY", &value); }
+                            unsafe {
+                                std::env::set_var("SHANNON_API_KEY", &value);
+                            }
                             repl.chat.add_message(
                                 ChatRole::System,
                                 "API key set for this session.".to_string(),
@@ -1330,17 +1467,13 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     "set_model" => {
                         if !value.is_empty() {
                             repl.state.model = Some(value.clone());
-                            repl.chat.add_message(
-                                ChatRole::System,
-                                format!("Model set to: {value}"),
-                            );
+                            repl.chat
+                                .add_message(ChatRole::System, format!("Model set to: {value}"));
                         }
                     }
                     _ => {
-                        repl.chat.add_message(
-                            ChatRole::System,
-                            format!("Input received: {value}"),
-                        );
+                        repl.chat
+                            .add_message(ChatRole::System, format!("Input received: {value}"));
                     }
                 }
             }
@@ -1380,10 +1513,22 @@ fn open_command_palette(repl: &mut Repl) {
 fn handle_command_palette_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     let action = match &mut repl.state.command_palette {
         Some(p) => match key.code {
-            KeyCode::Up => { p.move_up(); None }
-            KeyCode::Down => { p.move_down(); None }
-            KeyCode::Char(c) => { p.add_char(c); None }
-            KeyCode::Backspace => { p.backspace(); None }
+            KeyCode::Up => {
+                p.move_up();
+                None
+            }
+            KeyCode::Down => {
+                p.move_down();
+                None
+            }
+            KeyCode::Char(c) => {
+                p.add_char(c);
+                None
+            }
+            KeyCode::Backspace => {
+                p.backspace();
+                None
+            }
             KeyCode::Enter => {
                 let cmd = p.selected_command().map(|c| c.name.clone());
                 Some(cmd)
@@ -1432,7 +1577,7 @@ fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                         tool_name,
                         pattern,
                         approved: true,
-                    }
+                    },
                 );
             }
             repl.state.tool_approval.dismiss();
@@ -1476,7 +1621,10 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let selected = repl.state.fuzzy_picker.as_ref()
+            let selected = repl
+                .state
+                .fuzzy_picker
+                .as_ref()
                 .and_then(|p| p.selected_value().map(|v| v.to_string()));
             let is_file_pick = repl.state.file_selector_for_at;
             let is_session_pick = repl.state.session_picker_active;
@@ -1550,10 +1698,16 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 }
             }
 
-            let selected_path = repl.state.file_selector.as_ref()
+            let selected_path = repl
+                .state
+                .file_selector
+                .as_ref()
                 .and_then(|s| s.current_selection())
                 .map(|name| {
-                    let base = repl.state.file_selector.as_ref()
+                    let base = repl
+                        .state
+                        .file_selector
+                        .as_ref()
                         .map(|s| s.current_path().to_string())
                         .unwrap_or_else(|| ".".to_string());
                     format!("{base}/{name}")
@@ -1567,7 +1721,10 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     super::at_reference::AtReferenceKind::Pdf => {
                         let processed = super::at_reference::extract_pdf_text(&path);
                         if processed.is_error {
-                            repl.chat.add_message(ChatRole::System, processed.status_message.unwrap_or_default());
+                            repl.chat.add_message(
+                                ChatRole::System,
+                                processed.status_message.unwrap_or_default(),
+                            );
                             repl.prompt.set_input(path);
                         } else {
                             repl.prompt.set_input(processed.injected_text);
@@ -1579,7 +1736,10 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     super::at_reference::AtReferenceKind::Directory => {
                         let processed = super::at_reference::generate_directory_tree(&path, None);
                         if processed.is_error {
-                            repl.chat.add_message(ChatRole::System, processed.status_message.unwrap_or_default());
+                            repl.chat.add_message(
+                                ChatRole::System,
+                                processed.status_message.unwrap_or_default(),
+                            );
                             repl.prompt.set_input(path);
                         } else {
                             repl.prompt.set_input(processed.injected_text);
@@ -1591,7 +1751,10 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     super::at_reference::AtReferenceKind::Url(url) => {
                         let processed = super::at_reference::fetch_url_content(&url);
                         if processed.is_error {
-                            repl.chat.add_message(ChatRole::System, processed.status_message.unwrap_or_default());
+                            repl.chat.add_message(
+                                ChatRole::System,
+                                processed.status_message.unwrap_or_default(),
+                            );
                             repl.prompt.set_input(path);
                         } else {
                             repl.prompt.set_input(processed.injected_text);
@@ -1621,10 +1784,8 @@ fn handle_file_selector_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Backspace => {
             if let Some(ref mut sel) = repl.state.file_selector {
                 if let Err(e) = sel.navigate_up() {
-                    repl.chat.add_message(
-                        ChatRole::System,
-                        format!("Failed to navigate up: {e}"),
-                    );
+                    repl.chat
+                        .add_message(ChatRole::System, format!("Failed to navigate up: {e}"));
                 }
             }
         }
@@ -1659,7 +1820,10 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let model_id = repl.state.model_picker.as_ref()
+            let model_id = repl
+                .state
+                .model_picker
+                .as_ref()
                 .and_then(|mp| mp.selected_model().map(|m| m.id.to_string()));
             repl.state.model_picker = None;
 
@@ -1674,7 +1838,11 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 );
                 repl.chat.add_message(
                     ChatRole::System,
-                    t!("commands.model.set", name = repl.state.model.as_deref().unwrap_or("")).to_string(),
+                    t!(
+                        "commands.model.set",
+                        name = repl.state.model.as_deref().unwrap_or("")
+                    )
+                    .to_string(),
                 );
             }
         }
@@ -1709,7 +1877,10 @@ fn handle_theme_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let selected = repl.state.theme_picker.as_ref()
+            let selected = repl
+                .state
+                .theme_picker
+                .as_ref()
                 .and_then(|p| p.selected_value().map(|v| v.to_string()));
             repl.state.theme_picker = None;
 
@@ -1767,16 +1938,25 @@ fn handle_multi_select_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            let values: Vec<String> = repl.state.multi_select
+            let values: Vec<String> = repl
+                .state
+                .multi_select
                 .as_ref()
-                .map(|sel| sel.selected_values().iter().map(|v| v.to_string()).collect())
+                .map(|sel| {
+                    sel.selected_values()
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect()
+                })
                 .unwrap_or_default();
             repl.state.multi_select = None;
 
             if values.is_empty() {
-                repl.chat.add_message(ChatRole::System, "No items selected.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No items selected.".to_string());
             } else {
-                repl.chat.add_message(ChatRole::System, format!("Selected: {}", values.join(", ")));
+                repl.chat
+                    .add_message(ChatRole::System, format!("Selected: {}", values.join(", ")));
             }
         }
         KeyCode::Esc => {
@@ -1800,7 +1980,12 @@ fn handle_plan_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     let total_lines = repl.state.plan.content.lines().count();
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
-            repl.state.plan.scroll_offset = repl.state.plan.scroll_offset.saturating_add(1).min(total_lines);
+            repl.state.plan.scroll_offset = repl
+                .state
+                .plan
+                .scroll_offset
+                .saturating_add(1)
+                .min(total_lines);
             Ok(())
         }
         KeyCode::Char('k') | KeyCode::Up => {
@@ -1824,7 +2009,7 @@ fn handle_plan_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.state.status = "Ready".to_string();
             Ok(())
         }
-        _ => Ok(())
+        _ => Ok(()),
     }
 }
 
@@ -1854,7 +2039,9 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                         let mut seen = std::collections::HashSet::new();
                         for turn in repl.diff_data.get_session_diffs() {
                             for fc in &turn.files_modified {
-                                if seen.insert(fc.path.clone()) { count += 1; }
+                                if seen.insert(fc.path.clone()) {
+                                    count += 1;
+                                }
                             }
                             count += turn.files_created.len() + turn.files_deleted.len();
                         }
@@ -1867,7 +2054,8 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         KeyCode::Char('k') | KeyCode::Up => {
             if let Some(ref mut viewer) = repl.state.diff_viewer {
                 if repl.state.diff_interactive {
-                    repl.state.interactive_selected = repl.state.interactive_selected.saturating_sub(1);
+                    repl.state.interactive_selected =
+                        repl.state.interactive_selected.saturating_sub(1);
                 } else if viewer.detail_file.is_some() {
                     viewer.scroll_offset = viewer.scroll_offset.saturating_sub(1);
                 } else {
@@ -1927,7 +2115,10 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Enter if repl.state.diff_interactive => {
             // Collect accepted content per file and apply via git apply
-            let accepted: Vec<_> = repl.state.interactive_hunks.iter()
+            let accepted: Vec<_> = repl
+                .state
+                .interactive_hunks
+                .iter()
                 .filter(|h| h.action == HunkAction::Accepted)
                 .collect();
             if accepted.is_empty() {
@@ -1954,19 +2145,27 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                         Ok(o) if o.status.success() => {
                             let count = accepted.len();
                             dismiss_diff_viewer(repl);
-                            repl.chat.add_message(ChatRole::System, format!("Applied {count} accepted hunk(s)."));
+                            repl.chat.add_message(
+                                ChatRole::System,
+                                format!("Applied {count} accepted hunk(s)."),
+                            );
                         }
                         Ok(o) => {
                             let err = String::from_utf8_lossy(&o.stderr);
-                            repl.chat.add_message(ChatRole::System, format!("git apply failed: {err}"));
+                            repl.chat
+                                .add_message(ChatRole::System, format!("git apply failed: {err}"));
                         }
                         Err(e) => {
-                            repl.chat.add_message(ChatRole::System, format!("Failed to run git apply: {e}"));
+                            repl.chat.add_message(
+                                ChatRole::System,
+                                format!("Failed to run git apply: {e}"),
+                            );
                         }
                     }
                     let _ = std::fs::remove_file(&tmp);
                 } else {
-                    repl.chat.add_message(ChatRole::System, "Failed to write patch file.".to_string());
+                    repl.chat
+                        .add_message(ChatRole::System, "Failed to write patch file.".to_string());
                 }
             }
         }
@@ -1980,11 +2179,31 @@ fn handle_diff_viewer_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 /// Skips hidden directories (except useful config dirs), common build/artifact dirs, and .git.
 fn collect_project_files(root: &str) -> Vec<String> {
     let mut files = Vec::new();
-    let skip_dirs: &[&str] = &[".git", "node_modules", "target", "__pycache__", ".next", "dist", "build", ".cache"];
-    let visible_dot_dirs: &[&str] = &[".claude", ".shannon", ".github", ".vscode", ".env", ".direnv"];
+    let skip_dirs: &[&str] = &[
+        ".git",
+        "node_modules",
+        "target",
+        "__pycache__",
+        ".next",
+        "dist",
+        "build",
+        ".cache",
+    ];
+    let visible_dot_dirs: &[&str] = &[
+        ".claude", ".shannon", ".github", ".vscode", ".env", ".direnv",
+    ];
 
-    fn walk(dir: &std::path::Path, root: &std::path::Path, skip_dirs: &[&str], visible_dot_dirs: &[&str], files: &mut Vec<String>, depth: usize) {
-        if depth > 8 { return; }
+    fn walk(
+        dir: &std::path::Path,
+        root: &std::path::Path,
+        skip_dirs: &[&str],
+        visible_dot_dirs: &[&str],
+        files: &mut Vec<String>,
+        depth: usize,
+    ) {
+        if depth > 8 {
+            return;
+        }
         let entries = match std::fs::read_dir(dir) {
             Ok(rd) => rd,
             Err(_) => return,
@@ -1992,9 +2211,13 @@ fn collect_project_files(root: &str) -> Vec<String> {
         for entry in entries.flatten() {
             let path = entry.path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') && !visible_dot_dirs.contains(&name) { continue; }
+            if name.starts_with('.') && !visible_dot_dirs.contains(&name) {
+                continue;
+            }
             if path.is_dir() {
-                if skip_dirs.contains(&name) { continue; }
+                if skip_dirs.contains(&name) {
+                    continue;
+                }
                 walk(&path, root, skip_dirs, visible_dot_dirs, files, depth + 1);
             } else if let Ok(rel) = path.strip_prefix(root) {
                 files.push(rel.to_string_lossy().to_string());
@@ -2003,7 +2226,14 @@ fn collect_project_files(root: &str) -> Vec<String> {
     }
 
     let root_path = std::path::Path::new(root);
-    walk(root_path, root_path, skip_dirs, visible_dot_dirs, &mut files, 0);
+    walk(
+        root_path,
+        root_path,
+        skip_dirs,
+        visible_dot_dirs,
+        &mut files,
+        0,
+    );
 
     // Limit to 500 files for performance
     files.truncate(500);
@@ -2019,15 +2249,22 @@ fn handle_incremental_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()>
             repl.state.incremental_search_query.clear();
             repl.state.incremental_search_match_index = 0;
             repl.state.incremental_search_match_count = 0;
-            repl.prompt.set_input(std::mem::take(&mut repl.state.incremental_search_saved_input));
+            repl.prompt.set_input(std::mem::take(
+                &mut repl.state.incremental_search_saved_input,
+            ));
             Ok(())
         }
         KeyCode::Enter => {
-            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            let matches = repl
+                .command_history
+                .search_history(&repl.state.incremental_search_query);
             let chosen = if matches.is_empty() {
                 std::mem::take(&mut repl.state.incremental_search_query)
             } else {
-                let idx = repl.state.incremental_search_match_index.min(matches.len() - 1);
+                let idx = repl
+                    .state
+                    .incremental_search_match_index
+                    .min(matches.len() - 1);
                 matches[idx].to_string()
             };
             repl.state.incremental_search_active = false;
@@ -2039,55 +2276,70 @@ fn handle_incremental_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()>
             Ok(())
         }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            let matches = repl
+                .command_history
+                .search_history(&repl.state.incremental_search_query);
             repl.state.incremental_search_match_count = matches.len();
             if !matches.is_empty() {
                 repl.state.incremental_search_match_index =
                     (repl.state.incremental_search_match_index + 1) % matches.len();
-                repl.prompt.set_input(matches[repl.state.incremental_search_match_index].to_string());
+                repl.prompt
+                    .set_input(matches[repl.state.incremental_search_match_index].to_string());
             }
             Ok(())
         }
         KeyCode::Up => {
-            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            let matches = repl
+                .command_history
+                .search_history(&repl.state.incremental_search_query);
             repl.state.incremental_search_match_count = matches.len();
             if !matches.is_empty() && repl.state.incremental_search_match_index > 0 {
                 repl.state.incremental_search_match_index -= 1;
-                repl.prompt.set_input(matches[repl.state.incremental_search_match_index].to_string());
+                repl.prompt
+                    .set_input(matches[repl.state.incremental_search_match_index].to_string());
             }
             Ok(())
         }
         KeyCode::Down => {
-            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            let matches = repl
+                .command_history
+                .search_history(&repl.state.incremental_search_query);
             repl.state.incremental_search_match_count = matches.len();
             if !matches.is_empty() {
                 repl.state.incremental_search_match_index =
                     (repl.state.incremental_search_match_index + 1).min(matches.len() - 1);
-                repl.prompt.set_input(matches[repl.state.incremental_search_match_index].to_string());
+                repl.prompt
+                    .set_input(matches[repl.state.incremental_search_match_index].to_string());
             }
             Ok(())
         }
         KeyCode::Backspace => {
             repl.state.incremental_search_query.pop();
             repl.state.incremental_search_match_index = 0;
-            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            let matches = repl
+                .command_history
+                .search_history(&repl.state.incremental_search_query);
             repl.state.incremental_search_match_count = matches.len();
             if let Some(first) = matches.first() {
                 repl.prompt.set_input(first.to_string());
             } else {
-                repl.prompt.set_input(repl.state.incremental_search_query.clone());
+                repl.prompt
+                    .set_input(repl.state.incremental_search_query.clone());
             }
             Ok(())
         }
         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
             repl.state.incremental_search_query.push(c);
             repl.state.incremental_search_match_index = 0;
-            let matches = repl.command_history.search_history(&repl.state.incremental_search_query);
+            let matches = repl
+                .command_history
+                .search_history(&repl.state.incremental_search_query);
             repl.state.incremental_search_match_count = matches.len();
             if let Some(first) = matches.first() {
                 repl.prompt.set_input(first.to_string());
             } else {
-                repl.prompt.set_input(repl.state.incremental_search_query.clone());
+                repl.prompt
+                    .set_input(repl.state.incremental_search_query.clone());
             }
             Ok(())
         }
@@ -2148,7 +2400,7 @@ fn handle_pager_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.chat_search_prev();
             Ok(())
         }
-        _ => Ok(())
+        _ => Ok(()),
     }
 }
 
@@ -2198,7 +2450,7 @@ fn handle_chat_search_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
             Ok(())
         }
-        _ => Ok(())
+        _ => Ok(()),
     }
 }
 
@@ -2209,11 +2461,26 @@ mod tests {
     #[test]
     fn test_complete_command_args_compact() {
         let completions = complete_command_args("compact", "");
-        assert!(completions.contains(&"status".to_string()), "compact should complete 'status'");
-        assert!(completions.contains(&"truncate".to_string()), "compact should complete 'truncate'");
-        assert!(completions.contains(&"micro".to_string()), "compact should complete 'micro'");
-        assert!(completions.contains(&"group".to_string()), "compact should complete 'group'");
-        assert!(completions.contains(&"--preview".to_string()), "compact should complete '--preview'");
+        assert!(
+            completions.contains(&"status".to_string()),
+            "compact should complete 'status'"
+        );
+        assert!(
+            completions.contains(&"truncate".to_string()),
+            "compact should complete 'truncate'"
+        );
+        assert!(
+            completions.contains(&"micro".to_string()),
+            "compact should complete 'micro'"
+        );
+        assert!(
+            completions.contains(&"group".to_string()),
+            "compact should complete 'group'"
+        );
+        assert!(
+            completions.contains(&"--preview".to_string()),
+            "compact should complete '--preview'"
+        );
     }
 
     #[test]
@@ -2250,32 +2517,83 @@ mod tests {
     #[test]
     fn test_complete_command_args_unknown_returns_empty() {
         let completions = complete_command_args("nonexistent_cmd", "");
-        assert!(completions.is_empty(), "Unknown command should return empty completions");
+        assert!(
+            completions.is_empty(),
+            "Unknown command should return empty completions"
+        );
     }
 
     #[test]
     fn test_complete_command_args_with_prefix() {
         let completions = complete_command_args("compact", "st");
-        assert!(completions.contains(&"status".to_string()), "Prefix 'st' should match 'status'");
-        assert!(!completions.contains(&"truncate".to_string()), "Prefix 'st' should not match 'truncate'");
+        assert!(
+            completions.contains(&"status".to_string()),
+            "Prefix 'st' should match 'status'"
+        );
+        assert!(
+            !completions.contains(&"truncate".to_string()),
+            "Prefix 'st' should not match 'truncate'"
+        );
     }
 
     #[test]
     fn test_complete_command_args_all_core_commands_have_completions() {
         let core_commands = [
-            "team", "model", "config", "credentials", "worktree", "debug",
-            "diff", "ci", "compact", "permissions", "plan", "review",
-            "history", "export", "theme", "loop", "schedule", "ralph", "routine",
-            "status", "find", "browse", "cost", "agents", "mcp", "hooks",
-            "remember", "recall", "memory", "image", "mode", "undo", "rewind",
-            "notify", "create-pr", "copy", "add", "watch", "session", "effort",
-            "focus", "accessibility", "color", "diag", "commands", "statusline", "lang",
+            "team",
+            "model",
+            "config",
+            "credentials",
+            "worktree",
+            "debug",
+            "diff",
+            "ci",
+            "compact",
+            "permissions",
+            "plan",
+            "review",
+            "history",
+            "export",
+            "theme",
+            "loop",
+            "schedule",
+            "ralph",
+            "routine",
+            "status",
+            "find",
+            "browse",
+            "cost",
+            "agents",
+            "mcp",
+            "hooks",
+            "remember",
+            "recall",
+            "memory",
+            "image",
+            "mode",
+            "undo",
+            "rewind",
+            "notify",
+            "create-pr",
+            "copy",
+            "add",
+            "watch",
+            "session",
+            "effort",
+            "focus",
+            "accessibility",
+            "color",
+            "diag",
+            "commands",
+            "statusline",
+            "lang",
         ];
 
         for cmd in &core_commands {
             let completions = complete_command_args(cmd, "");
-            assert!(!completions.is_empty(),
-                "Command '/{cmd}' should have tab completions but returned empty");
+            assert!(
+                !completions.is_empty(),
+                "Command '/{cmd}' should have tab completions but returned empty"
+            );
         }
     }
 
@@ -2283,11 +2601,17 @@ mod tests {
     fn test_complete_command_args_aliases() {
         let creds = complete_command_args("credentials", "");
         let creds_alias = complete_command_args("creds", "");
-        assert_eq!(creds, creds_alias, "credentials and creds should have same completions");
+        assert_eq!(
+            creds, creds_alias,
+            "credentials and creds should have same completions"
+        );
 
         let perm = complete_command_args("permissions", "");
         let perm_alias = complete_command_args("perms", "");
-        assert_eq!(perm, perm_alias, "permissions and perms should have same completions");
+        assert_eq!(
+            perm, perm_alias,
+            "permissions and perms should have same completions"
+        );
     }
 }
 
@@ -2296,7 +2620,12 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
     use crate::widgets::agent_bar::DashboardMode;
 
     // If in detail mode, handle scrolling and exit
-    if repl.state.agent_dashboard.as_ref().is_some_and(|d| d.mode == DashboardMode::Detail) {
+    if repl
+        .state
+        .agent_dashboard
+        .as_ref()
+        .is_some_and(|d| d.mode == DashboardMode::Detail)
+    {
         let dashboard = repl.state.agent_dashboard.as_mut().unwrap();
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -2311,7 +2640,7 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 dashboard.scroll_down();
                 Ok(())
             }
-            _ => Ok(())
+            _ => Ok(()),
         }
     } else {
         // List mode: navigate agents, enter detail, or close
@@ -2333,7 +2662,7 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 dashboard.enter_detail();
                 Ok(())
             }
-            _ => Ok(())
+            _ => Ok(()),
         }
     }
 }

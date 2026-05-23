@@ -3,12 +3,12 @@
 //! Records the full query lifecycle (LLM requests/responses, tool calls,
 //! query events) as JSONL for deterministic replay testing.
 
-pub(crate) mod types;
+mod fixture;
 mod recorder;
 mod replayer;
-mod fixture;
+pub(crate) mod types;
 
-pub use types::{RecordingEntry, SessionRecordingMeta};
+pub use fixture::ToolChainTest;
 pub use recorder::SessionRecorder;
 pub use replayer::SessionReplayer;
-pub use fixture::ToolChainTest;
+pub use types::{RecordingEntry, SessionRecordingMeta};

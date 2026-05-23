@@ -3,10 +3,10 @@
 //! Manages OAuth authentication for MCP servers that require it.
 //! Provides token management, authorization code flow, and token refresh.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -37,24 +37,15 @@ pub struct McpOAuthConfig {
 #[serde(tag = "action")]
 pub enum McpAuthAction {
     /// Start OAuth authorization flow.
-    Authorize {
-        server_name: String,
-    },
+    Authorize { server_name: String },
     /// Exchange authorization code for token.
-    Token {
-        server_name: String,
-        code: String,
-    },
+    Token { server_name: String, code: String },
     /// Refresh an expired token.
-    Refresh {
-        server_name: String,
-    },
+    Refresh { server_name: String },
     /// List authenticated servers.
     List,
     /// Revoke authentication.
-    Revoke {
-        server_name: String,
-    },
+    Revoke { server_name: String },
 }
 
 /// Shared OAuth token store.
@@ -190,7 +181,10 @@ impl Tool for McpAuthTool {
                 }
             }
 
-            McpAuthAction::Token { server_name, code: _code } => {
+            McpAuthAction::Token {
+                server_name,
+                code: _code,
+            } => {
                 // In a real implementation, this would exchange the code for tokens via HTTP.
                 // For now, store a placeholder token to demonstrate the flow.
                 let token = OAuthToken {
@@ -218,8 +212,7 @@ impl Tool for McpAuthTool {
                 let mut tokens = self.tokens.write().await;
                 match tokens.get_mut(&server_name) {
                     Some(token) => {
-                        token.access_token =
-                            format!("refreshed_{}", uuid::Uuid::new_v4().simple());
+                        token.access_token = format!("refreshed_{}", uuid::Uuid::new_v4().simple());
                         Ok(ToolOutput {
                             content: format!("Refreshed token for {server_name}"),
                             is_error: false,
@@ -310,10 +303,7 @@ mod tests {
         assert!(!output.is_error);
         assert!(output.content.contains("test-server"));
         assert!(output.content.contains("auth.example.com"));
-        assert_eq!(
-            output.metadata.get("server_name").unwrap(),
-            "test-server"
-        );
+        assert_eq!(output.metadata.get("server_name").unwrap(), "test-server");
     }
 
     #[tokio::test]

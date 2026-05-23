@@ -18,32 +18,37 @@ pub fn load_skill_from_file(path: &Path) -> SkillResult<Skill> {
     if metadata.len() > MAX_SKILL_SIZE {
         return Err(SkillError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("Skill file too large: {} bytes (max {MAX_SKILL_SIZE})", metadata.len()),
+            format!(
+                "Skill file too large: {} bytes (max {MAX_SKILL_SIZE})",
+                metadata.len()
+            ),
         )));
     }
 
-    let content = std::fs::read_to_string(path)
-        .map_err(SkillError::Io)?;
+    let content = std::fs::read_to_string(path).map_err(SkillError::Io)?;
 
     let parsed = parse_skill_frontmatter(&content, &path.display().to_string())?;
 
     // Determine skill name and ID
-    let parent_dir = path.parent()
-        .unwrap_or_else(|| Path::new(""));
+    let parent_dir = path.parent().unwrap_or_else(|| Path::new(""));
 
     let skill_dir_name = parent_dir
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
 
-    let name = parsed.frontmatter.name
+    let name = parsed
+        .frontmatter
+        .name
         .clone()
         .unwrap_or_else(|| skill_dir_name.to_string());
 
     let id = skill_dir_name.to_string();
 
     // Extract description
-    let description = parsed.frontmatter.description
+    let description = parsed
+        .frontmatter
+        .description
         .clone()
         .unwrap_or_else(|| extract_description_from_body(&parsed.body));
 
@@ -98,8 +103,7 @@ pub fn load_metadata_only(path: &Path) -> SkillResult<SkillMetadata> {
         return Err(SkillError::NotFound(path.display().to_string()));
     }
 
-    let content = std::fs::read_to_string(path)
-        .map_err(SkillError::Io)?;
+    let content = std::fs::read_to_string(path).map_err(SkillError::Io)?;
 
     let parsed = parse_skill_frontmatter(&content, &path.display().to_string())?;
 
@@ -109,13 +113,17 @@ pub fn load_metadata_only(path: &Path) -> SkillResult<SkillMetadata> {
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
 
-    let name = parsed.frontmatter.name
+    let name = parsed
+        .frontmatter
+        .name
         .clone()
         .unwrap_or_else(|| skill_dir_name.to_string());
 
     let id = skill_dir_name.to_string();
 
-    let description = parsed.frontmatter.description
+    let description = parsed
+        .frontmatter
+        .description
         .clone()
         .unwrap_or_else(|| extract_description_from_body(&parsed.body));
 
@@ -222,10 +230,7 @@ pub fn load_skills_from_directory(
 /// Searches for `.claude/skills/` and `.shannon/skills/` directories between
 /// the given paths and the current working directory, plus user-level skills
 /// from `~/.claude/skills/` and `~/.shannon/skills/`.
-pub fn discover_skill_directories(
-    file_paths: &[PathBuf],
-    cwd: &Path,
-) -> Vec<PathBuf> {
+pub fn discover_skill_directories(file_paths: &[PathBuf], cwd: &Path) -> Vec<PathBuf> {
     let mut discovered = std::collections::HashSet::new();
 
     // Skill directory names to search (Claude Code compat + Shannon + Agent Skills Standard)
@@ -235,8 +240,7 @@ pub fn discover_skill_directories(
     let command_dir_names = [".claude/commands", ".shannon/commands"];
 
     for file_path in file_paths {
-        let mut current = file_path.parent()
-            .unwrap_or_else(|| Path::new("."));
+        let mut current = file_path.parent().unwrap_or_else(|| Path::new("."));
 
         while current != cwd && current.starts_with(cwd) {
             for dir_name in &skill_dir_names {
@@ -324,9 +328,7 @@ pub fn load_commands_from_directory(
 
     let mut skills = Vec::new();
 
-    for entry in std::fs::read_dir(commands_dir)
-        .map_err(SkillError::Io)?
-    {
+    for entry in std::fs::read_dir(commands_dir).map_err(SkillError::Io)? {
         let entry = entry.map_err(SkillError::Io)?;
         let path = entry.path();
 
@@ -340,7 +342,8 @@ pub fn load_commands_from_directory(
             continue;
         }
 
-        let stem = path.file_stem()
+        let stem = path
+            .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown");
 
@@ -365,13 +368,17 @@ pub fn load_commands_from_directory(
             }
         };
 
-        let name = parsed.frontmatter.name
+        let name = parsed
+            .frontmatter
+            .name
             .clone()
             .unwrap_or_else(|| stem.to_string());
 
         let id = stem.to_string();
 
-        let description = parsed.frontmatter.description
+        let description = parsed
+            .frontmatter
+            .description
             .clone()
             .unwrap_or_else(|| extract_description_from_body(&parsed.body));
 
@@ -408,7 +415,10 @@ pub fn load_commands_from_directory(
             updated_at: None,
         };
 
-        debug!("Loaded command skill: {} from {:?}", skill.name, skill.file_path);
+        debug!(
+            "Loaded command skill: {} from {:?}",
+            skill.name, skill.file_path
+        );
         skills.push(skill);
     }
 
@@ -424,14 +434,12 @@ pub fn load_commands_from_directory(
 /// Validate that a path doesn't escape the base directory.
 /// Resolves symlinks via canonicalization to prevent symlink-based traversal.
 pub fn validate_path_within_base(path: &Path, base: &Path) -> SkillResult<()> {
-    let canonical_path = path.canonicalize()
-        .map_err(|e| SkillError::PathTraversal(format!(
-            "Cannot resolve path {path:?}: {e}"
-        )))?;
-    let canonical_base = base.canonicalize()
-        .map_err(|e| SkillError::PathTraversal(format!(
-            "Cannot resolve base {base:?}: {e}"
-        )))?;
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|e| SkillError::PathTraversal(format!("Cannot resolve path {path:?}: {e}")))?;
+    let canonical_base = base
+        .canonicalize()
+        .map_err(|e| SkillError::PathTraversal(format!("Cannot resolve base {base:?}: {e}")))?;
 
     if !canonical_path.starts_with(&canonical_base) {
         return Err(SkillError::PathTraversal(format!(
@@ -457,7 +465,10 @@ This is a description."#;
     #[test]
     fn test_extract_description_from_plain_text() {
         let body = "Just a simple description";
-        assert_eq!(extract_description_from_body(body), "Just a simple description");
+        assert_eq!(
+            extract_description_from_body(body),
+            "Just a simple description"
+        );
     }
 
     #[test]
@@ -489,7 +500,9 @@ This is a description."#;
         let skill_dir = tmp.path().join("my-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
         let skill_file = skill_dir.join("SKILL.md");
-        std::fs::write(&skill_file, r#"---
+        std::fs::write(
+            &skill_file,
+            r#"---
 name: my-skill
 description: A helpful skill
 alias:
@@ -505,14 +518,19 @@ This is a very long body that should not be loaded
 when we only need metadata. It contains detailed instructions
 and examples that would consume many tokens if included in
 the LLM context window.
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let meta = load_metadata_only(&skill_file).unwrap();
         assert_eq!(meta.id, "my-skill");
         assert_eq!(meta.name, "my-skill");
         assert_eq!(meta.description, "A helpful skill");
         assert_eq!(meta.aliases, vec!["ms".to_string()]);
-        assert_eq!(meta.allowed_tools, vec!["bash".to_string(), "read".to_string()]);
+        assert_eq!(
+            meta.allowed_tools,
+            vec!["bash".to_string(), "read".to_string()]
+        );
         assert_eq!(meta.argument_hint, Some("<files>".to_string()));
         assert!(meta.user_invocable);
         assert!(!meta.is_hidden);
@@ -531,7 +549,11 @@ the LLM context window.
         let skill_dir = tmp.path().join("plain-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
         let skill_file = skill_dir.join("SKILL.md");
-        std::fs::write(&skill_file, "# Plain Skill\n\nJust a body with no frontmatter.\n").unwrap();
+        std::fs::write(
+            &skill_file,
+            "# Plain Skill\n\nJust a body with no frontmatter.\n",
+        )
+        .unwrap();
 
         let meta = load_metadata_only(&skill_file).unwrap();
         // Should fall back to directory name for id and name
@@ -549,14 +571,18 @@ the LLM context window.
         let skill_dir = tmp.path().join("full-skill");
         std::fs::create_dir_all(&skill_dir).unwrap();
         let skill_file = skill_dir.join("SKILL.md");
-        std::fs::write(&skill_file, r#"---
+        std::fs::write(
+            &skill_file,
+            r#"---
 name: full-skill
 description: A full skill
 ---
 # Full Skill Body
 
 Detailed instructions go here.
-"#).unwrap();
+"#,
+        )
+        .unwrap();
 
         let skill = load_full_skill(&skill_file).unwrap();
         assert_eq!(skill.id, "full-skill");
@@ -601,8 +627,7 @@ Detailed instructions go here.
         )
         .unwrap();
 
-        let skills =
-            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+        let skills = load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].id, "deploy");
@@ -624,8 +649,7 @@ Detailed instructions go here.
         )
         .unwrap();
 
-        let skills =
-            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+        let skills = load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
 
         assert_eq!(skills[0].id, "my-cmd");
         assert_eq!(skills[0].name, "My Custom Command");
@@ -641,8 +665,7 @@ Detailed instructions go here.
         std::fs::write(cmds.join("ignore.txt"), "Not a command.\n").unwrap();
         std::fs::write(cmds.join("ignore.json"), "{}\n").unwrap();
 
-        let skills =
-            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+        let skills = load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].id, "valid");
@@ -657,8 +680,7 @@ Detailed instructions go here.
         std::fs::write(cmds.join("visible.md"), "# Visible\nBody.\n").unwrap();
         std::fs::write(cmds.join(".hidden.md"), "# Hidden\nBody.\n").unwrap();
 
-        let skills =
-            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+        let skills = load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].id, "visible");
@@ -682,8 +704,7 @@ Detailed instructions go here.
 
         std::fs::write(cmds.join("simple.md"), "# Simple Command\n\nJust a body.\n").unwrap();
 
-        let skills =
-            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+        let skills = load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
 
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].id, "simple");
@@ -702,8 +723,7 @@ Detailed instructions go here.
         std::fs::write(cmds.join("beta.md"), "---\n---\nBeta body.\n").unwrap();
         std::fs::write(cmds.join("gamma.md"), "---\n---\nGamma body.\n").unwrap();
 
-        let skills =
-            load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
+        let skills = load_commands_from_directory(&cmds, SkillSource::CommandsDeprecated).unwrap();
 
         assert_eq!(skills.len(), 3);
 

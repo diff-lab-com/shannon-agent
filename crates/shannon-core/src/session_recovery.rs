@@ -229,7 +229,9 @@ impl SessionRecovery {
         let log_path = self.session_log_path(&project_dir, session_id);
 
         if !log_path.exists() {
-            return Err(SessionRecoveryError::SessionNotFound(session_id.to_string()));
+            return Err(SessionRecoveryError::SessionNotFound(
+                session_id.to_string(),
+            ));
         }
 
         let entry = SessionLogEntry {
@@ -276,7 +278,9 @@ impl SessionRecovery {
         let log_path = self.session_log_path(&project_dir, session_id);
 
         if !log_path.exists() {
-            return Err(SessionRecoveryError::SessionNotFound(session_id.to_string()));
+            return Err(SessionRecoveryError::SessionNotFound(
+                session_id.to_string(),
+            ));
         }
 
         // Open once in append mode and write all entries.
@@ -322,7 +326,9 @@ impl SessionRecovery {
         let log_path = self.session_log_path(&project_dir, session_id);
 
         if !log_path.exists() {
-            return Err(SessionRecoveryError::SessionNotFound(session_id.to_string()));
+            return Err(SessionRecoveryError::SessionNotFound(
+                session_id.to_string(),
+            ));
         }
 
         self.read_log_entries(&log_path)
@@ -338,7 +344,9 @@ impl SessionRecovery {
         let log_path = self.session_log_path(&project_dir, session_id);
 
         if !log_path.exists() {
-            return Err(SessionRecoveryError::SessionNotFound(session_id.to_string()));
+            return Err(SessionRecoveryError::SessionNotFound(
+                session_id.to_string(),
+            ));
         }
 
         self.read_raw_entries(&log_path)
@@ -365,7 +373,9 @@ impl SessionRecovery {
         let meta_path = self.session_meta_path(&project_dir, session_id);
 
         if !meta_path.exists() {
-            return Err(SessionRecoveryError::SessionNotFound(session_id.to_string()));
+            return Err(SessionRecoveryError::SessionNotFound(
+                session_id.to_string(),
+            ));
         }
 
         let contents = fs::read_to_string(&meta_path)?;
@@ -434,7 +444,9 @@ impl SessionRecovery {
     ///
     /// Scans all project directories and returns the session with the most
     /// recent `updated_at` timestamp.
-    pub fn get_last_session(&self) -> Result<Option<(PathBuf, RecoveryMetadata)>, SessionRecoveryError> {
+    pub fn get_last_session(
+        &self,
+    ) -> Result<Option<(PathBuf, RecoveryMetadata)>, SessionRecoveryError> {
         if !self.sessions_dir.exists() {
             return Ok(None);
         }
@@ -509,7 +521,9 @@ impl SessionRecovery {
         let meta_path = self.session_meta_path(&project_dir, session_id);
 
         if !log_path.exists() && !meta_path.exists() {
-            return Err(SessionRecoveryError::SessionNotFound(session_id.to_string()));
+            return Err(SessionRecoveryError::SessionNotFound(
+                session_id.to_string(),
+            ));
         }
 
         if log_path.exists() {
@@ -565,7 +579,10 @@ impl SessionRecovery {
         let count = if log_path.exists() {
             let file = File::open(&log_path)?;
             let reader = BufReader::new(file);
-            reader.lines().filter(|l| l.as_ref().is_ok_and(|s| !s.trim().is_empty())).count()
+            reader
+                .lines()
+                .filter(|l| l.as_ref().is_ok_and(|s| !s.trim().is_empty()))
+                .count()
         } else {
             0
         };
@@ -585,7 +602,10 @@ impl SessionRecovery {
     }
 
     /// Read raw log entries, sorting by sequence number, skipping bad lines.
-    fn read_raw_entries(&self, log_path: &Path) -> Result<Vec<SessionLogEntry>, SessionRecoveryError> {
+    fn read_raw_entries(
+        &self,
+        log_path: &Path,
+    ) -> Result<Vec<SessionLogEntry>, SessionRecoveryError> {
         let file = File::open(log_path)?;
         let reader = BufReader::new(file);
 
@@ -625,8 +645,12 @@ impl Default for SessionRecovery {
                 match Self::with_dir(fallback_dir.clone()) {
                     Ok(s) => s,
                     Err(fallback_err) => {
-                        tracing::error!("SessionRecovery: temp fallback also failed: {fallback_err}. Using non-persisting instance.");
-                        Self { sessions_dir: fallback_dir }
+                        tracing::error!(
+                            "SessionRecovery: temp fallback also failed: {fallback_err}. Using non-persisting instance."
+                        );
+                        Self {
+                            sessions_dir: fallback_dir,
+                        }
                     }
                 }
             }
@@ -784,7 +808,8 @@ mod tests {
             make_message("user", "How are you?"),
         ];
 
-        mgr.append_messages(&project_path(), &id, 0, &messages).unwrap();
+        mgr.append_messages(&project_path(), &id, 0, &messages)
+            .unwrap();
 
         let loaded = mgr.load_messages(&project_path(), &id).unwrap();
         assert_eq!(loaded.len(), 3);
@@ -799,9 +824,12 @@ mod tests {
         let id = mgr.create_session(&project_path(), "model").unwrap();
 
         // Append out of order by seq.
-        mgr.append_message(&project_path(), &id, 2, &make_message("user", "Third")).unwrap();
-        mgr.append_message(&project_path(), &id, 0, &make_message("user", "First")).unwrap();
-        mgr.append_message(&project_path(), &id, 1, &make_message("user", "Second")).unwrap();
+        mgr.append_message(&project_path(), &id, 2, &make_message("user", "Third"))
+            .unwrap();
+        mgr.append_message(&project_path(), &id, 0, &make_message("user", "First"))
+            .unwrap();
+        mgr.append_message(&project_path(), &id, 1, &make_message("user", "Second"))
+            .unwrap();
 
         let loaded = mgr.load_messages(&project_path(), &id).unwrap();
         assert_eq!(loaded.len(), 3);
@@ -843,7 +871,8 @@ mod tests {
         let meta_before = mgr.load_metadata(&project_path(), &id).unwrap();
         assert_eq!(meta_before.message_count, 0);
 
-        mgr.append_message(&project_path(), &id, 0, &make_message("user", "Hi")).unwrap();
+        mgr.append_message(&project_path(), &id, 0, &make_message("user", "Hi"))
+            .unwrap();
 
         let meta_after = mgr.load_metadata(&project_path(), &id).unwrap();
         assert_eq!(meta_after.message_count, 1);
@@ -923,7 +952,8 @@ mod tests {
         let mgr = manager();
         let id = mgr.create_session(&project_path(), "model").unwrap();
 
-        mgr.append_message(&project_path(), &id, 0, &make_message("user", "Hi")).unwrap();
+        mgr.append_message(&project_path(), &id, 0, &make_message("user", "Hi"))
+            .unwrap();
         mgr.delete_session(&project_path(), &id).unwrap();
 
         assert!(mgr.load_messages(&project_path(), &id).is_err());
@@ -945,14 +975,16 @@ mod tests {
         let id = mgr.create_session(&project_path(), "model").unwrap();
 
         // Append a valid message.
-        mgr.append_message(&project_path(), &id, 0, &make_message("user", "Valid")).unwrap();
+        mgr.append_message(&project_path(), &id, 0, &make_message("user", "Valid"))
+            .unwrap();
 
         // Simulate a crash by writing a partial/truncated line to the JSONL file.
         let project_dir = mgr.project_session_dir(&project_path());
         let log_path = mgr.session_log_path(&project_dir, &id);
         {
             let mut file = OpenOptions::new().append(true).open(&log_path).unwrap();
-            file.write_all(br#"{"seq":1,"message":{"role":"user","content":{"Text":"Partial"#).unwrap();
+            file.write_all(br#"{"seq":1,"message":{"role":"user","content":{"Text":"Partial"#)
+                .unwrap();
             file.flush().unwrap();
         }
 
@@ -972,8 +1004,10 @@ mod tests {
         let id = mgr.create_session(&project_path(), "model").unwrap();
 
         // Append valid messages.
-        mgr.append_message(&project_path(), &id, 0, &make_message("user", "First")).unwrap();
-        mgr.append_message(&project_path(), &id, 1, &make_message("user", "Second")).unwrap();
+        mgr.append_message(&project_path(), &id, 0, &make_message("user", "First"))
+            .unwrap();
+        mgr.append_message(&project_path(), &id, 1, &make_message("user", "Second"))
+            .unwrap();
 
         // Inject empty lines into the JSONL file.
         let project_dir = mgr.project_session_dir(&project_path());
@@ -999,8 +1033,10 @@ mod tests {
         let id_a = mgr.create_session(&project_a, "model").unwrap();
         let id_b = mgr.create_session(&project_b, "model").unwrap();
 
-        mgr.append_message(&project_a, &id_a, 0, &make_message("user", "Message A")).unwrap();
-        mgr.append_message(&project_b, &id_b, 0, &make_message("user", "Message B")).unwrap();
+        mgr.append_message(&project_a, &id_a, 0, &make_message("user", "Message A"))
+            .unwrap();
+        mgr.append_message(&project_b, &id_b, 0, &make_message("user", "Message B"))
+            .unwrap();
 
         let msgs_a = mgr.load_messages(&project_a, &id_a).unwrap();
         let msgs_b = mgr.load_messages(&project_b, &id_b).unwrap();
@@ -1046,7 +1082,8 @@ mod tests {
         let id = mgr.create_session(&project_path(), "model").unwrap();
 
         let before = Utc::now();
-        mgr.append_message(&project_path(), &id, 0, &make_message("user", "Test")).unwrap();
+        mgr.append_message(&project_path(), &id, 0, &make_message("user", "Test"))
+            .unwrap();
 
         let entries = mgr.load_entries(&project_path(), &id).unwrap();
         assert_eq!(entries.len(), 1);

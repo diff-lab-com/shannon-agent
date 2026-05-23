@@ -1,6 +1,6 @@
 //! Write tool implementation
 
-use crate::{ToolOutput, ToolError};
+use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -42,7 +42,11 @@ pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
 
     // Atomic write: write to temp file then rename to avoid partial writes on crash.
     // Use UUID suffix to prevent symlink race attacks on predictable temp paths.
-    let temp_path = format!("{}.shannon-tmp-{}", input.file_path, uuid::Uuid::new_v4().as_simple());
+    let temp_path = format!(
+        "{}.shannon-tmp-{}",
+        input.file_path,
+        uuid::Uuid::new_v4().as_simple()
+    );
     fs::write(&temp_path, &input.content)
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {e}")))?;
@@ -138,7 +142,9 @@ mod tests {
     async fn test_write_creates_parent_dirs() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub/dir/file.txt");
-        tokio::fs::create_dir_all(path.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
 
         let input = WriteInput {
             file_path: path.to_str().unwrap().to_string(),

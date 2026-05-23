@@ -4,95 +4,77 @@
 //! on complex tasks. It supports team creation, task delegation, message passing,
 //! and git worktree isolation for parallel development workflows.
 
+pub mod agent_defs;
+mod context;
 mod coordinator;
 pub mod custom_agent;
-mod teammate;
-mod task_board;
-mod worktree;
-mod message;
-mod task;
 mod error;
-mod sub_agent;
-mod multi_agent;
 mod executor;
-mod summary;
-mod context;
-mod task_tools;
+mod isolation;
+mod message;
+mod multi_agent;
 mod persistence;
-pub mod agent_defs;
 mod process_manager;
 mod protocol;
 mod remote_tools;
+mod sub_agent;
+mod summary;
+mod task;
+mod task_board;
+mod task_tools;
+mod teammate;
 mod tmux;
-mod isolation;
+mod worktree;
 
-pub use coordinator::{AgentCoordinator, CoordinatorConfig, AssignmentStrategy, AgentMode, CoordinatorEvent, AgentInfo, TeamManifest, InboxSummary};
-pub use teammate::{Teammate, TeammateConfig, TeammateStatus, TeammateState};
-pub use task_board::{TaskBoard, TaskAssignment, TaskBoardEvent, TaskBoardSummary};
-pub use worktree::{WorktreeManager, WorktreeConfig, WorktreeSession, WorktreeStatus, ExitAction,
-    EnterWorktreeTool, ExitWorktreeTool,
-    EnterWorktreeToolInput, ExitWorktreeToolInput,
-    get_active_worktree};
-pub use message::{AgentMessage, MessagePriority, MessageType, MessageContent, ProtocolMessage};
-pub use task::{AgentTask, TaskStatus, TaskDependency, TaskPriority, DependencyType};
+pub use agent_defs::{AgentDefError, AgentDefinition, AgentDefinitionRegistry};
+pub use context::{TEAMS_ENV_VAR, TeamContext, teams_enabled};
+pub use coordinator::{
+    AgentCoordinator, AgentInfo, AgentMode, AssignmentStrategy, CoordinatorConfig,
+    CoordinatorEvent, InboxSummary, TeamManifest,
+};
+pub use custom_agent::{CustomAgentDef, CustomAgentError, CustomAgentLoader};
 pub use error::{AgentError, CoordinationError, TaskError};
-pub use sub_agent::{
-    AgentConfig, AgentStatus, SubAgent, SubAgentRegistry,
-    AgentSpawnTool, AgentSpawnInput,
-    SendMessageTool, SendMessageInput,
-    TeamCreateTool, TeamCreateInput,
-};
-pub use multi_agent::{
-    MultiAgentConfig, MultiAgentSpawner, MultiAgentResult,
-    AgentResult as MultiAgentTaskResult, AgentResultStatus,
-    AgentConfig as SpawnAgentConfig,
-    DependencyError,
-};
-pub use summary::{
-    AgentExecutionSummary, SummaryStatus, SummaryGenerator, SuccessMetrics,
-};
-pub use context::{TeamContext, teams_enabled, TEAMS_ENV_VAR};
-pub use task_tools::{
-    TeamTaskCreateTool, TeamTaskUpdateTool, TeamTaskListTool,
-    TeamTaskClaimTool, TeamNotifyIdleTool,
-};
-pub use persistence::{
-    FilePersistence, TeamConfigFile, TaskFile, InboxMessage,
-};
-pub use agent_defs::{
-    AgentDefinition, AgentDefinitionRegistry, AgentDefError,
-};
-pub use custom_agent::{
-    CustomAgentDef, CustomAgentLoader, CustomAgentError,
-};
-pub use executor::{
-    AgentExecutor, LlmAgentExecutor, MockAgentExecutor, shared_executor,
-    ChatTurn,
-};
-pub use tmux::TmuxManager;
+pub use executor::{AgentExecutor, ChatTurn, LlmAgentExecutor, MockAgentExecutor, shared_executor};
 pub use isolation::{
-    IsolatedContext, IsolationConfig, SubagentSummary,
-    ContextMessage, ContextRole,
+    ContextMessage, ContextRole, IsolatedContext, IsolationConfig, SubagentSummary,
 };
+pub use message::{AgentMessage, MessageContent, MessagePriority, MessageType, ProtocolMessage};
+pub use multi_agent::{
+    AgentConfig as SpawnAgentConfig, AgentResult as MultiAgentTaskResult, AgentResultStatus,
+    DependencyError, MultiAgentConfig, MultiAgentResult, MultiAgentSpawner,
+};
+pub use persistence::{FilePersistence, InboxMessage, TaskFile, TeamConfigFile};
 pub use process_manager::{
-    AgentProcessManager, AgentProcessConfig, AgentProcessStatus,
-    AgentProcessError, AgentEvent, HealthCheckConfig,
+    AgentEvent, AgentProcessConfig, AgentProcessError, AgentProcessManager, AgentProcessStatus,
+    HealthCheckConfig,
 };
 pub use protocol::{
-    JsonRpcMessage, JsonRpcId, JsonRpcError,
-    ExecuteTaskParams, ShutdownParams,
-    AgentReadyParams, TaskProgressParams, TaskCompleteParams,
-    AgentIdleParams, ClaimTaskParams, ClaimTaskResult,
-    SendMessageParams, ListTasksParams, ListTasksResult, TaskSummary,
-    frame_message, parse_message,
+    AgentIdleParams, AgentReadyParams, ClaimTaskParams, ClaimTaskResult, ExecuteTaskParams,
+    JsonRpcError, JsonRpcId, JsonRpcMessage, ListTasksParams, ListTasksResult, SendMessageParams,
+    ShutdownParams, TaskCompleteParams, TaskProgressParams, TaskSummary, frame_message,
+    parse_message,
 };
 pub use remote_tools::{
-    CoordinatorChannel,
-    RemoteTeamTaskListTool, RemoteTeamTaskClaimTool,
-    RemoteTeamNotifyIdleTool, RemoteSendMessageTool,
-    RemoteTeamTaskCreateTool, RemoteTeamTaskUpdateTool,
-    RemoteTeamTaskGetTool, RemoteTeamManifestTool,
-    RemoteDisbandTeamTool, RemoteAddAgentTool,
+    CoordinatorChannel, RemoteAddAgentTool, RemoteDisbandTeamTool, RemoteSendMessageTool,
+    RemoteTeamManifestTool, RemoteTeamNotifyIdleTool, RemoteTeamTaskClaimTool,
+    RemoteTeamTaskCreateTool, RemoteTeamTaskGetTool, RemoteTeamTaskListTool,
+    RemoteTeamTaskUpdateTool,
+};
+pub use sub_agent::{
+    AgentConfig, AgentSpawnInput, AgentSpawnTool, AgentStatus, SendMessageInput, SendMessageTool,
+    SubAgent, SubAgentRegistry, TeamCreateInput, TeamCreateTool,
+};
+pub use summary::{AgentExecutionSummary, SuccessMetrics, SummaryGenerator, SummaryStatus};
+pub use task::{AgentTask, DependencyType, TaskDependency, TaskPriority, TaskStatus};
+pub use task_board::{TaskAssignment, TaskBoard, TaskBoardEvent, TaskBoardSummary};
+pub use task_tools::{
+    TeamNotifyIdleTool, TeamTaskClaimTool, TeamTaskCreateTool, TeamTaskListTool, TeamTaskUpdateTool,
+};
+pub use teammate::{Teammate, TeammateConfig, TeammateState, TeammateStatus};
+pub use tmux::TmuxManager;
+pub use worktree::{
+    EnterWorktreeTool, EnterWorktreeToolInput, ExitAction, ExitWorktreeTool, ExitWorktreeToolInput,
+    WorktreeConfig, WorktreeManager, WorktreeSession, WorktreeStatus, get_active_worktree,
 };
 
 /// Version information for the agents crate

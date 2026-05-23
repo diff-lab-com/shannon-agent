@@ -35,8 +35,7 @@ pub struct ProjectMemoryConfig {
 }
 
 /// Frontmatter metadata from a project memory file
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectMemoryMetadata {
     /// Priority for this configuration (higher = more important)
     pub priority: i32,
@@ -53,7 +52,6 @@ pub struct ProjectMemoryMetadata {
     /// Tool permissions
     pub tool_permissions: Option<serde_json::Value>,
 }
-
 
 /// Result of a project memory file search
 #[derive(Debug, Clone)]
@@ -115,7 +113,10 @@ impl ProjectMemoryManager {
 
     /// Find and parse the nearest project memory file from a specific directory.
     /// Searches for both CLAUDE.md and SHANNON.md, returning the first found.
-    pub fn find_nearest_from(&self, start_dir: &Path) -> Result<Option<ProjectMemorySearchResult>, ProjectMemoryError> {
+    pub fn find_nearest_from(
+        &self,
+        start_dir: &Path,
+    ) -> Result<Option<ProjectMemorySearchResult>, ProjectMemoryError> {
         let mut current_dir = start_dir.to_path_buf();
 
         // Search upward through parent directories
@@ -197,15 +198,13 @@ impl ProjectMemoryManager {
                 }
 
                 self.find_all_recursive(&path, results)?;
-            } else if MEMORY_FILE_NAMES.iter().any(|&name| {
-                path.file_name() == Some(std::ffi::OsStr::new(name))
-            }) {
+            } else if MEMORY_FILE_NAMES
+                .iter()
+                .any(|&name| path.file_name() == Some(std::ffi::OsStr::new(name)))
+            {
                 // Found a memory file, parse it
                 let config = self.parse_memory_file(&path)?;
-                results.push(ProjectMemorySearchResult {
-                    path,
-                    config,
-                });
+                results.push(ProjectMemorySearchResult { path, config });
             }
         }
 
@@ -214,21 +213,24 @@ impl ProjectMemoryManager {
 
     /// Parse a project memory file
     fn parse_memory_file(&self, path: &Path) -> Result<ProjectMemoryConfig, ProjectMemoryError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(ProjectMemoryError::ReadError)?;
+        let content = std::fs::read_to_string(path).map_err(ProjectMemoryError::ReadError)?;
 
         self.parse_memory_file_content(&content, path)
     }
 
     /// Parse project memory file content
-    pub fn parse_memory_file_content(&self, content: &str, _path: &Path) -> Result<ProjectMemoryConfig, ProjectMemoryError> {
+    pub fn parse_memory_file_content(
+        &self,
+        content: &str,
+        _path: &Path,
+    ) -> Result<ProjectMemoryConfig, ProjectMemoryError> {
         // Check for YAML frontmatter (--- delimited)
         let (metadata, body) = if content.starts_with("---") {
             // Has YAML frontmatter
             let parts: Vec<&str> = content.splitn(3, "---").collect();
             if parts.len() < 2 {
                 return Err(ProjectMemoryError::InvalidFrontmatter(
-                    "Frontmatter not properly closed with ---".to_string()
+                    "Frontmatter not properly closed with ---".to_string(),
                 ));
             }
 
@@ -236,8 +238,10 @@ impl ProjectMemoryManager {
             let main_content = parts[2..].join("---").trim().to_string();
 
             // Parse YAML frontmatter
-            let metadata: ProjectMemoryMetadata = serde_yaml::from_str(frontmatter)
-                .map_err(|e| ProjectMemoryError::InvalidFrontmatter(format!("YAML parsing error: {e}")))?;
+            let metadata: ProjectMemoryMetadata =
+                serde_yaml::from_str(frontmatter).map_err(|e| {
+                    ProjectMemoryError::InvalidFrontmatter(format!("YAML parsing error: {e}"))
+                })?;
 
             (metadata, main_content)
         } else {
@@ -274,7 +278,10 @@ impl ProjectMemoryManager {
         let mut parts = Vec::new();
 
         // Add priority header
-        parts.push(format!("=== Project Memory Instructions (priority: {}) ===", config.metadata.priority));
+        parts.push(format!(
+            "=== Project Memory Instructions (priority: {}) ===",
+            config.metadata.priority
+        ));
 
         // Add model overrides if present
         if let Some(ref model) = config.metadata.model {
@@ -351,7 +358,8 @@ impl ProjectMemoryManager {
                 if !source.config.instructions.is_empty() {
                     merged_instructions.push(source.config.instructions.clone());
                 }
-                merged_metadata = merge_metadata(merged_metadata.clone(), source.config.metadata.clone());
+                merged_metadata =
+                    merge_metadata(merged_metadata.clone(), source.config.metadata.clone());
                 sources.push(source);
             }
         };
@@ -393,14 +401,17 @@ impl ProjectMemoryManager {
 impl Default for ProjectMemoryManager {
     fn default() -> Self {
         Self::from_current_dir().unwrap_or_else(|_| Self {
-            base_dir: PathBuf::from(".")
+            base_dir: PathBuf::from("."),
         })
     }
 }
 
 /// Merge two metadata structs, with `later` values overriding `base` values
 /// when they are non-default/non-None.
-fn merge_metadata(base: ProjectMemoryMetadata, later: ProjectMemoryMetadata) -> ProjectMemoryMetadata {
+fn merge_metadata(
+    base: ProjectMemoryMetadata,
+    later: ProjectMemoryMetadata,
+) -> ProjectMemoryMetadata {
     ProjectMemoryMetadata {
         priority: later.priority,
         disable_auto_memory: later.disable_auto_memory,
@@ -486,11 +497,7 @@ pub fn load_rules_for_path(dir: &Path, active_path: Option<&Path>) -> Option<Str
     let mut entries: Vec<_> = std::fs::read_dir(&rules_dir)
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "md")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
         .collect();
 
     entries.sort_by_key(|e| e.file_name());
@@ -524,7 +531,10 @@ pub fn load_rules_for_path(dir: &Path, active_path: Option<&Path>) -> Option<Str
     if parts.is_empty() {
         None
     } else {
-        Some(format!("=== Project Rules (.claude/rules/) ===\n\n{}", parts.join("\n\n")))
+        Some(format!(
+            "=== Project Rules (.claude/rules/) ===\n\n{}",
+            parts.join("\n\n")
+        ))
     }
 }
 
@@ -710,7 +720,8 @@ pub fn save_memory_file(project_dir: &Path, id: &str, content: &str) -> std::io:
     std::fs::create_dir_all(&memory_dir)?;
 
     // Use first 8 chars of id as filename, sanitized
-    let safe_id: String = id.chars()
+    let safe_id: String = id
+        .chars()
         .take(8)
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
         .collect();
@@ -732,16 +743,25 @@ pub fn save_memory_file(project_dir: &Path, id: &str, content: &str) -> std::io:
 /// Returns `~/.shannon/projects/<project_hash>/memory/`.
 /// The project hash is derived from the project directory path.
 pub fn project_memory_dir(project_dir: &Path) -> PathBuf {
-    use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
     project_dir.hash(&mut hasher);
     let hash = format!("{:016x}", hasher.finish());
 
     dirs_home()
-        .map(|h| h.join(".shannon").join("projects").join(&hash).join("memory"))
-        .unwrap_or_else(|| PathBuf::from(".shannon/projects").join(&hash).join("memory"))
+        .map(|h| {
+            h.join(".shannon")
+                .join("projects")
+                .join(&hash)
+                .join("memory")
+        })
+        .unwrap_or_else(|| {
+            PathBuf::from(".shannon/projects")
+                .join(&hash)
+                .join("memory")
+        })
 }
 
 /// Attempt to resolve the user's home directory.
@@ -768,7 +788,9 @@ mod tests {
     fn test_parse_memory_file_without_frontmatter() {
         let manager = ProjectMemoryManager::new(PathBuf::from("."));
         let content = "This is a test instruction.\nAnother line.";
-        let config = manager.parse_memory_file_content(content, Path::new("test.md")).unwrap();
+        let config = manager
+            .parse_memory_file_content(content, Path::new("test.md"))
+            .unwrap();
 
         assert_eq!(config.metadata.priority, 0);
         assert_eq!(config.content, content);
@@ -785,7 +807,9 @@ disable_auto_memory: false
 ---
 This is a test instruction with frontmatter."#;
 
-        let config = manager.parse_memory_file_content(content, Path::new("test.md")).unwrap();
+        let config = manager
+            .parse_memory_file_content(content, Path::new("test.md"))
+            .unwrap();
 
         assert_eq!(config.metadata.priority, 10);
         assert_eq!(config.metadata.model.as_deref(), Some("test-model-v1"));
@@ -883,18 +907,37 @@ Another instruction"#;
         let claude_dir = tmp.join(".claude");
         fs::create_dir_all(&claude_dir).unwrap();
         fs::write(tmp.join("CLAUDE.md"), "Root CLAUDE.md instructions").unwrap();
-        fs::write(claude_dir.join("CLAUDE.md"), "Hidden claude dir instructions").unwrap();
+        fs::write(
+            claude_dir.join("CLAUDE.md"),
+            "Hidden claude dir instructions",
+        )
+        .unwrap();
         fs::write(tmp.join("CLAUDE.local.md"), "Local gitignored instructions").unwrap();
         fs::write(tmp.join("SHANNON.md"), "Shannon project instructions").unwrap();
 
         let manager = ProjectMemoryManager::new(tmp.clone());
         let result = manager.load_merged().unwrap();
 
-        assert!(!result.sources.is_empty(), "Should find at least some sources");
-        assert!(result.instructions.contains("Root CLAUDE.md"), "Should contain root CLAUDE.md");
-        assert!(result.instructions.contains("Hidden claude dir"), "Should contain .claude/CLAUDE.md");
-        assert!(result.instructions.contains("Local gitignored"), "Should contain CLAUDE.local.md");
-        assert!(result.instructions.contains("Shannon project"), "Should contain SHANNON.md");
+        assert!(
+            !result.sources.is_empty(),
+            "Should find at least some sources"
+        );
+        assert!(
+            result.instructions.contains("Root CLAUDE.md"),
+            "Should contain root CLAUDE.md"
+        );
+        assert!(
+            result.instructions.contains("Hidden claude dir"),
+            "Should contain .claude/CLAUDE.md"
+        );
+        assert!(
+            result.instructions.contains("Local gitignored"),
+            "Should contain CLAUDE.local.md"
+        );
+        assert!(
+            result.instructions.contains("Shannon project"),
+            "Should contain SHANNON.md"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -932,12 +975,21 @@ Another instruction"#;
         let content = "Header line\n@README\nMiddle line\n@docs/guide.md\nFooter";
         let result = resolve_imports(content, &tmp);
 
-        assert!(result.contains("Header line"), "Should keep non-import lines");
+        assert!(
+            result.contains("Header line"),
+            "Should keep non-import lines"
+        );
         assert!(result.contains("Readme content"), "Should resolve @README");
         assert!(result.contains("Middle line"), "Should keep middle lines");
-        assert!(result.contains("Guide content"), "Should resolve @docs/guide.md");
+        assert!(
+            result.contains("Guide content"),
+            "Should resolve @docs/guide.md"
+        );
         assert!(result.contains("Footer"), "Should keep footer");
-        assert!(!result.contains("@README"), "Should not contain @README after resolution");
+        assert!(
+            !result.contains("@README"),
+            "Should not contain @README after resolution"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -950,7 +1002,10 @@ Another instruction"#;
         // @nonexistent should be kept as-is
         let content = "Line one\n@nonexistent_file_xyz\nLine two";
         let result = resolve_imports(content, &tmp);
-        assert!(result.contains("@nonexistent_file_xyz"), "Unresolved imports kept as-is");
+        assert!(
+            result.contains("@nonexistent_file_xyz"),
+            "Unresolved imports kept as-is"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -959,7 +1014,10 @@ Another instruction"#;
     fn test_resolve_imports_skips_non_paths() {
         let content = "Email: user@example.com\nMention: @someone\nPath: /absolute/path";
         let result = resolve_imports(content, Path::new("."));
-        assert!(result.contains("user@example.com"), "Should not resolve emails");
+        assert!(
+            result.contains("user@example.com"),
+            "Should not resolve emails"
+        );
         assert!(result.contains("@someone"), "Should not resolve @mentions");
     }
 
@@ -1035,9 +1093,21 @@ Another instruction"#;
     #[test]
     fn test_matches_any_pattern() {
         let dir = Path::new("/project");
-        assert!(matches_any_pattern(Path::new("/project/src/main.rs"), dir, &["src/**/*.rs".to_string()]));
-        assert!(!matches_any_pattern(Path::new("/project/docs/guide.md"), dir, &["src/**/*.rs".to_string()]));
-        assert!(matches_any_pattern(Path::new("/project/Cargo.toml"), dir, &["*.toml".to_string()]));
+        assert!(matches_any_pattern(
+            Path::new("/project/src/main.rs"),
+            dir,
+            &["src/**/*.rs".to_string()]
+        ));
+        assert!(!matches_any_pattern(
+            Path::new("/project/docs/guide.md"),
+            dir,
+            &["src/**/*.rs".to_string()]
+        ));
+        assert!(matches_any_pattern(
+            Path::new("/project/Cargo.toml"),
+            dir,
+            &["*.toml".to_string()]
+        ));
     }
 
     #[test]
@@ -1050,13 +1120,11 @@ Another instruction"#;
         fs::write(
             rules_dir.join("rust-rules.md"),
             "---\npaths:\n  - \"**/*.rs\"\n---\nUse thiserror for errors.",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Rule that applies to all
-        fs::write(
-            rules_dir.join("general.md"),
-            "Always write tests.",
-        ).unwrap();
+        fs::write(rules_dir.join("general.md"), "Always write tests.").unwrap();
 
         // No filtering - should get both
         let all = load_rules_for_path(tmp.path(), None);

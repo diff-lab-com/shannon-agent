@@ -9,7 +9,7 @@
 //!
 //! Enables hierarchical task organization with persistent memory.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -251,7 +251,8 @@ impl Default for TodoWriteTool {
 impl TodoWriteTool {
     pub fn new() -> Self {
         Self {
-            description: "Create and manage session task checklists for tracking work progress".to_string(),
+            description: "Create and manage session task checklists for tracking work progress"
+                .to_string(),
             store: Arc::new(RwLock::new(HashMap::new())),
             session_id: Uuid::new_v4().to_string(),
         }
@@ -270,7 +271,10 @@ impl TodoWriteTool {
         };
 
         // Check if all todos are completed
-        let all_done = input.todos.iter().all(|t| t.status == TodoStatus::Completed);
+        let all_done = input
+            .todos
+            .iter()
+            .all(|t| t.status == TodoStatus::Completed);
 
         // If all done, clear the list; otherwise, store new todos
         let new_todos = if all_done {
@@ -296,9 +300,9 @@ impl TodoWriteTool {
         // Check if verification nudge is needed
         // (3+ items completed, none marked as verification)
         let verification_nudge_needed = if all_done && old_todos.len() >= 3 {
-            let has_verification = old_todos.iter().any(|t| {
-                t.content.to_lowercase().contains("verif")
-            });
+            let has_verification = old_todos
+                .iter()
+                .any(|t| t.content.to_lowercase().contains("verif"));
             !has_verification
         } else {
             false
@@ -323,7 +327,9 @@ impl Tool for TodoWriteTool {
         let content = if todo_count == 0 {
             "All todos completed, list cleared".to_string()
         } else {
-            let pending = output.new_todos.iter()
+            let pending = output
+                .new_todos
+                .iter()
                 .filter(|t| t.status == TodoStatus::Pending)
                 .count();
             format!("Updated todo list: {todo_count} items ({pending} pending)")
@@ -384,14 +390,16 @@ impl Default for TaskCreateTool {
 impl TaskCreateTool {
     pub fn new() -> Self {
         Self {
-            description: "Create a new task with subject, description, and optional metadata".to_string(),
+            description: "Create a new task with subject, description, and optional metadata"
+                .to_string(),
             task_store: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub fn with_store(task_store: TaskStore) -> Self {
         Self {
-            description: "Create a new task with subject, description, and optional metadata".to_string(),
+            description: "Create a new task with subject, description, and optional metadata"
+                .to_string(),
             task_store,
         }
     }
@@ -564,7 +572,9 @@ impl Tool for TaskListTool {
             }
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 impl Default for TaskUpdateTool {
@@ -603,9 +613,11 @@ impl TaskUpdateTool {
                 "pending" => TodoStatus::Pending,
                 "in_progress" => TodoStatus::InProgress,
                 "completed" => TodoStatus::Completed,
-                _ => return Err(ToolError::InvalidInput(format!(
-                    "Invalid status: {status_str}. Must be pending, in_progress, or completed"
-                ))),
+                _ => {
+                    return Err(ToolError::InvalidInput(format!(
+                        "Invalid status: {status_str}. Must be pending, in_progress, or completed"
+                    )));
+                }
             };
         }
 
@@ -760,7 +772,9 @@ impl Tool for TaskGetTool {
             "required": ["task_id"]
         })
     }
-    fn is_read_only(&self) -> bool {        true    }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
@@ -819,7 +833,10 @@ mod tests {
         assert_eq!(item.description, "Implement the new feature");
         assert_eq!(item.active_form, Some("Implementing feature".to_string()));
         assert_eq!(item.metadata, Some(metadata));
-        assert_eq!(item.blocked_by, vec!["task-1".to_string(), "task-2".to_string()]);
+        assert_eq!(
+            item.blocked_by,
+            vec!["task-1".to_string(), "task-2".to_string()]
+        );
         assert!(Uuid::parse_str(&item.task_id).is_ok());
     }
 
@@ -868,16 +885,21 @@ mod tests {
         }
 
         // List all tasks
-        let result = tool.list_tasks(TaskListInput { status_filter: None }).await;
+        let result = tool
+            .list_tasks(TaskListInput {
+                status_filter: None,
+            })
+            .await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert_eq!(output.count, 2);
 
         // Filter by pending status
-        let result = tool.list_tasks(TaskListInput {
-            status_filter: Some("pending".to_string()),
-        })
-        .await;
+        let result = tool
+            .list_tasks(TaskListInput {
+                status_filter: Some("pending".to_string()),
+            })
+            .await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert_eq!(output.count, 1);
@@ -988,7 +1010,11 @@ mod tests {
         }
 
         // Get the task
-        let result = tool.get_task(TaskGetInput { task_id: task_id.clone() }).await;
+        let result = tool
+            .get_task(TaskGetInput {
+                task_id: task_id.clone(),
+            })
+            .await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.found);
@@ -1069,7 +1095,9 @@ mod tests {
 
         // List tasks should show 1 task
         let list_result = list_tool
-            .list_tasks(TaskListInput { status_filter: None })
+            .list_tasks(TaskListInput {
+                status_filter: None,
+            })
             .await
             .unwrap();
         assert_eq!(list_result.count, 1);
@@ -1086,7 +1114,12 @@ mod tests {
             .unwrap();
 
         // Get the task and verify the update
-        let get_result = get_tool.get_task(TaskGetInput { task_id: task_id.clone() }).await.unwrap();
+        let get_result = get_tool
+            .get_task(TaskGetInput {
+                task_id: task_id.clone(),
+            })
+            .await
+            .unwrap();
         assert!(get_result.found);
         assert_eq!(get_result.task.unwrap().status, TodoStatus::InProgress);
     }

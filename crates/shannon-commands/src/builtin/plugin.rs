@@ -4,10 +4,12 @@
 // Suppress dead_code for the entire file to avoid per-item annotations.
 #![allow(dead_code)]
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
-use shannon_core::plugin::{PluginRegistry, PluginIndex};
-use std::path::{Path, PathBuf};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
+use shannon_core::plugin::{PluginIndex, PluginRegistry};
 use std::io;
+use std::path::{Path, PathBuf};
 
 /// Plugin prompt template
 const PLUGIN_PROMPT: &str = r##"
@@ -53,13 +55,16 @@ pub fn command() -> Command {
         base: CommandBase {
             name: "plugin".to_string(),
             aliases: vec!["plugins".to_string()],
-            description: "Manage plugins: install, uninstall, list, search, update, info".to_string(),
+            description: "Manage plugins: install, uninstall, list, search, update, info"
+                .to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],
             source: CommandSource::Builtin,
             is_enabled: true,
             is_hidden: false,
-            argument_hint: Some("[install|uninstall|list|search|update|info|enable|disable] [args]".to_string()),
+            argument_hint: Some(
+                "[install|uninstall|list|search|update|info|enable|disable] [args]".to_string(),
+            ),
             when_to_use: Some(
                 "To install, manage, or discover plugins for Shannon Code".to_string(),
             ),
@@ -163,19 +168,25 @@ pub struct PluginDisplayInfo {
 /// Format a plugin list for display
 pub fn format_plugin_list(plugins: &[PluginDisplayInfo]) -> String {
     if plugins.is_empty() {
-        return "No plugins installed.\n\nInstall plugins with:\n  /plugin install <name-or-url>".to_string();
+        return "No plugins installed.\n\nInstall plugins with:\n  /plugin install <name-or-url>"
+            .to_string();
     }
 
     let mut output = String::from("Installed Plugins:\n\n");
 
-    let name_width = plugins.iter()
+    let name_width = plugins
+        .iter()
         .map(|p| p.name.len())
         .max()
         .unwrap_or(10)
         .max(4);
 
     for plugin in plugins {
-        let status = if plugin.enabled { "enabled" } else { "disabled" };
+        let status = if plugin.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
         output.push_str(&format!(
             "  {:<name_width$}  {:<8}  {} — {}\n",
             plugin.name,
@@ -272,38 +283,51 @@ pub fn create_registry() -> PluginRegistry {
 /// Create a plugin index with default URL
 pub fn create_index() -> PluginIndex {
     PluginIndex::new(
-        "https://raw.githubusercontent.com/shannon-code/plugins-index/main/index.json".to_string()
+        "https://raw.githubusercontent.com/shannon-code/plugins-index/main/index.json".to_string(),
     )
 }
 
 /// Install a plugin from a source (index name, git URL, or local path)
 pub async fn install_from_source(source: &str) -> Result<String, String> {
     let mut registry = create_registry();
-    registry.ensure_dir().await
+    registry
+        .ensure_dir()
+        .await
         .map_err(|e| format!("Failed to create plugins directory: {e}"))?;
 
     // Determine the source type
-    if source.starts_with("http://") || source.starts_with("https://") || source.starts_with("git@") {
+    if source.starts_with("http://") || source.starts_with("https://") || source.starts_with("git@")
+    {
         // Git URL
-        registry.install_from_git(source).await
+        registry
+            .install_from_git(source)
+            .await
             .map_err(|e| format!("Failed to install from git: {e}"))
     } else if Path::new(source).exists() {
         // Local path
-        registry.install_from_path(Path::new(source)).await
+        registry
+            .install_from_path(Path::new(source))
+            .await
             .map_err(|e| format!("Failed to install from path: {e}"))
     } else {
         // Try to find in index
         let mut index = create_index();
         if let Err(refresh_err) = index.refresh().await {
-            return Err(format!("Failed to refresh index: {refresh_err}. The plugin '{source}' was not found as a local path or git URL."));
+            return Err(format!(
+                "Failed to refresh index: {refresh_err}. The plugin '{source}' was not found as a local path or git URL."
+            ));
         }
 
         if let Some(entry) = index.get(source) {
             // Found in index, install from git
-            registry.install_from_git(&entry.repository).await
+            registry
+                .install_from_git(&entry.repository)
+                .await
                 .map_err(|e| format!("Failed to install from index: {e}"))
         } else {
-            Err(format!("Plugin '{source}' not found in index. Try:\n  - A valid git URL\n  - A local path\n  - A name from: /plugin search <query>"))
+            Err(format!(
+                "Plugin '{source}' not found in index. Try:\n  - A valid git URL\n  - A local path\n  - A name from: /plugin search <query>"
+            ))
         }
     }
 }
@@ -311,10 +335,13 @@ pub async fn install_from_source(source: &str) -> Result<String, String> {
 /// List all installed plugins
 pub async fn list_installed() -> Result<Vec<PluginDisplayInfo>, String> {
     let mut registry = create_registry();
-    registry.load_all().await
+    registry
+        .load_all()
+        .await
         .map_err(|e| format!("Failed to load plugins: {e}"))?;
 
-    let plugins: Vec<PluginDisplayInfo> = registry.list()
+    let plugins: Vec<PluginDisplayInfo> = registry
+        .list()
         .into_iter()
         .map(|p| PluginDisplayInfo {
             name: p.manifest.name.clone(),
@@ -332,27 +359,44 @@ pub async fn list_installed() -> Result<Vec<PluginDisplayInfo>, String> {
 /// Search the plugin index
 pub async fn search_index(query: &str) -> Result<Vec<(f64, String, String, String, u64)>, String> {
     let mut index = create_index();
-    index.refresh().await
+    index
+        .refresh()
+        .await
         .map_err(|e| format!("Failed to refresh index: {e}"))?;
 
     let results = index.search_ranked(query);
-    Ok(results.into_iter().map(|(score, entry)| {
-        (score, entry.name.clone(), entry.description.clone(), entry.author.clone(), entry.downloads)
-    }).collect())
+    Ok(results
+        .into_iter()
+        .map(|(score, entry)| {
+            (
+                score,
+                entry.name.clone(),
+                entry.description.clone(),
+                entry.author.clone(),
+                entry.downloads,
+            )
+        })
+        .collect())
 }
 
 /// Update plugins (specific or all)
 pub async fn update_plugins(name: Option<&str>) -> Result<Vec<String>, String> {
     let mut registry = create_registry();
-    registry.load_all().await
+    registry
+        .load_all()
+        .await
         .map_err(|e| format!("Failed to load plugins: {e}"))?;
 
     let updated = if let Some(plugin_name) = name {
-        registry.update(plugin_name).await
+        registry
+            .update(plugin_name)
+            .await
             .map_err(|e| format!("Failed to update '{plugin_name}': {e}"))?;
         vec![plugin_name.to_string()]
     } else {
-        registry.update_all().await
+        registry
+            .update_all()
+            .await
             .map_err(|e| format!("Failed to update plugins: {e}"))?
     };
 
@@ -362,10 +406,13 @@ pub async fn update_plugins(name: Option<&str>) -> Result<Vec<String>, String> {
 /// Get detailed info about a plugin from the index
 pub async fn get_info(name: &str) -> Result<PluginInfoDisplay, String> {
     let mut index = create_index();
-    index.refresh().await
+    index
+        .refresh()
+        .await
         .map_err(|e| format!("Failed to refresh index: {e}"))?;
 
-    let entry = index.info(name)
+    let entry = index
+        .info(name)
         .ok_or_else(|| format!("Plugin '{name}' not found in index"))?;
 
     Ok(PluginInfoDisplay {
@@ -383,15 +430,19 @@ pub async fn get_info(name: &str) -> Result<PluginInfoDisplay, String> {
 /// Enable or disable a plugin
 pub async fn enable_disable(name: &str, enable: bool) -> Result<String, String> {
     let mut registry = create_registry();
-    registry.load_all().await
+    registry
+        .load_all()
+        .await
         .map_err(|e| format!("Failed to load plugins: {e}"))?;
 
     if enable {
-        registry.enable(name)
+        registry
+            .enable(name)
             .map_err(|e| format!("Failed to enable '{name}': {e}"))?;
         Ok(format!("Plugin '{name}' enabled"))
     } else {
-        registry.disable(name)
+        registry
+            .disable(name)
             .map_err(|e| format!("Failed to disable '{name}': {e}"))?;
         Ok(format!("Plugin '{name}' disabled"))
     }
@@ -400,10 +451,14 @@ pub async fn enable_disable(name: &str, enable: bool) -> Result<String, String> 
 /// Uninstall a plugin
 pub async fn uninstall(name: &str) -> Result<String, String> {
     let mut registry = create_registry();
-    registry.load_all().await
+    registry
+        .load_all()
+        .await
         .map_err(|e| format!("Failed to load plugins: {e}"))?;
 
-    registry.uninstall(name).await
+    registry
+        .uninstall(name)
+        .await
         .map_err(|e| format!("Failed to uninstall '{name}': {e}"))?;
 
     Ok(format!("Plugin '{name}' uninstalled successfully"))
@@ -415,10 +470,12 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
 
     match cmd {
         PluginSubcommand::Install => {
-            let source = argument.ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "install requires a plugin name, URL, or path"
-            ))?;
+            let source = argument.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "install requires a plugin name, URL, or path",
+                )
+            })?;
 
             println!("Installing plugin from '{source}'...");
             match install_from_source(&source).await {
@@ -427,10 +484,12 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
             }
         }
         PluginSubcommand::Uninstall => {
-            let name = argument.ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "uninstall requires a plugin name"
-            ))?;
+            let name = argument.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "uninstall requires a plugin name",
+                )
+            })?;
 
             println!("Uninstalling plugin '{name}'...");
             match uninstall(&name).await {
@@ -438,40 +497,39 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
                 Err(e) => println!("✗ Uninstallation failed: {e}"),
             }
         }
-        PluginSubcommand::List => {
-            match list_installed().await {
-                Ok(plugins) => print!("{}", format_plugin_list(&plugins)),
-                Err(e) => println!("✗ Failed to list plugins: {e}"),
-            }
-        }
+        PluginSubcommand::List => match list_installed().await {
+            Ok(plugins) => print!("{}", format_plugin_list(&plugins)),
+            Err(e) => println!("✗ Failed to list plugins: {e}"),
+        },
         PluginSubcommand::Search => {
-            let query = argument.ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "search requires a query string"
-            ))?;
+            let query = argument.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "search requires a query string",
+                )
+            })?;
 
             match search_index(&query).await {
                 Ok(results) => print!("{}", format_ranked_search_results(&results)),
                 Err(e) => println!("✗ Search failed: {e}"),
             }
         }
-        PluginSubcommand::Update => {
-            match update_plugins(argument.as_deref()).await {
-                Ok(updated) => {
-                    if updated.is_empty() {
-                        println!("No plugins were updated (all may be up-to-date or not git repositories)");
-                    } else {
-                        println!("✓ Updated plugins: {}", updated.join(", "));
-                    }
+        PluginSubcommand::Update => match update_plugins(argument.as_deref()).await {
+            Ok(updated) => {
+                if updated.is_empty() {
+                    println!(
+                        "No plugins were updated (all may be up-to-date or not git repositories)"
+                    );
+                } else {
+                    println!("✓ Updated plugins: {}", updated.join(", "));
                 }
-                Err(e) => println!("✗ Update failed: {e}"),
             }
-        }
+            Err(e) => println!("✗ Update failed: {e}"),
+        },
         PluginSubcommand::Enable => {
-            let name = argument.ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "enable requires a plugin name"
-            ))?;
+            let name = argument.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "enable requires a plugin name")
+            })?;
 
             match enable_disable(&name, true).await {
                 Ok(msg) => println!("✓ {msg}"),
@@ -479,10 +537,12 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
             }
         }
         PluginSubcommand::Disable => {
-            let name = argument.ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "disable requires a plugin name"
-            ))?;
+            let name = argument.ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "disable requires a plugin name",
+                )
+            })?;
 
             match enable_disable(&name, false).await {
                 Ok(msg) => println!("✓ {msg}"),
@@ -490,10 +550,9 @@ pub async fn execute_plugin_subcommand(arg: &str) -> io::Result<()> {
             }
         }
         PluginSubcommand::Info => {
-            let name = argument.ok_or_else(|| io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "info requires a plugin name"
-            ))?;
+            let name = argument.ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "info requires a plugin name")
+            })?;
 
             match get_info(&name).await {
                 Ok(info) => print!("{}", format_plugin_info(&info)),
@@ -585,8 +644,18 @@ mod tests {
     #[test]
     fn test_format_search_results() {
         let results = vec![
-            ("example-plugin".to_string(), "An example".to_string(), "Author".to_string(), 1000),
-            ("another-plugin".to_string(), "Another one".to_string(), "Author2".to_string(), 500),
+            (
+                "example-plugin".to_string(),
+                "An example".to_string(),
+                "Author".to_string(),
+                1000,
+            ),
+            (
+                "another-plugin".to_string(),
+                "Another one".to_string(),
+                "Author2".to_string(),
+                500,
+            ),
         ];
 
         let output = format_search_results(&results);
@@ -656,8 +725,20 @@ mod tests {
     #[test]
     fn test_format_ranked_search_results() {
         let results = vec![
-            (30.0, "exact-match".to_string(), "Perfect match".to_string(), "Author".to_string(), 100),
-            (4.0, "partial-match".to_string(), "Partial match".to_string(), "Author2".to_string(), 50),
+            (
+                30.0,
+                "exact-match".to_string(),
+                "Perfect match".to_string(),
+                "Author".to_string(),
+                100,
+            ),
+            (
+                4.0,
+                "partial-match".to_string(),
+                "Partial match".to_string(),
+                "Author2".to_string(),
+                50,
+            ),
         ];
 
         let output = format_ranked_search_results(&results);

@@ -1,15 +1,13 @@
-use crate::{widgets::ChatRole, Result};
+use super::super::Repl;
+use crate::{Result, widgets::ChatRole};
 use rust_i18n::t;
 use shannon_core::api::LlmProvider;
 use shannon_core::model_registry;
 use shannon_types::recover_lock;
-use super::super::Repl;
 
 pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
     if args.is_empty() {
-        let picker = crate::widgets::select::ModelPickerWidget::new(
-            repl.state.model.as_deref(),
-        );
+        let picker = crate::widgets::select::ModelPickerWidget::new(repl.state.model.as_deref());
         repl.state.model_picker = Some(picker);
     } else {
         // Resolve aliases (e.g. "sonnet" → "claude-sonnet-4-20250514")
@@ -53,7 +51,10 @@ pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
         } else {
             ctx.to_string()
         };
-        let msg = format!("{} (context: {ctx_label})", t!("commands.model.set", name = &resolved_id));
+        let msg = format!(
+            "{} (context: {ctx_label})",
+            t!("commands.model.set", name = &resolved_id)
+        );
         repl.chat.add_message(ChatRole::System, msg);
     }
     Ok(())
@@ -88,7 +89,8 @@ fn parse_provider_name(name: &str) -> Result<LlmProvider> {
         "cloudflare" | "cf" => Ok(LlmProvider::Cloudflare),
         "replicate" => Ok(LlmProvider::Replicate),
         _ => {
-            let msg = format!("Unknown provider: {name}. Use /provider to list available providers.");
+            let msg =
+                format!("Unknown provider: {name}. Use /provider to list available providers.");
             return Err(msg.into());
         }
     }
@@ -106,9 +108,12 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
             } else {
                 "no auth"
             };
-            let current = if repl.state.selected_provider.as_ref() == Some(p) { " *" } else { "" };
-            lines.push(format!("  {} — {}{}",
-                p, key_status, current));
+            let current = if repl.state.selected_provider.as_ref() == Some(p) {
+                " *"
+            } else {
+                ""
+            };
+            lines.push(format!("  {} — {}{}", p, key_status, current));
         }
         lines.push(String::new());
         lines.push("* = current | Use /provider <name> to switch".to_string());
@@ -117,7 +122,8 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
         // Switch to specified provider
         let provider = parse_provider_name(args.trim())?;
         let models = model_registry::models_for_provider(provider.clone());
-        let default_model = models.first()
+        let default_model = models
+            .first()
             .map(|m| m.id.to_string())
             .unwrap_or_else(|| "unknown".to_string());
 
@@ -139,8 +145,14 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
             theme: Some(repl.state.theme.name.to_string()),
         });
 
-        repl.chat.add_message(ChatRole::System,
-            format!("Provider: {} | Model: {}", repl.state.selected_provider.as_ref().unwrap(), default_model));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Provider: {} | Model: {}",
+                repl.state.selected_provider.as_ref().unwrap(),
+                default_model
+            ),
+        );
     }
     Ok(())
 }
@@ -168,17 +180,23 @@ pub(crate) fn handle_init(repl: &mut Repl) -> Result<()> {
     }
 
     init_info.push_str(&format!("Working directory: {cwd}\n"));
-    repl.chat.add_message(ChatRole::System, t!("repl.project_initialized", info = init_info).to_string());
+    repl.chat.add_message(
+        ChatRole::System,
+        t!("repl.project_initialized", info = init_info).to_string(),
+    );
     Ok(())
 }
 
 pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_tools::config::ConfigManager;
     use shannon_commands::config_utils;
+    use shannon_tools::config::ConfigManager;
 
     let mut manager = ConfigManager::new();
     if let Err(e) = manager.load() {
-        repl.chat.add_message(ChatRole::System, t!("commands.config.warning_load", error = e).to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            t!("commands.config.warning_load", error = e).to_string(),
+        );
     }
 
     let parts: Vec<&str> = args.splitn(3, ' ').collect();
@@ -187,13 +205,20 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
 
     let output = match action {
         config_utils::ConfigAction::List => {
-            let prefix = if action_str.is_empty() { None } else { parts.get(1).copied() };
+            let prefix = if action_str.is_empty() {
+                None
+            } else {
+                parts.get(1).copied()
+            };
             let keys = manager.list(prefix);
             if keys.is_empty() {
                 config_utils::format_config_list()
             } else {
                 let mut out = config_utils::format_config_list();
-                out.push_str(&format!("\nConfig file: {}\n", manager.config_path().display()));
+                out.push_str(&format!(
+                    "\nConfig file: {}\n",
+                    manager.config_path().display()
+                ));
                 for key in &keys {
                     let val = manager.get(key).unwrap_or(serde_json::Value::Null);
                     out.push_str(&format!("  {key} = {val}\n"));
@@ -271,7 +296,10 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
             let query_engine = match repl.query_engine.as_ref() {
                 Some(e) => e,
                 None => {
-                    repl.chat.add_message(ChatRole::System, "Error: Query engine not available.".to_string());
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "Error: Query engine not available.".to_string(),
+                    );
                     return Ok(());
                 }
             };
@@ -280,7 +308,8 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
         };
         let mut msg = format!("Current approval mode: {current}\n\nAvailable modes:\n");
         for name in ApprovalMode::all_names() {
-            let mode = ApprovalMode::from_str_ci(name).expect("from_str_ci should return valid mode for all_names()");
+            let mode = ApprovalMode::from_str_ci(name)
+                .expect("from_str_ci should return valid mode for all_names()");
             let marker = if mode == current { " *" } else { "" };
             msg.push_str(&format!("  {name}{marker} — {}\n", mode.description()));
         }
@@ -295,7 +324,10 @@ pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
             let query_engine = match repl.query_engine.as_ref() {
                 Some(e) => e,
                 None => {
-                    repl.chat.add_message(ChatRole::System, "Error: Query engine not available.".to_string());
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "Error: Query engine not available.".to_string(),
+                    );
                     return Ok(());
                 }
             };
@@ -333,7 +365,10 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
                 let query_engine = match repl.query_engine.as_mut() {
                     Some(e) => e,
                     None => {
-                        repl.chat.add_message(ChatRole::System, "Error: Query engine not available.".to_string());
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            "Error: Query engine not available.".to_string(),
+                        );
                         return Ok(());
                     }
                 };
@@ -347,12 +382,10 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
                 }
             }
             None => {
-                {
-                    repl.chat.add_message(
+                repl.chat.add_message(
                         ChatRole::System,
                         "No project context found (no CLAUDE.md/AGENTS.md/GEMINI.md and not in a git repo)".to_string(),
                     );
-                }
             }
         }
         return Ok(());
@@ -368,26 +401,56 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
         // Build a colored bar using Unicode block chars
         let bar_w = 40usize;
         let max_ctx = 200_000u64; // default context window
-        let pct = if total > 0 { (total as f64 / max_ctx as f64).min(1.0) } else { 0.0 };
+        let pct = if total > 0 {
+            (total as f64 / max_ctx as f64).min(1.0)
+        } else {
+            0.0
+        };
         let filled = (pct * bar_w as f64).round() as usize;
 
-        let input_w = if total > 0 { (input as f64 / max_ctx as f64 * bar_w as f64).round() as usize } else { 0 };
-        let output_w = if total > 0 { (output as f64 / max_ctx as f64 * bar_w as f64).round() as usize } else { 0 };
-        let cached_w = if total > 0 { (cached as f64 / max_ctx as f64 * bar_w as f64).round() as usize } else { 0 };
+        let input_w = if total > 0 {
+            (input as f64 / max_ctx as f64 * bar_w as f64).round() as usize
+        } else {
+            0
+        };
+        let output_w = if total > 0 {
+            (output as f64 / max_ctx as f64 * bar_w as f64).round() as usize
+        } else {
+            0
+        };
+        let cached_w = if total > 0 {
+            (cached as f64 / max_ctx as f64 * bar_w as f64).round() as usize
+        } else {
+            0
+        };
         let other_w = filled.saturating_sub(input_w + output_w + cached_w);
 
         let mut bar = String::from("[");
-        for _ in 0..input_w { bar.push('█'); }
-        for _ in 0..output_w { bar.push('▓'); }
-        for _ in 0..cached_w { bar.push('░'); }
-        for _ in 0..other_w { bar.push('▒'); }
-        for _ in 0..(bar_w.saturating_sub(filled)) { bar.push('·'); }
+        for _ in 0..input_w {
+            bar.push('█');
+        }
+        for _ in 0..output_w {
+            bar.push('▓');
+        }
+        for _ in 0..cached_w {
+            bar.push('░');
+        }
+        for _ in 0..other_w {
+            bar.push('▒');
+        }
+        for _ in 0..(bar_w.saturating_sub(filled)) {
+            bar.push('·');
+        }
         bar.push(']');
 
         let fmt_tok = |t: u64| -> String {
-            if t < 1000 { format!("{t}") }
-            else if t < 1_000_000 { format!("{:.1}k", t as f64 / 1000.0) }
-            else { format!("{:.1}M", t as f64 / 1_000_000.0) }
+            if t < 1000 {
+                format!("{t}")
+            } else if t < 1_000_000 {
+                format!("{:.1}k", t as f64 / 1000.0)
+            } else {
+                format!("{:.1}M", t as f64 / 1_000_000.0)
+            }
         };
 
         let mut msg = String::from("Context Window Usage\n\n");
@@ -398,8 +461,15 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
         if other > 0 {
             msg.push_str(&format!("  ▒ Other:    {} tokens\n", fmt_tok(other)));
         }
-        msg.push_str(&format!("  · Free:     {} tokens\n\n", fmt_tok(max_ctx.saturating_sub(total))));
-        msg.push_str(&format!("  Total used: {} / {} tokens\n", fmt_tok(total), fmt_tok(max_ctx)));
+        msg.push_str(&format!(
+            "  · Free:     {} tokens\n\n",
+            fmt_tok(max_ctx.saturating_sub(total))
+        ));
+        msg.push_str(&format!(
+            "  Total used: {} / {} tokens\n",
+            fmt_tok(total),
+            fmt_tok(max_ctx)
+        ));
 
         if pct > 0.8 {
             msg.push_str("\n  ⚠ Context is over 80% used. Consider /compact to free space.");
@@ -447,7 +517,9 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     if !found_any {
-        msg.push_str("\nNo project context available. Create a CLAUDE.md file or initialize a git repo.");
+        msg.push_str(
+            "\nNo project context available. Create a CLAUDE.md file or initialize a git repo.",
+        );
     }
 
     msg.push_str("\nTip: Use /context reload to refresh the project context.");
@@ -462,7 +534,12 @@ pub(crate) fn handle_local_models(repl: &mut Repl) -> Result<()> {
 
     // Check Ollama
     let ollama_check = std::process::Command::new("curl")
-        .args(["-s", "--connect-timeout", "3", "http://localhost:11434/api/tags"])
+        .args([
+            "-s",
+            "--connect-timeout",
+            "3",
+            "http://localhost:11434/api/tags",
+        ])
         .output();
 
     match ollama_check {
@@ -480,8 +557,15 @@ pub(crate) fn handle_local_models(repl: &mut Repl) -> Result<()> {
                         } else {
                             output.push_str(&format!("  Available models ({}):\n", models.len()));
                             for model in models {
-                                let name = model.get("name").and_then(|n| n.as_str()).unwrap_or("unknown");
-                                let size = model.get("size").and_then(|s| s.as_u64()).map(|b| format!("{:.1} GB", b as f64 / 1e9)).unwrap_or_default();
+                                let name = model
+                                    .get("name")
+                                    .and_then(|n| n.as_str())
+                                    .unwrap_or("unknown");
+                                let size = model
+                                    .get("size")
+                                    .and_then(|s| s.as_u64())
+                                    .map(|b| format!("{:.1} GB", b as f64 / 1e9))
+                                    .unwrap_or_default();
                                 output.push_str(&format!("    - {name} ({size})\n"));
                             }
                         }
@@ -498,7 +582,12 @@ pub(crate) fn handle_local_models(repl: &mut Repl) -> Result<()> {
 
     // Check LM Studio
     let lmstudio_check = std::process::Command::new("curl")
-        .args(["-s", "--connect-timeout", "3", "http://localhost:1234/v1/models"])
+        .args([
+            "-s",
+            "--connect-timeout",
+            "3",
+            "http://localhost:1234/v1/models",
+        ])
         .output();
 
     match lmstudio_check {
@@ -515,7 +604,10 @@ pub(crate) fn handle_local_models(repl: &mut Repl) -> Result<()> {
                         } else {
                             output.push_str(&format!("  Loaded models ({}):\n", models.len()));
                             for model in models {
-                                let id = model.get("id").and_then(|i| i.as_str()).unwrap_or("unknown");
+                                let id = model
+                                    .get("id")
+                                    .and_then(|i| i.as_str())
+                                    .unwrap_or("unknown");
                                 output.push_str(&format!("    - {id}\n"));
                             }
                         }
@@ -533,7 +625,10 @@ pub(crate) fn handle_local_models(repl: &mut Repl) -> Result<()> {
     output.push_str("  /model ollama/llama3\n");
     output.push_str("  /model ollama/mistral\n");
     output.push_str("  /model lmstudio/<model-id>\n");
-    output.push_str(&format!("\nCurrent model: {}\n", repl.state.model.as_deref().unwrap_or("not set")));
+    output.push_str(&format!(
+        "\nCurrent model: {}\n",
+        repl.state.model.as_deref().unwrap_or("not set")
+    ));
 
     repl.chat.add_message(ChatRole::System, output);
     Ok(())
@@ -548,14 +643,17 @@ pub(crate) fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
     if args == "pick" || args == "picker" || args == "preview" {
         let themes = Theme::available();
         let current = &repl.state.theme.name;
-        let items: Vec<_> = themes.into_iter().map(|name| {
-            let label = if name == *current {
-                format!("{name} (current)")
-            } else {
-                name.clone()
-            };
-            crate::widgets::select::SelectItem::new(label, name)
-        }).collect();
+        let items: Vec<_> = themes
+            .into_iter()
+            .map(|name| {
+                let label = if name == *current {
+                    format!("{name} (current)")
+                } else {
+                    name.clone()
+                };
+                crate::widgets::select::SelectItem::new(label, name)
+            })
+            .collect();
 
         let picker = crate::widgets::select::FuzzyPickerWidget::new("Theme Picker".to_string())
             .with_items(items);
@@ -584,17 +682,13 @@ pub(crate) fn handle_theme(repl: &mut Repl, args: &str) -> Result<()> {
             let name = theme.name.clone();
             repl.renderer.set_theme(&theme);
             repl.state.theme = theme;
-            crate::repl::preferences::save_preferences(
-                &crate::repl::preferences::Preferences {
-                    model: repl.state.model.clone(),
-                    provider: repl.state.selected_provider.clone(),
-                    theme: Some(name.to_string()),
-                },
-            );
-            repl.chat.add_message(
-                ChatRole::System,
-                format!("Theme switched to '{name}'."),
-            );
+            crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+                model: repl.state.model.clone(),
+                provider: repl.state.selected_provider.clone(),
+                theme: Some(name.to_string()),
+            });
+            repl.chat
+                .add_message(ChatRole::System, format!("Theme switched to '{name}'."));
         }
         None => {
             let available = Theme::available().join(", ");
@@ -615,23 +709,32 @@ pub(crate) fn handle_accessibility(repl: &mut Repl, args: &str) -> Result<()> {
         "on" | "enable" | "true" | "1" => {
             repl.state.accessibility_mode = true;
             crate::a11y::set_enabled(true);
-            repl.chat.add_message(ChatRole::System,
-                "Accessibility mode enabled. Decorative characters replaced with plain text.".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Accessibility mode enabled. Decorative characters replaced with plain text."
+                    .to_string(),
+            );
         }
         "off" | "disable" | "false" | "0" => {
             repl.state.accessibility_mode = false;
             crate::a11y::set_enabled(false);
-            repl.chat.add_message(ChatRole::System,
-                "Accessibility mode disabled.".to_string());
+            repl.chat
+                .add_message(ChatRole::System, "Accessibility mode disabled.".to_string());
         }
         "" | "status" => {
-            let state = if repl.state.accessibility_mode { "enabled" } else { "disabled" };
+            let state = if repl.state.accessibility_mode {
+                "enabled"
+            } else {
+                "disabled"
+            };
             repl.chat.add_message(ChatRole::System,
                 format!("Accessibility mode: {state}\n\nUsage: /accessibility on|off\nAlso auto-enabled via NO_GRAPHICS or ACCESSIBILITY env vars."));
         }
         _ => {
-            repl.chat.add_message(ChatRole::System,
-                "Usage: /accessibility on|off|status".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Usage: /accessibility on|off|status".to_string(),
+            );
         }
     }
     Ok(())
@@ -661,7 +764,11 @@ pub(crate) fn handle_terminal_setup(repl: &mut Repl) -> Result<()> {
         .unwrap_or(false);
     report.push_str(&format!(
         "shannon on PATH: {}\n",
-        if shannon_on_path { "yes" } else { "no — add shannon to your PATH" }
+        if shannon_on_path {
+            "yes"
+        } else {
+            "no — add shannon to your PATH"
+        }
     ));
 
     // 4. Check for common terminal tools
@@ -716,8 +823,11 @@ pub(crate) fn handle_terminal_setup(repl: &mut Repl) -> Result<()> {
     match shell_name.as_str() {
         "zsh" => report.push_str("  Add to ~/.zshrc:\n    eval \"$(shannon init zsh)\"\n"),
         "bash" => report.push_str("  Add to ~/.bashrc:\n    eval \"$(shannon init bash)\"\n"),
-        "fish" => report.push_str("  Add to ~/.config/fish/config.fish:\n    shannon init fish | source\n"),
-        other => report.push_str(&format!("  Unknown shell '{other}'. Add the appropriate init line to your shell profile.\n")),
+        "fish" => report
+            .push_str("  Add to ~/.config/fish/config.fish:\n    shannon init fish | source\n"),
+        other => report.push_str(&format!(
+            "  Unknown shell '{other}'. Add the appropriate init line to your shell profile.\n"
+        )),
     }
 
     repl.chat.add_message(ChatRole::System, report);
@@ -730,7 +840,10 @@ pub(crate) fn handle_color(repl: &mut Repl, args: &str) -> Result<()> {
     if color.is_empty() || color == "default" || color == "reset" {
         repl.state.prompt_bar_color = None;
         repl.prompt.set_border_color(None);
-        repl.chat.add_message(ChatRole::System, "Prompt bar color reset to default.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Prompt bar color reset to default.".to_string(),
+        );
     } else {
         // Validate color by trying to parse it
         let parsed = parse_color_string(color);
@@ -738,7 +851,10 @@ pub(crate) fn handle_color(repl: &mut Repl, args: &str) -> Result<()> {
             Some(c) => {
                 repl.state.prompt_bar_color = Some(color.to_string());
                 repl.prompt.set_border_color(Some(c));
-                repl.chat.add_message(ChatRole::System, format!("Prompt bar color set to {color}."));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Prompt bar color set to {color}."),
+                );
             }
             None => {
                 repl.chat.add_message(ChatRole::System, format!(
@@ -756,12 +872,14 @@ pub(crate) fn handle_statusline(repl: &mut Repl, args: &str) -> Result<()> {
     if cmd.is_empty() || cmd == "off" || cmd == "reset" || cmd == "default" {
         repl.state.statusline_command = None;
         repl.state.cached_statusline = None;
-        repl.chat.add_message(ChatRole::System, "Custom statusline disabled.".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "Custom statusline disabled.".to_string());
     } else {
         repl.state.statusline_command = Some(cmd.to_string());
         repl.state.cached_statusline = None;
         repl.state.statusline_last_update = None;
-        repl.chat.add_message(ChatRole::System, format!("Custom statusline set to: {cmd}"));
+        repl.chat
+            .add_message(ChatRole::System, format!("Custom statusline set to: {cmd}"));
     }
     Ok(())
 }
@@ -807,10 +925,13 @@ pub(crate) fn handle_lang(repl: &mut Repl, args: &str) -> Result<()> {
 
     if input.is_empty() {
         let current = shannon_core::i18n::current_locale();
-        repl.chat.add_message(ChatRole::System, format!(
-            "Current language: {current}\n\nUsage: /lang <code>\nSupported: {}",
-            supported.join(", ")
-        ));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Current language: {current}\n\nUsage: /lang <code>\nSupported: {}",
+                supported.join(", ")
+            ),
+        );
         return Ok(());
     }
 
@@ -820,18 +941,34 @@ pub(crate) fn handle_lang(repl: &mut Repl, args: &str) -> Result<()> {
         // Refresh status bar to reflect the new language immediately
         repl.state.status = t!("status.ready").to_string();
         let lang_names = [
-            ("en", "English"), ("zh", "中文"), ("hi", "हिन्दी"),
-            ("es", "Español"), ("fr", "Français"), ("ar", "العربية"),
-            ("bn", "বাংলা"), ("pt", "Português"), ("ru", "Русский"),
+            ("en", "English"),
+            ("zh", "中文"),
+            ("hi", "हिन्दी"),
+            ("es", "Español"),
+            ("fr", "Français"),
+            ("ar", "العربية"),
+            ("bn", "বাংলা"),
+            ("pt", "Português"),
+            ("ru", "Русский"),
             ("ja", "日本語"),
         ];
-        let native_name = lang_names.iter().find(|(c, _)| *c == lang).map(|(_, n)| *n).unwrap_or(&lang);
-        repl.chat.add_message(ChatRole::System, format!("Language: {native_name} ({lang})"));
+        let native_name = lang_names
+            .iter()
+            .find(|(c, _)| *c == lang)
+            .map(|(_, n)| *n)
+            .unwrap_or(&lang);
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("Language: {native_name} ({lang})"),
+        );
     } else {
-        repl.chat.add_message(ChatRole::System, format!(
-            "Unsupported language: {lang}\nSupported: {}",
-            supported.join(", ")
-        ));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!(
+                "Unsupported language: {lang}\nSupported: {}",
+                supported.join(", ")
+            ),
+        );
     }
     Ok(())
 }

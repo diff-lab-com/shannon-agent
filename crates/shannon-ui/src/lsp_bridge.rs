@@ -59,18 +59,14 @@ impl LspDisplay {
                         format!("[{icon}] "),
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(
-                        location,
-                        Style::default().fg(theme.text_dim),
-                    ),
+                    Span::styled(location, Style::default().fg(theme.text_dim)),
                     Span::raw(": "),
-                    Span::styled(
-                        diag.message.clone(),
-                        Style::default().fg(color),
-                    ),
+                    Span::styled(diag.message.clone(), Style::default().fg(color)),
                     Span::styled(
                         format!(" ({source})"),
-                        Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
+                        Style::default()
+                            .fg(theme.text_dim)
+                            .add_modifier(Modifier::ITALIC),
                     ),
                 ])
             })
@@ -92,23 +88,19 @@ impl LspDisplay {
         lines.push(Line::from(vec![
             Span::styled(
                 symbol,
-                Style::default().fg(theme.syntax_function).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.syntax_function)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(": "),
-            Span::styled(
-                type_text,
-                Style::default().fg(theme.syntax_type),
-            ),
+            Span::styled(type_text, Style::default().fg(theme.syntax_type)),
         ]));
 
         // Location if available
         if let (Some(path), Some(ln)) = (file_path, line) {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(
-                    format!("{path}:{ln}"),
-                    Style::default().fg(theme.text_dim),
-                ),
+                Span::styled(format!("{path}:{ln}"), Style::default().fg(theme.text_dim)),
             ]));
         }
 
@@ -119,7 +111,9 @@ impl LspDisplay {
                     Span::raw("  "),
                     Span::styled(
                         line_str.into_owned(),
-                        Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
+                        Style::default()
+                            .fg(theme.text_dim)
+                            .add_modifier(Modifier::ITALIC),
                     ),
                 ]));
             }
@@ -141,10 +135,7 @@ impl LspDisplay {
 
         Line::from(vec![
             Span::raw(indent),
-            Span::styled(
-                "~~~",
-                Style::default().fg(color),
-            ),
+            Span::styled("~~~", Style::default().fg(color)),
             Span::raw(" "),
             Span::styled(
                 message.to_string(),
@@ -391,15 +382,13 @@ mod tests {
     #[test]
     fn test_render_diagnostics() {
         let theme = Theme::default_dark();
-        let diagnostics = vec![
-            Diagnostic {
-                severity: DiagnosticSeverity::Error,
-                message: "unexpected type".to_string(),
-                file_path: "src/main.rs".to_string(),
-                line: 42,
-                source: Some("rustc".to_string()),
-            },
-        ];
+        let diagnostics = vec![Diagnostic {
+            severity: DiagnosticSeverity::Error,
+            message: "unexpected type".to_string(),
+            file_path: "src/main.rs".to_string(),
+            line: 42,
+            source: Some("rustc".to_string()),
+        }];
 
         let lines = LspDisplay::render_diagnostics(&diagnostics, &theme);
         assert_eq!(lines.len(), 1);
@@ -455,20 +444,27 @@ mod tests {
     #[test]
     fn test_sync_from_registry_with_diagnostics() {
         let mut registry = shannon_tools::DiagnosticRegistry::new();
-        registry.update("src/main.rs", vec![
-            shannon_tools::LspDiagnostic::new(
-                "src/main.rs", 9, 4,
-                shannon_tools::DiagnosticSeverity::Error,
-                "mismatched types",
-                "rustc",
-            ),
-            shannon_tools::LspDiagnostic::new(
-                "src/main.rs", 20, 0,
-                shannon_tools::DiagnosticSeverity::Warning,
-                "unused variable",
-                "rustc",
-            ),
-        ]);
+        registry.update(
+            "src/main.rs",
+            vec![
+                shannon_tools::LspDiagnostic::new(
+                    "src/main.rs",
+                    9,
+                    4,
+                    shannon_tools::DiagnosticSeverity::Error,
+                    "mismatched types",
+                    "rustc",
+                ),
+                shannon_tools::LspDiagnostic::new(
+                    "src/main.rs",
+                    20,
+                    0,
+                    shannon_tools::DiagnosticSeverity::Warning,
+                    "unused variable",
+                    "rustc",
+                ),
+            ],
+        );
 
         let mut store = DiagnosticStore::new();
         let count = store.sync_from_registry(&registry);
@@ -518,14 +514,20 @@ mod tests {
         let result = shannon_tools::CliDiagnosticResult {
             diagnostics: vec![
                 shannon_tools::LspDiagnostic::new(
-                    "src/main.rs", 9, 0,
+                    "src/main.rs",
+                    9,
+                    0,
                     shannon_tools::DiagnosticSeverity::Error,
-                    "cannot find value `x`", "rustc",
+                    "cannot find value `x`",
+                    "rustc",
                 ),
                 shannon_tools::LspDiagnostic::new(
-                    "src/lib.rs", 4, 0,
+                    "src/lib.rs",
+                    4,
+                    0,
                     shannon_tools::DiagnosticSeverity::Warning,
-                    "unused variable", "rustc",
+                    "unused variable",
+                    "rustc",
                 ),
             ],
             success: true,
@@ -569,10 +571,38 @@ mod tests {
 
         let result = shannon_tools::CliDiagnosticResult {
             diagnostics: vec![
-                shannon_tools::LspDiagnostic::new("a.rs", 0, 0, shannon_tools::DiagnosticSeverity::Error, "e", "rustc"),
-                shannon_tools::LspDiagnostic::new("b.rs", 0, 0, shannon_tools::DiagnosticSeverity::Warning, "w", "rustc"),
-                shannon_tools::LspDiagnostic::new("c.rs", 0, 0, shannon_tools::DiagnosticSeverity::Info, "i", "rustc"),
-                shannon_tools::LspDiagnostic::new("d.rs", 0, 0, shannon_tools::DiagnosticSeverity::Hint, "h", "rustc"),
+                shannon_tools::LspDiagnostic::new(
+                    "a.rs",
+                    0,
+                    0,
+                    shannon_tools::DiagnosticSeverity::Error,
+                    "e",
+                    "rustc",
+                ),
+                shannon_tools::LspDiagnostic::new(
+                    "b.rs",
+                    0,
+                    0,
+                    shannon_tools::DiagnosticSeverity::Warning,
+                    "w",
+                    "rustc",
+                ),
+                shannon_tools::LspDiagnostic::new(
+                    "c.rs",
+                    0,
+                    0,
+                    shannon_tools::DiagnosticSeverity::Info,
+                    "i",
+                    "rustc",
+                ),
+                shannon_tools::LspDiagnostic::new(
+                    "d.rs",
+                    0,
+                    0,
+                    shannon_tools::DiagnosticSeverity::Hint,
+                    "h",
+                    "rustc",
+                ),
             ],
             success: true,
             error: None,
@@ -580,9 +610,21 @@ mod tests {
 
         let count = store.update_from_cli(&result);
         assert_eq!(count, 4);
-        assert!(matches!(store.diagnostics[0].severity, DiagnosticSeverity::Error));
-        assert!(matches!(store.diagnostics[1].severity, DiagnosticSeverity::Warning));
-        assert!(matches!(store.diagnostics[2].severity, DiagnosticSeverity::Info));
-        assert!(matches!(store.diagnostics[3].severity, DiagnosticSeverity::Hint));
+        assert!(matches!(
+            store.diagnostics[0].severity,
+            DiagnosticSeverity::Error
+        ));
+        assert!(matches!(
+            store.diagnostics[1].severity,
+            DiagnosticSeverity::Warning
+        ));
+        assert!(matches!(
+            store.diagnostics[2].severity,
+            DiagnosticSeverity::Info
+        ));
+        assert!(matches!(
+            store.diagnostics[3].severity,
+            DiagnosticSeverity::Hint
+        ));
     }
 }

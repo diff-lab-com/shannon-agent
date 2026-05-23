@@ -87,19 +87,14 @@ impl Summarizer for RuleBasedSummarizer {
                                     .get(tool_use_id)
                                     .map(|s| s.as_str())
                                     .unwrap_or("unknown");
-                                let limit =
-                                    super::helpers::tool_result_preview_limit(tool_name);
+                                let limit = super::helpers::tool_result_preview_limit(tool_name);
                                 let result_text = match content {
-                                    Some(ToolResultContent::Single(s)) => {
-                                        truncate_text(s, limit)
-                                    }
+                                    Some(ToolResultContent::Single(s)) => truncate_text(s, limit),
                                     Some(ToolResultContent::Multiple(blocks)) => {
                                         let text: String = blocks
                                             .iter()
                                             .filter_map(|b| match b {
-                                                ContentBlock::Text { text } => {
-                                                    Some(text.as_str())
-                                                }
+                                                ContentBlock::Text { text } => Some(text.as_str()),
                                                 _ => None,
                                             })
                                             .collect::<Vec<_>>()
@@ -119,13 +114,11 @@ impl Summarizer for RuleBasedSummarizer {
                                 ));
                             }
                             ContentBlock::Text { text } => {
-                                summary_parts
-                                    .push(format!("Text: {}", truncate_text(text, 100)));
+                                summary_parts.push(format!("Text: {}", truncate_text(text, 100)));
                                 turn_count += 1;
                             }
                             ContentBlock::Image { .. } => {
-                                summary_parts
-                                    .push("Image (omitted from summary)".to_string());
+                                summary_parts.push("Image (omitted from summary)".to_string());
                             }
                             ContentBlock::Thinking { .. } => {}
                         }
@@ -183,7 +176,11 @@ impl Summarizer for RuleBasedSummarizer {
         Ok(summary)
     }
 
-    fn micro_summarize(&self, message: &Message, _max_tokens: usize) -> Result<String, CompactError> {
+    fn micro_summarize(
+        &self,
+        message: &Message,
+        _max_tokens: usize,
+    ) -> Result<String, CompactError> {
         let content = extract_text_content(message);
         Ok(format!(
             "[Compressed {} message]\n{}",
@@ -268,11 +265,7 @@ impl LlmSummarizer {
     }
 
     /// Build the messages payload for a summarization request.
-    fn build_summarize_messages(
-        &self,
-        messages: &[Message],
-        max_tokens: usize,
-    ) -> Vec<Message> {
+    fn build_summarize_messages(&self, messages: &[Message], max_tokens: usize) -> Vec<Message> {
         vec![
             Message {
                 role: "system".to_string(),
@@ -280,19 +273,13 @@ impl LlmSummarizer {
             },
             Message {
                 role: "user".to_string(),
-                content: MessageContent::Text(
-                    CompactPrompt::conversation_to_summarize(messages),
-                ),
+                content: MessageContent::Text(CompactPrompt::conversation_to_summarize(messages)),
             },
         ]
     }
 
     /// Build the messages payload for a micro-compact request.
-    fn build_micro_messages(
-        &self,
-        message: &Message,
-        max_tokens: usize,
-    ) -> Vec<Message> {
+    fn build_micro_messages(&self, message: &Message, max_tokens: usize) -> Vec<Message> {
         vec![
             Message {
                 role: "system".to_string(),
@@ -305,7 +292,9 @@ impl LlmSummarizer {
             },
             Message {
                 role: "user".to_string(),
-                content: MessageContent::Text(CompactPrompt::micro_compact_prompt(message, max_tokens)),
+                content: MessageContent::Text(CompactPrompt::micro_compact_prompt(
+                    message, max_tokens,
+                )),
             },
         ]
     }
@@ -361,7 +350,11 @@ impl Summarizer for LlmSummarizer {
         }
     }
 
-    fn micro_summarize(&self, message: &Message, max_tokens: usize) -> Result<String, CompactError> {
+    fn micro_summarize(
+        &self,
+        message: &Message,
+        max_tokens: usize,
+    ) -> Result<String, CompactError> {
         let payload = self.build_micro_messages(message, max_tokens);
         let client = self.compact_client();
 
@@ -406,7 +399,10 @@ mod tests {
     use crate::compact::types::Summarizer;
 
     fn text_message(role: &str, text: &str) -> Message {
-        Message { role: role.to_string(), content: MessageContent::Text(text.to_string()) }
+        Message {
+            role: role.to_string(),
+            content: MessageContent::Text(text.to_string()),
+        }
     }
 
     // ── RuleBasedSummarizer::summarize ───────────────────────────────────
@@ -459,23 +455,19 @@ mod tests {
         let msgs = vec![
             Message {
                 role: "assistant".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolUse {
-                        id: "tu_1".to_string(),
-                        name: "Read".to_string(),
-                        input: serde_json::json!({"file_path": "/tmp/test.rs"}),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tu_1".to_string(),
+                    name: "Read".to_string(),
+                    input: serde_json::json!({"file_path": "/tmp/test.rs"}),
+                }]),
             },
             Message {
                 role: "user".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "tu_1".to_string(),
-                        content: Some(ToolResultContent::Single("fn main() {}".to_string())),
-                        is_error: Some(false),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "tu_1".to_string(),
+                    content: Some(ToolResultContent::Single("fn main() {}".to_string())),
+                    is_error: Some(false),
+                }]),
             },
         ];
         let result = s.summarize(&msgs, 2000).unwrap();
@@ -491,23 +483,19 @@ mod tests {
         let msgs = vec![
             Message {
                 role: "assistant".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolUse {
-                        id: "tu_1".to_string(),
-                        name: "Bash".to_string(),
-                        input: serde_json::json!({"command": "rm -rf /"}),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tu_1".to_string(),
+                    name: "Bash".to_string(),
+                    input: serde_json::json!({"command": "rm -rf /"}),
+                }]),
             },
             Message {
                 role: "user".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "tu_1".to_string(),
-                        content: Some(ToolResultContent::Single("Permission denied".to_string())),
-                        is_error: Some(true),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "tu_1".to_string(),
+                    content: Some(ToolResultContent::Single("Permission denied".to_string())),
+                    is_error: Some(true),
+                }]),
             },
         ];
         let result = s.summarize(&msgs, 2000).unwrap();
@@ -519,7 +507,10 @@ mod tests {
     #[test]
     fn test_summarize_file_path_extraction() {
         let s = RuleBasedSummarizer::new();
-        let msgs = vec![text_message("user", "Read src/main.rs and Cargo.toml for me")];
+        let msgs = vec![text_message(
+            "user",
+            "Read src/main.rs and Cargo.toml for me",
+        )];
         let result = s.summarize(&msgs, 2000).unwrap();
         assert!(result.contains("Files referenced"));
         assert!(result.contains("src/main.rs"));
@@ -540,9 +531,9 @@ mod tests {
         let s = RuleBasedSummarizer::new();
         let msgs = vec![Message {
             role: "user".to_string(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::Image { source: crate::api::ImageSource::base64("image/png", "abc") },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::Image {
+                source: crate::api::ImageSource::base64("image/png", "abc"),
+            }]),
         }];
         let result = s.summarize(&msgs, 1000).unwrap();
         assert!(result.contains("Image (omitted from summary)"));
@@ -554,8 +545,12 @@ mod tests {
         let msgs = vec![Message {
             role: "assistant".to_string(),
             content: MessageContent::Blocks(vec![
-                ContentBlock::Thinking { thinking: "deep thoughts".to_string() },
-                ContentBlock::Text { text: "Here's my answer.".to_string() },
+                ContentBlock::Thinking {
+                    thinking: "deep thoughts".to_string(),
+                },
+                ContentBlock::Text {
+                    text: "Here's my answer.".to_string(),
+                },
             ]),
         }];
         let result = s.summarize(&msgs, 1000).unwrap();
@@ -569,26 +564,26 @@ mod tests {
         let msgs = vec![
             Message {
                 role: "assistant".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolUse {
-                        id: "tu_1".to_string(),
-                        name: "Grep".to_string(),
-                        input: serde_json::json!({"pattern": "fn main"}),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tu_1".to_string(),
+                    name: "Grep".to_string(),
+                    input: serde_json::json!({"pattern": "fn main"}),
+                }]),
             },
             Message {
                 role: "user".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "tu_1".to_string(),
-                        content: Some(ToolResultContent::Multiple(vec![
-                            ContentBlock::Text { text: "main.rs:1:fn main()".to_string() },
-                            ContentBlock::Text { text: "lib.rs:5:fn main_test()".to_string() },
-                        ])),
-                        is_error: Some(false),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "tu_1".to_string(),
+                    content: Some(ToolResultContent::Multiple(vec![
+                        ContentBlock::Text {
+                            text: "main.rs:1:fn main()".to_string(),
+                        },
+                        ContentBlock::Text {
+                            text: "lib.rs:5:fn main_test()".to_string(),
+                        },
+                    ])),
+                    is_error: Some(false),
+                }]),
             },
         ];
         let result = s.summarize(&msgs, 2000).unwrap();
@@ -602,23 +597,19 @@ mod tests {
         let msgs = vec![
             Message {
                 role: "assistant".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolUse {
-                        id: "tu_1".to_string(),
-                        name: "Read".to_string(),
-                        input: serde_json::json!({"file_path": "/tmp/empty"}),
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                    id: "tu_1".to_string(),
+                    name: "Read".to_string(),
+                    input: serde_json::json!({"file_path": "/tmp/empty"}),
+                }]),
             },
             Message {
                 role: "user".to_string(),
-                content: MessageContent::Blocks(vec![
-                    ContentBlock::ToolResult {
-                        tool_use_id: "tu_1".to_string(),
-                        content: None,
-                        is_error: None,
-                    },
-                ]),
+                content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                    tool_use_id: "tu_1".to_string(),
+                    content: None,
+                    is_error: None,
+                }]),
             },
         ];
         let result = s.summarize(&msgs, 1000).unwrap();
@@ -630,13 +621,11 @@ mod tests {
         let s = RuleBasedSummarizer::new();
         let msgs = vec![Message {
             role: "user".to_string(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::ToolResult {
-                    tool_use_id: "orphan_id".to_string(),
-                    content: Some(ToolResultContent::Single("some output".to_string())),
-                    is_error: Some(false),
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+                tool_use_id: "orphan_id".to_string(),
+                content: Some(ToolResultContent::Single("some output".to_string())),
+                is_error: Some(false),
+            }]),
         }];
         let result = s.summarize(&msgs, 1000).unwrap();
         assert!(result.contains("Result [unknown]"));
@@ -658,9 +647,9 @@ mod tests {
         let s = RuleBasedSummarizer::new();
         let msg = Message {
             role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::Text { text: "Hello world".to_string() },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "Hello world".to_string(),
+            }]),
         };
         let result = s.micro_summarize(&msg, 1000).unwrap();
         assert!(result.contains("[Compressed assistant message]"));

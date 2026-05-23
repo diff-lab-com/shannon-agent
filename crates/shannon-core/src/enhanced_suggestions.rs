@@ -207,9 +207,7 @@ impl ContextSuggestionEngine {
                     trigger: SuggestionTrigger::FileEdit,
                     suggested_tool: Some("test".to_string()),
                     suggested_files: vec![edited_file.to_string()],
-                    reason: format!(
-                        "Source file .{ext} was edited; running tests is recommended."
-                    ),
+                    reason: format!("Source file .{ext} was edited; running tests is recommended."),
                     priority: 80,
                     confidence: 0.85,
                 });
@@ -401,10 +399,9 @@ impl ContextSuggestionEngine {
             }
             "bash" => {
                 // If a test command was run, suggest next steps
-                let had_test = context
-                    .recently_run_commands
-                    .iter()
-                    .any(|c| c.contains("test") || c.contains("pytest") || c.contains("cargo test"));
+                let had_test = context.recently_run_commands.iter().any(|c| {
+                    c.contains("test") || c.contains("pytest") || c.contains("cargo test")
+                });
                 if had_test {
                     suggestions.push(ContextualSuggestion {
                         id: uid(),
@@ -484,7 +481,10 @@ impl ContextSuggestionEngine {
         }
 
         // Build success
-        if cmd_lower.contains("cargo build") || cmd_lower.contains("npm run build") || cmd_lower.contains("compile") {
+        if cmd_lower.contains("cargo build")
+            || cmd_lower.contains("npm run build")
+            || cmd_lower.contains("compile")
+        {
             suggestions.push(ContextualSuggestion {
                 id: uid(),
                 trigger: SuggestionTrigger::CommandRun,
@@ -523,7 +523,10 @@ impl ContextSuggestionEngine {
         }
 
         // Install/dependency changes
-        if cmd_lower.contains("install") || cmd_lower.contains("add ") || cmd_lower.contains("cargo add") {
+        if cmd_lower.contains("install")
+            || cmd_lower.contains("add ")
+            || cmd_lower.contains("cargo add")
+        {
             suggestions.push(ContextualSuggestion {
                 id: uid(),
                 trigger: SuggestionTrigger::CommandRun,
@@ -541,7 +544,10 @@ impl ContextSuggestionEngine {
     // ---- Conversation start suggestions ----------------------------------
 
     /// Suggest actions when a new conversation begins.
-    pub fn suggest_for_conversation_start(&self, context: &SuggestionContext) -> Vec<ContextualSuggestion> {
+    pub fn suggest_for_conversation_start(
+        &self,
+        context: &SuggestionContext,
+    ) -> Vec<ContextualSuggestion> {
         let mut suggestions = Vec::new();
 
         // If there are uncommitted changes, suggest git status
@@ -591,7 +597,13 @@ impl ContextSuggestionEngine {
     // ---- Helpers --------------------------------------------------------
 
     fn truncate(&self, mut suggestions: Vec<ContextualSuggestion>) -> Vec<ContextualSuggestion> {
-        suggestions.sort_by(|a, b| b.priority.cmp(&a.priority).then(b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)));
+        suggestions.sort_by(|a, b| {
+            b.priority.cmp(&a.priority).then(
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+        });
         suggestions.truncate(self.max_suggestions);
         suggestions
     }
@@ -610,10 +622,21 @@ fn uid() -> String {
 fn is_source_extension(ext: &str) -> bool {
     matches!(
         ext,
-        "rs" | "ts" | "tsx" | "js" | "jsx"
-            | "py" | "go" | "java" | "rb"
-            | "c" | "cpp" | "h" | "hpp"
-            | "zig" | "swift" | "kt"
+        "rs" | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "py"
+            | "go"
+            | "java"
+            | "rb"
+            | "c"
+            | "cpp"
+            | "h"
+            | "hpp"
+            | "zig"
+            | "swift"
+            | "kt"
     )
 }
 
@@ -650,10 +673,7 @@ fn companion_test_file(path: &str) -> Option<String> {
             format!("tests/{}.rs", name),
             format!("{}{}", stem, "_test.rs"),
         ],
-        "py" => vec![
-            format!("test_{}", path),
-            format!("tests/test_{}.py", name),
-        ],
+        "py" => vec![format!("test_{}", path), format!("tests/test_{}.py", name)],
         "ts" | "tsx" => vec![
             format!("{}.test.{}", stem, ext),
             format!("{}.spec.{}", stem, ext),
@@ -715,7 +735,10 @@ mod tests {
 
     #[test]
     fn trigger_display_conversation_start() {
-        assert_eq!(SuggestionTrigger::ConversationStart.to_string(), "conversation_start");
+        assert_eq!(
+            SuggestionTrigger::ConversationStart.to_string(),
+            "conversation_start"
+        );
     }
 
     // -- File extension ----------------------------------------------------
@@ -799,7 +822,11 @@ mod tests {
     #[test]
     fn edit_suggests_tests_for_source() {
         let suggestions = engine().suggest_for_edit("src/main.rs", &[]);
-        assert!(suggestions.iter().any(|s| s.suggested_tool.as_deref() == Some("test")));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.suggested_tool.as_deref() == Some("test"))
+        );
     }
 
     #[test]
@@ -823,7 +850,9 @@ mod tests {
     fn creation_suggests_test_file() {
         let suggestions = engine().suggest_for_creation("src/utils.rs", &[]);
         assert!(suggestions.iter().any(|s| {
-            s.suggested_files.iter().any(|f| f.contains("test") || f.contains("spec"))
+            s.suggested_files
+                .iter()
+                .any(|f| f.contains("test") || f.contains("spec"))
         }));
     }
 
@@ -831,7 +860,9 @@ mod tests {
     fn creation_suggests_module_decl_for_rust() {
         let suggestions = engine().suggest_for_creation("src/parser.rs", &[]);
         assert!(suggestions.iter().any(|s| {
-            s.suggested_files.iter().any(|f| f == "mod.rs" || f == "lib.rs")
+            s.suggested_files
+                .iter()
+                .any(|f| f == "mod.rs" || f == "lib.rs")
         }));
     }
 
@@ -841,14 +872,22 @@ mod tests {
     fn tool_suggests_edit_after_read() {
         let ctx = SuggestionContext::default();
         let suggestions = engine().suggest_for_tool("read", &ctx);
-        assert!(suggestions.iter().any(|s| s.suggested_tool.as_deref() == Some("edit")));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.suggested_tool.as_deref() == Some("edit"))
+        );
     }
 
     #[test]
     fn tool_suggests_test_after_edit() {
         let ctx = SuggestionContext::default();
         let suggestions = engine().suggest_for_tool("edit", &ctx);
-        assert!(suggestions.iter().any(|s| s.suggested_tool.as_deref() == Some("test")));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.suggested_tool.as_deref() == Some("test"))
+        );
     }
 
     #[test]
@@ -887,9 +926,11 @@ mod tests {
     fn conversation_start_suggests_claude_md() {
         let ctx = SuggestionContext::default();
         let suggestions = engine().suggest_for_conversation_start(&ctx);
-        assert!(suggestions.iter().any(|s| {
-            s.suggested_files.iter().any(|f| f == "CLAUDE.md")
-        }));
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| { s.suggested_files.iter().any(|f| f == "CLAUDE.md") })
+        );
     }
 
     #[test]
@@ -907,7 +948,10 @@ mod tests {
     #[test]
     fn max_suggestions_respected() {
         let engine = ContextSuggestionEngine::with_max_suggestions(2);
-        let s = engine.suggest_for_edit("src/main.rs", &["src/lib.rs".to_string(), "src/config.rs".to_string()]);
+        let s = engine.suggest_for_edit(
+            "src/main.rs",
+            &["src/lib.rs".to_string(), "src/config.rs".to_string()],
+        );
         assert!(s.len() <= 2);
     }
 

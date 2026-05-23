@@ -36,63 +36,55 @@
 // }
 // ```
 
-pub mod client;
-pub mod protocol;
-pub mod transport;
 pub mod auth;
-pub mod resources;
+pub mod client;
 pub mod config;
-pub mod server_manager;
 pub mod process_pool;
+pub mod protocol;
+pub mod resources;
+pub mod server_manager;
+pub mod transport;
 
-pub use protocol::{
-    JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, JsonRpcNotification,
-    McpRequest, McpResponse, McpNotification,
-    RequestMethod, ResponseMethod, NotificationMethod,
-    Tool, ToolAnnotations, Resource, ResourceTemplate, Prompt, PromptArgument,
-    McpCapabilities, ServerCapabilities, ClientCapabilities,
-    CompletionsCapability,
-    ToolContent, ResourceContent, ContentBlock,
-    CompletionRequest, CompletionRef, CompletionResult, Completion, CompletionValue,
-    LoggingLevel,
-    InitializeParams, InitializeResult, ClientInfo, ServerInfo,
-    ListToolsResult, ListResourcesResult, ListPromptsResult, ListResourceTemplatesResult,
-    SubscribeRequest, UnsubscribeRequest, SubscribeResult,
-    ProgressToken, ProgressNotification,
-    Root, ListRootsResult, RootsCapability,
-    SamplingCapability, SamplingMessageRole, SamplingMessage, SamplingContent,
-    ModelHint, ModelPreferences, SamplingParams,
-    CreateMessageRequest, CreateMessageResult, StopReason,
-    ElicitationRequest, ElicitationResult, ElicitationAction,
+pub use auth::{
+    ApiKeyProvider, AuthProvider, DcrRegistrationResult, OAuth2Provider, OAuthDiscoveryResult,
+    auto_register_oauth, discover_oauth_endpoints, register_client,
 };
-pub use transport::{Transport, TransportError, StdioTransport, SseTransport, HttpTransport, WebSocketTransport};
 pub use client::{McpClient, McpClientError};
-pub use auth::{AuthProvider, OAuth2Provider, ApiKeyProvider, OAuthDiscoveryResult, discover_oauth_endpoints,
-    DcrRegistrationResult, register_client, auto_register_oauth};
-pub use resources::{
-    ResourceDescriptor, ListResourcesInput, ListResourcesOutput,
-    ReadResourceInput, ReadResourceOutput, ResourceReadContent,
-    SubscribeResourceInput, SubscribeResourceOutput,
-    UnsubscribeResourceInput, UnsubscribeResourceOutput,
-    McpResourceManager, McpResourceClient, McpClientAdapter,
-};
 pub use config::{
-    McpConfig, McpServerConfig, McpAuthConfig, ConfigError,
-    HeaderSource,
-    expand_env_vars, expand_server_config,
-    discover_config, config_search_paths,
-};
-pub use server_manager::{
-    McpDiscoveryResult, discover_all_servers,
-    PooledMcpDiscoveryResult, discover_all_servers_pooled,
-    discover_all_servers_pooled_nonblocking,
+    ConfigError, HeaderSource, McpAuthConfig, McpConfig, McpServerConfig, config_search_paths,
+    discover_config, expand_env_vars, expand_server_config,
 };
 pub use process_pool::{
-    McpProcessPool, PooledMcpToolAdapter, PooledDiscoveryResult,
-    discover_pooled_tools, discover_pooled_remote_tools,
-    make_sampling_provider, make_elicitation_provider,
-    UserPromptCallback, ServerState, ServerStatus,
-    ChunkResult,
+    ChunkResult, McpProcessPool, PooledDiscoveryResult, PooledMcpToolAdapter, ServerState,
+    ServerStatus, UserPromptCallback, discover_pooled_remote_tools, discover_pooled_tools,
+    make_elicitation_provider, make_sampling_provider,
+};
+pub use protocol::{
+    ClientCapabilities, ClientInfo, Completion, CompletionRef, CompletionRequest, CompletionResult,
+    CompletionValue, CompletionsCapability, ContentBlock, CreateMessageRequest,
+    CreateMessageResult, ElicitationAction, ElicitationRequest, ElicitationResult,
+    InitializeParams, InitializeResult, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult,
+    ListRootsResult, ListToolsResult, LoggingLevel, McpCapabilities, McpNotification, McpRequest,
+    McpResponse, ModelHint, ModelPreferences, NotificationMethod, ProgressNotification,
+    ProgressToken, Prompt, PromptArgument, RequestMethod, Resource, ResourceContent,
+    ResourceTemplate, ResponseMethod, Root, RootsCapability, SamplingCapability, SamplingContent,
+    SamplingMessage, SamplingMessageRole, SamplingParams, ServerCapabilities, ServerInfo,
+    StopReason, SubscribeRequest, SubscribeResult, Tool, ToolAnnotations, ToolContent,
+    UnsubscribeRequest,
+};
+pub use resources::{
+    ListResourcesInput, ListResourcesOutput, McpClientAdapter, McpResourceClient,
+    McpResourceManager, ReadResourceInput, ReadResourceOutput, ResourceDescriptor,
+    ResourceReadContent, SubscribeResourceInput, SubscribeResourceOutput, UnsubscribeResourceInput,
+    UnsubscribeResourceOutput,
+};
+pub use server_manager::{
+    McpDiscoveryResult, PooledMcpDiscoveryResult, discover_all_servers,
+    discover_all_servers_pooled, discover_all_servers_pooled_nonblocking,
+};
+pub use transport::{
+    HttpTransport, SseTransport, StdioTransport, Transport, TransportError, WebSocketTransport,
 };
 
 /// Current MCP protocol version supported by this implementation

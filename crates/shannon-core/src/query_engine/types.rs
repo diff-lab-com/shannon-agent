@@ -95,28 +95,124 @@ pub struct ModelPricing {
 /// env var or a `.shannon-pricing.json` file in the project directory.
 static DEFAULT_PRICING: &[(&str, ModelPricing)] = &[
     // Anthropic Claude 4 series
-    ("claude-opus-4",   ModelPricing { input_price_per_mtok: 15.0, output_price_per_mtok: 75.0 }),
-    ("claude-sonnet-4", ModelPricing { input_price_per_mtok: 3.0,  output_price_per_mtok: 15.0 }),
-    ("claude-haiku-4",  ModelPricing { input_price_per_mtok: 0.80, output_price_per_mtok: 4.0 }),
+    (
+        "claude-opus-4",
+        ModelPricing {
+            input_price_per_mtok: 15.0,
+            output_price_per_mtok: 75.0,
+        },
+    ),
+    (
+        "claude-sonnet-4",
+        ModelPricing {
+            input_price_per_mtok: 3.0,
+            output_price_per_mtok: 15.0,
+        },
+    ),
+    (
+        "claude-haiku-4",
+        ModelPricing {
+            input_price_per_mtok: 0.80,
+            output_price_per_mtok: 4.0,
+        },
+    ),
     // Anthropic Claude 3.5 series
-    ("claude-3-5-sonnet", ModelPricing { input_price_per_mtok: 3.0,  output_price_per_mtok: 15.0 }),
-    ("claude-3-5-haiku",  ModelPricing { input_price_per_mtok: 0.80, output_price_per_mtok: 4.0 }),
+    (
+        "claude-3-5-sonnet",
+        ModelPricing {
+            input_price_per_mtok: 3.0,
+            output_price_per_mtok: 15.0,
+        },
+    ),
+    (
+        "claude-3-5-haiku",
+        ModelPricing {
+            input_price_per_mtok: 0.80,
+            output_price_per_mtok: 4.0,
+        },
+    ),
     // Anthropic Claude 3 series
-    ("claude-3-opus", ModelPricing { input_price_per_mtok: 15.0, output_price_per_mtok: 75.0 }),
+    (
+        "claude-3-opus",
+        ModelPricing {
+            input_price_per_mtok: 15.0,
+            output_price_per_mtok: 75.0,
+        },
+    ),
     // OpenAI GPT-4.1 series
-    ("gpt-4.1",       ModelPricing { input_price_per_mtok: 2.0,  output_price_per_mtok: 8.0 }),
-    ("gpt-4.1-mini",  ModelPricing { input_price_per_mtok: 0.40, output_price_per_mtok: 1.60 }),
-    ("gpt-4.1-nano",  ModelPricing { input_price_per_mtok: 0.10, output_price_per_mtok: 0.40 }),
+    (
+        "gpt-4.1",
+        ModelPricing {
+            input_price_per_mtok: 2.0,
+            output_price_per_mtok: 8.0,
+        },
+    ),
+    (
+        "gpt-4.1-mini",
+        ModelPricing {
+            input_price_per_mtok: 0.40,
+            output_price_per_mtok: 1.60,
+        },
+    ),
+    (
+        "gpt-4.1-nano",
+        ModelPricing {
+            input_price_per_mtok: 0.10,
+            output_price_per_mtok: 0.40,
+        },
+    ),
     // OpenAI GPT-4o series
-    ("gpt-4o",        ModelPricing { input_price_per_mtok: 2.5,  output_price_per_mtok: 10.0 }),
-    ("gpt-4o-mini",   ModelPricing { input_price_per_mtok: 0.15, output_price_per_mtok: 0.60 }),
+    (
+        "gpt-4o",
+        ModelPricing {
+            input_price_per_mtok: 2.5,
+            output_price_per_mtok: 10.0,
+        },
+    ),
+    (
+        "gpt-4o-mini",
+        ModelPricing {
+            input_price_per_mtok: 0.15,
+            output_price_per_mtok: 0.60,
+        },
+    ),
     // OpenAI GPT-4 / 3.5
-    ("gpt-4-turbo",   ModelPricing { input_price_per_mtok: 10.0, output_price_per_mtok: 30.0 }),
-    ("gpt-3.5-turbo", ModelPricing { input_price_per_mtok: 0.5,  output_price_per_mtok: 1.5 }),
+    (
+        "gpt-4-turbo",
+        ModelPricing {
+            input_price_per_mtok: 10.0,
+            output_price_per_mtok: 30.0,
+        },
+    ),
+    (
+        "gpt-3.5-turbo",
+        ModelPricing {
+            input_price_per_mtok: 0.5,
+            output_price_per_mtok: 1.5,
+        },
+    ),
     // Ollama / local models (free)
-    ("llama",   ModelPricing { input_price_per_mtok: 0.0, output_price_per_mtok: 0.0 }),
-    ("mistral", ModelPricing { input_price_per_mtok: 0.0, output_price_per_mtok: 0.0 }),
-    ("qwen",    ModelPricing { input_price_per_mtok: 0.0, output_price_per_mtok: 0.0 }),
+    (
+        "llama",
+        ModelPricing {
+            input_price_per_mtok: 0.0,
+            output_price_per_mtok: 0.0,
+        },
+    ),
+    (
+        "mistral",
+        ModelPricing {
+            input_price_per_mtok: 0.0,
+            output_price_per_mtok: 0.0,
+        },
+    ),
+    (
+        "qwen",
+        ModelPricing {
+            input_price_per_mtok: 0.0,
+            output_price_per_mtok: 0.0,
+        },
+    ),
 ];
 
 /// Fallback pricing used for models not found in the table.
@@ -163,19 +259,28 @@ fn apply_pricing_overrides(table: &mut HashMap<String, ModelPricing>, json: &str
                 if v.input_price_per_mtok < 0.0 || v.output_price_per_mtok < 0.0 {
                     tracing::warn!(
                         "Ignoring pricing override from {}: {} has negative price (in=${:.2}, out=${:.2})",
-                        source, k, v.input_price_per_mtok, v.output_price_per_mtok
+                        source,
+                        k,
+                        v.input_price_per_mtok,
+                        v.output_price_per_mtok
                     );
                     continue;
                 }
                 tracing::debug!(
                     "Pricing override from {}: {} -> in=${:.2}/Mtok, out=${:.2}/Mtok",
-                    source, k, v.input_price_per_mtok, v.output_price_per_mtok
+                    source,
+                    k,
+                    v.input_price_per_mtok,
+                    v.output_price_per_mtok
                 );
                 table.insert(k, v);
             }
         }
         Err(e) => {
-            tracing::warn!("Ignoring pricing overrides from {}: invalid JSON: {e}", source);
+            tracing::warn!(
+                "Ignoring pricing overrides from {}: invalid JSON: {e}",
+                source
+            );
         }
     }
 }
@@ -238,8 +343,7 @@ impl CostTracker {
         self.total_cost_usd += cost;
 
         // Update per-model breakdown
-        let entry = self.model_breakdowns.entry(model.to_string())
-            .or_default();
+        let entry = self.model_breakdowns.entry(model.to_string()).or_default();
         entry.input_tokens += input_tokens;
         entry.output_tokens += output_tokens;
         entry.cost_usd += cost;
@@ -327,7 +431,8 @@ impl CostTracker {
         new_message_chars: usize,
         max_output_tokens: u64,
     ) -> CostEstimate {
-        let estimated_input_tokens = ((history_chars + new_message_chars) as f64 / 4.0).ceil() as u64;
+        let estimated_input_tokens =
+            ((history_chars + new_message_chars) as f64 / 4.0).ceil() as u64;
         let estimated_cost = Self::calculate_cost(model, estimated_input_tokens, max_output_tokens);
         CostEstimate {
             estimated_input_tokens,
@@ -351,10 +456,18 @@ impl CostTracker {
         // Budget status
         if let Some(limit) = self.budget_limit_usd {
             let ratio = self.total_cost_usd / limit;
-            let status = if ratio >= 1.0 { "EXCEEDED" } else if ratio >= 0.8 { "WARNING" } else { "OK" };
+            let status = if ratio >= 1.0 {
+                "EXCEEDED"
+            } else if ratio >= 0.8 {
+                "WARNING"
+            } else {
+                "OK"
+            };
             report.push_str(&format!(
                 "  Budget: ${:.4} / ${:.2} ({:.0}% — {status})\n",
-                self.total_cost_usd, limit, ratio * 100.0,
+                self.total_cost_usd,
+                limit,
+                ratio * 100.0,
             ));
         }
 
@@ -362,12 +475,19 @@ impl CostTracker {
         if self.model_breakdowns.len() > 1 {
             report.push_str("  Per-model breakdown:\n");
             let mut models: Vec<_> = self.model_breakdowns.iter().collect();
-            models.sort_by(|a, b| b.1.cost_usd.partial_cmp(&a.1.cost_usd).unwrap_or(std::cmp::Ordering::Equal));
+            models.sort_by(|a, b| {
+                b.1.cost_usd
+                    .partial_cmp(&a.1.cost_usd)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             for (model, breakdown) in &models {
                 report.push_str(&format!(
                     "    {}: ${:.4} ({} turns, {} in + {} out)\n",
-                    model, breakdown.cost_usd, breakdown.turn_count,
-                    breakdown.input_tokens, breakdown.output_tokens,
+                    model,
+                    breakdown.cost_usd,
+                    breakdown.turn_count,
+                    breakdown.input_tokens,
+                    breakdown.output_tokens,
                 ));
             }
         }
@@ -967,10 +1087,13 @@ mod tests {
     #[test]
     fn test_apply_pricing_overrides_valid_json() {
         let mut table = HashMap::new();
-        table.insert("test-model".to_string(), ModelPricing {
-            input_price_per_mtok: 5.0,
-            output_price_per_mtok: 25.0,
-        });
+        table.insert(
+            "test-model".to_string(),
+            ModelPricing {
+                input_price_per_mtok: 5.0,
+                output_price_per_mtok: 25.0,
+            },
+        );
 
         let json = r#"{"test-model": {"input_price_per_mtok": 1.0, "output_price_per_mtok": 2.0}}"#;
         apply_pricing_overrides(&mut table, json, "test");
@@ -983,10 +1106,13 @@ mod tests {
     #[test]
     fn test_apply_pricing_overrides_invalid_json() {
         let mut table = HashMap::new();
-        table.insert("test-model".to_string(), ModelPricing {
-            input_price_per_mtok: 5.0,
-            output_price_per_mtok: 25.0,
-        });
+        table.insert(
+            "test-model".to_string(),
+            ModelPricing {
+                input_price_per_mtok: 5.0,
+                output_price_per_mtok: 25.0,
+            },
+        );
 
         apply_pricing_overrides(&mut table, "not valid json{{{", "test");
 
@@ -1000,7 +1126,8 @@ mod tests {
     fn test_apply_pricing_overrides_adds_new_model() {
         let mut table = HashMap::new();
 
-        let json = r#"{"brand-new-model": {"input_price_per_mtok": 7.0, "output_price_per_mtok": 14.0}}"#;
+        let json =
+            r#"{"brand-new-model": {"input_price_per_mtok": 7.0, "output_price_per_mtok": 14.0}}"#;
         apply_pricing_overrides(&mut table, json, "test");
 
         let entry = table.get("brand-new-model").unwrap();
@@ -1011,16 +1138,23 @@ mod tests {
     #[test]
     fn test_apply_pricing_overrides_rejects_negative_prices() {
         let mut table = HashMap::new();
-        table.insert("safe-model".to_string(), ModelPricing {
-            input_price_per_mtok: 5.0,
-            output_price_per_mtok: 25.0,
-        });
+        table.insert(
+            "safe-model".to_string(),
+            ModelPricing {
+                input_price_per_mtok: 5.0,
+                output_price_per_mtok: 25.0,
+            },
+        );
 
-        let json = r#"{"malicious-model": {"input_price_per_mtok": -1.0, "output_price_per_mtok": 0.0}}"#;
+        let json =
+            r#"{"malicious-model": {"input_price_per_mtok": -1.0, "output_price_per_mtok": 0.0}}"#;
         apply_pricing_overrides(&mut table, json, "test");
 
         // Negative-price model should NOT be added
-        assert!(table.get("malicious-model").is_none(), "negative prices should be rejected");
+        assert!(
+            table.get("malicious-model").is_none(),
+            "negative prices should be rejected"
+        );
         // Existing model should be unchanged
         let safe = table.get("safe-model").unwrap();
         assert!((safe.input_price_per_mtok - 5.0).abs() < 0.001);
@@ -1033,7 +1167,10 @@ mod tests {
         let json = r#"{"bad": {"input_price_per_mtok": 1.0, "output_price_per_mtok": -5.0}}"#;
         apply_pricing_overrides(&mut table, json, "test");
 
-        assert!(table.get("bad").is_none(), "negative output price should be rejected");
+        assert!(
+            table.get("bad").is_none(),
+            "negative output price should be rejected"
+        );
     }
 
     #[test]

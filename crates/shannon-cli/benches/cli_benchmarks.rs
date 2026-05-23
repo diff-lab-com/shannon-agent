@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo bench -p shannon-cli
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use std::process::Command;
 
 fn bench_cold_start(c: &mut Criterion) {
@@ -43,7 +43,9 @@ fn bench_config_load(c: &mut Criterion) {
 fn bench_config_load_large(c: &mut Criterion) {
     let mut large_toml = String::from("[llm]\nprovider = \"anthropic\"\nmodel = \"test\"\n");
     for i in 0..50 {
-        large_toml.push_str(&format!("[mcp_servers.server{i}]\ncommand = \"test-cmd\"\nargs = [\"arg1\", \"arg2\"]\n"));
+        large_toml.push_str(&format!(
+            "[mcp_servers.server{i}]\ncommand = \"test-cmd\"\nargs = [\"arg1\", \"arg2\"]\n"
+        ));
     }
 
     c.bench_function("config_load_large_50_mcp", |b| {
@@ -68,8 +70,23 @@ fn bench_cli_arg_parsing(c: &mut Criterion) {
 
     let cases = vec![
         ("simple_prompt", vec!["--prompt", "hello"]),
-        ("with_model", vec!["--prompt", "hello", "--model", "claude-opus-4"]),
-        ("full_flags", vec!["--prompt", "hello", "--model", "test", "--max-tokens", "4096", "--permission-mode", "full-auto"]),
+        (
+            "with_model",
+            vec!["--prompt", "hello", "--model", "claude-opus-4"],
+        ),
+        (
+            "full_flags",
+            vec![
+                "--prompt",
+                "hello",
+                "--model",
+                "test",
+                "--max-tokens",
+                "4096",
+                "--permission-mode",
+                "full-auto",
+            ],
+        ),
         ("resume", vec!["--resume"]),
     ];
 

@@ -1106,20 +1106,20 @@ impl Theme {
         let base = Self::default_dark();
         Self {
             name: "dark_daltonized".to_string(),
-            success: Color::Rgb(80, 140, 210),      // blue instead of green
+            success: Color::Rgb(80, 140, 210), // blue instead of green
             warning: base.warning,
-            error: Color::Rgb(80, 140, 210),         // blue instead of red
-            diff_added: Color::Rgb(230, 160, 50),    // orange instead of green
-            diff_removed: Color::Rgb(80, 140, 210),  // blue instead of red
-            diff_added_bg: Color::Rgb(50, 40, 20),   // dark orange tint
-            diff_removed_bg: Color::Rgb(25, 40, 60),  // dark blue tint
+            error: Color::Rgb(80, 140, 210), // blue instead of red
+            diff_added: Color::Rgb(230, 160, 50), // orange instead of green
+            diff_removed: Color::Rgb(80, 140, 210), // blue instead of red
+            diff_added_bg: Color::Rgb(50, 40, 20), // dark orange tint
+            diff_removed_bg: Color::Rgb(25, 40, 60), // dark blue tint
             diff_added_word: Color::Rgb(255, 190, 80),
             diff_removed_word: Color::Rgb(120, 175, 240),
             syntax_keyword: base.syntax_keyword,
             syntax_string: Color::Rgb(230, 160, 50), // orange instead of green
             syntax_comment: base.syntax_comment,
-            tool_bash: Color::Rgb(230, 160, 50),     // orange instead of green
-            tool_read: Color::Rgb(80, 140, 210),     // blue
+            tool_bash: Color::Rgb(230, 160, 50), // orange instead of green
+            tool_read: Color::Rgb(80, 140, 210), // blue
             ..base
         }
     }
@@ -1246,7 +1246,9 @@ impl Theme {
             "light" => Some(Self::default_light()),
             "dracula" => Some(Self::dracula()),
             "tokyonight" | "tokyo-night" | "tokyo_night" => Some(Self::tokyonight()),
-            "catppuccin" | "catppuccin_mocha" | "catppuccin-mocha" => Some(Self::catppuccin_mocha()),
+            "catppuccin" | "catppuccin_mocha" | "catppuccin-mocha" => {
+                Some(Self::catppuccin_mocha())
+            }
             "gruvbox" | "gruvbox_dark" | "gruvbox-dark" => Some(Self::gruvbox_dark()),
             "nord" => Some(Self::nord()),
             "kanagawa" => Some(Self::kanagawa()),
@@ -1264,11 +1266,21 @@ impl Theme {
     /// List available theme names (built-in + custom).
     pub fn available() -> Vec<String> {
         let mut names: Vec<String> = vec![
-            "dark".into(), "light".into(), "dracula".into(),
-            "tokyonight".into(), "catppuccin_mocha".into(), "gruvbox_dark".into(),
-            "nord".into(), "kanagawa".into(), "monokai".into(), "onedark".into(),
-            "everforest".into(), "ayu".into(), "flexoki".into(),
-            "dark_daltonized".into(), "light_daltonized".into(),
+            "dark".into(),
+            "light".into(),
+            "dracula".into(),
+            "tokyonight".into(),
+            "catppuccin_mocha".into(),
+            "gruvbox_dark".into(),
+            "nord".into(),
+            "kanagawa".into(),
+            "monokai".into(),
+            "onedark".into(),
+            "everforest".into(),
+            "ayu".into(),
+            "flexoki".into(),
+            "dark_daltonized".into(),
+            "light_daltonized".into(),
         ];
         if let Some(dir) = dirs::home_dir().map(|h| h.join(".shannon").join("themes")) {
             if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -1293,7 +1305,9 @@ impl Theme {
         // Heuristic: if the fullscreen background is darker than mid-gray, it's dark.
         fn luminance(c: ratatui::style::Color) -> f32 {
             match c {
-                ratatui::style::Color::Rgb(r, g, b) => (r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114) / 255.0,
+                ratatui::style::Color::Rgb(r, g, b) => {
+                    (r as f32 * 0.299 + g as f32 * 0.587 + b as f32 * 0.114) / 255.0
+                }
                 ratatui::style::Color::Black => 0.0,
                 ratatui::style::Color::White => 1.0,
                 ratatui::style::Color::DarkGray => 0.25,
@@ -1500,7 +1514,10 @@ fn parse_color(s: &str) -> Option<Color> {
     }
 
     // ansi256(n) format
-    if let Some(inner) = lower.strip_prefix("ansi256(").and_then(|s| s.strip_suffix(')')) {
+    if let Some(inner) = lower
+        .strip_prefix("ansi256(")
+        .and_then(|s| s.strip_suffix(')'))
+    {
         if let Ok(n) = inner.trim().parse::<u8>() {
             return Some(Color::Indexed(n));
         }
@@ -1578,9 +1595,21 @@ mod tests {
     #[test]
     fn test_all_builtin_themes_loadable() {
         let names = [
-            "dark", "light", "dracula", "tokyonight", "catppuccin_mocha",
-            "gruvbox_dark", "nord", "kanagawa", "monokai", "onedark",
-            "everforest", "ayu", "flexoki", "dark_daltonized", "light_daltonized",
+            "dark",
+            "light",
+            "dracula",
+            "tokyonight",
+            "catppuccin_mocha",
+            "gruvbox_dark",
+            "nord",
+            "kanagawa",
+            "monokai",
+            "onedark",
+            "everforest",
+            "ayu",
+            "flexoki",
+            "dark_daltonized",
+            "light_daltonized",
         ];
         for name in &names {
             assert!(Theme::named(name).is_some(), "Theme '{name}' should load");
@@ -1666,7 +1695,10 @@ mod tests {
                 // Verify new fields are not default (should be set to real colors)
                 assert!(matches!(theme.diff_added_bg, Color::Rgb(..)));
                 assert!(matches!(theme.diff_removed_bg, Color::Rgb(..)));
-                assert!(matches!(theme.syntax_keyword, Color::Rgb(..) | Color::Magenta | Color::Red | Color::Indexed(..)));
+                assert!(matches!(
+                    theme.syntax_keyword,
+                    Color::Rgb(..) | Color::Magenta | Color::Red | Color::Indexed(..)
+                ));
                 assert!(matches!(theme.tool_bash, Color::Rgb(..) | Color::Green));
             }
         }

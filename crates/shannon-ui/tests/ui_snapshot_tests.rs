@@ -2,12 +2,7 @@
 //!
 //! Run with: cargo test --package shannon-ui --test ui_snapshot_tests -- --test-threads=1
 
-use ratatui::{
-    backend::TestBackend,
-    buffer::Buffer,
-    layout::Rect,
-    Terminal,
-};
+use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect};
 use shannon_ui::theme::Theme;
 use shannon_ui::{ChatMessage, ChatRole, StatusBarWidget};
 
@@ -79,28 +74,19 @@ fn make_tool_message(tool_name: &str, content: &str, is_error: bool) -> ChatMess
 #[test]
 fn test_chat_message_text_snapshot() {
     let msg = make_message(ChatRole::User, "Hello, can you help me with Rust?");
-    insta::assert_snapshot!(
-        "chat_message_text",
-        format!("{:#?}", msg)
-    );
+    insta::assert_snapshot!("chat_message_text", format!("{:#?}", msg));
 }
 
 #[test]
 fn test_chat_message_tool_call_snapshot() {
     let msg = make_tool_message("bash", "cargo test\nrunning 42 tests\nall passed", false);
-    insta::assert_snapshot!(
-        "chat_message_tool_call",
-        format!("{:#?}", msg)
-    );
+    insta::assert_snapshot!("chat_message_tool_call", format!("{:#?}", msg));
 }
 
 #[test]
 fn test_chat_message_error_snapshot() {
     let msg = make_tool_message("write", "Permission denied: /etc/hosts", true);
-    insta::assert_snapshot!(
-        "chat_message_error",
-        format!("{:#?}", msg)
-    );
+    insta::assert_snapshot!("chat_message_error", format!("{:#?}", msg));
 }
 
 #[test]
@@ -109,10 +95,7 @@ fn test_chat_message_thinking_snapshot() {
     msg.thinking_content = Some("Let me analyze the code step by step...".to_string());
     msg.thinking_duration_secs = Some(3.2);
     msg.thinking_expanded = false;
-    insta::assert_snapshot!(
-        "chat_message_thinking",
-        format!("{:#?}", msg)
-    );
+    insta::assert_snapshot!("chat_message_thinking", format!("{:#?}", msg));
 }
 
 #[test]
@@ -120,20 +103,14 @@ fn test_tool_status_snapshot() {
     let mut msg = make_tool_message("bash", "running...", false);
     msg.spinner_frame = 3;
     msg.duration_secs = None; // still running
-    insta::assert_snapshot!(
-        "tool_status_running",
-        format!("{:#?}", msg)
-    );
+    insta::assert_snapshot!("tool_status_running", format!("{:#?}", msg));
 }
 
 #[test]
 fn test_diff_stats_snapshot() {
     let mut msg = make_tool_message("write", "src/main.rs written", false);
     msg.diff_stats = Some((42, 7));
-    insta::assert_snapshot!(
-        "diff_stats",
-        format!("{:#?}", msg)
-    );
+    insta::assert_snapshot!("diff_stats", format!("{:#?}", msg));
 }
 
 #[test]
@@ -142,27 +119,42 @@ fn test_progress_indicator_snapshot() {
     let mut terminal = test_terminal(80, 2);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 80, 2);
-        StatusBarWidget::render_with_spinner(
-            f, area,
-            "Thinking...",
-            Some("claude-sonnet-4"),
-            None,
-            None, None, None, None, None, None,
-            &theme,
-            None, None, None, None, None, None, None, None, None,
-            true, 5000,
-            None, None,
-        );
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 80, 2);
+            StatusBarWidget::render_with_spinner(
+                f,
+                area,
+                "Thinking...",
+                Some("claude-sonnet-4"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &theme,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                true,
+                5000,
+                None,
+                None,
+            );
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 80, 2));
-    insta::assert_snapshot!(
-        "progress_indicator",
-        text
-    );
+    insta::assert_snapshot!("progress_indicator", text);
 }
 
 #[test]
@@ -171,10 +163,7 @@ fn test_stats_line_snapshot() {
     let mut msg = make_message(ChatRole::Assistant, "Done!");
     msg.stats_line = Some("960 tokens · $0.0142".to_string());
     msg.diff_stats = Some((15, 3));
-    insta::assert_snapshot!(
-        "stats_line",
-        format!("{:#?}", msg)
-    );
+    insta::assert_snapshot!("stats_line", format!("{:#?}", msg));
 }
 
 #[test]
@@ -183,42 +172,42 @@ fn test_cache_hit_rate_snapshot() {
     let mut terminal = test_terminal(120, 2);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 120, 2);
-        StatusBarWidget::render_with_spinner(
-            f, area,
-            "Responding",
-            Some("claude-sonnet-4"),
-            None,
-            Some(5000),          // tokens_used
-            Some(200000),        // max_tokens (200k context)
-            Some(0.0234),        // cost_usd
-            None,                // git_branch
-            None,                // spinner
-            None,                // progress_bar
-            &theme,
-            None,                // approval_mode
-            Some((5000, 800)),   // token_breakdown (input, output)
-            Some(4500),          // cache_read_tokens — 4500 read from cache
-            Some(500),           // cache_creation_tokens — 500 written to cache
-            None,                // diag_counts
-            None,                // rate_limit
-            None,                // files_info
-            None,                // tools_invoked
-            None,                // session_duration
-            false,               // thinking_phase
-            0,                   // thinking_chars
-            None,                // turn_count
-            None,                // memory_rss_kb
-        );
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 120, 2);
+            StatusBarWidget::render_with_spinner(
+                f,
+                area,
+                "Responding",
+                Some("claude-sonnet-4"),
+                None,
+                Some(5000),   // tokens_used
+                Some(200000), // max_tokens (200k context)
+                Some(0.0234), // cost_usd
+                None,         // git_branch
+                None,         // spinner
+                None,         // progress_bar
+                &theme,
+                None,              // approval_mode
+                Some((5000, 800)), // token_breakdown (input, output)
+                Some(4500),        // cache_read_tokens — 4500 read from cache
+                Some(500),         // cache_creation_tokens — 500 written to cache
+                None,              // diag_counts
+                None,              // rate_limit
+                None,              // files_info
+                None,              // tools_invoked
+                None,              // session_duration
+                false,             // thinking_phase
+                0,                 // thinking_chars
+                None,              // turn_count
+                None,              // memory_rss_kb
+            );
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 120, 2));
-    insta::assert_snapshot!(
-        "cache_hit_rate",
-        text
-    );
+    insta::assert_snapshot!("cache_hit_rate", text);
 
     // Verify the rendered output contains a cache hit rate indicator
     assert!(
@@ -233,33 +222,40 @@ fn test_cache_zero_tokens_snapshot() {
     let mut terminal = test_terminal(120, 2);
     let theme = Theme::default_dark();
 
-    terminal.draw(|f| {
-        let area = Rect::new(0, 0, 120, 2);
-        StatusBarWidget::render_with_spinner(
-            f, area,
-            "Responding",
-            Some("claude-sonnet-4"),
-            None,
-            Some(5000),
-            Some(200000),
-            Some(0.0234),
-            None,                // git_branch
-            None,                // spinner
-            None,                // progress_bar
-            &theme,
-            None,
-            Some((5000, 800)),
-            Some(0),             // cache_read_tokens = 0
-            Some(0),             // cache_creation_tokens = 0
-            None, None, None, None, None,
-            false, 0, None, None,
-        );
-    }).unwrap();
+    terminal
+        .draw(|f| {
+            let area = Rect::new(0, 0, 120, 2);
+            StatusBarWidget::render_with_spinner(
+                f,
+                area,
+                "Responding",
+                Some("claude-sonnet-4"),
+                None,
+                Some(5000),
+                Some(200000),
+                Some(0.0234),
+                None, // git_branch
+                None, // spinner
+                None, // progress_bar
+                &theme,
+                None,
+                Some((5000, 800)),
+                Some(0), // cache_read_tokens = 0
+                Some(0), // cache_creation_tokens = 0
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+                0,
+                None,
+                None,
+            );
+        })
+        .unwrap();
 
     let buf = terminal.backend().buffer().clone();
     let text = buffer_text(&buf, Rect::new(0, 0, 120, 2));
-    insta::assert_snapshot!(
-        "cache_zero_tokens",
-        text
-    );
+    insta::assert_snapshot!("cache_zero_tokens", text);
 }

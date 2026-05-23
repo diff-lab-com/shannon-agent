@@ -3,7 +3,7 @@
 //! Stops/cancels a running task by marking it as cancelled in the task store.
 
 use crate::todo::{TaskStore, TodoStatus};
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -64,10 +64,7 @@ impl TaskStopTool {
 
         let was_running = task.status == TodoStatus::InProgress;
         task.status = TodoStatus::Completed; // Mark as completed (stopped)
-        task.description = format!(
-            "{} [CANCELLED]",
-            task.description
-        );
+        task.description = format!("{} [CANCELLED]", task.description);
         task.content = task.description.clone();
 
         let message = if was_running {
@@ -155,10 +152,15 @@ mod tests {
 
         let task = make_task(TodoStatus::InProgress);
         let task_id = task.task_id.clone();
-        store.write().unwrap_or_else(|e| e.into_inner()).insert(task_id.clone(), task);
+        store
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(task_id.clone(), task);
 
         let result = tool
-            .stop_task(TaskStopInput { task_id: task_id.clone() })
+            .stop_task(TaskStopInput {
+                task_id: task_id.clone(),
+            })
             .await
             .unwrap();
 
@@ -195,10 +197,15 @@ mod tests {
 
         let task = make_task(TodoStatus::Completed);
         let task_id = task.task_id.clone();
-        store.write().unwrap_or_else(|e| e.into_inner()).insert(task_id.clone(), task);
+        store
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(task_id.clone(), task);
 
         let result = tool
-            .stop_task(TaskStopInput { task_id: task_id.clone() })
+            .stop_task(TaskStopInput {
+                task_id: task_id.clone(),
+            })
             .await
             .unwrap();
 
@@ -213,10 +220,15 @@ mod tests {
 
         let task = make_task(TodoStatus::Pending);
         let task_id = task.task_id.clone();
-        store.write().unwrap_or_else(|e| e.into_inner()).insert(task_id.clone(), task);
+        store
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(task_id.clone(), task);
 
         let result = tool
-            .stop_task(TaskStopInput { task_id: task_id.clone() })
+            .stop_task(TaskStopInput {
+                task_id: task_id.clone(),
+            })
             .await
             .unwrap();
 
@@ -239,11 +251,16 @@ mod tests {
         task.description = "Do important work".to_string();
         task.content = "Do important work".to_string();
         let task_id = task.task_id.clone();
-        store.write().unwrap_or_else(|e| e.into_inner()).insert(task_id.clone(), task);
+        store
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(task_id.clone(), task);
 
-        tool.stop_task(TaskStopInput { task_id: task_id.clone() })
-            .await
-            .unwrap();
+        tool.stop_task(TaskStopInput {
+            task_id: task_id.clone(),
+        })
+        .await
+        .unwrap();
 
         let store = store.read().unwrap_or_else(|e| e.into_inner());
         let task = store.get(&task_id).unwrap();

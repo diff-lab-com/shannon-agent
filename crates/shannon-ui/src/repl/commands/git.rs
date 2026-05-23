@@ -1,4 +1,4 @@
-use crate::{widgets::ChatRole, Result};
+use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
@@ -7,23 +7,24 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
 
     // Show help
     if trimmed == "help" || trimmed == "--help" || trimmed == "-h" {
-        repl.chat.add_message(ChatRole::System,
+        repl.chat.add_message(
+            ChatRole::System,
             "Create a GitHub pull request\n\n\
              Usage:\n  /create-pr            — interactive PR creation\n  \
              /create-pr <title>     — create with custom title\n  \
              /create-pr --draft     — create as draft PR\n  \
              /create-pr --base X    — set target branch (default: main)\n  \
-             /create-pr --web       — open in browser to continue editing".to_string(),
+             /create-pr --web       — open in browser to continue editing"
+                .to_string(),
         );
         return Ok(());
     }
 
     // Check if gh CLI is available
-    let gh_check = std::process::Command::new("gh")
-        .arg("--version")
-        .output();
+    let gh_check = std::process::Command::new("gh").arg("--version").output();
     if gh_check.is_err() {
-        repl.chat.add_message(ChatRole::System,
+        repl.chat.add_message(
+            ChatRole::System,
             "GitHub CLI (gh) is not installed. Install it: https://cli.github.com".to_string(),
         );
         return Ok(());
@@ -34,8 +35,14 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(&repl.state.working_directory)
         .output();
-    if git_check.is_err() || !git_check.as_ref().map(|o| o.status.success()).unwrap_or(false) {
-        repl.chat.add_message(ChatRole::System, "Not inside a git repository.".to_string());
+    if git_check.is_err()
+        || !git_check
+            .as_ref()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    {
+        repl.chat
+            .add_message(ChatRole::System, "Not inside a git repository.".to_string());
         return Ok(());
     }
 
@@ -47,7 +54,10 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
     let current_branch = match branch_output {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
         _ => {
-            repl.chat.add_message(ChatRole::System, "Failed to determine current branch.".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Failed to determine current branch.".to_string(),
+            );
             return Ok(());
         }
     };
@@ -56,7 +66,11 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
     let base_branch = if trimmed.contains("--base") {
         if let Some(idx) = trimmed.find("--base") {
             let after = &trimmed[idx + 6..].trim_start();
-            after.split_whitespace().next().unwrap_or("main").to_string()
+            after
+                .split_whitespace()
+                .next()
+                .unwrap_or("main")
+                .to_string()
         } else {
             "main".to_string()
         }
@@ -66,7 +80,11 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
             .args(["rev-parse", "--verify", "main"])
             .current_dir(&repl.state.working_directory)
             .output();
-        if main_check.as_ref().map(|o| o.status.success()).unwrap_or(false) {
+        if main_check
+            .as_ref()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             "main".to_string()
         } else {
             "master".to_string()
@@ -101,12 +119,19 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
     let open_web = trimmed.contains("--web");
 
     let title = {
-        let non_flag_args: Vec<&str> = trimmed.split_whitespace()
+        let non_flag_args: Vec<&str> = trimmed
+            .split_whitespace()
             .filter(|s| !s.starts_with('-'))
             .collect();
         if non_flag_args.is_empty() {
-            commits.lines().next()
-                .map(|line| line.split_once(' ').map(|(_, msg)| msg.to_string()).unwrap_or(line.to_string()))
+            commits
+                .lines()
+                .next()
+                .map(|line| {
+                    line.split_once(' ')
+                        .map(|(_, msg)| msg.to_string())
+                        .unwrap_or(line.to_string())
+                })
                 .unwrap_or_else(|| format!("PR from {current_branch}"))
         } else {
             non_flag_args.join(" ")
@@ -174,7 +199,16 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     // Build gh pr create command
-    let mut gh_args = vec!["pr", "create", "--title", &title, "--body", &body, "--base", &base_branch];
+    let mut gh_args = vec![
+        "pr",
+        "create",
+        "--title",
+        &title,
+        "--body",
+        &body,
+        "--base",
+        &base_branch,
+    ];
     if is_draft {
         gh_args.push("--draft");
     }
@@ -190,9 +224,17 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
     match pr_result {
         Ok(out) if out.status.success() => {
             let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            let msg = if is_draft { "Draft PR created" } else { "PR created" };
-            repl.chat.add_message(ChatRole::System,
-                format!("{msg}: {url}\n\nBranch: {current_branch} → {base_branch}\nCommits:\n{commits}"));
+            let msg = if is_draft {
+                "Draft PR created"
+            } else {
+                "PR created"
+            };
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "{msg}: {url}\n\nBranch: {current_branch} → {base_branch}\nCommits:\n{commits}"
+                ),
+            );
 
             // Send desktop notification if enabled
             if repl.notifications_enabled {
@@ -209,14 +251,18 @@ pub(crate) fn handle_create_pr(repl: &mut Repl, args: &str) -> Result<()> {
                     .output();
                 match existing {
                     Ok(eout) if eout.status.success() => {
-                        let url: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&eout.stdout)).unwrap_or_default();
+                        let url: serde_json::Value =
+                            serde_json::from_str(&String::from_utf8_lossy(&eout.stdout))
+                                .unwrap_or_default();
                         let pr_url = url.get("url").and_then(|u| u.as_str()).unwrap_or("unknown");
                         repl.chat.add_message(ChatRole::System,
                             format!("PR already exists: {pr_url}\nBranch: {current_branch} → {base_branch}"));
                     }
                     _ => {
-                        repl.chat.add_message(ChatRole::System,
-                            format!("PR already exists for branch {current_branch}.\n{stderr}"));
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            format!("PR already exists for branch {current_branch}.\n{stderr}"),
+                        );
                     }
                 }
             } else {
@@ -235,7 +281,8 @@ pub(crate) fn handle_patch(repl: &mut Repl, args: &str) -> Result<()> {
     let args = args.trim();
 
     if args.is_empty() || args == "--help" || args == "help" {
-        repl.chat.add_message(ChatRole::System,
+        repl.chat.add_message(
+            ChatRole::System,
             "Patch — search/replace with diff preview\n\n\
              Usage:\n\
                /patch <file> <search> --- <replace>          Preview change\n\
@@ -243,7 +290,9 @@ pub(crate) fn handle_patch(repl: &mut Repl, args: &str) -> Result<()> {
                /patch --all <file> <search> --- <replace>    Preview (replace all)\n\
                /patch --apply --all <file> <search> --- <replace>  Apply all\n\n\
              The preview shows the diff without modifying the file.\n\
-             Add --apply to write the change.".to_string());
+             Add --apply to write the change."
+                .to_string(),
+        );
         return Ok(());
     }
 
@@ -270,16 +319,20 @@ pub(crate) fn handle_patch(repl: &mut Repl, args: &str) -> Result<()> {
     let file_path = match words.next() {
         Some(f) if !f.is_empty() => f.to_string(),
         _ => {
-            repl.chat.add_message(ChatRole::System,
-                "Usage: /patch <file> <search> --- <replace>".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Usage: /patch <file> <search> --- <replace>".to_string(),
+            );
             return Ok(());
         }
     };
     let old_text = words.next().unwrap_or("").to_string();
 
     if old_text.is_empty() {
-        repl.chat.add_message(ChatRole::System,
-            "Error: search text is empty.\nUsage: /patch <file> <search> --- <replace>".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Error: search text is empty.\nUsage: /patch <file> <search> --- <replace>".to_string(),
+        );
         return Ok(());
     }
 
@@ -287,11 +340,16 @@ pub(crate) fn handle_patch(repl: &mut Repl, args: &str) -> Result<()> {
     let abs_path = if std::path::Path::new(&file_path).is_absolute() {
         file_path.clone()
     } else {
-        format!("{}/{}", repl.state.working_directory.trim_end_matches('/'), file_path)
+        format!(
+            "{}/{}",
+            repl.state.working_directory.trim_end_matches('/'),
+            file_path
+        )
     };
 
     let Some(ref engine) = repl.query_engine else {
-        repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "No query engine available.".to_string());
         return Ok(());
     };
 
@@ -304,14 +362,20 @@ pub(crate) fn handle_patch(repl: &mut Repl, args: &str) -> Result<()> {
     });
 
     let tool_name = "Edit";
-    match repl.runtime.block_on(engine.tools().execute(tool_name, input)) {
+    match repl
+        .runtime
+        .block_on(engine.tools().execute(tool_name, input))
+    {
         Ok(result) => {
             let prefix = if apply { "Applied" } else { "Preview" };
             let msg = format!("{prefix}: {}\n{}", file_path, result.content);
-            { repl.chat.add_message(ChatRole::System, msg); }
+            {
+                repl.chat.add_message(ChatRole::System, msg);
+            }
         }
         Err(e) => {
-            { repl.chat.add_message(ChatRole::System, format!("Patch failed: {e}")); }
+            repl.chat
+                .add_message(ChatRole::System, format!("Patch failed: {e}"));
         }
     }
 
@@ -355,14 +419,17 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
         match output {
             Ok(o) if o.status.success() => {
                 let diff_str = String::from_utf8_lossy(&o.stdout);
-                let hunks = crate::widgets::diff_viewer::InteractiveHunk::parse_from_diff(&diff_str, None);
+                let hunks =
+                    crate::widgets::diff_viewer::InteractiveHunk::parse_from_diff(&diff_str, None);
                 if hunks.is_empty() {
-                    repl.chat.add_message(ChatRole::System, "No diff hunks found.".to_string());
+                    repl.chat
+                        .add_message(ChatRole::System, "No diff hunks found.".to_string());
                 } else {
                     repl.state.interactive_hunks = hunks;
                     repl.state.interactive_selected = 0;
                     repl.state.diff_interactive = true;
-                    repl.state.diff_viewer = Some(crate::widgets::diff_viewer::DiffViewerWidget::new());
+                    repl.state.diff_viewer =
+                        Some(crate::widgets::diff_viewer::DiffViewerWidget::new());
                 }
             }
             Ok(o) => {
@@ -384,12 +451,20 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             .output();
         match output {
             Ok(o) if o.status.success() => {
-                repl.chat.add_message(ChatRole::System, "All changes accepted and staged.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "All changes accepted and staged.".to_string(),
+                );
             }
             Ok(o) => {
-                super::set_error(repl, &format!("staging: {}", String::from_utf8_lossy(&o.stderr)));
+                super::set_error(
+                    repl,
+                    &format!("staging: {}", String::from_utf8_lossy(&o.stderr)),
+                );
             }
-            Err(e) => { super::set_error(repl, &format!("{e}")); }
+            Err(e) => {
+                super::set_error(repl, &format!("{e}"));
+            }
         }
         return Ok(());
     }
@@ -405,7 +480,8 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
             .unwrap_or(0);
         if file_count == 0 {
-            repl.chat.add_message(ChatRole::System, "No changes to reject.".to_string());
+            repl.chat
+                .add_message(ChatRole::System, "No changes to reject.".to_string());
             return Ok(());
         }
         let output = std::process::Command::new("git")
@@ -414,12 +490,20 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             .output();
         match output {
             Ok(o) if o.status.success() => {
-                repl.chat.add_message(ChatRole::System, format!("All unstaged changes discarded ({file_count} files)."));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("All unstaged changes discarded ({file_count} files)."),
+                );
             }
             Ok(o) => {
-                super::set_error(repl, &format!("discarding changes: {}", String::from_utf8_lossy(&o.stderr)));
+                super::set_error(
+                    repl,
+                    &format!("discarding changes: {}", String::from_utf8_lossy(&o.stderr)),
+                );
             }
-            Err(e) => { super::set_error(repl, &format!("discarding changes: {e}")); }
+            Err(e) => {
+                super::set_error(repl, &format!("discarding changes: {e}"));
+            }
         }
         // Also clean untracked files
         let _ = std::process::Command::new("git")
@@ -438,12 +522,23 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             .output();
         match output {
             Ok(o) if o.status.success() => {
-                repl.chat.add_message(ChatRole::System, format!("Changes to '{file}' accepted (staged)."));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Changes to '{file}' accepted (staged)."),
+                );
             }
             Ok(o) => {
-                super::set_error(repl, &format!("git operation failed: {}", String::from_utf8_lossy(&o.stderr)));
+                super::set_error(
+                    repl,
+                    &format!(
+                        "git operation failed: {}",
+                        String::from_utf8_lossy(&o.stderr)
+                    ),
+                );
             }
-            Err(e) => { super::set_error(repl, &format!("{e}")); }
+            Err(e) => {
+                super::set_error(repl, &format!("{e}"));
+            }
         }
         return Ok(());
     }
@@ -457,12 +552,23 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             .output();
         match output {
             Ok(o) if o.status.success() => {
-                repl.chat.add_message(ChatRole::System, format!("Changes to '{file}' rejected (reverted)."));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Changes to '{file}' rejected (reverted)."),
+                );
             }
             Ok(o) => {
-                super::set_error(repl, &format!("git operation failed: {}", String::from_utf8_lossy(&o.stderr)));
+                super::set_error(
+                    repl,
+                    &format!(
+                        "git operation failed: {}",
+                        String::from_utf8_lossy(&o.stderr)
+                    ),
+                );
             }
-            Err(e) => { super::set_error(repl, &format!("{e}")); }
+            Err(e) => {
+                super::set_error(repl, &format!("{e}"));
+            }
         }
         return Ok(());
     }
@@ -478,7 +584,8 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 if stdout.trim().is_empty() {
-                    repl.chat.add_message(ChatRole::System, "No changes to review.".to_string());
+                    repl.chat
+                        .add_message(ChatRole::System, "No changes to review.".to_string());
                     return Ok(());
                 }
 
@@ -510,7 +617,9 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
 
                 repl.chat.add_message(ChatRole::System, msg);
             }
-            Err(e) => { super::set_error(repl, &format!("getting git status: {e}")); }
+            Err(e) => {
+                super::set_error(repl, &format!("getting git status: {e}"));
+            }
         }
         return Ok(());
     }
@@ -534,24 +643,42 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                         Ok(result) => {
                             let diff = String::from_utf8_lossy(&result.stdout);
                             if diff.is_empty() {
-                                repl.chat.add_message(ChatRole::System, format!("No unstaged diff for '{file}'."));
+                                repl.chat.add_message(
+                                    ChatRole::System,
+                                    format!("No unstaged diff for '{file}'."),
+                                );
                             } else {
                                 let max = 8000;
                                 let end = if diff.len() > max {
-                                    let mut e = max; while !diff.is_char_boundary(e) { e -= 1; } e
-                                } else { diff.len() };
+                                    let mut e = max;
+                                    while !diff.is_char_boundary(e) {
+                                        e -= 1;
+                                    }
+                                    e
+                                } else {
+                                    diff.len()
+                                };
                                 let truncated = &diff[..end];
                                 let mut msg = format!("Diff for '{file}':\n```\n{truncated}");
-                                if diff.len() > 8000 { msg.push_str("\n... (truncated)"); }
+                                if diff.len() > 8000 {
+                                    msg.push_str("\n... (truncated)");
+                                }
                                 msg.push_str("\n```\n\n");
-                                msg.push_str(&format!("Accept: /diff accept {file}\nReject: /diff reject {file}"));
+                                msg.push_str(&format!(
+                                    "Accept: /diff accept {file}\nReject: /diff reject {file}"
+                                ));
                                 repl.chat.add_message(ChatRole::System, msg);
                             }
                         }
-                        Err(e) => { super::set_error(repl, &format!("{e}")); }
+                        Err(e) => {
+                            super::set_error(repl, &format!("{e}"));
+                        }
                     }
                 } else {
-                    repl.chat.add_message(ChatRole::System, format!("Invalid file number: {num}. Use /diff review to list files."));
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Invalid file number: {num}. Use /diff review to list files."),
+                    );
                 }
             }
             return Ok(());
@@ -560,7 +687,11 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
 
     // /diff review branch [name] — compare current branch vs a base branch
     if let Some(rest) = trimmed.strip_prefix("review branch") {
-        let base = if rest.trim().is_empty() { "main" } else { rest.trim() };
+        let base = if rest.trim().is_empty() {
+            "main"
+        } else {
+            rest.trim()
+        };
         let output = std::process::Command::new("git")
             .args(["diff", &format!("{base}...HEAD"), "--stat"])
             .current_dir(&repl.state.working_directory)
@@ -664,7 +795,10 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
 
     let cmd_parts: Vec<&str> = cmd_str.split_whitespace().collect();
     if cmd_parts.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Failed to build git diff command.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "Failed to build git diff command.".to_string(),
+        );
         return Ok(());
     }
 
@@ -679,9 +813,11 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
             let stderr = String::from_utf8_lossy(&result.stderr);
 
             if !stderr.is_empty() && stdout.is_empty() {
-                repl.chat.add_message(ChatRole::System, format!("Git diff error: {stderr}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("Git diff error: {stderr}"));
             } else if stdout.is_empty() {
-                repl.chat.add_message(ChatRole::System, "No changes found.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No changes found.".to_string());
             } else {
                 let analyzer = diff_utils::DiffAnalyzer::new();
                 let analysis = analyzer.analyze(&stdout);
@@ -695,13 +831,17 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                             current_file = name.to_string();
                         }
                     } else if line.starts_with('+') && !line.starts_with("+++") {
-                        if let Some(entry) = file_stats.iter_mut().find(|(f, _, _)| f == &current_file) {
+                        if let Some(entry) =
+                            file_stats.iter_mut().find(|(f, _, _)| f == &current_file)
+                        {
                             entry.1 += 1;
                         } else {
                             file_stats.push((current_file.clone(), 1, 0));
                         }
                     } else if line.starts_with('-') && !line.starts_with("---") {
-                        if let Some(entry) = file_stats.iter_mut().find(|(f, _, _)| f == &current_file) {
+                        if let Some(entry) =
+                            file_stats.iter_mut().find(|(f, _, _)| f == &current_file)
+                        {
                             entry.2 += 1;
                         } else {
                             file_stats.push((current_file.clone(), 0, 1));
@@ -711,11 +851,16 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
 
                 let total_lines = stdout.lines().count();
                 let category_summary = analysis.summary();
-                let test_flag = if analysis.has_test_changes() { " [has test changes]" } else { "" };
+                let test_flag = if analysis.has_test_changes() {
+                    " [has test changes]"
+                } else {
+                    ""
+                };
 
                 let mut report = format!(
                     "Git diff ({} files, {} lines){test_flag}\nCategories: {category_summary}\n",
-                    file_stats.len(), total_lines,
+                    file_stats.len(),
+                    total_lines,
                 );
 
                 // File-by-file summary
@@ -738,7 +883,9 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
                 repl.chat.add_message(ChatRole::System, report);
             }
         }
-        Err(e) => { super::set_error(repl, &format!("running git diff: {e}")); }
+        Err(e) => {
+            super::set_error(repl, &format!("running git diff: {e}"));
+        }
     }
     Ok(())
 }
@@ -746,7 +893,8 @@ pub(crate) fn handle_diff(repl: &mut Repl, args: &str) -> Result<()> {
 /// Format a visual change bar for a file.
 pub(crate) fn format_change_bar(additions: i32, deletions: i32) -> String {
     let total = (additions + deletions).min(20) as usize;
-    let add_chars = (additions as f32 / (additions + deletions).max(1) as f32 * total as f32).round() as usize;
+    let add_chars =
+        (additions as f32 / (additions + deletions).max(1) as f32 * total as f32).round() as usize;
     let del_chars = total - add_chars;
     format!("{}{}", "+".repeat(add_chars), "-".repeat(del_chars))
 }
@@ -793,7 +941,9 @@ pub(crate) fn handle_stage(repl: &mut Repl, args: &str) -> Result<()> {
                             msg.push_str("No unstaged or untracked changes.\n");
                         } else {
                             let count = ut_files.lines().filter(|l| !l.is_empty()).count();
-                            msg.push_str(&format!("No unstaged changes, but {count} untracked file(s):\n"));
+                            msg.push_str(&format!(
+                                "No unstaged changes, but {count} untracked file(s):\n"
+                            ));
                             for line in ut_files.lines().filter(|l| !l.is_empty()).take(20) {
                                 msg.push_str(&format!("  ? {line}\n"));
                             }
@@ -812,7 +962,8 @@ pub(crate) fn handle_stage(repl: &mut Repl, args: &str) -> Result<()> {
                         .output();
                     if let Ok(fo) = files_output {
                         let files = String::from_utf8_lossy(&fo.stdout);
-                        let file_list: Vec<&str> = files.lines().filter(|l| !l.is_empty()).collect();
+                        let file_list: Vec<&str> =
+                            files.lines().filter(|l| !l.is_empty()).collect();
                         if !file_list.is_empty() {
                             msg.push_str("Files to stage:\n");
                             for f in &file_list {
@@ -837,11 +988,13 @@ pub(crate) fn handle_stage(repl: &mut Repl, args: &str) -> Result<()> {
             .output();
         match output {
             Ok(o) if o.status.success() => {
-                repl.chat.add_message(ChatRole::System, "All changes staged.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "All changes staged.".to_string());
             }
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
-                repl.chat.add_message(ChatRole::System, format!("git add failed: {err}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("git add failed: {err}"));
             }
             Err(e) => {
                 super::set_error(repl, &format!("running git add: {e}"));
@@ -858,11 +1011,13 @@ pub(crate) fn handle_stage(repl: &mut Repl, args: &str) -> Result<()> {
         match output {
             Ok(o) if o.status.success() => {
                 let count = files.len();
-                repl.chat.add_message(ChatRole::System, format!("Staged {count} file(s)."));
+                repl.chat
+                    .add_message(ChatRole::System, format!("Staged {count} file(s)."));
             }
             Ok(o) => {
                 let err = String::from_utf8_lossy(&o.stderr);
-                repl.chat.add_message(ChatRole::System, format!("git add failed: {err}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("git add failed: {err}"));
             }
             Err(e) => {
                 super::set_error(repl, &format!("running git add: {e}"));
@@ -874,7 +1029,7 @@ pub(crate) fn handle_stage(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 pub(crate) fn handle_status(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_commands::status_utils::{parse_git_status, format_status};
+    use shannon_commands::status_utils::{format_status, parse_git_status};
 
     let short = args.contains("--short");
 
@@ -888,7 +1043,8 @@ pub(crate) fn handle_status(repl: &mut Repl, args: &str) -> Result<()> {
             let stdout = String::from_utf8_lossy(&result.stdout);
             let stderr = String::from_utf8_lossy(&result.stderr);
             if !stderr.is_empty() && stdout.is_empty() {
-                repl.chat.add_message(ChatRole::System, format!("Git error: {stderr}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("Git error: {stderr}"));
                 return Ok(());
             }
             stdout.to_string()
@@ -925,13 +1081,14 @@ pub(crate) fn handle_status(repl: &mut Repl, args: &str) -> Result<()> {
 
 pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
     // Check if gh CLI is available
-    let gh_check = std::process::Command::new("gh")
-        .arg("--version")
-        .output();
+    let gh_check = std::process::Command::new("gh").arg("--version").output();
 
     if gh_check.is_err() {
-        repl.chat.add_message(ChatRole::System,
-            "GitHub CLI (gh) is not installed.\nInstall it from: https://cli.github.com/".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "GitHub CLI (gh) is not installed.\nInstall it from: https://cli.github.com/"
+                .to_string(),
+        );
         return Ok(());
     }
 
@@ -951,11 +1108,16 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     let stdout = String::from_utf8_lossy(&result.stdout);
                     let stderr = String::from_utf8_lossy(&result.stderr);
                     if !stderr.is_empty() && stdout.is_empty() {
-                        repl.chat.add_message(ChatRole::System, format!("CI error: {stderr}"));
+                        repl.chat
+                            .add_message(ChatRole::System, format!("CI error: {stderr}"));
                     } else if stdout.is_empty() {
-                        repl.chat.add_message(ChatRole::System, "No workflow runs found.".to_string());
+                        repl.chat
+                            .add_message(ChatRole::System, "No workflow runs found.".to_string());
                     } else {
-                        repl.chat.add_message(ChatRole::System, format!("Recent workflow runs:\n{stdout}"));
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            format!("Recent workflow runs:\n{stdout}"),
+                        );
                     }
                 }
                 Err(e) => {
@@ -964,7 +1126,10 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         "runs" => {
-            let limit = parts.get(1).and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+            let limit = parts
+                .get(1)
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(10);
             let output = std::process::Command::new("gh")
                 .args(["run", "list", "--limit", &limit.to_string()])
                 .current_dir(&repl.state.working_directory)
@@ -975,9 +1140,13 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     let stdout = String::from_utf8_lossy(&result.stdout);
                     let stderr = String::from_utf8_lossy(&result.stderr);
                     if !stderr.is_empty() && stdout.is_empty() {
-                        repl.chat.add_message(ChatRole::System, format!("CI error: {stderr}"));
+                        repl.chat
+                            .add_message(ChatRole::System, format!("CI error: {stderr}"));
                     } else {
-                        repl.chat.add_message(ChatRole::System, format!("Workflow runs (limit: {limit}):\n{stdout}"));
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            format!("Workflow runs (limit: {limit}):\n{stdout}"),
+                        );
                     }
                 }
                 Err(e) => {
@@ -996,9 +1165,11 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     let stdout = String::from_utf8_lossy(&result.stdout);
                     let stderr = String::from_utf8_lossy(&result.stderr);
                     if !stderr.is_empty() && stdout.is_empty() {
-                        repl.chat.add_message(ChatRole::System, format!("CI error: {stderr}"));
+                        repl.chat
+                            .add_message(ChatRole::System, format!("CI error: {stderr}"));
                     } else {
-                        repl.chat.add_message(ChatRole::System, format!("Workflows:\n{stdout}"));
+                        repl.chat
+                            .add_message(ChatRole::System, format!("Workflows:\n{stdout}"));
                     }
                 }
                 Err(e) => {
@@ -1009,7 +1180,8 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
         "view" => {
             let run_id = parts.get(1).copied().unwrap_or("");
             if run_id.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Usage: /ci view <run-id>".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "Usage: /ci view <run-id>".to_string());
                 return Ok(());
             }
             let output = std::process::Command::new("gh")
@@ -1022,9 +1194,11 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                     let stdout = String::from_utf8_lossy(&result.stdout);
                     let stderr = String::from_utf8_lossy(&result.stderr);
                     if !stderr.is_empty() && stdout.is_empty() {
-                        repl.chat.add_message(ChatRole::System, format!("CI error: {stderr}"));
+                        repl.chat
+                            .add_message(ChatRole::System, format!("CI error: {stderr}"));
                     } else {
-                        repl.chat.add_message(ChatRole::System, format!("Run details:\n{stdout}"));
+                        repl.chat
+                            .add_message(ChatRole::System, format!("Run details:\n{stdout}"));
                     }
                 }
                 Err(e) => {
@@ -1048,11 +1222,15 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
                 Ok(result) => {
                     let stderr = String::from_utf8_lossy(&result.stderr);
                     if result.status.success() {
-                        repl.chat.add_message(ChatRole::System,
-                            format!("Workflow '{workflow}' triggered successfully."));
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            format!("Workflow '{workflow}' triggered successfully."),
+                        );
                     } else {
-                        repl.chat.add_message(ChatRole::System,
-                            format!("Failed to trigger workflow: {stderr}"));
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            format!("Failed to trigger workflow: {stderr}"),
+                        );
                     }
                 }
                 Err(e) => {
@@ -1061,7 +1239,9 @@ pub(crate) fn handle_ci(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         _ => {
-            repl.chat.add_message(ChatRole::System, "\
+            repl.chat.add_message(
+                ChatRole::System,
+                "\
 CI/GitHub Actions Commands:
   /ci            — Show recent workflow runs (default: 10)
   /ci status     — Same as above
@@ -1071,7 +1251,9 @@ CI/GitHub Actions Commands:
   /ci trigger <name> — Trigger a workflow
   /ci help       — Show this help
 
-Requires GitHub CLI (gh) to be installed.".to_string());
+Requires GitHub CLI (gh) to be installed."
+                    .to_string(),
+            );
         }
     }
 
@@ -1120,19 +1302,44 @@ pub(crate) fn handle_review(repl: &mut Repl, args: &str) -> Result<()> {
 
                 if let Ok(diff_result) = full_diff {
                     let diff_text = String::from_utf8_lossy(&diff_result.stdout);
-                    let files: Vec<&str> = diff_text.lines().filter(|l| l.starts_with("diff --git")).collect();
-                    let additions = diff_text.lines().filter(|l| l.starts_with('+') && !l.starts_with("+++")).count();
-                    let deletions = diff_text.lines().filter(|l| l.starts_with('-') && !l.starts_with("---")).count();
+                    let files: Vec<&str> = diff_text
+                        .lines()
+                        .filter(|l| l.starts_with("diff --git"))
+                        .collect();
+                    let additions = diff_text
+                        .lines()
+                        .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
+                        .count();
+                    let deletions = diff_text
+                        .lines()
+                        .filter(|l| l.starts_with('-') && !l.starts_with("---"))
+                        .count();
 
-                    review.push_str(&format!("Summary: {} files changed, +{}/-{} lines\n\n", files.len(), additions, deletions));
+                    review.push_str(&format!(
+                        "Summary: {} files changed, +{}/-{} lines\n\n",
+                        files.len(),
+                        additions,
+                        deletions
+                    ));
 
                     // Basic automated checks
                     let mut findings: Vec<String> = Vec::new();
 
                     // Check for potential secrets
-                    let secret_patterns = ["API_KEY", "api_key", "password", "secret_key", "access_token",
-                        "private_key", "credential", "auth_token", "BEGIN RSA", "BEGIN PRIVATE"];
-                    let added_lines: Vec<&str> = diff_text.lines()
+                    let secret_patterns = [
+                        "API_KEY",
+                        "api_key",
+                        "password",
+                        "secret_key",
+                        "access_token",
+                        "private_key",
+                        "credential",
+                        "auth_token",
+                        "BEGIN RSA",
+                        "BEGIN PRIVATE",
+                    ];
+                    let added_lines: Vec<&str> = diff_text
+                        .lines()
                         .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
                         .collect();
                     for pat in &secret_patterns {
@@ -1144,50 +1351,77 @@ pub(crate) fn handle_review(repl: &mut Repl, args: &str) -> Result<()> {
 
                     // Check for large diffs
                     if additions + deletions > 500 {
-                        findings.push("[WARN] Large diff — consider splitting into smaller changes".to_string());
+                        findings.push(
+                            "[WARN] Large diff — consider splitting into smaller changes"
+                                .to_string(),
+                        );
                     }
 
                     // Check for debug prints left in
-                    let debug_patterns = ["println!", "console.log", "print(", "dbg!", "eprintln!", "fmt.Println"];
+                    let debug_patterns = [
+                        "println!",
+                        "console.log",
+                        "print(",
+                        "dbg!",
+                        "eprintln!",
+                        "fmt.Println",
+                    ];
                     for pat in &debug_patterns {
                         if added_lines.iter().any(|l| l.contains(pat)) {
-                            findings.push(format!("[WARN] Debug output detected: `{pat}` — remove before commit"));
+                            findings.push(format!(
+                                "[WARN] Debug output detected: `{pat}` — remove before commit"
+                            ));
                             break;
                         }
                     }
 
                     // Check for unsafe code in Rust
                     if added_lines.iter().any(|l| l.contains("unsafe ")) {
-                        findings.push("[REVIEW] Unsafe code block added — requires careful review".to_string());
+                        findings.push(
+                            "[REVIEW] Unsafe code block added — requires careful review"
+                                .to_string(),
+                        );
                     }
 
                     // Check for unwrap() calls that could panic
-                    let unwrap_count = added_lines.iter().filter(|l| l.contains(".unwrap()")).count();
+                    let unwrap_count = added_lines
+                        .iter()
+                        .filter(|l| l.contains(".unwrap()"))
+                        .count();
                     if unwrap_count > 3 {
                         findings.push(format!("[WARN] {unwrap_count} .unwrap() calls added — consider proper error handling"));
                     }
 
                     // Check for TODO/FIXME
-                    if added_lines.iter().any(|l| l.contains("TODO") || l.contains("FIXME") || l.contains("HACK")) {
+                    if added_lines
+                        .iter()
+                        .any(|l| l.contains("TODO") || l.contains("FIXME") || l.contains("HACK"))
+                    {
                         findings.push("[INFO] New TODO/FIXME/HACK comments added".to_string());
                     }
 
                     // Check for hardcoded IPs or URLs
                     let has_hardcoded = added_lines.iter().any(|l| {
-                        (l.contains("127.0.0.1") || l.contains("localhost")) && !l.contains("test") && !l.contains("example")
+                        (l.contains("127.0.0.1") || l.contains("localhost"))
+                            && !l.contains("test")
+                            && !l.contains("example")
                     });
                     if has_hardcoded {
                         findings.push("[WARN] Hardcoded localhost/127.0.0.1 detected — use configurable endpoints".to_string());
                     }
 
                     // Check for test changes
-                    let has_test_changes = diff_text.lines()
+                    let has_test_changes = diff_text
+                        .lines()
                         .filter(|l| l.starts_with("diff --git"))
                         .any(|l| l.contains("test") || l.contains("spec"));
                     if has_test_changes {
                         findings.push("[PASS] Test changes detected".to_string());
                     } else if additions + deletions > 50 {
-                        findings.push("[WARN] No test changes — consider adding tests for new code".to_string());
+                        findings.push(
+                            "[WARN] No test changes — consider adding tests for new code"
+                                .to_string(),
+                        );
                     }
 
                     if findings.is_empty() {
@@ -1199,7 +1433,9 @@ pub(crate) fn handle_review(repl: &mut Repl, args: &str) -> Result<()> {
                         }
                     }
 
-                    review.push_str("\nTo get AI-powered review, ask in the chat after these changes.");
+                    review.push_str(
+                        "\nTo get AI-powered review, ask in the chat after these changes.",
+                    );
                 }
             }
         }
@@ -1225,14 +1461,22 @@ pub(crate) fn handle_worktree(repl: &mut Repl, args: &str) -> Result<()> {
         let active = shannon_agents::get_active_worktree();
         match active.as_ref() {
             Some(session) => {
-                repl.chat.add_message(ChatRole::System, format!(
-                    "{}Active worktree:\n  Branch: {}\n  Path: {}\n  Created: {}",
-                    status, session.branch_name, session.path.display(),
-                    session.created_at.format("%Y-%m-%d %H:%M"),
-                ));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "{}Active worktree:\n  Branch: {}\n  Path: {}\n  Created: {}",
+                        status,
+                        session.branch_name,
+                        session.path.display(),
+                        session.created_at.format("%Y-%m-%d %H:%M"),
+                    ),
+                );
             }
             None => {
-                repl.chat.add_message(ChatRole::System, format!("{status}No active worktree. Working in main repository."));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("{status}No active worktree. Working in main repository."),
+                );
             }
         }
         return Ok(());
@@ -1243,34 +1487,66 @@ pub(crate) fn handle_worktree(repl: &mut Repl, args: &str) -> Result<()> {
         "enter" => {
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Usage: /worktree enter <name>".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Usage: /worktree enter <name>".to_string(),
+                );
                 return Ok(());
             }
             let input = serde_json::json!({ "name": name });
             let Some(engine) = repl.query_engine.as_ref() else {
-                repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No query engine available.".to_string());
                 return Ok(());
             };
-            match repl.runtime.block_on(engine.tools().execute("enter_worktree", input)) {
-                Ok(result) => { repl.chat.add_message(ChatRole::System, format!("Entered worktree: {}", result.content)); }
-                Err(e) => { super::set_error(repl, &format!("entering worktree: {e}")); }
+            match repl
+                .runtime
+                .block_on(engine.tools().execute("enter_worktree", input))
+            {
+                Ok(result) => {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Entered worktree: {}", result.content),
+                    );
+                }
+                Err(e) => {
+                    super::set_error(repl, &format!("entering worktree: {e}"));
+                }
             }
         }
         "exit" => {
             let action = parts.get(1).copied().unwrap_or("keep");
-            let exit_action = match action { "--remove" => "remove", _ => "keep" };
+            let exit_action = match action {
+                "--remove" => "remove",
+                _ => "keep",
+            };
             let input = serde_json::json!({ "action": exit_action });
             let Some(engine) = repl.query_engine.as_ref() else {
-                repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No query engine available.".to_string());
                 return Ok(());
             };
-            match repl.runtime.block_on(engine.tools().execute("exit_worktree", input)) {
-                Ok(result) => { repl.chat.add_message(ChatRole::System, format!("Exited worktree: {}", result.content)); }
-                Err(e) => { super::set_error(repl, &format!("exiting worktree: {e}")); }
+            match repl
+                .runtime
+                .block_on(engine.tools().execute("exit_worktree", input))
+            {
+                Ok(result) => {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Exited worktree: {}", result.content),
+                    );
+                }
+                Err(e) => {
+                    super::set_error(repl, &format!("exiting worktree: {e}"));
+                }
             }
         }
         _ => {
-            repl.chat.add_message(ChatRole::System, "Unknown worktree action. Use: enter <name>, exit [--keep|--remove], or status".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Unknown worktree action. Use: enter <name>, exit [--keep|--remove], or status"
+                    .to_string(),
+            );
         }
     }
 

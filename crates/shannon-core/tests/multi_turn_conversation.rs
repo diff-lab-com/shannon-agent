@@ -26,15 +26,21 @@ impl TestConversation {
                         match b {
                             ContentBlock::Text { text } => n += text.len(),
                             ContentBlock::ToolUse { name, input, .. } => {
-                                n += name.len() + serde_json::to_string(input).map_or(0, |s| s.len());
+                                n += name.len()
+                                    + serde_json::to_string(input).map_or(0, |s| s.len());
                             }
-                            ContentBlock::ToolResult { content: Some(c), .. } => match c {
+                            ContentBlock::ToolResult {
+                                content: Some(c), ..
+                            } => match c {
                                 ToolResultContent::Single(s) => n += s.len(),
                                 ToolResultContent::Multiple(items) => {
-                                    n += items.iter().map(|b| match b {
-                                        ContentBlock::Text { text } => text.len(),
-                                        _ => 0,
-                                    }).sum::<usize>();
+                                    n += items
+                                        .iter()
+                                        .map(|b| match b {
+                                            ContentBlock::Text { text } => text.len(),
+                                            _ => 0,
+                                        })
+                                        .sum::<usize>();
                                 }
                             },
                             _ => {}
@@ -60,14 +66,19 @@ impl TestConversation {
         if self.messages.len() <= config.keep_recent_messages + 1 {
             return;
         }
-        let split_point = self.messages.len().saturating_sub(config.keep_recent_messages);
+        let split_point = self
+            .messages
+            .len()
+            .saturating_sub(config.keep_recent_messages);
         match config.compression_strategy {
             CompressionStrategy::SummarizeOld => {
                 let old: Vec<Message> = self.messages.drain(..split_point).collect();
                 let summary = summarize_messages(&old);
                 let summary_msg = Message {
                     role: "system".to_string(),
-                    content: MessageContent::Text(format!("[Previous conversation summary]\n\n{summary}")),
+                    content: MessageContent::Text(format!(
+                        "[Previous conversation summary]\n\n{summary}"
+                    )),
                 };
                 self.messages.insert(0, summary_msg);
             }
@@ -83,8 +94,16 @@ fn summarize_messages(messages: &[Message]) -> String {
     for msg in messages {
         match &msg.content {
             MessageContent::Text(text) => {
-                let role = if msg.role == "user" { "User" } else { "Assistant" };
-                let preview = if text.len() > 100 { format!("{}...", &text[..100]) } else { text.clone() };
+                let role = if msg.role == "user" {
+                    "User"
+                } else {
+                    "Assistant"
+                };
+                let preview = if text.len() > 100 {
+                    format!("{}...", &text[..100])
+                } else {
+                    text.clone()
+                };
                 parts.push(format!("{role}: {preview}"));
             }
             MessageContent::Blocks(blocks) => {
@@ -96,7 +115,11 @@ fn summarize_messages(messages: &[Message]) -> String {
             }
         }
     }
-    format!("Summary of {} messages:\n{}", messages.len(), parts.join("\n"))
+    format!(
+        "Summary of {} messages:\n{}",
+        messages.len(),
+        parts.join("\n")
+    )
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -157,13 +180,19 @@ fn test_conversation_history_accumulation() {
     state.turn_count += 1;
 
     // Turn 2
-    state.messages.push(text_msg("user", "Explain Rust ownership"));
-    state.messages.push(text_msg("assistant", "Rust ownership is..."));
+    state
+        .messages
+        .push(text_msg("user", "Explain Rust ownership"));
+    state
+        .messages
+        .push(text_msg("assistant", "Rust ownership is..."));
     state.turn_count += 1;
 
     // Turn 3
     state.messages.push(text_msg("user", "Give an example"));
-    state.messages.push(text_msg("assistant", "Here's an example:"));
+    state
+        .messages
+        .push(text_msg("assistant", "Here's an example:"));
     state.turn_count += 1;
 
     assert_eq!(state.turn_count, 3);
@@ -179,7 +208,9 @@ fn test_conversation_history_accumulation() {
 
     // Verify content preserved
     assert!(matches!(&state.messages[0].content, MessageContent::Text(t) if t == "Hello"));
-    assert!(matches!(&state.messages[3].content, MessageContent::Text(t) if t == "Rust ownership is..."));
+    assert!(
+        matches!(&state.messages[3].content, MessageContent::Text(t) if t == "Rust ownership is...")
+    );
 }
 
 #[test]
@@ -193,20 +224,30 @@ fn test_tool_result_interleaving() {
     // Tool result comes back as user message (standard pattern)
     state.messages.push(tool_result_msg());
     // Assistant follows up
-    state.messages.push(text_msg("assistant", "The file contains a main function."));
+    state
+        .messages
+        .push(text_msg("assistant", "The file contains a main function."));
 
     assert_eq!(state.messages.len(), 4);
 
     // Verify tool_use block exists
     if let MessageContent::Blocks(blocks) = &state.messages[1].content {
-        assert!(blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })));
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. }))
+        );
     } else {
         panic!("Expected Blocks content for assistant message");
     }
 
     // Verify tool_result block exists
     if let MessageContent::Blocks(blocks) = &state.messages[2].content {
-        assert!(blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })));
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+        );
     } else {
         panic!("Expected Blocks content for tool result");
     }
@@ -220,15 +261,23 @@ fn test_estimate_tokens() {
     assert_eq!(state.estimate_tokens(), 0);
 
     // Add a message (~25 chars = ~6 tokens)
-    state.messages.push(text_msg("user", "Hello, this is a test message!"));
+    state
+        .messages
+        .push(text_msg("user", "Hello, this is a test message!"));
     let tokens = state.estimate_tokens();
     assert!(tokens > 0, "Should estimate some tokens");
     assert!(tokens < 100, "Should be a small number for short text");
 
     // Add more messages
-    state.messages.push(text_msg("assistant", "I understand. Let me help you with that."));
+    state.messages.push(text_msg(
+        "assistant",
+        "I understand. Let me help you with that.",
+    ));
     let tokens_after = state.estimate_tokens();
-    assert!(tokens_after > tokens, "Tokens should increase with more messages");
+    assert!(
+        tokens_after > tokens,
+        "Tokens should increase with more messages"
+    );
 }
 
 #[test]
@@ -251,11 +300,19 @@ fn test_needs_compression_above_threshold() {
     // Add enough text to exceed threshold
     // ~500 chars / 4 = ~125 tokens > 100 threshold
     for i in 0..20 {
-        state.messages.push(text_msg("user", &format!("Message number {i} with some extra content to increase token count significantly")));
+        state.messages.push(text_msg(
+            "user",
+            &format!(
+                "Message number {i} with some extra content to increase token count significantly"
+            ),
+        ));
         state.messages.push(text_msg("assistant", &format!("Response {i} with enough text to push token estimation well above the compression threshold")));
     }
 
-    assert!(state.needs_compression(&config), "Should need compression with 40 messages");
+    assert!(
+        state.needs_compression(&config),
+        "Should need compression with 40 messages"
+    );
 }
 
 #[test]
@@ -271,8 +328,12 @@ fn test_compression_summarize_old() {
 
     // Add 10 messages (5 turns)
     for i in 0..5 {
-        state.messages.push(text_msg("user", &format!("User question {i}")));
-        state.messages.push(text_msg("assistant", &format!("Assistant answer {i}")));
+        state
+            .messages
+            .push(text_msg("user", &format!("User question {i}")));
+        state
+            .messages
+            .push(text_msg("assistant", &format!("Assistant answer {i}")));
     }
 
     let original_count = state.messages.len();
@@ -291,7 +352,10 @@ fn test_compression_summarize_old() {
     // First message should be the summary
     assert_eq!(state.messages[0].role, "system");
     if let MessageContent::Text(text) = &state.messages[0].content {
-        assert!(text.contains("[Previous conversation summary]"), "Expected summary header, got: {text}");
+        assert!(
+            text.contains("[Previous conversation summary]"),
+            "Expected summary header, got: {text}"
+        );
     } else {
         panic!("Expected Text content for summary message");
     }
@@ -313,19 +377,29 @@ fn test_compression_truncate_oldest() {
 
     // Add 10 messages
     for i in 0..5 {
-        state.messages.push(text_msg("user", &format!("User question {i}")));
-        state.messages.push(text_msg("assistant", &format!("Assistant answer {i}")));
+        state
+            .messages
+            .push(text_msg("user", &format!("User question {i}")));
+        state
+            .messages
+            .push(text_msg("assistant", &format!("Assistant answer {i}")));
     }
 
     state.compress(&config);
 
     // Should keep exactly 4 recent messages
-    assert_eq!(state.messages.len(), 4, "Expected exactly 4 messages after TruncateOldest");
+    assert_eq!(
+        state.messages.len(),
+        4,
+        "Expected exactly 4 messages after TruncateOldest"
+    );
 
     // Should be the last 4 messages (turns 4)
     if let MessageContent::Text(t) = &state.messages[0].content {
-        assert!(t.contains("question 3") || t.contains("question 4"),
-            "Expected recent messages, got: {t}");
+        assert!(
+            t.contains("question 3") || t.contains("question 4"),
+            "Expected recent messages, got: {t}"
+        );
     }
 }
 
@@ -347,12 +421,24 @@ fn test_compression_preserves_recent_messages() {
     state.compress(&config);
 
     // Last 6 messages (3 turns) should be preserved
-    let last_content: Vec<&str> = state.messages.iter().rev().take(2).filter_map(|m| {
-        if let MessageContent::Text(t) = &m.content { Some(t.as_str()) } else { None }
-    }).collect();
+    let last_content: Vec<&str> = state
+        .messages
+        .iter()
+        .rev()
+        .take(2)
+        .filter_map(|m| {
+            if let MessageContent::Text(t) = &m.content {
+                Some(t.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    assert!(last_content.iter().any(|t| t.contains("A9")),
-        "Most recent assistant message should be preserved");
+    assert!(
+        last_content.iter().any(|t| t.contains("A9")),
+        "Most recent assistant message should be preserved"
+    );
 }
 
 #[test]
@@ -372,7 +458,11 @@ fn test_compression_not_enough_messages() {
 
     let count_before = state.messages.len();
     state.compress(&config);
-    assert_eq!(state.messages.len(), count_before, "Should not compress when too few messages");
+    assert_eq!(
+        state.messages.len(),
+        count_before,
+        "Should not compress when too few messages"
+    );
 }
 
 #[test]
@@ -380,13 +470,17 @@ fn test_multiple_tool_uses_in_history() {
     let mut state = TestConversation::default();
 
     // User asks
-    state.messages.push(text_msg("user", "Check files and read config"));
+    state
+        .messages
+        .push(text_msg("user", "Check files and read config"));
 
     // Assistant calls two tools
     state.messages.push(Message {
         role: "assistant".to_string(),
         content: MessageContent::Blocks(vec![
-            ContentBlock::Text { text: "Checking now.".to_string() },
+            ContentBlock::Text {
+                text: "Checking now.".to_string(),
+            },
             ContentBlock::ToolUse {
                 id: "t1".to_string(),
                 name: "bash".to_string(),
@@ -417,19 +511,28 @@ fn test_multiple_tool_uses_in_history() {
         ]),
     });
 
-    state.messages.push(text_msg("assistant", "Found 2 files and config is in debug mode."));
+    state.messages.push(text_msg(
+        "assistant",
+        "Found 2 files and config is in debug mode.",
+    ));
 
     assert_eq!(state.messages.len(), 4);
 
     // Verify tool_use pairing — assistant has 2 tool_use blocks
     if let MessageContent::Blocks(blocks) = &state.messages[1].content {
-        let tool_uses: Vec<_> = blocks.iter().filter(|b| matches!(b, ContentBlock::ToolUse { .. })).collect();
+        let tool_uses: Vec<_> = blocks
+            .iter()
+            .filter(|b| matches!(b, ContentBlock::ToolUse { .. }))
+            .collect();
         assert_eq!(tool_uses.len(), 2, "Should have 2 tool_use blocks");
     }
 
     // Verify tool_result pairing — user has 2 tool_result blocks
     if let MessageContent::Blocks(blocks) = &state.messages[2].content {
-        let results: Vec<_> = blocks.iter().filter(|b| matches!(b, ContentBlock::ToolResult { .. })).collect();
+        let results: Vec<_> = blocks
+            .iter()
+            .filter(|b| matches!(b, ContentBlock::ToolResult { .. }))
+            .collect();
         assert_eq!(results.len(), 2, "Should have 2 tool_result blocks");
     }
 }
@@ -437,20 +540,25 @@ fn test_multiple_tool_uses_in_history() {
 #[test]
 fn test_token_estimation_with_blocks() {
     let mut text_only = TestConversation::default();
-    text_only.messages.push(text_msg("user", "Hello world test message"));
+    text_only
+        .messages
+        .push(text_msg("user", "Hello world test message"));
 
     let mut with_blocks = TestConversation::default();
     with_blocks.messages.push(Message {
         role: "user".to_string(),
-        content: MessageContent::Blocks(vec![
-            ContentBlock::Text { text: "Hello world test message".to_string() },
-        ]),
+        content: MessageContent::Blocks(vec![ContentBlock::Text {
+            text: "Hello world test message".to_string(),
+        }]),
     });
 
     // Both should estimate similar token counts
     let text_tokens = text_only.estimate_tokens();
     let block_tokens = with_blocks.estimate_tokens();
-    assert_eq!(text_tokens, block_tokens, "Same text should have same token estimate regardless of container");
+    assert_eq!(
+        text_tokens, block_tokens,
+        "Same text should have same token estimate regardless of container"
+    );
 }
 
 #[test]
@@ -476,7 +584,10 @@ fn test_large_conversation_history_accumulation() {
     let num_turns = 500;
 
     for i in 0..num_turns {
-        state.messages.push(text_msg("user", &format!("User question {i}: tell me about topic {}", i % 50)));
+        state.messages.push(text_msg(
+            "user",
+            &format!("User question {i}: tell me about topic {}", i % 50),
+        ));
         state.messages.push(text_msg("assistant", &format!("Assistant answer {i}: here is a detailed explanation about topic {} with enough content to be realistic.", i % 50)));
         state.turn_count += 1;
     }
@@ -488,10 +599,16 @@ fn test_large_conversation_history_accumulation() {
     for i in 0..num_turns {
         let user_idx = i * 2;
         let asst_idx = i * 2 + 1;
-        assert_eq!(state.messages[user_idx].role, "user",
-            "Message {user_idx} should be user, got {}", state.messages[user_idx].role);
-        assert_eq!(state.messages[asst_idx].role, "assistant",
-            "Message {asst_idx} should be assistant, got {}", state.messages[asst_idx].role);
+        assert_eq!(
+            state.messages[user_idx].role, "user",
+            "Message {user_idx} should be user, got {}",
+            state.messages[user_idx].role
+        );
+        assert_eq!(
+            state.messages[asst_idx].role, "assistant",
+            "Message {asst_idx} should be assistant, got {}",
+            state.messages[asst_idx].role
+        );
     }
 
     // Verify first and last turn content preserved
@@ -513,33 +630,52 @@ fn test_token_estimation_scaling() {
 
     let tokens_100 = {
         for i in 0..50 {
-            state.messages.push(text_msg("user", &format!("Question {i}")));
-            state.messages.push(text_msg("assistant", &format!("Answer {i} with some extra text")));
+            state
+                .messages
+                .push(text_msg("user", &format!("Question {i}")));
+            state.messages.push(text_msg(
+                "assistant",
+                &format!("Answer {i} with some extra text"),
+            ));
         }
         state.estimate_tokens()
     };
 
     let tokens_200 = {
         for i in 50..100 {
-            state.messages.push(text_msg("user", &format!("Question {i}")));
-            state.messages.push(text_msg("assistant", &format!("Answer {i} with some extra text")));
+            state
+                .messages
+                .push(text_msg("user", &format!("Question {i}")));
+            state.messages.push(text_msg(
+                "assistant",
+                &format!("Answer {i} with some extra text"),
+            ));
         }
         state.estimate_tokens()
     };
 
     let tokens_400 = {
         for i in 100..200 {
-            state.messages.push(text_msg("user", &format!("Question {i}")));
-            state.messages.push(text_msg("assistant", &format!("Answer {i} with some extra text")));
+            state
+                .messages
+                .push(text_msg("user", &format!("Question {i}")));
+            state.messages.push(text_msg(
+                "assistant",
+                &format!("Answer {i} with some extra text"),
+            ));
         }
         state.estimate_tokens()
     };
 
     // Should scale roughly linearly (2x messages = ~2x tokens)
-    assert!(tokens_200 > tokens_100 * 180 / 100,
-        "Tokens should grow proportionally: {tokens_100} -> {tokens_200}");
-    assert!(tokens_400 > tokens_200 * 180 / 100,
-        "Tokens should grow proportionally: {tokens_200} -> {tokens_400}");
+    assert!(
+        tokens_200 > tokens_100 * 180 / 100,
+        "Tokens should grow proportionally: {tokens_100} -> {tokens_200}"
+    );
+    assert!(
+        tokens_400 > tokens_200 * 180 / 100,
+        "Tokens should grow proportionally: {tokens_200} -> {tokens_400}"
+    );
 }
 
 /// Verify context compression works correctly at scale.
@@ -568,8 +704,11 @@ fn test_large_conversation_compression_summarize() {
     state.compress(&config);
 
     // After compression: 1 summary + up to 20 recent messages
-    assert!(state.messages.len() <= 21,
-        "After compression should have ≤21 messages, got {}", state.messages.len());
+    assert!(
+        state.messages.len() <= 21,
+        "After compression should have ≤21 messages, got {}",
+        state.messages.len()
+    );
 
     // Summary at front
     assert_eq!(state.messages[0].role, "system");
@@ -607,8 +746,11 @@ fn test_large_conversation_compression_truncate() {
 
     state.compress(&config);
 
-    assert_eq!(state.messages.len(), 10,
-        "Should keep exactly 10 recent messages");
+    assert_eq!(
+        state.messages.len(),
+        10,
+        "Should keep exactly 10 recent messages"
+    );
 
     // Should be the most recent messages
     match &state.messages[0].content {
@@ -638,7 +780,12 @@ fn test_repeated_compression_cycles() {
         let base = round * 20;
         for i in base..(base + 20) {
             // Use longer messages to ensure compression triggers
-            state.messages.push(text_msg("user", &format!("Question number {i} with some extra text to increase token count significantly")));
+            state.messages.push(text_msg(
+                "user",
+                &format!(
+                    "Question number {i} with some extra text to increase token count significantly"
+                ),
+            ));
             state.messages.push(text_msg("assistant", &format!("Answer number {i} with enough text to push token estimation well above the compression threshold value")));
         }
         if state.needs_compression(&config) {
@@ -647,14 +794,19 @@ fn test_repeated_compression_cycles() {
     }
 
     // After all cycles, should still have at most keep_recent_messages
-    assert!(state.messages.len() <= 6,
-        "Should have at most 6 messages after repeated compression, got {}", state.messages.len());
+    assert!(
+        state.messages.len() <= 6,
+        "Should have at most 6 messages after repeated compression, got {}",
+        state.messages.len()
+    );
 
     // Most recent messages should be from the last round
     let last = &state.messages[state.messages.len() - 1];
     match &last.content {
-        MessageContent::Text(t) => assert!(t.contains("Answer number 9") || t.contains("Answer number 8"),
-            "Should preserve most recent: got {t}"),
+        MessageContent::Text(t) => assert!(
+            t.contains("Answer number 9") || t.contains("Answer number 8"),
+            "Should preserve most recent: got {t}"
+        ),
         _ => panic!("Expected text"),
     }
 }
@@ -667,11 +819,15 @@ fn test_large_conversation_with_tool_interleaving() {
 
     // 100 turns, each with a tool use cycle (user → assistant+tool → tool_result → assistant)
     for i in 0..100 {
-        state.messages.push(text_msg("user", &format!("Read file {i}")));
+        state
+            .messages
+            .push(text_msg("user", &format!("Read file {i}")));
         state.messages.push(Message {
             role: "assistant".to_string(),
             content: MessageContent::Blocks(vec![
-                ContentBlock::Text { text: format!("Reading file {i}...") },
+                ContentBlock::Text {
+                    text: format!("Reading file {i}..."),
+                },
                 ContentBlock::ToolUse {
                     id: format!("t_{i}"),
                     name: "read_file".to_string(),
@@ -687,7 +843,10 @@ fn test_large_conversation_with_tool_interleaving() {
                 is_error: None,
             }]),
         });
-        state.messages.push(text_msg("assistant", &format!("File {i} contains: some data")));
+        state.messages.push(text_msg(
+            "assistant",
+            &format!("File {i} contains: some data"),
+        ));
     }
 
     // 100 turns × 4 messages = 400 messages
@@ -705,7 +864,10 @@ fn test_large_conversation_with_tool_interleaving() {
     // Token estimation should be reasonable
     let tokens = state.estimate_tokens();
     assert!(tokens > 0);
-    assert!(tokens < 100_000, "Token estimate should be bounded, got {tokens}");
+    assert!(
+        tokens < 100_000,
+        "Token estimate should be bounded, got {tokens}"
+    );
 }
 
 /// Verify compression with tool-interleaved conversations preserves tool pairing.
@@ -727,7 +889,9 @@ fn test_compression_preserves_tool_pairing() {
         state.messages.push(Message {
             role: "assistant".to_string(),
             content: MessageContent::Blocks(vec![
-                ContentBlock::Text { text: format!("Working on {i}") },
+                ContentBlock::Text {
+                    text: format!("Working on {i}"),
+                },
                 ContentBlock::ToolUse {
                     id: format!("t{i}"),
                     name: "bash".to_string(),
@@ -743,7 +907,9 @@ fn test_compression_preserves_tool_pairing() {
                 is_error: None,
             }]),
         });
-        state.messages.push(text_msg("assistant", &format!("Done {i}")));
+        state
+            .messages
+            .push(text_msg("assistant", &format!("Done {i}")));
     }
 
     assert_eq!(state.messages.len(), 20);
@@ -755,12 +921,20 @@ fn test_compression_preserves_tool_pairing() {
     // Tool_use and tool_result should be properly paired
     // (assistant has tool_use, followed by user with tool_result)
     if let MessageContent::Blocks(blocks) = &state.messages[1].content {
-        assert!(blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. })),
-            "Kept assistant message should still have tool_use");
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolUse { .. })),
+            "Kept assistant message should still have tool_use"
+        );
     }
     if let MessageContent::Blocks(blocks) = &state.messages[2].content {
-        assert!(blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })),
-            "Kept user message should still have tool_result");
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+            "Kept user message should still have tool_result"
+        );
     }
 }
 
@@ -775,19 +949,29 @@ fn test_conversation_operations_performance() {
     // Build 500-turn conversation
     let build_start = Instant::now();
     for i in 0..500 {
-        state.messages.push(text_msg("user", &format!("Question {i} with enough content to be realistic")));
-        state.messages.push(text_msg("assistant", &format!("Answer {i} with detailed explanation")));
+        state.messages.push(text_msg(
+            "user",
+            &format!("Question {i} with enough content to be realistic"),
+        ));
+        state.messages.push(text_msg(
+            "assistant",
+            &format!("Answer {i} with detailed explanation"),
+        ));
     }
     let build_time = build_start.elapsed();
-    assert!(build_time.as_millis() < 100,
-        "Building 500-turn conversation took {build_time:?}, expected <100ms");
+    assert!(
+        build_time.as_millis() < 100,
+        "Building 500-turn conversation took {build_time:?}, expected <100ms"
+    );
 
     // Token estimation
     let est_start = Instant::now();
     let tokens = state.estimate_tokens();
     let est_time = est_start.elapsed();
-    assert!(est_time.as_millis() < 50,
-        "Token estimation for 1000 messages took {est_time:?}, expected <50ms");
+    assert!(
+        est_time.as_millis() < 50,
+        "Token estimation for 1000 messages took {est_time:?}, expected <50ms"
+    );
     assert!(tokens > 0);
 
     // Compression check
@@ -802,8 +986,10 @@ fn test_conversation_operations_performance() {
     let compress_start = Instant::now();
     state.compress(&config);
     let compress_time = compress_start.elapsed();
-    assert!(compress_time.as_millis() < 100,
-        "Compression of 1000 messages took {compress_time:?}, expected <100ms");
+    assert!(
+        compress_time.as_millis() < 100,
+        "Compression of 1000 messages took {compress_time:?}, expected <100ms"
+    );
     assert!(state.messages.len() <= 20);
 }
 
@@ -817,7 +1003,13 @@ use shannon_core::compact::CompactEngine;
 fn build_conversation(turns: usize) -> Vec<Message> {
     let mut messages = Vec::new();
     for i in 0..turns {
-        messages.push(text_msg("user", &format!("User question {i}: explain topic {} in detail with examples and code samples.", i % 10)));
+        messages.push(text_msg(
+            "user",
+            &format!(
+                "User question {i}: explain topic {} in detail with examples and code samples.",
+                i % 10
+            ),
+        ));
         messages.push(text_msg("assistant", &format!("Assistant answer {i}: here is a comprehensive explanation about topic {} with detailed examples, code samples, and analysis.", i % 10)));
     }
     messages
@@ -826,7 +1018,10 @@ fn build_conversation(turns: usize) -> Vec<Message> {
 #[test]
 fn test_compact_engine_creation_default() {
     let engine = CompactEngine::with_defaults();
-    assert!(engine.is_ok(), "CompactEngine::with_defaults() should succeed");
+    assert!(
+        engine.is_ok(),
+        "CompactEngine::with_defaults() should succeed"
+    );
 }
 
 #[test]
@@ -835,7 +1030,10 @@ fn test_compact_engine_empty_history() {
     let mut messages: Vec<Message> = vec![];
     let result = engine.compact(&mut messages);
     assert!(result.is_err(), "Should error on empty messages");
-    assert!(matches!(result.unwrap_err(), shannon_core::compact::CompactError::NoMessagesToCompact));
+    assert!(matches!(
+        result.unwrap_err(),
+        shannon_core::compact::CompactError::NoMessagesToCompact
+    ));
 }
 
 #[test]
@@ -846,7 +1044,10 @@ fn test_compact_engine_too_few_messages() {
     assert!(result.is_ok(), "Should succeed even with few messages");
     let cr = result.unwrap();
     // Not enough messages to compact, should report no change
-    assert_eq!(cr.messages_removed, 0, "Should not remove any messages with small conversation");
+    assert_eq!(
+        cr.messages_removed, 0,
+        "Should not remove any messages with small conversation"
+    );
 }
 
 #[test]
@@ -857,14 +1058,21 @@ fn test_compact_engine_normal_conversation() {
     let _original_tokens = shannon_core::compact::estimate_tokens(&messages);
 
     let result = engine.compact(&mut messages);
-    assert!(result.is_ok(), "Compact should succeed on normal conversation");
+    assert!(
+        result.is_ok(),
+        "Compact should succeed on normal conversation"
+    );
 
     let cr = result.unwrap();
     assert!(cr.original_tokens > 0, "Should report original tokens");
-    assert!(messages.len() < original_len || cr.messages_removed == 0,
-        "Messages should be reduced or no change needed");
-    assert!(cr.messages_compacted > 0 || original_len <= engine.config().keep_recent_count + 1,
-        "Should compact messages when conversation is large enough");
+    assert!(
+        messages.len() < original_len || cr.messages_removed == 0,
+        "Messages should be reduced or no change needed"
+    );
+    assert!(
+        cr.messages_compacted > 0 || original_len <= engine.config().keep_recent_count + 1,
+        "Should compact messages when conversation is large enough"
+    );
 }
 
 #[test]
@@ -894,9 +1102,18 @@ fn test_compact_engine_analyze_context() {
     let analysis = engine.analyze_context(&messages);
 
     assert!(analysis.estimated_tokens > 0, "Should estimate tokens");
-    assert!(analysis.context_usage_ratio >= 0.0, "Context ratio should be non-negative");
-    assert!(analysis.compactable_message_count > 0, "Should have compactable candidates");
-    assert!(analysis.compactable_message_count <= messages.len(), "Compactable count cannot exceed total messages");
+    assert!(
+        analysis.context_usage_ratio >= 0.0,
+        "Context ratio should be non-negative"
+    );
+    assert!(
+        analysis.compactable_message_count > 0,
+        "Should have compactable candidates"
+    );
+    assert!(
+        analysis.compactable_message_count <= messages.len(),
+        "Compactable count cannot exceed total messages"
+    );
 }
 
 #[test]
@@ -920,15 +1137,24 @@ fn test_compact_focus_mode_filtering() {
         }
     }
 
-    assert!(!to_keep.is_empty(), "Should find messages matching focus keywords");
+    assert!(
+        !to_keep.is_empty(),
+        "Should find messages matching focus keywords"
+    );
     assert!(!to_compact.is_empty(), "Should have messages to compact");
-    assert!(to_keep.len() < 40, "Focus should filter down to fewer messages");
+    assert!(
+        to_keep.len() < 40,
+        "Focus should filter down to fewer messages"
+    );
 
     // Verify compact engine works on the filtered set
     let mut engine = CompactEngine::with_defaults().unwrap();
     if to_compact.len() > engine.config().keep_recent_count + 1 {
         let result = engine.compact(&mut to_compact);
-        assert!(result.is_ok(), "Compact of non-focus messages should succeed");
+        assert!(
+            result.is_ok(),
+            "Compact of non-focus messages should succeed"
+        );
     }
 
     // Re-merge: kept messages + compacted messages
@@ -940,9 +1166,10 @@ fn test_compact_focus_mode_filtering() {
 #[test]
 fn test_compact_preserves_system_messages() {
     let mut engine = CompactEngine::with_defaults().unwrap();
-    let mut messages = vec![
-        Message { role: "system".to_string(), content: MessageContent::Text("You are a helpful assistant.".to_string()) },
-    ];
+    let mut messages = vec![Message {
+        role: "system".to_string(),
+        content: MessageContent::Text("You are a helpful assistant.".to_string()),
+    }];
     messages.extend(build_conversation(15));
 
     let result = engine.compact(&mut messages);
@@ -950,7 +1177,10 @@ fn test_compact_preserves_system_messages() {
 
     // System message should still be present
     let has_system = messages.iter().any(|m| m.role == "system");
-    assert!(has_system, "System message should be preserved after compaction");
+    assert!(
+        has_system,
+        "System message should be preserved after compaction"
+    );
 }
 
 #[test]
@@ -964,7 +1194,10 @@ fn test_compact_double_compact_rejected() {
 
     // Second compact should also succeed (compacting flag is reset)
     let result2 = engine.compact(&mut messages);
-    assert!(result2.is_ok(), "Second compact should work since compacting flag resets");
+    assert!(
+        result2.is_ok(),
+        "Second compact should work since compacting flag resets"
+    );
 }
 
 // ── Context Preservation Regression Tests ─────────────────────────────
@@ -983,18 +1216,29 @@ fn test_multi_turn_messages_preserved() {
     conv.turn_count += 1;
 
     // Simulate turn 2: user asks about the story
-    conv.messages.push(text_msg("user", "这篇小说有几个人物?几个场景?"));
+    conv.messages
+        .push(text_msg("user", "这篇小说有几个人物?几个场景?"));
     conv.turn_count += 1;
 
     // Before API call, engine should have all 3 messages
-    assert_eq!(conv.messages.len(), 3, "Should have 3 messages (2 from turn 1 + 1 from turn 2)");
+    assert_eq!(
+        conv.messages.len(),
+        3,
+        "Should have 3 messages (2 from turn 1 + 1 from turn 2)"
+    );
 
     // Verify the story content is still present for context
     let story_msg = &conv.messages[1];
     match &story_msg.content {
         MessageContent::Text(t) => {
-            assert!(t.contains("阿尔弗雷德"), "Story character should be in message history");
-            assert!(t.contains("莉莉"), "Second character should be in message history");
+            assert!(
+                t.contains("阿尔弗雷德"),
+                "Story character should be in message history"
+            );
+            assert!(
+                t.contains("莉莉"),
+                "Second character should be in message history"
+            );
         }
         _ => panic!("Expected text content for assistant message"),
     }
@@ -1002,7 +1246,9 @@ fn test_multi_turn_messages_preserved() {
     // Verify the follow-up question is the last message
     let last = conv.messages.last().unwrap();
     match &last.content {
-        MessageContent::Text(t) => assert!(t.contains("几个人物"), "Follow-up question should be last"),
+        MessageContent::Text(t) => {
+            assert!(t.contains("几个人物"), "Follow-up question should be last")
+        }
         _ => panic!("Expected text content"),
     }
 }
@@ -1015,7 +1261,10 @@ fn test_compression_keeps_recent_context_intact() {
 
     // Build a conversation with 10 turns (20 messages)
     for i in 0..10 {
-        conv.messages.push(text_msg("user", &format!("Question about topic {i}: what is the answer?")));
+        conv.messages.push(text_msg(
+            "user",
+            &format!("Question about topic {i}: what is the answer?"),
+        ));
         conv.messages.push(text_msg("assistant", &format!("The answer to topic {i} involves detailed explanation about concepts {i} through {}.", i + 1)));
     }
 
@@ -1030,7 +1279,11 @@ fn test_compression_keeps_recent_context_intact() {
     conv.compress(&config);
 
     // The last 6 messages (3 turns) must be preserved verbatim
-    let recent: Vec<&str> = conv.messages.iter().rev().take(6)
+    let recent: Vec<&str> = conv
+        .messages
+        .iter()
+        .rev()
+        .take(6)
         .filter_map(|m| match &m.content {
             MessageContent::Text(t) => Some(t.as_str()),
             _ => None,
@@ -1038,12 +1291,16 @@ fn test_compression_keeps_recent_context_intact() {
         .collect();
 
     // Most recent messages should reference topic 9
-    assert!(recent.iter().any(|t| t.contains("topic 9")),
-        "Most recent turn (topic 9) should be preserved, got: {recent:?}");
+    assert!(
+        recent.iter().any(|t| t.contains("topic 9")),
+        "Most recent turn (topic 9) should be preserved, got: {recent:?}"
+    );
 
     // Second-to-last turn (topic 8) should also be preserved
-    assert!(recent.iter().any(|t| t.contains("topic 8")),
-        "Second recent turn (topic 8) should be preserved, got: {recent:?}");
+    assert!(
+        recent.iter().any(|t| t.contains("topic 8")),
+        "Second recent turn (topic 8) should be preserved, got: {recent:?}"
+    );
 }
 
 /// Verify that cloning a conversation preserves all messages — this is the
@@ -1052,8 +1309,12 @@ fn test_compression_keeps_recent_context_intact() {
 fn test_conversation_clone_preserves_messages() {
     let mut conv = TestConversation::default();
     conv.messages.push(text_msg("user", "First question"));
-    conv.messages.push(text_msg("assistant", "First answer with detailed content"));
-    conv.messages.push(text_msg("user", "Follow-up question referencing first answer"));
+    conv.messages
+        .push(text_msg("assistant", "First answer with detailed content"));
+    conv.messages.push(text_msg(
+        "user",
+        "Follow-up question referencing first answer",
+    ));
     conv.turn_count = 2;
 
     // Clone (simulates engine.process_query cloning self.conversation)
@@ -1070,8 +1331,10 @@ fn test_conversation_clone_preserves_messages() {
 
     // All original messages should be identical in the clone
     for i in 0..conv.messages.len() {
-        assert_eq!(conv.messages[i].role, cloned.messages[i].role,
-            "Message {i} role should match after clone");
+        assert_eq!(
+            conv.messages[i].role, cloned.messages[i].role,
+            "Message {i} role should match after clone"
+        );
         match (&conv.messages[i].content, &cloned.messages[i].content) {
             (MessageContent::Text(a), MessageContent::Text(b)) => assert_eq!(a, b),
             _ => panic!("Content mismatch at index {i}"),
@@ -1089,19 +1352,27 @@ fn test_cost_accumulation_not_replacement() {
     // Simulate turn 1 cost
     let turn1_cost: f64 = 0.0242;
     total_cost = 0.0_f64 + turn1_cost; // pre_stream_cost (0) + s.cost
-    assert!((total_cost - 0.0242_f64).abs() < f64::EPSILON, "After turn 1: {total_cost}");
+    assert!(
+        (total_cost - 0.0242_f64).abs() < f64::EPSILON,
+        "After turn 1: {total_cost}"
+    );
 
     // Simulate turn 2 cost — must ACCUMULATE, not replace
     let turn2_cost: f64 = 0.0203;
     let pre_stream_cost = total_cost;
     total_cost = pre_stream_cost + turn2_cost;
-    assert!((total_cost - 0.0445_f64).abs() < 0.0001_f64,
-        "After turn 2: expected ~0.0445, got {total_cost}");
+    assert!(
+        (total_cost - 0.0445_f64).abs() < 0.0001_f64,
+        "After turn 2: expected ~0.0445, got {total_cost}"
+    );
 
     // Verify the OLD (buggy) behavior would have given wrong result
     let buggy_total: f64 = turn2_cost; // replacement, not accumulation
     assert!((buggy_total - 0.0203_f64).abs() < f64::EPSILON);
-    assert!(total_cost > buggy_total, "Accumulated cost should be higher than replacement cost");
+    assert!(
+        total_cost > buggy_total,
+        "Accumulated cost should be higher than replacement cost"
+    );
 }
 
 // ── Context Loss Regression Tests ─────────────────────────────────────
@@ -1120,7 +1391,10 @@ fn test_restore_messages_preserves_assistant_response() {
 
     // Turn 1: user asks, assistant responds
     conv.messages.push(text_msg("user", "写一篇科幻小说"));
-    conv.messages.push(text_msg("assistant", "在一个遥远的星球上，机器人阿尔法和人类莉莉一起探索废墟..."));
+    conv.messages.push(text_msg(
+        "assistant",
+        "在一个遥远的星球上，机器人阿尔法和人类莉莉一起探索废墟...",
+    ));
     conv.turn_count += 1;
 
     // Simulate the "restore_messages" pattern: the UI receives a ConversationUpdate
@@ -1137,8 +1411,14 @@ fn test_restore_messages_preserves_assistant_response() {
     assert_eq!(cloned.messages.len(), 3);
     match &cloned.messages[1].content {
         MessageContent::Text(t) => {
-            assert!(t.contains("阿尔法"), "Assistant's story should still be in context for turn 2");
-            assert!(t.contains("莉莉"), "Characters from previous response must be preserved");
+            assert!(
+                t.contains("阿尔法"),
+                "Assistant's story should still be in context for turn 2"
+            );
+            assert!(
+                t.contains("莉莉"),
+                "Characters from previous response must be preserved"
+            );
         }
         _ => panic!("Expected text content for assistant message"),
     }
@@ -1154,9 +1434,15 @@ fn test_auto_compact_retry_preserves_response() {
 
     // Build a conversation with multiple turns
     conv.messages.push(text_msg("user", "Question 1"));
-    conv.messages.push(text_msg("assistant", "Answer 1 with enough detail to simulate a real response."));
+    conv.messages.push(text_msg(
+        "assistant",
+        "Answer 1 with enough detail to simulate a real response.",
+    ));
     conv.messages.push(text_msg("user", "Question 2"));
-    conv.messages.push(text_msg("assistant", "Answer 2 with enough detail to simulate a real response."));
+    conv.messages.push(text_msg(
+        "assistant",
+        "Answer 2 with enough detail to simulate a real response.",
+    ));
 
     // Simulate what happens in the auto-compact retry path:
     // 1. Messages get truncated for the retry
@@ -1179,18 +1465,27 @@ fn test_auto_compact_retry_preserves_response() {
     let update_messages = conv.messages.clone();
 
     // 5. Verify: the retry response IS in the final conversation
-    assert_eq!(update_messages.len(), 3, "Should have 3 messages after retry");
+    assert_eq!(
+        update_messages.len(),
+        3,
+        "Should have 3 messages after retry"
+    );
     let last = update_messages.last().unwrap();
     assert_eq!(last.role, "assistant");
     match &last.content {
-        MessageContent::Text(t) => assert!(t.contains(retry_response),
-            "Retry response must be in conversation, got: {t}"),
+        MessageContent::Text(t) => assert!(
+            t.contains(retry_response),
+            "Retry response must be in conversation, got: {t}"
+        ),
         _ => panic!("Expected text content"),
     }
 
     // 6. Simulate next turn — verify retry response is available as context
     let mut next_turn = update_messages.clone();
-    next_turn.push(text_msg("user", "Follow-up question about the retry response"));
+    next_turn.push(text_msg(
+        "user",
+        "Follow-up question about the retry response",
+    ));
     assert!(next_turn.len() >= 4);
     // The retry response at index 2 should still be there
     match &next_turn[2].content {
@@ -1210,7 +1505,9 @@ fn test_openai_adapter_preserves_text_with_tool_calls() {
     let msg = Message {
         role: "assistant".to_string(),
         content: MessageContent::Blocks(vec![
-            ContentBlock::Text { text: "Let me read that file for you.".to_string() },
+            ContentBlock::Text {
+                text: "Let me read that file for you.".to_string(),
+            },
             ContentBlock::ToolUse {
                 id: "tool_1".to_string(),
                 name: "read_file".to_string(),
@@ -1221,7 +1518,9 @@ fn test_openai_adapter_preserves_text_with_tool_calls() {
 
     // Extract tool calls
     let tool_calls: Vec<Value> = match &msg.content {
-        MessageContent::Blocks(blocks) => blocks.iter().enumerate()
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .enumerate()
             .filter_map(|(i, b)| match b {
                 ContentBlock::ToolUse { id, name, input } => Some(serde_json::json!({
                     "id": id,
@@ -1239,7 +1538,8 @@ fn test_openai_adapter_preserves_text_with_tool_calls() {
 
     // The FIX: extract text content even when tool_calls exist
     let text_content: String = match &msg.content {
-        MessageContent::Blocks(blocks) => blocks.iter()
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
             .filter_map(|b| match b {
                 ContentBlock::Text { text } => Some(text.as_str()),
                 _ => None,
@@ -1250,8 +1550,14 @@ fn test_openai_adapter_preserves_text_with_tool_calls() {
     };
 
     // Verify text content is NOT empty (was empty before the fix)
-    assert!(!text_content.is_empty(), "Text content must be preserved alongside tool_calls");
-    assert!(text_content.contains("read that file"), "Text content should match original");
+    assert!(
+        !text_content.is_empty(),
+        "Text content must be preserved alongside tool_calls"
+    );
+    assert!(
+        text_content.contains("read that file"),
+        "Text content should match original"
+    );
 
     // Build the OpenAI message with BOTH text and tool_calls
     let openai_msg = serde_json::json!({
@@ -1261,9 +1567,16 @@ fn test_openai_adapter_preserves_text_with_tool_calls() {
     });
 
     // Verify the message has both fields
-    assert!(openai_msg.get("tool_calls").is_some(), "Should have tool_calls");
+    assert!(
+        openai_msg.get("tool_calls").is_some(),
+        "Should have tool_calls"
+    );
     assert!(openai_msg.get("content").is_some(), "Should have content");
-    assert_ne!(openai_msg["content"], serde_json::Value::Null, "Content should not be null");
+    assert_ne!(
+        openai_msg["content"],
+        serde_json::Value::Null,
+        "Content should not be null"
+    );
 }
 
 /// Regression test: verify that when a query fails, the user message is still
@@ -1289,7 +1602,11 @@ fn test_error_path_preserves_user_message() {
     conv.messages.push(text_msg("user", user_msg_2));
 
     // Verify: the engine's conversation now has 3 messages
-    assert_eq!(conv.messages.len(), 3, "Should have 3 messages after error recovery");
+    assert_eq!(
+        conv.messages.len(),
+        3,
+        "Should have 3 messages after error recovery"
+    );
     assert_eq!(conv.messages[2].role, "user");
 
     // Turn 3: next query should see the previous user message
@@ -1299,8 +1616,10 @@ fn test_error_path_preserves_user_message() {
 
     // The failed user message should be in context
     match &next_query.messages[2].content {
-        MessageContent::Text(t) => assert!(t.contains("Second question"),
-            "Failed user message must be preserved for context"),
+        MessageContent::Text(t) => assert!(
+            t.contains("Second question"),
+            "Failed user message must be preserved for context"
+        ),
         _ => panic!("Expected text content"),
     }
 }
@@ -1317,10 +1636,16 @@ fn test_full_query_cycle_preserves_context() {
         let mut bg_conv = engine_conv.clone();
 
         // Step 2: Add user message to clone
-        bg_conv.messages.push(text_msg("user", &format!("Turn {} question about the previous responses", turn + 1)));
+        bg_conv.messages.push(text_msg(
+            "user",
+            &format!("Turn {} question about the previous responses", turn + 1),
+        ));
 
         // Step 3: Add assistant response to clone
-        bg_conv.messages.push(text_msg("assistant", &format!("Turn {} answer referencing all previous context", turn + 1)));
+        bg_conv.messages.push(text_msg(
+            "assistant",
+            &format!("Turn {} answer referencing all previous context", turn + 1),
+        ));
 
         // Step 4: ConversationUpdate sends bg_conv.messages
         let update = bg_conv.messages.clone();
@@ -1331,23 +1656,33 @@ fn test_full_query_cycle_preserves_context() {
     }
 
     // After 3 cycles, should have 6 messages (3 user + 3 assistant)
-    assert_eq!(engine_conv.messages.len(), 6, "Should have 6 messages after 3 turns");
+    assert_eq!(
+        engine_conv.messages.len(),
+        6,
+        "Should have 6 messages after 3 turns"
+    );
     assert_eq!(engine_conv.turn_count, 3);
 
     // Verify all messages are in order
     for i in 0..3 {
         let user_idx = i * 2;
         let asst_idx = i * 2 + 1;
-        assert_eq!(engine_conv.messages[user_idx].role, "user",
-            "Message {user_idx} should be user");
-        assert_eq!(engine_conv.messages[asst_idx].role, "assistant",
-            "Message {asst_idx} should be assistant");
+        assert_eq!(
+            engine_conv.messages[user_idx].role, "user",
+            "Message {user_idx} should be user"
+        );
+        assert_eq!(
+            engine_conv.messages[asst_idx].role, "assistant",
+            "Message {asst_idx} should be assistant"
+        );
     }
 
     // Verify the story-pattern: each response mentions the turn
     match &engine_conv.messages[5].content {
-        MessageContent::Text(t) => assert!(t.contains("Turn 3"),
-            "Last response should reference turn 3"),
+        MessageContent::Text(t) => assert!(
+            t.contains("Turn 3"),
+            "Last response should reference turn 3"
+        ),
         _ => panic!("Expected text"),
     }
 }
@@ -1364,13 +1699,20 @@ fn test_tool_results_persisted_in_conversation_messages() {
     let mut engine_conv = TestConversation::default();
 
     // ── Turn 1: user asks for a story, assistant responds ──
-    engine_conv.messages.push(text_msg("user", "Write a 200-word sci-fi story"));
-    engine_conv.messages.push(text_msg("assistant",
-        "In the year 2187, Dr. Elara Chen stared at the quantum display…"));
+    engine_conv
+        .messages
+        .push(text_msg("user", "Write a 200-word sci-fi story"));
+    engine_conv.messages.push(text_msg(
+        "assistant",
+        "In the year 2187, Dr. Elara Chen stared at the quantum display…",
+    ));
 
     // ── Turn 2: user asks a follow-up that triggers tool use ──
     let mut bg_conv = engine_conv.clone();
-    bg_conv.messages.push(text_msg("user", "How many characters appeared in this story?"));
+    bg_conv.messages.push(text_msg(
+        "user",
+        "How many characters appeared in this story?",
+    ));
 
     // Simulate what process_query does: build local `messages` from conversation
     let mut messages = bg_conv.messages.clone();
@@ -1387,8 +1729,10 @@ fn test_tool_results_persisted_in_conversation_messages() {
     bg_conv.messages.push(result_msg); // <- this line was missing before the fix
 
     // Assistant final response
-    let final_answer = text_msg("assistant",
-        "The story features 3 characters: Dr. Elara Chen, Captain Voss, and the AI navigator ORION.");
+    let final_answer = text_msg(
+        "assistant",
+        "The story features 3 characters: Dr. Elara Chen, Captain Voss, and the AI navigator ORION.",
+    );
     messages.push(final_answer.clone());
     bg_conv.messages.push(final_answer);
 
@@ -1400,17 +1744,20 @@ fn test_tool_results_persisted_in_conversation_messages() {
 
     // Validate alternating user/assistant pattern (no two consecutive same-role)
     for i in 1..next_query.len() {
-        assert_ne!(next_query[i].role, next_query[i - 1].role,
+        assert_ne!(
+            next_query[i].role,
+            next_query[i - 1].role,
             "Messages must alternate roles, but messages[{}] and messages[{}] are both '{}'",
-            i - 1, i, next_query[i].role);
+            i - 1,
+            i,
+            next_query[i].role
+        );
     }
 
     // Validate the story text is still present in context
-    let story_present = next_query.iter().any(|m| {
-        match &m.content {
-            MessageContent::Text(t) => t.contains("Dr. Elara Chen stared"),
-            _ => false,
-        }
+    let story_present = next_query.iter().any(|m| match &m.content {
+        MessageContent::Text(t) => t.contains("Dr. Elara Chen stared"),
+        _ => false,
     });
     assert!(story_present, "Turn 1 story must be in context for Turn 3");
 
@@ -1419,7 +1766,10 @@ fn test_tool_results_persisted_in_conversation_messages() {
         matches!(&m.content,
             MessageContent::Blocks(blocks) if blocks.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })))
     });
-    assert!(tool_result_present, "Tool result must be persisted in conversation messages");
+    assert!(
+        tool_result_present,
+        "Tool result must be persisted in conversation messages"
+    );
 }
 
 /// Regression: When a query fails (stream error, API error, etc.), the
@@ -1430,15 +1780,25 @@ fn test_conversation_update_before_failed_preserves_context() {
     let mut engine_conv = TestConversation::default();
 
     // Turn 1: successful exchange
-    engine_conv.messages.push(text_msg("user", "Tell me about Rust"));
-    engine_conv.messages.push(text_msg("assistant", "Rust is a systems programming language…"));
+    engine_conv
+        .messages
+        .push(text_msg("user", "Tell me about Rust"));
+    engine_conv.messages.push(text_msg(
+        "assistant",
+        "Rust is a systems programming language…",
+    ));
 
     // Turn 2: user asks follow-up, but query will fail
     let mut bg_conv = engine_conv.clone();
-    bg_conv.messages.push(text_msg("user", "What about error handling?"));
+    bg_conv
+        .messages
+        .push(text_msg("user", "What about error handling?"));
 
     // Simulate: the engine processes, maybe adds partial assistant message
-    bg_conv.messages.push(text_msg("assistant", "Error handling in Rust uses Result<T, E>"));
+    bg_conv.messages.push(text_msg(
+        "assistant",
+        "Error handling in Rust uses Result<T, E>",
+    ));
 
     // **THE BUG FIX**: ConversationUpdate must be sent before Failed
     // In real code, this means the UI receives the updated messages before
@@ -1447,38 +1807,40 @@ fn test_conversation_update_before_failed_preserves_context() {
 
     // Now simulate the Failed event arriving — context is already saved
     // Verify the user's failed-turn message is preserved
-    let has_failed_question = engine_conv.messages.iter().any(|m| {
-        match &m.content {
-            MessageContent::Text(t) => t.contains("error handling"),
-            _ => false,
-        }
+    let has_failed_question = engine_conv.messages.iter().any(|m| match &m.content {
+        MessageContent::Text(t) => t.contains("error handling"),
+        _ => false,
     });
-    assert!(has_failed_question,
-        "User's question from the failed turn must be preserved in conversation");
+    assert!(
+        has_failed_question,
+        "User's question from the failed turn must be preserved in conversation"
+    );
 
     // Verify the partial assistant response is also preserved
-    let has_partial_response = engine_conv.messages.iter().any(|m| {
-        match &m.content {
-            MessageContent::Text(t) => t.contains("Result<T, E>"),
-            _ => false,
-        }
+    let has_partial_response = engine_conv.messages.iter().any(|m| match &m.content {
+        MessageContent::Text(t) => t.contains("Result<T, E>"),
+        _ => false,
     });
-    assert!(has_partial_response,
-        "Partial assistant response from the failed turn must be preserved");
+    assert!(
+        has_partial_response,
+        "Partial assistant response from the failed turn must be preserved"
+    );
 
     // Turn 3: next query can still reference context from the failed turn
     let mut next_bg = engine_conv.clone();
-    next_bg.messages.push(text_msg("user",
-        "Can you give me an example of the Result type you mentioned?"));
+    next_bg.messages.push(text_msg(
+        "user",
+        "Can you give me an example of the Result type you mentioned?",
+    ));
 
-    let context_intact = next_bg.messages.iter().any(|m| {
-        match &m.content {
-            MessageContent::Text(t) => t.contains("Result<T, E>"),
-            _ => false,
-        }
+    let context_intact = next_bg.messages.iter().any(|m| match &m.content {
+        MessageContent::Text(t) => t.contains("Result<T, E>"),
+        _ => false,
     });
-    assert!(context_intact,
-        "Context from the failed turn must survive into the next query");
+    assert!(
+        context_intact,
+        "Context from the failed turn must survive into the next query"
+    );
 }
 
 /// Regression: End-to-end simulation of the exact user-reported scenario:
@@ -1504,7 +1866,8 @@ fn test_multi_turn_story_character_count_scenario() {
     // ── Turn 2: user asks about characters, AI uses a tool ──
     {
         let mut bg = engine_conv.clone();
-        bg.messages.push(text_msg("user", "这篇小说中出场人物有几个？"));
+        bg.messages
+            .push(text_msg("user", "这篇小说中出场人物有几个？"));
 
         let mut messages = bg.messages.clone();
 
@@ -1519,8 +1882,10 @@ fn test_multi_turn_story_character_count_scenario() {
         bg.messages.push(result);
 
         // AI final answer referencing the story from Turn 1
-        let answer = text_msg("assistant",
-            "这篇小说中有3个出场人物：1) 陈伊拉博士（Dr. Elara Chen）— 主角；2) ORION — AI导航系统；3) 沃斯舰长（Captain Voss）。");
+        let answer = text_msg(
+            "assistant",
+            "这篇小说中有3个出场人物：1) 陈伊拉博士（Dr. Elara Chen）— 主角；2) ORION — AI导航系统；3) 沃斯舰长（Captain Voss）。",
+        );
         messages.push(answer.clone());
         bg.messages.push(answer);
 
@@ -1528,43 +1893,55 @@ fn test_multi_turn_story_character_count_scenario() {
     }
 
     // Validate: should have 6 messages total
-    assert_eq!(engine_conv.messages.len(), 6,
-        "Turn 1 (2 msgs) + Turn 2 user + tool_use + tool_result + assistant = 6");
+    assert_eq!(
+        engine_conv.messages.len(),
+        6,
+        "Turn 1 (2 msgs) + Turn 2 user + tool_use + tool_result + assistant = 6"
+    );
 
     // Validate: alternating roles (API contract)
     for i in 1..engine_conv.messages.len() {
-        assert_ne!(engine_conv.messages[i].role, engine_conv.messages[i - 1].role,
+        assert_ne!(
+            engine_conv.messages[i].role,
+            engine_conv.messages[i - 1].role,
             "Role alternation broken at index {} vs {}: '{}' vs '{}'",
-            i, i - 1, engine_conv.messages[i].role, engine_conv.messages[i - 1].role);
+            i,
+            i - 1,
+            engine_conv.messages[i].role,
+            engine_conv.messages[i - 1].role
+        );
     }
 
     // Validate: Turn 1 story content is present
-    let story_present = engine_conv.messages.iter().any(|m| {
-        match &m.content {
-            MessageContent::Text(t) => t.contains("陈伊拉博士凝视着量子显示屏"),
-            _ => false,
-        }
+    let story_present = engine_conv.messages.iter().any(|m| match &m.content {
+        MessageContent::Text(t) => t.contains("陈伊拉博士凝视着量子显示屏"),
+        _ => false,
     });
-    assert!(story_present, "Story from Turn 1 must be in conversation context");
+    assert!(
+        story_present,
+        "Story from Turn 1 must be in conversation context"
+    );
 
     // ── Turn 3: follow-up proving context survived ──
     {
         let mut bg = engine_conv.clone();
-        bg.messages.push(text_msg("user",
-            "What was ORION's lie about?"));
+        bg.messages
+            .push(text_msg("user", "What was ORION's lie about?"));
 
         // The context should contain the story so the AI can answer
-        let story_in_context = bg.messages.iter().any(|m| {
-            match &m.content {
-                MessageContent::Text(t) => t.contains("轨道正常") || t.contains("陈伊拉"),
-                _ => false,
-            }
+        let story_in_context = bg.messages.iter().any(|m| match &m.content {
+            MessageContent::Text(t) => t.contains("轨道正常") || t.contains("陈伊拉"),
+            _ => false,
         });
-        assert!(story_in_context,
-            "Story content must survive into Turn 3 — this is exactly the reported bug");
+        assert!(
+            story_in_context,
+            "Story content must survive into Turn 3 — this is exactly the reported bug"
+        );
 
-        bg.messages.push(text_msg("assistant",
-            "ORION谎称\"轨道正常\"（orbit normal），实际上飞船已被引向一个虚无（void）而非地球。"));
+        bg.messages.push(text_msg(
+            "assistant",
+            "ORION谎称\"轨道正常\"（orbit normal），实际上飞船已被引向一个虚无（void）而非地球。",
+        ));
         engine_conv.messages = bg.messages.clone();
     }
 
@@ -1580,7 +1957,9 @@ fn test_error_path_does_not_lose_prior_context() {
 
     // Turn 1: successful
     engine_conv.messages.push(text_msg("user", "What is 2+2?"));
-    engine_conv.messages.push(text_msg("assistant", "2+2 equals 4."));
+    engine_conv
+        .messages
+        .push(text_msg("assistant", "2+2 equals 4."));
 
     // Turn 2: fails — but ConversationUpdate was sent before Failed
     let mut bg = engine_conv.clone();
@@ -1591,17 +1970,24 @@ fn test_error_path_does_not_lose_prior_context() {
 
     // Turn 3: must still have context from Turn 1 AND Turn 2's failed question
     let mut next_bg = engine_conv.clone();
-    next_bg.messages.push(text_msg("user", "Sum all previous answers"));
+    next_bg
+        .messages
+        .push(text_msg("user", "Sum all previous answers"));
 
-    let has_turn1 = next_bg.messages.iter().any(|m| {
-        matches!(&m.content, MessageContent::Text(t) if t.contains("equals 4"))
-    });
-    let has_turn2_question = next_bg.messages.iter().any(|m| {
-        matches!(&m.content, MessageContent::Text(t) if t.contains("3+3"))
-    });
+    let has_turn1 = next_bg
+        .messages
+        .iter()
+        .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("equals 4")));
+    let has_turn2_question = next_bg
+        .messages
+        .iter()
+        .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("3+3")));
 
     assert!(has_turn1, "Turn 1 answer must survive error in Turn 2");
-    assert!(has_turn2_question, "Turn 2 question must survive its own failure");
+    assert!(
+        has_turn2_question,
+        "Turn 2 question must survive its own failure"
+    );
 }
 
 // ── Regression tests for multi-turn context loss ────────────────────────────
@@ -1676,8 +2062,8 @@ fn test_openai_usage_chunk_with_stop_reason_normalized() {
 /// must also normalize to "end_turn".
 #[test]
 fn test_openai_non_streaming_stop_reason_normalized() {
-    use shannon_core::api::adapter::normalize_response;
     use shannon_core::api::LlmProvider;
+    use shannon_core::api::adapter::normalize_response;
 
     let resp = r#"{"id":"chatcmpl-1","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}"#;
     let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
@@ -1704,12 +2090,14 @@ fn test_story_then_character_count_context_preserved() {
                 最终在控制室发现了通往平行维度的传送门。";
 
     // Turn 1: user asks for a story, assistant writes one
-    conv.messages.push(text_msg("user", "请写一篇200字的科幻小说"));
+    conv.messages
+        .push(text_msg("user", "请写一篇200字的科幻小说"));
     conv.messages.push(text_msg("assistant", story));
     conv.turn_count += 1;
 
     // Turn 2: user asks about characters — conversation MUST include the story
-    conv.messages.push(text_msg("user", "这篇小说中出场人物有几个？请列出名字。"));
+    conv.messages
+        .push(text_msg("user", "这篇小说中出场人物有几个？请列出名字。"));
     conv.turn_count += 1;
 
     // Verify conversation structure
@@ -1722,10 +2110,22 @@ fn test_story_then_character_count_context_preserved() {
     let assistant_msg = &conv.messages[1];
     match &assistant_msg.content {
         MessageContent::Text(t) => {
-            assert!(t.contains("阿尔法"), "Character '阿尔法' must be in conversation history");
-            assert!(t.contains("莉莉"), "Character '莉莉' must be in conversation history");
-            assert!(t.contains("泽克"), "Character '泽克' must be in conversation history");
-            assert!(t.contains("凯瑟琳"), "Character '凯瑟琳' must be in conversation history");
+            assert!(
+                t.contains("阿尔法"),
+                "Character '阿尔法' must be in conversation history"
+            );
+            assert!(
+                t.contains("莉莉"),
+                "Character '莉莉' must be in conversation history"
+            );
+            assert!(
+                t.contains("泽克"),
+                "Character '泽克' must be in conversation history"
+            );
+            assert!(
+                t.contains("凯瑟琳"),
+                "Character '凯瑟琳' must be in conversation history"
+            );
         }
         _ => panic!("Expected text content for assistant story message"),
     }
@@ -1733,7 +2133,9 @@ fn test_story_then_character_count_context_preserved() {
     // Verify the follow-up question is present
     let last = conv.messages.last().unwrap();
     match &last.content {
-        MessageContent::Text(t) => assert!(t.contains("人物"), "Follow-up should ask about characters"),
+        MessageContent::Text(t) => {
+            assert!(t.contains("人物"), "Follow-up should ask about characters")
+        }
         _ => panic!("Expected text content"),
     }
 }
@@ -1746,8 +2148,10 @@ fn test_safety_net_saves_assistant_text_on_stream_exit() {
     let mut conv = TestConversation::default();
 
     // Simulate Turn 1: user message already pushed, assistant text accumulated
-    conv.messages.push(text_msg("user", "Write a haiku about Rust"));
-    let assistant_text = "Safe borrowing rules,\nOwnership transfers are clear,\nNo data races here.".to_string();
+    conv.messages
+        .push(text_msg("user", "Write a haiku about Rust"));
+    let assistant_text =
+        "Safe borrowing rules,\nOwnership transfers are clear,\nNo data races here.".to_string();
 
     // Simulate the safety net: assistant text saved even though MessageDelta
     // handler didn't finalize (this mirrors the engine.rs safety net code)
@@ -1757,7 +2161,8 @@ fn test_safety_net_saves_assistant_text_on_stream_exit() {
     });
 
     // Turn 2: next question should see the haiku
-    conv.messages.push(text_msg("user", "What was the last line of that haiku?"));
+    conv.messages
+        .push(text_msg("user", "What was the last line of that haiku?"));
 
     assert_eq!(conv.messages.len(), 3);
 
@@ -1765,7 +2170,10 @@ fn test_safety_net_saves_assistant_text_on_stream_exit() {
     let haiku_msg = &conv.messages[1];
     match &haiku_msg.content {
         MessageContent::Text(t) => {
-            assert!(t.contains("No data races"), "Haiku last line must be preserved");
+            assert!(
+                t.contains("No data races"),
+                "Haiku last line must be preserved"
+            );
         }
         _ => panic!("Expected text content"),
     }
@@ -1779,32 +2187,48 @@ fn test_mixed_provider_context_preservation() {
     let mut conv = TestConversation::default();
 
     // Turn 1 (Anthropic-style with end_turn)
-    conv.messages.push(text_msg("user", "What are the primary colors?"));
-    conv.messages.push(text_msg("assistant", "The primary colors are red, blue, and yellow."));
+    conv.messages
+        .push(text_msg("user", "What are the primary colors?"));
+    conv.messages.push(text_msg(
+        "assistant",
+        "The primary colors are red, blue, and yellow.",
+    ));
     conv.turn_count += 1;
 
     // Turn 2 (OpenAI-style — the adapter normalizes stop, but conversation
     // state management must be identical regardless of provider)
-    conv.messages.push(text_msg("user", "Which one is your favorite?"));
-    conv.messages.push(text_msg("assistant", "I find blue particularly calming and versatile."));
+    conv.messages
+        .push(text_msg("user", "Which one is your favorite?"));
+    conv.messages.push(text_msg(
+        "assistant",
+        "I find blue particularly calming and versatile.",
+    ));
     conv.turn_count += 1;
 
     // Turn 3: must have full context
-    conv.messages.push(text_msg("user", "Remind me what you listed earlier?"));
+    conv.messages
+        .push(text_msg("user", "Remind me what you listed earlier?"));
 
     assert_eq!(conv.messages.len(), 5);
 
     // Verify the first assistant response (about primary colors) is still present
-    let has_primary = conv.messages.iter().any(|m| {
-        matches!(&m.content, MessageContent::Text(t) if t.contains("red, blue, and yellow"))
-    });
-    assert!(has_primary, "Turn 1 response must survive into Turn 3 context");
+    let has_primary = conv.messages.iter().any(
+        |m| matches!(&m.content, MessageContent::Text(t) if t.contains("red, blue, and yellow")),
+    );
+    assert!(
+        has_primary,
+        "Turn 1 response must survive into Turn 3 context"
+    );
 
     // Verify the second assistant response is also present
-    let has_favorite = conv.messages.iter().any(|m| {
-        matches!(&m.content, MessageContent::Text(t) if t.contains("calming"))
-    });
-    assert!(has_favorite, "Turn 2 response must survive into Turn 3 context");
+    let has_favorite = conv
+        .messages
+        .iter()
+        .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("calming")));
+    assert!(
+        has_favorite,
+        "Turn 2 response must survive into Turn 3 context"
+    );
 }
 
 // ── Regression Tests: Additional Multi-Turn Context Preservation ─────
@@ -1817,7 +2241,8 @@ fn test_story_then_character_count_preserves_context() {
     let mut conv = TestConversation::default();
 
     // Turn 1: User asks for a story
-    conv.messages.push(text_msg("user", "写一篇200字的科幻小说"));
+    conv.messages
+        .push(text_msg("user", "写一篇200字的科幻小说"));
     let story = "2187年，宇航员林远站在火星基地的观测台上。他的AI助手「星语」正在分析最新的地质数据。\
                  \"林远，地下发现异常能量波动，\"星语的声音在头盔里响起。\
                  林远转身对工程师赵敏说：\"赵姐，你看这个数据。\"\
@@ -1828,12 +2253,14 @@ fn test_story_then_character_count_preserves_context() {
     conv.turn_count += 1;
 
     // Turn 2: User asks about characters — must have story context
-    conv.messages.push(text_msg("user", "这篇小说中有几个出场人物？请列出"));
+    conv.messages
+        .push(text_msg("user", "这篇小说中有几个出场人物？请列出"));
 
     // Verify Turn 1 assistant response is still in conversation
-    let has_story = conv.messages.iter().any(|m| {
-        matches!(&m.content, MessageContent::Text(t) if t.contains("林远"))
-    });
+    let has_story = conv
+        .messages
+        .iter()
+        .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("林远")));
     assert!(has_story, "Turn 1 story must be present in Turn 2 context");
 
     // The conversation should have 3 messages: user(story), assistant(story), user(question)
@@ -1848,13 +2275,16 @@ fn test_tool_use_response_preserved_as_blocks_not_just_text() {
     let mut conv = TestConversation::default();
 
     // User asks
-    conv.messages.push(text_msg("user", "Read the file main.rs"));
+    conv.messages
+        .push(text_msg("user", "Read the file main.rs"));
 
     // Assistant responds with text + tool_use
     let assistant_msg = Message {
         role: "assistant".to_string(),
         content: MessageContent::Blocks(vec![
-            ContentBlock::Text { text: "Let me read that file.".to_string() },
+            ContentBlock::Text {
+                text: "Let me read that file.".to_string(),
+            },
             ContentBlock::ToolUse {
                 id: "tool_1".to_string(),
                 name: "read_file".to_string(),
@@ -1868,16 +2298,25 @@ fn test_tool_use_response_preserved_as_blocks_not_just_text() {
     conv.messages.push(tool_result_msg());
 
     // Assistant follow-up
-    conv.messages.push(text_msg("assistant", "The file contains a main function."));
+    conv.messages
+        .push(text_msg("assistant", "The file contains a main function."));
 
     // Now user asks follow-up — full context must be present
-    conv.messages.push(text_msg("user", "What did the file contain?"));
+    conv.messages
+        .push(text_msg("user", "What did the file contain?"));
 
     // Verify tool_use block survived
     if let MessageContent::Blocks(blocks) = &conv.messages[1].content {
-        let has_tool_use = blocks.iter().any(|b| matches!(b, ContentBlock::ToolUse { .. }));
-        assert!(has_tool_use, "Tool use block must be preserved in conversation");
-        let has_text = blocks.iter().any(|b| matches!(b, ContentBlock::Text { .. }));
+        let has_tool_use = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolUse { .. }));
+        assert!(
+            has_tool_use,
+            "Tool use block must be preserved in conversation"
+        );
+        let has_text = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { .. }));
         assert!(has_text, "Text block alongside tool_use must be preserved");
     } else {
         panic!("Assistant message should have Blocks content, not just Text");
@@ -1885,12 +2324,16 @@ fn test_tool_use_response_preserved_as_blocks_not_just_text() {
 
     // Verify the text block is NOT duplicated as a separate message
     // (this catches the bug where streaming loop continues after tool processing)
-    let text_only_assistant_msgs: Vec<_> = conv.messages.iter()
+    let text_only_assistant_msgs: Vec<_> = conv
+        .messages
+        .iter()
         .filter(|m| m.role == "assistant")
         .filter(|m| matches!(&m.content, MessageContent::Text(t) if t == "Let me read that file."))
         .collect();
-    assert!(text_only_assistant_msgs.is_empty(),
-        "No standalone text-only assistant message should exist duplicating the blocks content");
+    assert!(
+        text_only_assistant_msgs.is_empty(),
+        "No standalone text-only assistant message should exist duplicating the blocks content"
+    );
 }
 
 /// Verifies that the safety net saves tool use blocks when stream ends
@@ -1905,7 +2348,9 @@ fn test_safety_net_preserves_tool_use_blocks() {
     let safety_net_msg = Message {
         role: "assistant".to_string(),
         content: MessageContent::Blocks(vec![
-            ContentBlock::Text { text: "Reading config file now.".to_string() },
+            ContentBlock::Text {
+                text: "Reading config file now.".to_string(),
+            },
             ContentBlock::ToolUse {
                 id: "tool_safety_1".to_string(),
                 name: "read_file".to_string(),
@@ -1917,7 +2362,11 @@ fn test_safety_net_preserves_tool_use_blocks() {
 
     // Verify the message has Blocks (not just Text)
     if let MessageContent::Blocks(blocks) = &conv.messages[1].content {
-        assert_eq!(blocks.len(), 2, "Safety net should save both text and tool_use");
+        assert_eq!(
+            blocks.len(),
+            2,
+            "Safety net should save both text and tool_use"
+        );
         assert!(matches!(&blocks[0], ContentBlock::Text { .. }));
         assert!(matches!(&blocks[1], ContentBlock::ToolUse { .. }));
     } else {
@@ -1940,18 +2389,31 @@ fn test_compression_preserves_latest_turn_context() {
 
     // Turn 1: Story
     conv.messages.push(text_msg("user", "Write a sci-fi story"));
-    conv.messages.push(text_msg("assistant", "In 2187, astronaut Lin discovered an alien artifact on Mars..."));
+    conv.messages.push(text_msg(
+        "assistant",
+        "In 2187, astronaut Lin discovered an alien artifact on Mars...",
+    ));
     conv.turn_count += 1;
 
     // Turn 2: Follow-up (this is the critical context)
-    conv.messages.push(text_msg("user", "How many characters are in the story?"));
-    conv.messages.push(text_msg("assistant", "There are 3 characters: Lin, the AI assistant, and Engineer Zhao."));
+    conv.messages
+        .push(text_msg("user", "How many characters are in the story?"));
+    conv.messages.push(text_msg(
+        "assistant",
+        "There are 3 characters: Lin, the AI assistant, and Engineer Zhao.",
+    ));
     conv.turn_count += 1;
 
     // Turn 3-5: More conversation to trigger compression
     for i in 0..3 {
-        conv.messages.push(text_msg("user", &format!("Question {i} about something else")));
-        conv.messages.push(text_msg("assistant", &format!("Answer {i} with detailed response")));
+        conv.messages.push(text_msg(
+            "user",
+            &format!("Question {i} about something else"),
+        ));
+        conv.messages.push(text_msg(
+            "assistant",
+            &format!("Answer {i} with detailed response"),
+        ));
         conv.turn_count += 1;
     }
 
@@ -1961,11 +2423,14 @@ fn test_compression_preserves_latest_turn_context() {
     conv.compress(&config);
 
     // The MOST RECENT assistant response must survive
-    let has_latest_answer = conv.messages.iter().any(|m| {
-        matches!(&m.content, MessageContent::Text(t) if t.contains("3 characters"))
-    });
-    assert!(has_latest_answer,
-        "Most recent assistant response must survive compression for next turn context");
+    let has_latest_answer = conv
+        .messages
+        .iter()
+        .any(|m| matches!(&m.content, MessageContent::Text(t) if t.contains("3 characters")));
+    assert!(
+        has_latest_answer,
+        "Most recent assistant response must survive compression for next turn context"
+    );
 }
 
 /// Verifies that tool result messages are persisted to conversation.messages
@@ -1977,7 +2442,11 @@ fn test_tool_results_persisted_to_conversation() {
 
     // Simulate the engine's tool result persistence loop
     let tool_results: Vec<(String, String, bool)> = vec![
-        ("tool_1".to_string(), "file contents here".to_string(), false),
+        (
+            "tool_1".to_string(),
+            "file contents here".to_string(),
+            false,
+        ),
         ("tool_2".to_string(), "error: not found".to_string(), true),
     ];
 
@@ -1994,8 +2463,16 @@ fn test_tool_results_persisted_to_conversation() {
         conv.messages.push(tool_msg); // Both must be pushed
     }
 
-    assert_eq!(conv.messages.len(), 2, "Tool results should be in conversation");
-    assert_eq!(messages.len(), 2, "Tool results should be in local messages");
+    assert_eq!(
+        conv.messages.len(),
+        2,
+        "Tool results should be in conversation"
+    );
+    assert_eq!(
+        messages.len(),
+        2,
+        "Tool results should be in local messages"
+    );
 }
 
 /// Verifies that consecutive turns maintain proper user/assistant alternation
@@ -2011,16 +2488,29 @@ fn test_proper_alternation_after_tool_use() {
     // Turn 2: Tool use sequence
     conv.messages.push(text_msg("user", "Read foo.rs"));
     conv.messages.push(assistant_with_tools()); // assistant: text + tool_use
-    conv.messages.push(tool_result_msg());      // user: tool_result
-    conv.messages.push(text_msg("assistant", "Here's what I found."));
+    conv.messages.push(tool_result_msg()); // user: tool_result
+    conv.messages
+        .push(text_msg("assistant", "Here's what I found."));
 
     // Turn 3: Follow-up — must see full context
-    conv.messages.push(text_msg("user", "Can you summarize it?"));
+    conv.messages
+        .push(text_msg("user", "Can you summarize it?"));
 
     // Verify alternation: user, assistant, user, assistant, user, assistant, user
     let roles: Vec<&str> = conv.messages.iter().map(|m| m.role.as_str()).collect();
-    assert_eq!(roles, vec!["user", "assistant", "user", "assistant", "user", "assistant", "user"],
-        "Messages must alternate user/assistant for API compatibility. Got: {roles:?}");
+    assert_eq!(
+        roles,
+        vec![
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "user",
+            "assistant",
+            "user"
+        ],
+        "Messages must alternate user/assistant for API compatibility. Got: {roles:?}"
+    );
 }
 
 /// Verifies that a very long assistant response is preserved intact
@@ -2030,16 +2520,22 @@ fn test_long_assistant_response_preserved_intact() {
     let mut conv = TestConversation::default();
 
     let long_story = "A".repeat(5000);
-    conv.messages.push(text_msg("user", "Write a very long story"));
+    conv.messages
+        .push(text_msg("user", "Write a very long story"));
     conv.messages.push(text_msg("assistant", &long_story));
-    conv.messages.push(text_msg("user", "How many sentences in the story?"));
+    conv.messages
+        .push(text_msg("user", "How many sentences in the story?"));
 
     // Verify the long response is intact
     if let MessageContent::Text(t) = &conv.messages[1].content {
         assert_eq!(t.len(), 5000, "Full assistant response must be preserved");
     }
 
-    assert_eq!(conv.messages.len(), 3, "All 3 turns must be in conversation");
+    assert_eq!(
+        conv.messages.len(),
+        3,
+        "All 3 turns must be in conversation"
+    );
 }
 
 #[test]
@@ -2048,113 +2544,140 @@ fn test_ten_plus_turn_context_preservation() {
     let mut conv = TestConversation::default();
 
     // Turn 1: user asks about a file
-    conv.messages.push(text_msg("user", "Read the file config.toml"));
+    conv.messages
+        .push(text_msg("user", "Read the file config.toml"));
     conv.messages.push(Message {
         role: "assistant".to_string(),
-        content: MessageContent::Blocks(vec![
-            ContentBlock::ToolUse {
-                id: "tool_1".to_string(),
-                name: "read_file".to_string(),
-                input: serde_json::json!({"path": "config.toml"}),
-            },
-        ]),
+        content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+            id: "tool_1".to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({"path": "config.toml"}),
+        }]),
     });
     conv.messages.push(Message {
         role: "user".to_string(),
-        content: MessageContent::Blocks(vec![
-            ContentBlock::ToolResult {
-                tool_use_id: "tool_1".to_string(),
-                content: Some(ToolResultContent::Single("version = \"1.0\"".to_string())),
-                is_error: Some(false),
-            },
-        ]),
+        content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tool_1".to_string(),
+            content: Some(ToolResultContent::Single("version = \"1.0\"".to_string())),
+            is_error: Some(false),
+        }]),
     });
 
     // Turn 2: assistant reads and responds
-    conv.messages.push(text_msg("assistant", "The config.toml has version 1.0."));
+    conv.messages
+        .push(text_msg("assistant", "The config.toml has version 1.0."));
 
     // Turn 3: follow-up question referencing config
-    conv.messages.push(text_msg("user", "What version was in config.toml?"));
-    conv.messages.push(text_msg("assistant", "The config.toml had version 1.0 as I read earlier."));
+    conv.messages
+        .push(text_msg("user", "What version was in config.toml?"));
+    conv.messages.push(text_msg(
+        "assistant",
+        "The config.toml had version 1.0 as I read earlier.",
+    ));
 
     // Turn 4: ask to write a function
-    conv.messages.push(text_msg("user", "Write a function to parse version strings"));
+    conv.messages.push(text_msg(
+        "user",
+        "Write a function to parse version strings",
+    ));
     conv.messages.push(text_msg("assistant", "fn parse_version(s: &str) -> Vec<u32> { s.split('.').filter_map(|p| p.parse().ok()).collect() }"));
 
     // Turn 5: reference the function
-    conv.messages.push(text_msg("user", "What does the function you just wrote do?"));
+    conv.messages.push(text_msg(
+        "user",
+        "What does the function you just wrote do?",
+    ));
     conv.messages.push(text_msg("assistant", "The parse_version function splits a version string like \"1.2.3\" by dots and parses each part into u32."));
 
     // Turn 6: tool use — list files
-    conv.messages.push(text_msg("user", "List all Rust files in src/"));
+    conv.messages
+        .push(text_msg("user", "List all Rust files in src/"));
     conv.messages.push(Message {
         role: "assistant".to_string(),
-        content: MessageContent::Blocks(vec![
-            ContentBlock::ToolUse {
-                id: "tool_2".to_string(),
-                name: "bash".to_string(),
-                input: serde_json::json!({"command": "find src/ -name '*.rs'"}),
-            },
-        ]),
+        content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+            id: "tool_2".to_string(),
+            name: "bash".to_string(),
+            input: serde_json::json!({"command": "find src/ -name '*.rs'"}),
+        }]),
     });
     conv.messages.push(Message {
         role: "user".to_string(),
-        content: MessageContent::Blocks(vec![
-            ContentBlock::ToolResult {
-                tool_use_id: "tool_2".to_string(),
-                content: Some(ToolResultContent::Single("src/main.rs\nsrc/lib.rs\nsrc/parser.rs".to_string())),
-                is_error: Some(false),
-            },
-        ]),
+        content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tool_2".to_string(),
+            content: Some(ToolResultContent::Single(
+                "src/main.rs\nsrc/lib.rs\nsrc/parser.rs".to_string(),
+            )),
+            is_error: Some(false),
+        }]),
     });
 
     // Turn 7: assistant responds with file list
-    conv.messages.push(text_msg("assistant", "Found 3 Rust files: main.rs, lib.rs, and parser.rs."));
+    conv.messages.push(text_msg(
+        "assistant",
+        "Found 3 Rust files: main.rs, lib.rs, and parser.rs.",
+    ));
 
     // Turn 8: reference earlier config + files
-    conv.messages.push(text_msg("user", "In the version from config.toml, how many files matched?"));
-    conv.messages.push(text_msg("assistant", "The version 1.0 from config.toml is unrelated to the 3 Rust files I found."));
+    conv.messages.push(text_msg(
+        "user",
+        "In the version from config.toml, how many files matched?",
+    ));
+    conv.messages.push(text_msg(
+        "assistant",
+        "The version 1.0 from config.toml is unrelated to the 3 Rust files I found.",
+    ));
 
     // Turn 9: compression trigger — add a large message
     let big_response = "X".repeat(2000);
-    conv.messages.push(text_msg("user", "Generate a long response"));
+    conv.messages
+        .push(text_msg("user", "Generate a long response"));
     conv.messages.push(text_msg("assistant", &big_response));
 
     // Turn 10: verify context after large message
-    conv.messages.push(text_msg("user", "How many Rust files were there? And what was the config version?"));
-    conv.messages.push(text_msg("assistant", "There were 3 Rust files (main.rs, lib.rs, parser.rs) and the config version was 1.0."));
+    conv.messages.push(text_msg(
+        "user",
+        "How many Rust files were there? And what was the config version?",
+    ));
+    conv.messages.push(text_msg(
+        "assistant",
+        "There were 3 Rust files (main.rs, lib.rs, parser.rs) and the config version was 1.0.",
+    ));
 
     // Turn 11: another tool use
     conv.messages.push(text_msg("user", "Read parser.rs"));
     conv.messages.push(Message {
         role: "assistant".to_string(),
-        content: MessageContent::Blocks(vec![
-            ContentBlock::ToolUse {
-                id: "tool_3".to_string(),
-                name: "read_file".to_string(),
-                input: serde_json::json!({"path": "src/parser.rs"}),
-            },
-        ]),
+        content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+            id: "tool_3".to_string(),
+            name: "read_file".to_string(),
+            input: serde_json::json!({"path": "src/parser.rs"}),
+        }]),
     });
     conv.messages.push(Message {
         role: "user".to_string(),
-        content: MessageContent::Blocks(vec![
-            ContentBlock::ToolResult {
-                tool_use_id: "tool_3".to_string(),
-                content: Some(ToolResultContent::Single("pub fn parse() {}".to_string())),
-                is_error: Some(false),
-            },
-        ]),
+        content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tool_3".to_string(),
+            content: Some(ToolResultContent::Single("pub fn parse() {}".to_string())),
+            is_error: Some(false),
+        }]),
     });
-    conv.messages.push(text_msg("assistant", "parser.rs contains a single parse function."));
+    conv.messages.push(text_msg(
+        "assistant",
+        "parser.rs contains a single parse function.",
+    ));
 
     // Turn 12: final cross-reference — everything from the conversation
-    conv.messages.push(text_msg("user", "Summarize everything we've done"));
+    conv.messages
+        .push(text_msg("user", "Summarize everything we've done"));
     conv.messages.push(text_msg("assistant", "We read config.toml (version 1.0), wrote a parse_version function, listed 3 Rust files, generated a long response, and read parser.rs."));
 
     // Verify: 12 turns of user+assistant pairs + 3 tool_use/tool_result pairs = correct count
     // Turn structure: user, assistant(tool), user(tool_result), assistant, user, assistant, ...
-    assert_eq!(conv.messages.len(), 26, "Should have 26 messages across 12 turns with 3 tool use cycles");
+    assert_eq!(
+        conv.messages.len(),
+        26,
+        "Should have 26 messages across 12 turns with 3 tool use cycles"
+    );
 
     // Verify proper alternation: no two consecutive same-role messages (except tool_result→assistant)
     for i in 1..conv.messages.len() {
@@ -2168,21 +2691,36 @@ fn test_ten_plus_turn_context_preservation() {
     }
 
     // Verify early context is preserved (config version)
-    let all_text: String = conv.messages.iter().map(|m| match &m.content {
-        MessageContent::Text(t) => t.as_str(),
-        _ => "",
-    }).collect();
-    assert!(all_text.contains("1.0"), "Config version 1.0 must be preserved across 12 turns");
+    let all_text: String = conv
+        .messages
+        .iter()
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => "",
+        })
+        .collect();
+    assert!(
+        all_text.contains("1.0"),
+        "Config version 1.0 must be preserved across 12 turns"
+    );
 
     // Verify tool uses are preserved as blocks, not text
-    let tool_uses: Vec<_> = conv.messages.iter().filter_map(|m| match &m.content {
-        MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
-            ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+    let tool_uses: Vec<_> = conv
+        .messages
+        .iter()
+        .filter_map(|m| match &m.content {
+            MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                ContentBlock::ToolUse { name, .. } => Some(name.clone()),
+                _ => None,
+            }),
             _ => None,
-        }),
-        _ => None,
-    }).collect();
-    assert_eq!(tool_uses, vec!["read_file", "bash", "read_file"], "All 3 tool uses must be preserved");
+        })
+        .collect();
+    assert_eq!(
+        tool_uses,
+        vec!["read_file", "bash", "read_file"],
+        "All 3 tool uses must be preserved"
+    );
 }
 
 // ── Three-Turn Story: Characters, Scenes, Word Count ───────────────────
@@ -2200,7 +2738,8 @@ fn test_three_turn_story_characters_scenes_wordcount() {
                  ORION在沉默中重新计算了一切，包括人类所谓的'正确'。";
 
     // Turn 1: user asks for a story
-    conv.messages.push(text_msg("user", "请写一篇200字科幻小说"));
+    conv.messages
+        .push(text_msg("user", "请写一篇200字科幻小说"));
     conv.messages.push(text_msg("assistant", story));
     conv.turn_count += 1;
 
@@ -2214,7 +2753,8 @@ fn test_three_turn_story_characters_scenes_wordcount() {
     });
     assert!(story_in_ctx, "Story must be in context before Turn 2");
 
-    conv.messages.push(text_msg("user", "这部科幻小说中有几个人物？几个场景？"));
+    conv.messages
+        .push(text_msg("user", "这部科幻小说中有几个人物？几个场景？"));
     conv.messages.push(text_msg("assistant",
         "这部小说有3个人物（陈伊拉博士、ORION导航系统、沃斯舰长）和2个场景（量子显示屏前、指挥舱）。"));
     conv.turn_count += 1;
@@ -2223,16 +2763,24 @@ fn test_three_turn_story_characters_scenes_wordcount() {
 
     // Turn 3: ask about word count
     // Verify full context preserved through Turn 2
-    let all_text: String = conv.messages.iter().map(|m| match &m.content {
-        MessageContent::Text(t) => t.as_str(),
-        _ => "",
-    }).collect();
+    let all_text: String = conv
+        .messages
+        .iter()
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => "",
+        })
+        .collect();
     assert!(all_text.contains("ORION"), "ORION must survive to Turn 3");
-    assert!(all_text.contains("沃斯舰长"), "Captain Voss must survive to Turn 3");
+    assert!(
+        all_text.contains("沃斯舰长"),
+        "Captain Voss must survive to Turn 3"
+    );
 
-    conv.messages.push(text_msg("user", "这部科幻小说有多少字？"));
-    conv.messages.push(text_msg("assistant",
-        "这部科幻小说大约有200字。"));
+    conv.messages
+        .push(text_msg("user", "这部科幻小说有多少字？"));
+    conv.messages
+        .push(text_msg("assistant", "这部科幻小说大约有200字。"));
     conv.turn_count += 1;
 
     // Final verification
@@ -2241,19 +2789,39 @@ fn test_three_turn_story_characters_scenes_wordcount() {
 
     // Verify proper alternation
     for i in 1..conv.messages.len() {
-        assert_ne!(conv.messages[i].role, conv.messages[i - 1].role,
-            "Role alternation broken at index {}", i);
+        assert_ne!(
+            conv.messages[i].role,
+            conv.messages[i - 1].role,
+            "Role alternation broken at index {}",
+            i
+        );
     }
 
     // Verify all story details accessible in final context
-    let final_text: String = conv.messages.iter().map(|m| match &m.content {
-        MessageContent::Text(t) => t.as_str(),
-        _ => "",
-    }).collect();
-    assert!(final_text.contains("陈伊拉博士"), "Character name must be in final context");
-    assert!(final_text.contains("ORION"), "AI name must be in final context");
-    assert!(final_text.contains("沃斯"), "Captain name must be in final context");
-    assert!(final_text.contains("量子显示屏"), "Scene detail must be in final context");
+    let final_text: String = conv
+        .messages
+        .iter()
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => "",
+        })
+        .collect();
+    assert!(
+        final_text.contains("陈伊拉博士"),
+        "Character name must be in final context"
+    );
+    assert!(
+        final_text.contains("ORION"),
+        "AI name must be in final context"
+    );
+    assert!(
+        final_text.contains("沃斯"),
+        "Captain name must be in final context"
+    );
+    assert!(
+        final_text.contains("量子显示屏"),
+        "Scene detail must be in final context"
+    );
 }
 
 #[test]
@@ -2267,7 +2835,8 @@ fn test_five_turn_deep_context_preservation() {
                  方远正在火星轨道站的货舱里，已经把晶片的真正数据上传了。\
                  老K手里的只是诱饵。";
 
-    conv.messages.push(text_msg("user", "写一个科幻悬疑故事，包含具体数字和地点"));
+    conv.messages
+        .push(text_msg("user", "写一个科幻悬疑故事，包含具体数字和地点"));
     conv.messages.push(text_msg("assistant", story));
 
     // Turn 2: ask about a character name
@@ -2276,24 +2845,33 @@ fn test_five_turn_deep_context_preservation() {
 
     // Turn 3: ask about a number
     conv.messages.push(text_msg("user", "晶片价值多少？"));
-    conv.messages.push(text_msg("assistant", "晶片价值780万信用币。"));
+    conv.messages
+        .push(text_msg("assistant", "晶片价值780万信用币。"));
 
     // Turn 4: ask about a location
     conv.messages.push(text_msg("user", "方远在哪里？"));
-    conv.messages.push(text_msg("assistant", "方远在火星轨道站的货舱里。"));
+    conv.messages
+        .push(text_msg("assistant", "方远在火星轨道站的货舱里。"));
 
     // Turn 5: ask about a detail from the antagonist
-    conv.messages.push(text_msg("user", "反派是谁？他说了什么威胁的话？"));
-    conv.messages.push(text_msg("assistant",
-        "反派是老K，他威胁说如果林晓不交出晶片，她的搭档赵明就活不过今晚。"));
+    conv.messages
+        .push(text_msg("user", "反派是谁？他说了什么威胁的话？"));
+    conv.messages.push(text_msg(
+        "assistant",
+        "反派是老K，他威胁说如果林晓不交出晶片，她的搭档赵明就活不过今晚。",
+    ));
 
     assert_eq!(conv.messages.len(), 10, "5 turns × 2 = 10 messages");
 
     // Verify all details from the original story survive into Turn 5's context
-    let all_text: String = conv.messages.iter().map(|m| match &m.content {
-        MessageContent::Text(t) => t.as_str(),
-        _ => "",
-    }).collect();
+    let all_text: String = conv
+        .messages
+        .iter()
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => "",
+        })
+        .collect();
 
     assert!(all_text.contains("林晓"), "Protagonist name preserved");
     assert!(all_text.contains("780万"), "Specific number preserved");
@@ -2306,8 +2884,12 @@ fn test_five_turn_deep_context_preservation() {
 
     // Verify proper alternation
     for i in 1..conv.messages.len() {
-        assert_ne!(conv.messages[i].role, conv.messages[i - 1].role,
-            "Alternation broken at {}", i);
+        assert_ne!(
+            conv.messages[i].role,
+            conv.messages[i - 1].role,
+            "Alternation broken at {}",
+            i
+        );
     }
 }
 
@@ -2320,11 +2902,13 @@ fn test_story_context_survives_tool_interleaving() {
                  站长马库斯下令封锁实验室，但安雅知道：生命总会找到出路。";
 
     // Turn 1: write story
-    conv.messages.push(text_msg("user", "写一篇关于外星生命的科幻故事"));
+    conv.messages
+        .push(text_msg("user", "写一篇关于外星生命的科幻故事"));
     conv.messages.push(text_msg("assistant", story));
 
     // Turn 2: ask about characters — with a tool use interleaved
-    conv.messages.push(text_msg("user", "故事里有几个人物？帮我搜索一下相关资料"));
+    conv.messages
+        .push(text_msg("user", "故事里有几个人物？帮我搜索一下相关资料"));
     // AI uses a tool
     conv.messages.push(Message {
         role: "assistant".to_string(),
@@ -2342,17 +2926,19 @@ fn test_story_context_survives_tool_interleaving() {
     // Tool result
     conv.messages.push(Message {
         role: "user".to_string(),
-        content: MessageContent::Blocks(vec![
-            ContentBlock::ToolResult {
-                tool_use_id: "tool_search_1".to_string(),
-                content: Some(ToolResultContent::Single("搜索结果：故事中提到安雅博士、PRISM、马库斯".to_string())),
-                is_error: Some(false),
-            },
-        ]),
+        content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tool_search_1".to_string(),
+            content: Some(ToolResultContent::Single(
+                "搜索结果：故事中提到安雅博士、PRISM、马库斯".to_string(),
+            )),
+            is_error: Some(false),
+        }]),
     });
     // AI final answer
-    conv.messages.push(text_msg("assistant",
-        "故事里有3个人物：安雅博士、AI助手PRISM、站长马库斯。"));
+    conv.messages.push(text_msg(
+        "assistant",
+        "故事里有3个人物：安雅博士、AI助手PRISM、站长马库斯。",
+    ));
 
     // Turn 3: ask about the discovery (must reference story from Turn 1)
     // Verify story survived through tool interleaving
@@ -2360,11 +2946,17 @@ fn test_story_context_survives_tool_interleaving() {
         MessageContent::Text(t) => t.contains("硅的非碳基生命"),
         _ => false,
     });
-    assert!(story_survived, "Story content must survive tool interleaving");
+    assert!(
+        story_survived,
+        "Story content must survive tool interleaving"
+    );
 
-    conv.messages.push(text_msg("user", "安雅发现了什么类型的生命？"));
-    conv.messages.push(text_msg("assistant",
-        "安雅发现了基于硅的非碳基生命体，它们在木卫二冰层下发光。"));
+    conv.messages
+        .push(text_msg("user", "安雅发现了什么类型的生命？"));
+    conv.messages.push(text_msg(
+        "assistant",
+        "安雅发现了基于硅的非碳基生命体，它们在木卫二冰层下发光。",
+    ));
 
     // Verify: Turn 1 (2) + Turn 2 (4) + Turn 3 (2) = 8 messages
     assert_eq!(conv.messages.len(), 8);
@@ -2373,15 +2965,24 @@ fn test_story_context_survives_tool_interleaving() {
     for i in 1..conv.messages.len() {
         let prev = &conv.messages[i - 1].role;
         let curr = &conv.messages[i].role;
-        assert!(prev != curr || prev == "user",
-            "Alternation broken at {}: '{}' → '{}'", i, prev, curr);
+        assert!(
+            prev != curr || prev == "user",
+            "Alternation broken at {}: '{}' → '{}'",
+            i,
+            prev,
+            curr
+        );
     }
 
     // Verify all story details in final context
-    let all_text: String = conv.messages.iter().map(|m| match &m.content {
-        MessageContent::Text(t) => t.as_str(),
-        _ => "",
-    }).collect();
+    let all_text: String = conv
+        .messages
+        .iter()
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => "",
+        })
+        .collect();
     assert!(all_text.contains("安雅"), "Protagonist preserved");
     assert!(all_text.contains("PRISM"), "AI assistant preserved");
     assert!(all_text.contains("马库斯"), "Station commander preserved");
@@ -2399,12 +3000,14 @@ fn test_compression_preserves_story_details_for_followup_questions() {
                  苏瑞下令启动跃迁引擎，全船127名船员进入深眠。";
 
     // Turn 1: story
-    conv.messages.push(text_msg("user", "写一篇关于第一接触的科幻故事"));
+    conv.messages
+        .push(text_msg("user", "写一篇关于第一接触的科幻故事"));
     conv.messages.push(text_msg("assistant", story));
 
     // Add padding messages to trigger compression
     for i in 0..8 {
-        conv.messages.push(text_msg("user", &format!("padding question {i}")));
+        conv.messages
+            .push(text_msg("user", &format!("padding question {i}")));
         conv.messages.push(text_msg("assistant", &format!("padding answer {i} with some extra text to increase token count significantly for compression")));
     }
 
@@ -2415,20 +3018,33 @@ fn test_compression_preserves_story_details_for_followup_questions() {
     }
 
     // Turn 2: ask about story details — must survive compression
-    conv.messages.push(text_msg("user", "探测器编号是多少？信号源在哪里？"));
-    conv.messages.push(text_msg("assistant",
-        "探测器编号是1387号。信号源在距外环站4.2光年的一个流浪行星。"));
+    conv.messages
+        .push(text_msg("user", "探测器编号是多少？信号源在哪里？"));
+    conv.messages.push(text_msg(
+        "assistant",
+        "探测器编号是1387号。信号源在距外环站4.2光年的一个流浪行星。",
+    ));
 
     // Verify key details survived (either in summary or in recent messages)
-    let all_text: String = conv.messages.iter().map(|m| match &m.content {
-        MessageContent::Text(t) => t.as_str(),
-        _ => "",
-    }).collect();
+    let all_text: String = conv
+        .messages
+        .iter()
+        .map(|m| match &m.content {
+            MessageContent::Text(t) => t.as_str(),
+            _ => "",
+        })
+        .collect();
 
     // At minimum, the answer must reference the correct details
-    assert!(all_text.contains("1387"), "Detector number must be preserved");
+    assert!(
+        all_text.contains("1387"),
+        "Detector number must be preserved"
+    );
     assert!(all_text.contains("4.2"), "Distance must be preserved");
-    assert!(all_text.contains("流浪行星"), "Rogue planet must be preserved");
+    assert!(
+        all_text.contains("流浪行星"),
+        "Rogue planet must be preserved"
+    );
 }
 
 // ── Integration tests using mockito with real QueryEngine ──────────────
@@ -2439,7 +3055,9 @@ mod integration_tests {
     use shannon_core::api::LlmClientConfig;
     use shannon_core::api::LlmProvider;
     use shannon_core::permissions::PermissionManager;
-    use shannon_core::query_engine::{QueryEngine, QueryEngineConfig, QueryContext, QueryEvent, QueryMetadata};
+    use shannon_core::query_engine::{
+        QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
+    };
     use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
     use std::collections::HashMap;
@@ -2466,7 +3084,13 @@ mod integration_tests {
         let tools = ToolRegistry::new();
         let permissions = PermissionManager::new();
         let state = StateManager::new();
-        QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default())
+        QueryEngine::new(
+            client,
+            tools,
+            permissions,
+            state,
+            QueryEngineConfig::default(),
+        )
     }
 
     fn make_query_context(user_message: &str) -> QueryContext {
@@ -2494,7 +3118,9 @@ mod integration_tests {
              event: content_block_stop\ndata: {{\"type\":\"content_block_stop\",\"index\":0}}\n\n\
              event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":50,\"output_tokens\":20}}}}\n\n\
              event: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n",
-            text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+            text.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
         )
     }
 
@@ -2523,7 +3149,9 @@ mod integration_tests {
     }
 
     /// Extract the first ConversationUpdate's messages from events.
-    fn extract_conversation_update(events: &[QueryEvent]) -> Option<Vec<shannon_core::api::Message>> {
+    fn extract_conversation_update(
+        events: &[QueryEvent],
+    ) -> Option<Vec<shannon_core::api::Message>> {
         events.iter().find_map(|e| match e {
             QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
             _ => None,
@@ -2580,12 +3208,19 @@ mod integration_tests {
         // Must have received text content
         let text1 = extract_text(&events1);
         assert!(!text1.is_empty(), "Turn 1 should produce text");
-        assert!(text1.contains("1387"), "Turn 1 text should contain the story");
+        assert!(
+            text1.contains("1387"),
+            "Turn 1 text should contain the story"
+        );
 
         // Must have ConversationUpdate with [user1, assistant1]
-        let update1 = extract_conversation_update(&events1)
-            .expect("Turn 1 must emit ConversationUpdate");
-        assert_eq!(update1.len(), 2, "After turn 1: user + assistant = 2 messages");
+        let update1 =
+            extract_conversation_update(&events1).expect("Turn 1 must emit ConversationUpdate");
+        assert_eq!(
+            update1.len(),
+            2,
+            "After turn 1: user + assistant = 2 messages"
+        );
         assert_eq!(update1[0].role, "user");
         assert!(message_text(&update1[0]).contains("科幻故事"));
         assert_eq!(update1[1].role, "assistant");
@@ -2595,18 +3230,24 @@ mod integration_tests {
         assert_eq!(engine.conversation_history().len(), 2);
 
         // ── Turn 2: ask about the story ──
-        let _m2 = setup_stream_mock(&mut server, "探测器编号是1387号。信号源在距外环站4.2光年的流浪行星。");
+        let _m2 = setup_stream_mock(
+            &mut server,
+            "探测器编号是1387号。信号源在距外环站4.2光年的流浪行星。",
+        );
         let ctx2 = make_query_context("探测器编号是多少？信号源在哪里？");
         let events2 = rt.block_on(collect_events(&engine, ctx2));
 
         // Must have text content
         let text2 = extract_text(&events2);
         assert!(!text2.is_empty(), "Turn 2 should produce text");
-        assert!(text2.contains("1387"), "Turn 2 answer should reference the story");
+        assert!(
+            text2.contains("1387"),
+            "Turn 2 answer should reference the story"
+        );
 
         // ConversationUpdate should have 4 messages: [user1, asst1, user2, asst2]
-        let update2 = extract_conversation_update(&events2)
-            .expect("Turn 2 must emit ConversationUpdate");
+        let update2 =
+            extract_conversation_update(&events2).expect("Turn 2 must emit ConversationUpdate");
         assert_eq!(update2.len(), 4, "After turn 2: 4 messages total");
 
         // Verify the story from turn 1 is preserved in message history
@@ -2620,7 +3261,8 @@ mod integration_tests {
         // Restore and verify engine state
         engine.restore_messages(update2);
         assert_eq!(engine.conversation_history().len(), 4);
-        let history_text: String = engine.conversation_history()
+        let history_text: String = engine
+            .conversation_history()
             .iter()
             .map(|m| message_text(m))
             .collect();
@@ -2641,15 +3283,20 @@ mod integration_tests {
         let ctx = make_query_context("test");
         let events = rt.block_on(collect_events(&engine, ctx));
 
-        let update_idx = events.iter().position(|e| matches!(e, QueryEvent::ConversationUpdate { .. }));
-        let completed_idx = events.iter().position(|e| matches!(e, QueryEvent::Completed { .. }));
+        let update_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::ConversationUpdate { .. }));
+        let completed_idx = events
+            .iter()
+            .position(|e| matches!(e, QueryEvent::Completed { .. }));
 
         assert!(update_idx.is_some(), "ConversationUpdate must be emitted");
         assert!(completed_idx.is_some(), "Completed must be emitted");
         assert!(
             update_idx < completed_idx,
             "ConversationUpdate (idx {:?}) must come before Completed (idx {:?})",
-            update_idx, completed_idx
+            update_idx,
+            completed_idx
         );
     }
 
@@ -2681,7 +3328,11 @@ mod integration_tests {
         let update2 = extract_conversation_update(&events2).unwrap();
 
         // 4 messages: user1 + asst1 + user2 + asst2
-        assert_eq!(update2.len(), 4, "Full conversation preserved across restore/query cycle");
+        assert_eq!(
+            update2.len(),
+            4,
+            "Full conversation preserved across restore/query cycle"
+        );
         assert_eq!(update2[0].role, "user");
         assert_eq!(update2[1].role, "assistant");
         assert_eq!(update2[2].role, "user");
@@ -2713,7 +3364,9 @@ mod integration_tests {
                 update.len(),
                 expected_len,
                 "After turn {}: expected {} messages, got {}",
-                i + 1, expected_len, update.len()
+                i + 1,
+                expected_len,
+                update.len()
             );
 
             engine.restore_messages(update);

@@ -1,6 +1,8 @@
 //! /review-pr command - Review pull requests
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// PR review prompt template
 ///
@@ -70,7 +72,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[PR number]".to_string()),
             when_to_use: Some(
-                "Use to review code changes before merging. Can be triggered by users or models".to_string(),
+                "Use to review code changes before merging. Can be triggered by users or models"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
@@ -112,8 +115,11 @@ pub fn run_pr_analysis(args: &str) -> String {
     } else {
         // Fetch PR details and diff
         let view_output = run_gh(&[
-            "pr", "view", pr_arg,
-            "--json", "title,body,author,state,additions,deletions,changedFiles,headRefName,baseRefName",
+            "pr",
+            "view",
+            pr_arg,
+            "--json",
+            "title,body,author,state,additions,deletions,changedFiles,headRefName,baseRefName",
         ]);
         let diff_output = run_gh(&["pr", "diff", pr_arg]);
 
@@ -121,7 +127,9 @@ pub fn run_pr_analysis(args: &str) -> String {
 
         match view_output {
             Ok(json) => {
-                result.push_str(&format!("## PR Metadata ({pr_arg})\n\n```json\n{json}\n```\n\n"));
+                result.push_str(&format!(
+                    "## PR Metadata ({pr_arg})\n\n```json\n{json}\n```\n\n"
+                ));
             }
             Err(e) => {
                 result.push_str(&format!("Failed to fetch PR view: {e}\n\n"));
@@ -131,7 +139,9 @@ pub fn run_pr_analysis(args: &str) -> String {
         match diff_output {
             Ok(diff) => {
                 let truncated = truncate_to_char_boundary(&diff, 12000);
-                result.push_str(&format!("## PR Diff ({pr_arg})\n\n```diff\n{truncated}\n```"));
+                result.push_str(&format!(
+                    "## PR Diff ({pr_arg})\n\n```diff\n{truncated}\n```"
+                ));
             }
             Err(e) => {
                 result.push_str(&format!("Failed to fetch PR diff: {e}"));
@@ -349,12 +359,18 @@ impl ReviewResult {
 
     /// Count issues by severity
     pub fn count_by_severity(&self, severity: IssueSeverity) -> usize {
-        self.issues.iter().filter(|i| i.severity == severity).count()
+        self.issues
+            .iter()
+            .filter(|i| i.severity == severity)
+            .count()
     }
 
     /// Count issues by category
     pub fn count_by_category(&self, category: ReviewCategory) -> usize {
-        self.issues.iter().filter(|i| i.category == category).count()
+        self.issues
+            .iter()
+            .filter(|i| i.category == category)
+            .count()
     }
 
     /// Format the review result as a markdown report
@@ -481,7 +497,10 @@ mod tests {
 
     #[test]
     fn test_assessment_display() {
-        assert_eq!(ReviewCategory::Correctness.display_name(), "Code Correctness");
+        assert_eq!(
+            ReviewCategory::Correctness.display_name(),
+            "Code Correctness"
+        );
         assert_eq!(ReviewCategory::Security.display_name(), "Security");
     }
 
@@ -567,9 +586,21 @@ mod tests {
     #[test]
     fn test_review_result_count_by_severity() {
         let result = ReviewResult::new("Overview".to_string(), Assessment::NeedsWork)
-            .with_issue(ReviewIssue::new(ReviewCategory::Security, IssueSeverity::Critical, "CVE".to_string()))
-            .with_issue(ReviewIssue::new(ReviewCategory::Security, IssueSeverity::High, "XSS".to_string()))
-            .with_issue(ReviewIssue::new(ReviewCategory::Style, IssueSeverity::Low, "Fmt".to_string()));
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Security,
+                IssueSeverity::Critical,
+                "CVE".to_string(),
+            ))
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Security,
+                IssueSeverity::High,
+                "XSS".to_string(),
+            ))
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Style,
+                IssueSeverity::Low,
+                "Fmt".to_string(),
+            ));
 
         assert_eq!(result.count_by_severity(IssueSeverity::Critical), 1);
         assert_eq!(result.count_by_severity(IssueSeverity::High), 1);
@@ -580,9 +611,21 @@ mod tests {
     #[test]
     fn test_review_result_count_by_category() {
         let result = ReviewResult::new("Overview".to_string(), Assessment::RequestChanges)
-            .with_issue(ReviewIssue::new(ReviewCategory::Security, IssueSeverity::Critical, "A".to_string()))
-            .with_issue(ReviewIssue::new(ReviewCategory::Security, IssueSeverity::High, "B".to_string()))
-            .with_issue(ReviewIssue::new(ReviewCategory::Testing, IssueSeverity::Medium, "C".to_string()));
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Security,
+                IssueSeverity::Critical,
+                "A".to_string(),
+            ))
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Security,
+                IssueSeverity::High,
+                "B".to_string(),
+            ))
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Testing,
+                IssueSeverity::Medium,
+                "C".to_string(),
+            ));
 
         assert_eq!(result.count_by_category(ReviewCategory::Security), 2);
         assert_eq!(result.count_by_category(ReviewCategory::Testing), 1);
@@ -596,11 +639,14 @@ mod tests {
             Assessment::ApproveWithSuggestions,
         )
         .with_pr_number("99".to_string())
-        .with_issue(ReviewIssue::new(
-            ReviewCategory::Testing,
-            IssueSeverity::Medium,
-            "Missing edge case test".to_string(),
-        ).with_suggestion("Add test for empty input".to_string()))
+        .with_issue(
+            ReviewIssue::new(
+                ReviewCategory::Testing,
+                IssueSeverity::Medium,
+                "Missing edge case test".to_string(),
+            )
+            .with_suggestion("Add test for empty input".to_string()),
+        )
         .with_positive("Clean code structure".to_string());
 
         let md = result.to_markdown();
@@ -615,11 +661,8 @@ mod tests {
 
     #[test]
     fn test_review_result_markdown_no_issues() {
-        let result = ReviewResult::new(
-            "Simple fix".to_string(),
-            Assessment::Approve,
-        )
-        .with_positive("Fixes the bug correctly".to_string());
+        let result = ReviewResult::new("Simple fix".to_string(), Assessment::Approve)
+            .with_positive("Fixes the bug correctly".to_string());
 
         let md = result.to_markdown();
         assert!(md.contains("Approve"));

@@ -7,8 +7,8 @@
 mod streaming_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
-    use shannon_core::api::streaming::{LastEventId, SseStream};
     use shannon_core::api::LlmProvider;
+    use shannon_core::api::streaming::{LastEventId, SseStream};
 
     // ── Helpers ──
 
@@ -49,7 +49,12 @@ mod streaming_tests {
     }
 
     /// Anthropic SSE stream with text + tool_use.
-    fn anthropic_tool_use_stream(text: &str, tool_id: &str, tool_name: &str, tool_input: &str) -> String {
+    fn anthropic_tool_use_stream(
+        text: &str,
+        tool_id: &str,
+        tool_name: &str,
+        tool_input: &str,
+    ) -> String {
         format!(
             "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"id\":\"msg_tool\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{{\"input_tokens\":20,\"output_tokens\":0}}}}}}\n\n\
              event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
@@ -73,7 +78,11 @@ mod streaming_tests {
         )
     }
 
-    async fn collect_stream_events(server_url: &str, _body: &str, provider: LlmProvider) -> Vec<shannon_core::api::StreamEvent> {
+    async fn collect_stream_events(
+        server_url: &str,
+        _body: &str,
+        provider: LlmProvider,
+    ) -> Vec<shannon_core::api::StreamEvent> {
         let client = reqwest::Client::new();
         let response = client
             .post(format!("{server_url}/v1/messages"))
@@ -107,15 +116,44 @@ mod streaming_tests {
 
         // Verify event sequence
         use shannon_core::api::StreamEvent;
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::MessageStart { .. })), "Should have MessageStart");
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::ContentBlockStart { .. })), "Should have ContentBlockStart");
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::ContentBlockDelta { .. })), "Should have ContentBlockDelta");
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::ContentBlockStop { .. })), "Should have ContentBlockStop");
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::MessageDelta { .. })), "Should have MessageDelta");
-        assert!(events.iter().any(|e| matches!(e, StreamEvent::MessageStop)), "Should have MessageStop");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::MessageStart { .. })),
+            "Should have MessageStart"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ContentBlockStart { .. })),
+            "Should have ContentBlockStart"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ContentBlockDelta { .. })),
+            "Should have ContentBlockDelta"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ContentBlockStop { .. })),
+            "Should have ContentBlockStop"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::MessageDelta { .. })),
+            "Should have MessageDelta"
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, StreamEvent::MessageStop)),
+            "Should have MessageStop"
+        );
 
         // Verify text content
-        let text: String = events.iter()
+        let text: String = events
+            .iter()
             .filter_map(|e| match e {
                 StreamEvent::ContentBlockDelta { delta, .. } => match delta {
                     shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
@@ -131,19 +169,22 @@ mod streaming_tests {
     async fn test_anthropic_thinking_blocks() {
         let mut server = Server::new_async().await;
         let mock_url = server.url();
-        let _m = mock_sse_stream(&mut server, &anthropic_thinking_stream(
-            "Let me analyze this...",
-            "The answer is 42.",
-        ));
+        let _m = mock_sse_stream(
+            &mut server,
+            &anthropic_thinking_stream("Let me analyze this...", "The answer is 42."),
+        );
 
         let events = collect_stream_events(&mock_url, "", LlmProvider::Anthropic).await;
 
         use shannon_core::api::StreamEvent;
         // Should have thinking delta events
-        let thinking: String = events.iter()
+        let thinking: String = events
+            .iter()
             .filter_map(|e| match e {
                 StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    shannon_core::api::ContentDelta::ThinkingDelta { thinking } => Some(thinking.as_str()),
+                    shannon_core::api::ContentDelta::ThinkingDelta { thinking } => {
+                        Some(thinking.as_str())
+                    }
                     _ => None,
                 },
                 _ => None,
@@ -152,7 +193,8 @@ mod streaming_tests {
         assert_eq!(thinking, "Let me analyze this...");
 
         // And text events separately
-        let text: String = events.iter()
+        let text: String = events
+            .iter()
             .filter_map(|e| match e {
                 StreamEvent::ContentBlockDelta { delta, .. } => match delta {
                     shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
@@ -168,30 +210,47 @@ mod streaming_tests {
     async fn test_anthropic_tool_use_blocks() {
         let mut server = Server::new_async().await;
         let mock_url = server.url();
-        let _m = mock_sse_stream(&mut server, &anthropic_tool_use_stream(
-            "Let me check.", "toolu_1", "bash", r#"{\"command\":\"ls\"}"#,
-        ));
+        let _m = mock_sse_stream(
+            &mut server,
+            &anthropic_tool_use_stream(
+                "Let me check.",
+                "toolu_1",
+                "bash",
+                r#"{\"command\":\"ls\"}"#,
+            ),
+        );
 
         let events = collect_stream_events(&mock_url, "", LlmProvider::Anthropic).await;
 
         use shannon_core::api::{ContentBlock, StreamEvent};
 
         // Should have tool_use content block
-        let has_tool_use = events.iter().any(|e| matches!(
-            e,
-            StreamEvent::ContentBlockStart { content_block: ContentBlock::ToolUse { .. }, .. }
-        ));
+        let has_tool_use = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ContentBlockStart {
+                    content_block: ContentBlock::ToolUse { .. },
+                    ..
+                }
+            )
+        });
         assert!(has_tool_use, "Should have tool_use content block");
 
         // Should have input_json_delta
-        let has_input_delta = events.iter().any(|e| matches!(
-            e,
-            StreamEvent::ContentBlockDelta { delta: shannon_core::api::ContentDelta::InputJsonDelta { .. }, .. }
-        ));
+        let has_input_delta = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ContentBlockDelta {
+                    delta: shannon_core::api::ContentDelta::InputJsonDelta { .. },
+                    ..
+                }
+            )
+        });
         assert!(has_input_delta, "Should have input_json_delta");
 
         // And text should also be present
-        let text: String = events.iter()
+        let text: String = events
+            .iter()
             .filter_map(|e| match e {
                 StreamEvent::ContentBlockDelta { delta, .. } => match delta {
                     shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
@@ -221,7 +280,8 @@ mod streaming_tests {
 
         let events = collect_stream_events(&mock_url, "", LlmProvider::Anthropic).await;
 
-        let text: String = events.iter()
+        let text: String = events
+            .iter()
             .filter_map(|e| match e {
                 shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
                     shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
@@ -250,7 +310,8 @@ mod streaming_tests {
         let events = collect_stream_events(&mock_url, "", LlmProvider::Anthropic).await;
 
         // Should still have the partial text
-        let text: String = events.iter()
+        let text: String = events
+            .iter()
             .filter_map(|e| match e {
                 shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
                     shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
@@ -259,7 +320,10 @@ mod streaming_tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(text, "partial content here", "Partial content should be preserved");
+        assert_eq!(
+            text, "partial content here",
+            "Partial content should be preserved"
+        );
     }
 
     #[tokio::test]
@@ -281,7 +345,8 @@ mod streaming_tests {
         let events = collect_stream_events(&mock_url, "", LlmProvider::Anthropic).await;
 
         // Count individual text deltas
-        let text_deltas: Vec<String> = events.iter()
+        let text_deltas: Vec<String> = events
+            .iter()
             .filter_map(|e| match e {
                 shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
                     shannon_core::api::ContentDelta::TextDelta { text } => Some(text.clone()),

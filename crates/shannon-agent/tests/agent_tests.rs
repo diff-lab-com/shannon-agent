@@ -8,14 +8,12 @@
 //! - Message classification (is_notification, is_request, is_response)
 //! - Binary subprocess behavior (assert_cmd)
 
-use shannon_agents::{
-    frame_message, parse_message,
-    AgentIdleParams, AgentReadyParams, ClaimTaskParams, ClaimTaskResult,
-    ExecuteTaskParams, ListTasksParams, ListTasksResult, SendMessageParams,
-    TaskCompleteParams, TaskProgressParams, TaskSummary,
-    JsonRpcError, JsonRpcId, JsonRpcMessage,
-};
 use serde_json::json;
+use shannon_agents::{
+    AgentIdleParams, AgentReadyParams, ClaimTaskParams, ClaimTaskResult, ExecuteTaskParams,
+    JsonRpcError, JsonRpcId, JsonRpcMessage, ListTasksParams, ListTasksResult, SendMessageParams,
+    TaskCompleteParams, TaskProgressParams, TaskSummary, frame_message, parse_message,
+};
 
 // =========================================================================
 // 1. JSON-RPC Message Construction
@@ -144,10 +142,7 @@ mod framing_tests {
 
     #[test]
     fn frame_and_parse_roundtrip_response() {
-        let original = JsonRpcMessage::response(
-            JsonRpcId::Number(3),
-            json!({"status": "ok"}),
-        );
+        let original = JsonRpcMessage::response(JsonRpcId::Number(3), json!({"status": "ok"}));
         let framed = frame_message(&original).unwrap();
         let parsed = parse_message(&framed).unwrap();
 
@@ -534,10 +529,7 @@ mod json_rpc_id_tests {
 
     #[test]
     fn string_id_roundtrip() {
-        let msg = JsonRpcMessage::response(
-            JsonRpcId::String("req-xyz".to_string()),
-            json!(null),
-        );
+        let msg = JsonRpcMessage::response(JsonRpcId::String("req-xyz".to_string()), json!(null));
         let serialized = serde_json::to_string(&msg).unwrap();
         let parsed: JsonRpcMessage = serde_json::from_str(&serialized).unwrap();
 
@@ -557,10 +549,8 @@ mod message_classification_tests {
 
     #[test]
     fn response_with_error_is_still_a_response() {
-        let msg = JsonRpcMessage::error_response(
-            JsonRpcId::Number(1),
-            JsonRpcError::internal("fail"),
-        );
+        let msg =
+            JsonRpcMessage::error_response(JsonRpcId::Number(1), JsonRpcError::internal("fail"));
         assert!(msg.is_response());
         assert!(!msg.is_request());
         assert!(!msg.is_notification());
@@ -749,7 +739,8 @@ mod user_message_logic_tests {
     #[test]
     fn multiline_description_preserved() {
         let subject = "Refactor".to_string();
-        let description = "Step 1: Extract function\nStep 2: Add tests\nStep 3: Update docs".to_string();
+        let description =
+            "Step 1: Extract function\nStep 2: Add tests\nStep 3: Update docs".to_string();
 
         let user_content = if description.is_empty() {
             subject.clone()

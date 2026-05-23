@@ -4,11 +4,11 @@
 //! (e.g. GitHub PR comments) and queues them for the REPL to consume
 //! as injected messages.
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::post;
-use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -341,10 +341,7 @@ async fn github_handler(
         match sig {
             None => {
                 warn!("GitHub webhook missing signature header");
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    "Missing signature".to_string(),
-                ));
+                return Err((StatusCode::UNAUTHORIZED, "Missing signature".to_string()));
             }
             Some(sig) => {
                 let sig = match sig.to_str() {
@@ -359,10 +356,7 @@ async fn github_handler(
                 };
                 if !verify_hmac(&payload, secret, sig) {
                     warn!("GitHub webhook signature verification failed");
-                    return Err((
-                        StatusCode::UNAUTHORIZED,
-                        "Invalid signature".to_string(),
-                    ));
+                    return Err((StatusCode::UNAUTHORIZED, "Invalid signature".to_string()));
                 }
             }
         }
@@ -416,8 +410,8 @@ async fn generic_handler(
         let expected = secret.as_bytes();
         let got = provided.as_bytes();
         // Constant-time comparison to prevent timing attacks.
-        let valid = expected.len() == got.len()
-            && expected.iter().zip(got.iter()).all(|(a, b)| a == b);
+        let valid =
+            expected.len() == got.len() && expected.iter().zip(got.iter()).all(|(a, b)| a == b);
         if !valid {
             warn!("Generic webhook authentication failed");
             return Err((StatusCode::UNAUTHORIZED, "Invalid secret".to_string()));
@@ -487,9 +481,15 @@ fn parse_github_comment(payload: &serde_json::Value) -> Option<WebhookEvent> {
         .unwrap_or("unknown/repo");
 
     let title = if is_pr {
-        format!("PR comment by @{user} on {repo}#{n}", n = issue_number.unwrap_or(0))
+        format!(
+            "PR comment by @{user} on {repo}#{n}",
+            n = issue_number.unwrap_or(0)
+        )
     } else {
-        format!("Issue comment by @{user} on {repo}#{n}", n = issue_number.unwrap_or(0))
+        format!(
+            "Issue comment by @{user} on {repo}#{n}",
+            n = issue_number.unwrap_or(0)
+        )
     };
 
     Some(WebhookEvent {

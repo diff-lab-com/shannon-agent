@@ -131,9 +131,7 @@ impl Activity {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self.status,
-            ActivityStatus::Completed
-                | ActivityStatus::Failed
-                | ActivityStatus::Cancelled
+            ActivityStatus::Completed | ActivityStatus::Failed | ActivityStatus::Cancelled
         )
     }
 
@@ -210,11 +208,7 @@ impl ActivityManager {
             return;
         }
 
-        let active: Vec<&Activity> = self
-            .activities
-            .values()
-            .filter(|a| a.is_active())
-            .collect();
+        let active: Vec<&Activity> = self.activities.values().filter(|a| a.is_active()).collect();
 
         if active.is_empty() {
             let _ = std::process::Command::new("printf")
@@ -395,7 +389,10 @@ impl ActivityManager {
                 to: ActivityStatus::Completed, // representative error
             });
         }
-        let activity = self.activities.remove(id).expect("activity existence verified by .get() above");
+        let activity = self
+            .activities
+            .remove(id)
+            .expect("activity existence verified by .get() above");
         self.update_terminal_title();
         Ok(activity)
     }

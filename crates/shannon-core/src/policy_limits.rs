@@ -3,7 +3,7 @@
 //! Organization-level policy limits fetched from API. Controls tool usage,
 //! path access, token budgets, and rate limits at the policy level.
 
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
@@ -529,7 +529,9 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         // Ensure the env var is not set for this test.
         rt.block_on(async {
-            unsafe { env::remove_var("SHANNON_POLICY_API_URL"); }
+            unsafe {
+                env::remove_var("SHANNON_POLICY_API_URL");
+            }
             let manager = PolicyLimitsManager::load_from_api().await.unwrap();
             assert_eq!(manager.limits().max_tokens_per_request, 200_000);
             assert_eq!(manager.limits().max_tool_calls_per_turn, 50);
@@ -564,8 +566,12 @@ mod tests {
                 .create_async()
                 .await;
 
-            unsafe { env::set_var("SHANNON_POLICY_API_URL", server.url()); }
-            unsafe { env::set_var("SHANNON_POLICY_API_KEY", "test-key"); }
+            unsafe {
+                env::set_var("SHANNON_POLICY_API_URL", server.url());
+            }
+            unsafe {
+                env::set_var("SHANNON_POLICY_API_KEY", "test-key");
+            }
 
             let manager = PolicyLimitsManager::load_from_api().await.unwrap();
             assert_eq!(manager.limits().max_tokens_per_request, 100_000);
@@ -583,8 +589,12 @@ mod tests {
             mock.assert_async().await;
 
             // Clean up env vars.
-            unsafe { env::remove_var("SHANNON_POLICY_API_URL"); }
-            unsafe { env::remove_var("SHANNON_POLICY_API_KEY"); }
+            unsafe {
+                env::remove_var("SHANNON_POLICY_API_URL");
+            }
+            unsafe {
+                env::remove_var("SHANNON_POLICY_API_KEY");
+            }
         });
     }
 
@@ -610,7 +620,9 @@ mod tests {
                 .create_async()
                 .await;
 
-            unsafe { env::set_var("SHANNON_POLICY_API_URL", server.url()); }
+            unsafe {
+                env::set_var("SHANNON_POLICY_API_URL", server.url());
+            }
 
             let manager = PolicyLimitsManager::load_from_api().await.unwrap();
             // Overridden field.
@@ -623,7 +635,9 @@ mod tests {
 
             mock.assert_async().await;
 
-            unsafe { env::remove_var("SHANNON_POLICY_API_URL"); }
+            unsafe {
+                env::remove_var("SHANNON_POLICY_API_URL");
+            }
         });
     }
 
@@ -641,7 +655,9 @@ mod tests {
                 .create_async()
                 .await;
 
-            unsafe { env::set_var("SHANNON_POLICY_API_URL", server.url()); }
+            unsafe {
+                env::set_var("SHANNON_POLICY_API_URL", server.url());
+            }
 
             let manager = PolicyLimitsManager::load_from_api().await.unwrap();
             // Falls back to defaults.
@@ -649,7 +665,9 @@ mod tests {
 
             mock.assert_async().await;
 
-            unsafe { env::remove_var("SHANNON_POLICY_API_URL"); }
+            unsafe {
+                env::remove_var("SHANNON_POLICY_API_URL");
+            }
         });
     }
 

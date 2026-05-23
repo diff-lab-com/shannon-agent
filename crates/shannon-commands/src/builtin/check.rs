@@ -4,7 +4,9 @@
 //! back to the LLM for iterative fixing. Inspired by OpenCode's diagnostic
 //! feedback loop feature.
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 const CHECK_PROMPT: &str = r##"
 Run diagnostics on the codebase and report issues.
@@ -63,7 +65,11 @@ pub fn command() -> Command {
     Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "check".to_string(),
-            aliases: vec!["diagnostics".to_string(), "diag".to_string(), "lint".to_string()],
+            aliases: vec![
+                "diagnostics".to_string(),
+                "diag".to_string(),
+                "lint".to_string(),
+            ],
             description: "Run diagnostics and fix issues iteratively".to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],

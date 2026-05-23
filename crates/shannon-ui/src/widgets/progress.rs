@@ -17,11 +17,11 @@
 
 use crate::theme::Theme;
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 /// Unicode block characters for smooth progress display
@@ -139,7 +139,9 @@ impl ProgressBarWidget {
                 Span::raw(" "),
                 Span::styled(
                     format!("{:.1}%", self.percentage()),
-                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
             content.push(Line::from(""));
@@ -185,19 +187,19 @@ impl ProgressBarWidget {
 
         // Percentage line (if no title)
         if self.show_percentage && self.title.is_none() {
-            content.push(Line::from(vec![
-                Span::styled(
-                    format!("{:.1}%", self.percentage()),
-                    Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
-                ),
-            ]));
+            content.push(Line::from(vec![Span::styled(
+                format!("{:.1}%", self.percentage()),
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )]));
         }
 
         let paragraph = Paragraph::new(content)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.accent))
+                    .border_style(Style::default().fg(theme.accent)),
             )
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
@@ -329,21 +331,29 @@ impl SpinnerWidget {
 
         let content = if let Some(ref msg) = self.message {
             Line::from(vec![
-                Span::styled(spinner, Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    spinner,
+                    Style::default()
+                        .fg(theme.accent)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
                 Span::styled(msg, Style::default().fg(theme.text)),
             ])
         } else {
-            Line::from(vec![
-                Span::styled(spinner, Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)),
-            ])
+            Line::from(vec![Span::styled(
+                spinner,
+                Style::default()
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            )])
         };
 
         let paragraph = Paragraph::new(content)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(theme.accent))
+                    .border_style(Style::default().fg(theme.accent)),
             )
             .alignment(Alignment::Center);
 
@@ -412,7 +422,8 @@ impl MultiProgressWidget {
         if let Some(bar) = self.bars.iter_mut().find(|(l, _, _)| l == label) {
             bar.1 = progress.clamp(0.0, 1.0);
         } else {
-            self.bars.push((label.to_string(), progress.clamp(0.0, 1.0), color));
+            self.bars
+                .push((label.to_string(), progress.clamp(0.0, 1.0), color));
         }
     }
 
@@ -464,7 +475,7 @@ impl MultiProgressWidget {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.accent))
-                    .title(" Progress ")
+                    .title(" Progress "),
             )
             .wrap(Wrap { trim: false });
 
@@ -560,8 +571,8 @@ mod tests {
 
     #[test]
     fn test_multi_progress_update() {
-        let mut widget = MultiProgressWidget::new()
-            .add_bar("Task 1".to_string(), 0.3, Color::Green);
+        let mut widget =
+            MultiProgressWidget::new().add_bar("Task 1".to_string(), 0.3, Color::Green);
 
         widget.update("Task 1", 0.8);
         assert_eq!(widget.bars[0].1, 0.8);

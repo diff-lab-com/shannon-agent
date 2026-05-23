@@ -47,22 +47,23 @@
 //! and color. The widget supports dynamic add/update/clear for live tracking.
 
 use super::chat::{
-    ChatMessage, ChatRole, MdSegment,
-    parse_markdown_segments, parse_inline_formatting, highlight_search_in_text,
-    wrap_line, highlight_code_cached, truncate_to,
-    detect_diff_language, highlight_diff_line,
+    ChatMessage, ChatRole, MdSegment, detect_diff_language, highlight_code_cached,
+    highlight_diff_line, highlight_search_in_text, parse_inline_formatting,
+    parse_markdown_segments, truncate_to, wrap_line,
 };
-use crate::tool_format::{display_tool_name, looks_like_json, strip_ansi, tool_category, ToolCategory};
 use crate::theme::Theme;
+use crate::tool_format::{
+    ToolCategory, display_tool_name, looks_like_json, strip_ansi, tool_category,
+};
 
-use std::sync::atomic::{AtomicU16, Ordering};
 use parking_lot::Mutex;
 use ratatui::{
     layout::Rect,
-    text::{Line, Span},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Clear, Paragraph, Widget},
 };
+use std::sync::atomic::{AtomicU16, Ordering};
 
 /// Braille-dot spinner frames for tool execution animation.
 const TOOL_SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -98,7 +99,9 @@ fn mcp_server_color(tool_name: &str) -> Option<Color> {
     }
     let rest = tool_name.strip_prefix("mcp__")?;
     let server = rest.split("__").next()?;
-    let hash = server.bytes().fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    let hash = server
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
     Some(MCP_PALETTE[(hash as usize) % MCP_PALETTE.len()])
 }
 
@@ -106,41 +109,64 @@ fn mcp_server_color(tool_name: &str) -> Option<Color> {
 fn json_line_spans(line: &str, theme: &Theme) -> Vec<Span<'static>> {
     let trimmed = line.trim();
     // Brace/bracket only lines
-    if trimmed == "{" || trimmed == "}" || trimmed == "[" || trimmed == "]"
-        || trimmed == "}," || trimmed == "],"
+    if trimmed == "{"
+        || trimmed == "}"
+        || trimmed == "["
+        || trimmed == "]"
+        || trimmed == "},"
+        || trimmed == "],"
     {
-        return vec![Span::styled(line.to_string(), Style::default().fg(theme.muted))];
+        return vec![Span::styled(
+            line.to_string(),
+            Style::default().fg(theme.muted),
+        )];
     }
     // Key: value lines
     if let Some(colon_pos) = line.find(": ") {
         let key_part = &line[..colon_pos + 1];
         let value_part = &line[colon_pos + 2..];
-        let mut spans = vec![
-            Span::styled(key_part.to_string(), Style::default().fg(Color::Cyan)),
-        ];
+        let mut spans = vec![Span::styled(
+            key_part.to_string(),
+            Style::default().fg(Color::Cyan),
+        )];
         let val_trim = value_part.trim_end_matches(',').trim_end_matches(']');
         if val_trim.starts_with('"') {
-            spans.push(Span::styled(value_part.to_string(), Style::default().fg(Color::Green)));
+            spans.push(Span::styled(
+                value_part.to_string(),
+                Style::default().fg(Color::Green),
+            ));
         } else if val_trim.parse::<f64>().is_ok() {
-            spans.push(Span::styled(value_part.to_string(), Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled(
+                value_part.to_string(),
+                Style::default().fg(Color::Yellow),
+            ));
         } else if val_trim == "true" || val_trim == "false" || val_trim == "null" {
-            spans.push(Span::styled(value_part.to_string(), Style::default().fg(Color::Magenta)));
+            spans.push(Span::styled(
+                value_part.to_string(),
+                Style::default().fg(Color::Magenta),
+            ));
         } else {
-            spans.push(Span::styled(value_part.to_string(), Style::default().fg(theme.text_dim)));
+            spans.push(Span::styled(
+                value_part.to_string(),
+                Style::default().fg(theme.text_dim),
+            ));
         }
         return spans;
     }
-    vec![Span::styled(line.to_string(), Style::default().fg(theme.text_dim))]
+    vec![Span::styled(
+        line.to_string(),
+        Style::default().fg(theme.text_dim),
+    )]
 }
 
 /// Prepend a colored role gutter `▕ ` to every line for visual lane separation.
 fn add_role_gutter(lines: &mut Vec<Line<'static>>, color: ratatui::style::Color) {
     // Only add indicator to the first line
     if let Some(first) = lines.first_mut() {
-        first.spans.insert(0, Span::styled(
-            "\u{258F} ".to_string(),
-            Style::default().fg(color),
-        ));
+        first.spans.insert(
+            0,
+            Span::styled("\u{258F} ".to_string(), Style::default().fg(color)),
+        );
     }
 }
 
@@ -177,7 +203,9 @@ impl SearchParams<'_> {
     /// Whether the focused search match falls within this cell.
     pub fn focused_in_cell(&self) -> bool {
         self.focused_idx.is_some_and(|fi| {
-            self.matches.get(fi).is_some_and(|&(mi, _, _)| mi == self.cell_index)
+            self.matches
+                .get(fi)
+                .is_some_and(|&(mi, _, _)| mi == self.cell_index)
         })
     }
 }
@@ -291,7 +319,12 @@ impl MessageCell {
                 // User message label: "▸ You  ·  14:23" (omit time on continuations)
                 let mut header_spans = vec![
                     Span::styled("▸ ", Style::default().fg(theme.user_msg)),
-                    Span::styled("You", Style::default().fg(theme.user_msg).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "You",
+                        Style::default()
+                            .fg(theme.user_msg)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ];
                 if !self.is_continuation {
                     let time_str = msg.timestamp.format("%H:%M").to_string();
@@ -317,21 +350,31 @@ impl MessageCell {
                     let sep = Line::from(vec![
                         Span::styled("\u{2500}".repeat(left_dash), Style::default().fg(sep_color)),
                         Span::styled(format!(" {time_str} "), Style::default().fg(theme.text_dim)),
-                        Span::styled("\u{2500}".repeat(right_dash), Style::default().fg(sep_color)),
+                        Span::styled(
+                            "\u{2500}".repeat(right_dash),
+                            Style::default().fg(sep_color),
+                        ),
                     ]);
                     l.insert(0, sep);
                 } else {
                     // Continuation: just a thin separator without timestamp
-                    let sep = Line::from(vec![
-                        Span::styled("\u{2500}".repeat(width as usize), Style::default().fg(sep_color)),
-                    ]);
+                    let sep = Line::from(vec![Span::styled(
+                        "\u{2500}".repeat(width as usize),
+                        Style::default().fg(sep_color),
+                    )]);
                     l.insert(0, sep);
                 }
 
                 // Thinking content for assistant messages
                 if msg.role == ChatRole::Assistant {
                     if let Some(ref thinking) = msg.thinking_content {
-                        let thinking_lines = build_thinking_lines(thinking, msg.thinking_expanded, width, theme, msg.thinking_duration_secs);
+                        let thinking_lines = build_thinking_lines(
+                            thinking,
+                            msg.thinking_expanded,
+                            width,
+                            theme,
+                            msg.thinking_duration_secs,
+                        );
                         // Insert after separator (index 1), before content
                         let mut new_l = vec![l.remove(0)]; // separator
                         new_l.extend(thinking_lines);
@@ -380,7 +423,12 @@ impl MessageCell {
     ///
     /// When `search` is `Some`, text spans use `highlight_search_in_text` for
     /// match highlighting. Search only affects colors, not line count.
-    fn build_lines(&self, width: u16, theme: &Theme, search: Option<&SearchParams<'_>>) -> Vec<Line<'static>> {
+    fn build_lines(
+        &self,
+        width: u16,
+        theme: &Theme,
+        search: Option<&SearchParams<'_>>,
+    ) -> Vec<Line<'static>> {
         // Return cached lines if width matches and no search override.
         // Search highlighting changes span colors, so bypass cache when active.
         if search.is_none() {
@@ -428,16 +476,21 @@ impl MessageCell {
                     ToolCategory::Skill => "skills",
                 };
                 let dur_str = if self.group_total_secs >= 60.0 {
-                    format!(" {}m{:.0}s", self.group_total_secs as u64 / 60, self.group_total_secs % 60.0)
+                    format!(
+                        " {}m{:.0}s",
+                        self.group_total_secs as u64 / 60,
+                        self.group_total_secs % 60.0
+                    )
                 } else if self.group_total_secs >= 0.1 {
                     format!(" {:.1}s", self.group_total_secs)
                 } else {
                     String::new()
                 };
                 let label = format!("{icon} {} {cat_name}{dur_str} \u{25BC}", self.group_count);
-                lines.push(Line::from(vec![
-                    Span::styled(label, Style::default().fg(tool_color).add_modifier(Modifier::BOLD)),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    label,
+                    Style::default().fg(tool_color).add_modifier(Modifier::BOLD),
+                )]));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -451,39 +504,69 @@ impl MessageCell {
             let tool_color = mcp_server_color(tool_label).unwrap_or(cat_color);
 
             // Status icon + duration badge (spinner animation for running tools)
-            let (status_icon, status_color, dur_badge) = if msg.duration_secs.is_none() && !msg.is_error {
-                // Tool is still running — show spinning animation
-                let frame = TOOL_SPINNER[msg.spinner_frame % TOOL_SPINNER.len()];
-                let elapsed = msg.start_time.map(|st| {
-                    let secs = (chrono::Utc::now() - st).num_seconds();
-                    if secs >= 60 {
-                        format!(" {}m{}s", secs / 60, secs % 60)
-                    } else {
-                        format!(" {secs}s")
-                    }
-                }).unwrap_or_default();
-                (frame.to_string(), theme.accent, format!("{elapsed} …"))
-            } else {
-                let icon = if msg.is_error { "\u{2717}" } else { "\u{2713}" };
-                let color = if msg.is_error { theme.error } else { theme.success };
-                let badge = if let Some(dur) = msg.duration_secs {
-                    if dur >= 60.0 {
-                        format!(" {}m{:.0}s", dur as u64 / 60, dur % 60.0)
-                    } else {
-                        format!(" {dur:.1}s")
-                    }
+            let (status_icon, status_color, dur_badge) =
+                if msg.duration_secs.is_none() && !msg.is_error {
+                    // Tool is still running — show spinning animation
+                    let frame = TOOL_SPINNER[msg.spinner_frame % TOOL_SPINNER.len()];
+                    let elapsed = msg
+                        .start_time
+                        .map(|st| {
+                            let secs = (chrono::Utc::now() - st).num_seconds();
+                            if secs >= 60 {
+                                format!(" {}m{}s", secs / 60, secs % 60)
+                            } else {
+                                format!(" {secs}s")
+                            }
+                        })
+                        .unwrap_or_default();
+                    (frame.to_string(), theme.accent, format!("{elapsed} …"))
                 } else {
-                    String::new()
+                    let icon = if msg.is_error { "\u{2717}" } else { "\u{2713}" };
+                    let color = if msg.is_error {
+                        theme.error
+                    } else {
+                        theme.success
+                    };
+                    let badge = if let Some(dur) = msg.duration_secs {
+                        if dur >= 60.0 {
+                            format!(" {}m{:.0}s", dur as u64 / 60, dur % 60.0)
+                        } else {
+                            format!(" {dur:.1}s")
+                        }
+                    } else {
+                        String::new()
+                    };
+                    (icon.to_string(), color, badge)
                 };
-                (icon.to_string(), color, badge)
-            };
 
-            let diff_add_len = msg.diff_stats.and_then(|(a, _)| if a > 0 { Some(unicode_width::UnicodeWidthStr::width(format!(" +{a}").as_str())) } else { None }).unwrap_or(0);
-            let diff_del_len = msg.diff_stats.and_then(|(_, d)| if d > 0 { Some(unicode_width::UnicodeWidthStr::width(format!(" -{d}").as_str())) } else { None }).unwrap_or(0);
+            let diff_add_len = msg
+                .diff_stats
+                .and_then(|(a, _)| {
+                    if a > 0 {
+                        Some(unicode_width::UnicodeWidthStr::width(
+                            format!(" +{a}").as_str(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            let diff_del_len = msg
+                .diff_stats
+                .and_then(|(_, d)| {
+                    if d > 0 {
+                        Some(unicode_width::UnicodeWidthStr::width(
+                            format!(" -{d}").as_str(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
             let diff_total_width = diff_add_len + diff_del_len;
 
             let display_budget = inner_width.min(60).saturating_sub(
-                unicode_width::UnicodeWidthStr::width(dur_badge.as_str()) + diff_total_width
+                unicode_width::UnicodeWidthStr::width(dur_badge.as_str()) + diff_total_width,
             );
             let display = if unicode_width::UnicodeWidthStr::width(first_line) > display_budget {
                 truncate_to(first_line, display_budget)
@@ -492,20 +575,43 @@ impl MessageCell {
             };
 
             let mut spans: Vec<Span<'static>> = vec![
-                Span::styled(format!("{icon}{display_label} "), Style::default().fg(tool_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{icon}{display_label} "),
+                    Style::default().fg(tool_color).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(prefix.to_string(), Style::default().fg(tool_color)),
                 Span::styled(display, Style::default().fg(theme.text_dim)),
                 Span::styled(dur_badge, Style::default().fg(theme.text_dim)),
             ];
             if let Some((add, del)) = msg.diff_stats {
-                if add > 0 { spans.push(Span::styled(format!(" +{add}"), Style::default().fg(theme.success))); }
-                if del > 0 { spans.push(Span::styled(format!(" -{del}"), Style::default().fg(theme.error))); }
+                if add > 0 {
+                    spans.push(Span::styled(
+                        format!(" +{add}"),
+                        Style::default().fg(theme.success),
+                    ));
+                }
+                if del > 0 {
+                    spans.push(Span::styled(
+                        format!(" -{del}"),
+                        Style::default().fg(theme.error),
+                    ));
+                }
             }
-            spans.push(Span::styled(format!(" {status_icon}"), Style::default().fg(status_color).add_modifier(
-                if msg.duration_secs.is_none() && !msg.is_error { Modifier::BOLD } else { Modifier::empty() }
-            )));
+            spans.push(Span::styled(
+                format!(" {status_icon}"),
+                Style::default().fg(status_color).add_modifier(
+                    if msg.duration_secs.is_none() && !msg.is_error {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    },
+                ),
+            ));
             if msg.duration_secs.is_some() || msg.is_error {
-                spans.push(Span::styled(" \u{21B5}".to_string(), Style::default().fg(theme.muted)));
+                spans.push(Span::styled(
+                    " \u{21B5}".to_string(),
+                    Style::default().fg(theme.muted),
+                ));
             }
             lines.push(Line::from(spans));
             add_role_gutter(&mut lines, gutter_color);
@@ -527,9 +633,10 @@ impl MessageCell {
         };
 
         // Build role prefix spans and compute indent width
-        let role_prefix_spans = vec![
-            Span::styled(format!("{role_icon} {display_name} "), Style::default().fg(role_color).add_modifier(Modifier::BOLD)),
-        ];
+        let role_prefix_spans = vec![Span::styled(
+            format!("{role_icon} {display_name} "),
+            Style::default().fg(role_color).add_modifier(Modifier::BOLD),
+        )];
         let role_prefix_str = format!("{role_icon} {display_name} ");
         let role_prefix_len = unicode_width::UnicodeWidthStr::width(role_prefix_str.as_str());
 
@@ -554,7 +661,10 @@ impl MessageCell {
                 ("\u{2717}".to_string(), theme.error)
             } else if msg.duration_secs.is_none() {
                 // Tool still running — animated spinner
-                (TOOL_SPINNER[msg.spinner_frame % TOOL_SPINNER.len()].to_string(), theme.accent)
+                (
+                    TOOL_SPINNER[msg.spinner_frame % TOOL_SPINNER.len()].to_string(),
+                    theme.accent,
+                )
             } else {
                 ("\u{2713}".to_string(), theme.success)
             };
@@ -566,15 +676,24 @@ impl MessageCell {
                 };
                 let mut p = format!(" {status_icon} {dur_str}");
                 if let Some(code) = msg.exit_code {
-                    if code != 0 { p = format!(" {status_icon} {dur_str} exit={code}"); }
+                    if code != 0 {
+                        p = format!(" {status_icon} {dur_str} exit={code}");
+                    }
                 }
                 p
             } else if !msg.is_error {
                 // Running tool — show elapsed time
-                let elapsed = msg.start_time.map(|st| {
-                    let secs = (chrono::Utc::now() - st).num_seconds();
-                    if secs >= 60 { format!("{}m{}s", secs / 60, secs % 60) } else { format!("{secs}s") }
-                }).unwrap_or_default();
+                let elapsed = msg
+                    .start_time
+                    .map(|st| {
+                        let secs = (chrono::Utc::now() - st).num_seconds();
+                        if secs >= 60 {
+                            format!("{}m{}s", secs / 60, secs % 60)
+                        } else {
+                            format!("{secs}s")
+                        }
+                    })
+                    .unwrap_or_default();
                 format!(" {status_icon} {elapsed} …")
             } else {
                 String::new()
@@ -599,7 +718,9 @@ impl MessageCell {
             // Error messages get a red-tinted rendering
             if msg.is_error {
                 for raw_line in content.lines() {
-                    if raw_line.trim().is_empty() { continue; }
+                    if raw_line.trim().is_empty() {
+                        continue;
+                    }
                     let wrapped = wrap_line(raw_line, tool_width);
                     for wl in wrapped {
                         lines.push(Line::from(vec![
@@ -609,17 +730,26 @@ impl MessageCell {
                     }
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
+                lines.push(Line::from(Span::styled(
+                    bottom,
+                    Style::default().fg(tool_border),
+                )));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
 
             // Diff output detection: colorize +/- lines
             let is_diff = content.lines().take(5).all(|l| {
-                l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@")
-                    || l.starts_with('+') || l.starts_with('-') || l.starts_with(' ')
+                l.starts_with("+++")
+                    || l.starts_with("---")
+                    || l.starts_with("@@")
+                    || l.starts_with('+')
+                    || l.starts_with('-')
+                    || l.starts_with(' ')
                     || l.is_empty()
-            }) && content.lines().any(|l| l.starts_with("+++") || l.starts_with("@@"));
+            }) && content
+                .lines()
+                .any(|l| l.starts_with("+++") || l.starts_with("@@"));
 
             if is_diff {
                 // Pre-scan hunk headers to determine max line number for column width
@@ -633,7 +763,10 @@ impl MessageCell {
                                 if let Some(range) = parts[0].strip_prefix('-') {
                                     let nums: Vec<&str> = range.split(',').collect();
                                     if let Ok(start) = nums[0].parse::<usize>() {
-                                        let count = nums.get(1).and_then(|c| c.parse::<usize>().ok()).unwrap_or(1);
+                                        let count = nums
+                                            .get(1)
+                                            .and_then(|c| c.parse::<usize>().ok())
+                                            .unwrap_or(1);
                                         max_ln = max_ln.max(start + count);
                                     }
                                 }
@@ -641,7 +774,10 @@ impl MessageCell {
                                 if let Some(range) = parts[1].strip_prefix('+') {
                                     let nums: Vec<&str> = range.split(',').collect();
                                     if let Ok(start) = nums[0].parse::<usize>() {
-                                        let count = nums.get(1).and_then(|c| c.parse::<usize>().ok()).unwrap_or(1);
+                                        let count = nums
+                                            .get(1)
+                                            .and_then(|c| c.parse::<usize>().ok())
+                                            .unwrap_or(1);
                                         max_ln = max_ln.max(start + count);
                                     }
                                 }
@@ -649,7 +785,11 @@ impl MessageCell {
                         }
                     }
                 }
-                let ln_width = if max_ln > 0 { max_ln.to_string().len() } else { 4 };
+                let ln_width = if max_ln > 0 {
+                    max_ln.to_string().len()
+                } else {
+                    4
+                };
 
                 // Track line numbers across hunks
                 let mut old_line: usize = 0;
@@ -664,26 +804,39 @@ impl MessageCell {
                             // Extract old/new start from "@@ -a,b +c,d @@"
                             let parts: Vec<&str> = rest.split_whitespace().take(2).collect();
                             if parts.len() >= 2 {
-                                if let Some(os) = parts[0].strip_prefix('-').and_then(|s| s.split(',').next()) {
+                                if let Some(os) =
+                                    parts[0].strip_prefix('-').and_then(|s| s.split(',').next())
+                                {
                                     old_line = os.parse::<usize>().unwrap_or(0).saturating_sub(1);
                                 }
-                                if let Some(ns) = parts[1].strip_prefix('+').and_then(|s| s.split(',').next()) {
+                                if let Some(ns) =
+                                    parts[1].strip_prefix('+').and_then(|s| s.split(',').next())
+                                {
                                     new_line = ns.parse::<usize>().unwrap_or(0).saturating_sub(1);
                                 }
                             }
                         }
                         lines.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(status_color)),
-                            Span::styled(raw_line.to_string(), Style::default().fg(theme.diff_header)),
+                            Span::styled(
+                                raw_line.to_string(),
+                                Style::default().fg(theme.diff_header),
+                            ),
                         ]));
                         continue;
                     }
                     // File headers (+++/---): extract filename and show cleanly
                     if raw_line.starts_with("+++") || raw_line.starts_with("---") {
                         let is_new = raw_line.starts_with("+++");
-                        let path = raw_line.trim_start_matches('+').trim_start_matches('-').trim();
+                        let path = raw_line
+                            .trim_start_matches('+')
+                            .trim_start_matches('-')
+                            .trim();
                         // Strip a/ or b/ prefix from git diff paths
-                        let clean_path = path.strip_prefix("b/").or_else(|| path.strip_prefix("a/")).unwrap_or(path);
+                        let clean_path = path
+                            .strip_prefix("b/")
+                            .or_else(|| path.strip_prefix("a/"))
+                            .unwrap_or(path);
                         let label = if clean_path.starts_with('/') || clean_path.is_empty() {
                             raw_line.to_string()
                         } else {
@@ -691,27 +844,63 @@ impl MessageCell {
                         };
                         lines.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(status_color)),
-                            Span::styled(label, Style::default().fg(theme.diff_header).add_modifier(Modifier::BOLD)),
+                            Span::styled(
+                                label,
+                                Style::default()
+                                    .fg(theme.diff_header)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
                         ]));
                         continue;
                     }
 
                     let (color, bg, ln_color, inc_old, inc_new) = if raw_line.starts_with('+') {
-                        (theme.diff_added, theme.diff_added_bg, theme.diff_line_number, false, true)
+                        (
+                            theme.diff_added,
+                            theme.diff_added_bg,
+                            theme.diff_line_number,
+                            false,
+                            true,
+                        )
                     } else if raw_line.starts_with('-') {
-                        (theme.diff_removed, theme.diff_removed_bg, theme.diff_line_number, true, false)
+                        (
+                            theme.diff_removed,
+                            theme.diff_removed_bg,
+                            theme.diff_line_number,
+                            true,
+                            false,
+                        )
                     } else {
-                        (theme.diff_context, theme.diff_context_bg, theme.diff_line_number, true, true)
+                        (
+                            theme.diff_context,
+                            theme.diff_context_bg,
+                            theme.diff_line_number,
+                            true,
+                            true,
+                        )
                     };
 
-                    if inc_old { old_line += 1; }
-                    if inc_new { new_line += 1; }
+                    if inc_old {
+                        old_line += 1;
+                    }
+                    if inc_new {
+                        new_line += 1;
+                    }
 
-                    let old_ln = if inc_old { format!("{old_line:>ln_width$}") } else { " ".repeat(ln_width) };
-                    let new_ln = if inc_new { format!("{new_line:>ln_width$}") } else { " ".repeat(ln_width) };
+                    let old_ln = if inc_old {
+                        format!("{old_line:>ln_width$}")
+                    } else {
+                        " ".repeat(ln_width)
+                    };
+                    let new_ln = if inc_new {
+                        format!("{new_line:>ln_width$}")
+                    } else {
+                        " ".repeat(ln_width)
+                    };
 
                     // Syntax-highlighted content spans from highlight_diff_line
-                    let mut content_spans = highlight_diff_line(raw_line, diff_lang.as_deref(), color, None);
+                    let mut content_spans =
+                        highlight_diff_line(raw_line, diff_lang.as_deref(), color, None);
                     for span in &mut content_spans {
                         span.style = span.style.bg(bg);
                     }
@@ -727,7 +916,10 @@ impl MessageCell {
                     lines.push(Line::from(all_spans));
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
+                lines.push(Line::from(Span::styled(
+                    bottom,
+                    Style::default().fg(tool_border),
+                )));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -737,26 +929,35 @@ impl MessageCell {
                 let row_budget: usize = 10;
                 let mut in_output = false;
                 // Single-pass: collect non-empty lines once
-                let non_empty: Vec<&str> = content.lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .collect();
+                let non_empty: Vec<&str> =
+                    content.lines().filter(|l| !l.trim().is_empty()).collect();
 
                 if non_empty.len() > row_budget {
                     let head = row_budget / 2;
                     let tail = row_budget - head;
                     // Render head
                     for raw_line in non_empty.iter().take(head) {
-                        if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
+                        if raw_line.trim_start().starts_with('$')
+                            || raw_line.starts_with("> Using: bash")
+                        {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(status_color)),
-                                Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
+                                Span::styled(
+                                    "$ ",
+                                    Style::default()
+                                        .fg(theme.tool_bash)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
                                 Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
                             ]));
                         } else {
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(status_color)),
-                                Span::styled(raw_line.to_string(), Style::default().fg(theme.text_dim)),
+                                Span::styled(
+                                    raw_line.to_string(),
+                                    Style::default().fg(theme.text_dim),
+                                ),
                             ]));
                         }
                     }
@@ -767,27 +968,44 @@ impl MessageCell {
                     )));
                     // Render tail
                     for raw_line in non_empty.iter().rev().take(tail).rev() {
-                        if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
+                        if raw_line.trim_start().starts_with('$')
+                            || raw_line.starts_with("> Using: bash")
+                        {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(status_color)),
-                                Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
+                                Span::styled(
+                                    "$ ",
+                                    Style::default()
+                                        .fg(theme.tool_bash)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
                                 Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
                             ]));
                         } else {
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(status_color)),
-                                Span::styled(raw_line.to_string(), Style::default().fg(theme.text_dim)),
+                                Span::styled(
+                                    raw_line.to_string(),
+                                    Style::default().fg(theme.text_dim),
+                                ),
                             ]));
                         }
                     }
                 } else {
                     for raw_line in &non_empty {
-                        if raw_line.trim_start().starts_with('$') || raw_line.starts_with("> Using: bash") {
+                        if raw_line.trim_start().starts_with('$')
+                            || raw_line.starts_with("> Using: bash")
+                        {
                             let cmd = raw_line.trim_start().trim_start_matches('$').trim_start();
                             lines.push(Line::from(vec![
                                 Span::styled("│ ", Style::default().fg(status_color)),
-                                Span::styled("$ ", Style::default().fg(theme.tool_bash).add_modifier(Modifier::BOLD)),
+                                Span::styled(
+                                    "$ ",
+                                    Style::default()
+                                        .fg(theme.tool_bash)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
                                 Span::styled(cmd.to_string(), Style::default().fg(theme.tool_bash)),
                             ]));
                             in_output = true;
@@ -811,7 +1029,10 @@ impl MessageCell {
                     }
                 }
                 let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-                lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
+                lines.push(Line::from(Span::styled(
+                    bottom,
+                    Style::default().fg(tool_border),
+                )));
                 add_role_gutter(&mut lines, gutter_color);
                 return lines;
             }
@@ -830,7 +1051,8 @@ impl MessageCell {
                 content.clone()
             };
 
-            let all_lines: Vec<String> = display_content.lines()
+            let all_lines: Vec<String> = display_content
+                .lines()
                 .filter(|l| !l.trim().is_empty())
                 .flat_map(|l| wrap_line(l, tool_width))
                 .collect();
@@ -842,7 +1064,10 @@ impl MessageCell {
                     let content_spans = if is_json {
                         json_line_spans(line, theme)
                     } else {
-                        vec![Span::styled(line.clone(), Style::default().fg(theme.text_dim))]
+                        vec![Span::styled(
+                            line.clone(),
+                            Style::default().fg(theme.text_dim),
+                        )]
                     };
                     let mut spans = vec![Span::styled("│ ", Style::default().fg(status_color))];
                     spans.extend(content_spans);
@@ -857,7 +1082,10 @@ impl MessageCell {
                     let content_spans = if is_json {
                         json_line_spans(line, theme)
                     } else {
-                        vec![Span::styled(line.clone(), Style::default().fg(theme.text_dim))]
+                        vec![Span::styled(
+                            line.clone(),
+                            Style::default().fg(theme.text_dim),
+                        )]
                     };
                     let mut spans = vec![Span::styled("│ ", Style::default().fg(status_color))];
                     spans.extend(content_spans);
@@ -865,7 +1093,9 @@ impl MessageCell {
                 }
             } else {
                 for raw_line in display_content.lines() {
-                    if raw_line.trim().is_empty() { continue; }
+                    if raw_line.trim().is_empty() {
+                        continue;
+                    }
                     let wrapped = wrap_line(raw_line, tool_width);
                     for wl in wrapped {
                         let content_spans = if is_json {
@@ -880,7 +1110,10 @@ impl MessageCell {
                 }
             }
             let bottom = format!("╰{}╯", "─".repeat(border_w.saturating_sub(2)));
-            lines.push(Line::from(Span::styled(bottom, Style::default().fg(tool_border))));
+            lines.push(Line::from(Span::styled(
+                bottom,
+                Style::default().fg(tool_border),
+            )));
             add_role_gutter(&mut lines, gutter_color);
             return lines;
         }
@@ -905,7 +1138,13 @@ impl MessageCell {
                         let wrapped = wrap_line(raw_line, text_width);
                         for wl in wrapped {
                             let spans = if let Some(sp) = search {
-                                highlight_search_in_text(&wl, theme.text, sp.query, sp.focused_in_cell(), theme)
+                                highlight_search_in_text(
+                                    &wl,
+                                    theme.text,
+                                    sp.query,
+                                    sp.focused_in_cell(),
+                                    theme,
+                                )
                             } else {
                                 parse_inline_formatting(&wl, theme.text, theme)
                             };
@@ -919,7 +1158,9 @@ impl MessageCell {
                             // H1: bold text above a full-width double-line separator
                             lines.push(Line::from(Span::styled(
                                 text.clone(),
-                                Style::default().fg(theme.heading).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(theme.heading)
+                                    .add_modifier(Modifier::BOLD),
                             )));
                             lines.push(Line::from(Span::styled(
                                 "═".repeat(inner_width.min(60)),
@@ -930,17 +1171,30 @@ impl MessageCell {
                             // H2: colored left bar + bold text
                             lines.push(Line::from(vec![
                                 Span::styled("█ ", Style::default().fg(theme.primary)),
-                                Span::styled(text.clone(), Style::default().fg(theme.heading).add_modifier(Modifier::BOLD)),
+                                Span::styled(
+                                    text.clone(),
+                                    Style::default()
+                                        .fg(theme.heading)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
                             ]));
                         }
                         3 => {
                             // H3: bold text with a thin underline
                             lines.push(Line::from(Span::styled(
                                 format!("  {text}"),
-                                Style::default().fg(theme.heading).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(theme.heading)
+                                    .add_modifier(Modifier::BOLD),
                             )));
                             lines.push(Line::from(Span::styled(
-                                format!("  {}", "─".repeat(unicode_width::UnicodeWidthStr::width(text.as_str()).min(inner_width.saturating_sub(2)))),
+                                format!(
+                                    "  {}",
+                                    "─".repeat(
+                                        unicode_width::UnicodeWidthStr::width(text.as_str())
+                                            .min(inner_width.saturating_sub(2))
+                                    )
+                                ),
                                 Style::default().fg(theme.muted),
                             )));
                         }
@@ -948,8 +1202,16 @@ impl MessageCell {
                             // H4+: dimmer, with level prefix
                             let level_prefix = "#".repeat(*level);
                             lines.push(Line::from(vec![
-                                Span::styled(format!("  {level_prefix} "), Style::default().fg(theme.muted)),
-                                Span::styled(text.clone(), Style::default().fg(theme.text_dim).add_modifier(Modifier::BOLD)),
+                                Span::styled(
+                                    format!("  {level_prefix} "),
+                                    Style::default().fg(theme.muted),
+                                ),
+                                Span::styled(
+                                    text.clone(),
+                                    Style::default()
+                                        .fg(theme.text_dim)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
                             ]));
                         }
                     }
@@ -984,9 +1246,10 @@ impl MessageCell {
                         let remaining = sep_w.saturating_sub(2).saturating_sub(inner_w);
                         format!("╭{inner}{}╮", "─".repeat(remaining))
                     };
-                    lines.push(Line::from(vec![
-                        Span::styled(top, Style::default().fg(theme.border_dim).bg(code_bg)),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        top,
+                        Style::default().fg(theme.border_dim).bg(code_bg),
+                    )]));
 
                     let highlighted = if let Some(l) = lang {
                         highlight_code_cached(code, l, theme)
@@ -995,8 +1258,15 @@ impl MessageCell {
                     };
 
                     /// Prepend `│ ` gutter prefix to a syntax-highlighted line with bg.
-                    fn prefix_code_line(line: Line<'static>, border_color: ratatui::style::Color, bg: ratatui::style::Color) -> Line<'static> {
-                        let mut spans = vec![Span::styled("│ ".to_string(), Style::default().fg(border_color).bg(bg))];
+                    fn prefix_code_line(
+                        line: Line<'static>,
+                        border_color: ratatui::style::Color,
+                        bg: ratatui::style::Color,
+                    ) -> Line<'static> {
+                        let mut spans = vec![Span::styled(
+                            "│ ".to_string(),
+                            Style::default().fg(border_color).bg(bg),
+                        )];
                         for mut span in line.spans {
                             span.style = span.style.bg(bg);
                             spans.push(span);
@@ -1004,9 +1274,14 @@ impl MessageCell {
                         Line::from(spans)
                     }
 
-                    let code_lines: Vec<Line<'static>> = if highlighted.len() > crate::render::CODE_FOLD_THRESHOLD && msg.folded && msg.role == ChatRole::Tool {
+                    let code_lines: Vec<Line<'static>> = if highlighted.len()
+                        > crate::render::CODE_FOLD_THRESHOLD
+                        && msg.folded
+                        && msg.role == ChatRole::Tool
+                    {
                         let head = crate::render::CODE_FOLD_HEAD.min(highlighted.len());
-                        let tail = crate::render::CODE_FOLD_TAIL.min(highlighted.len().saturating_sub(head));
+                        let tail = crate::render::CODE_FOLD_TAIL
+                            .min(highlighted.len().saturating_sub(head));
                         let mut folded = Vec::with_capacity(head + 1 + tail);
                         for line in &highlighted[..head] {
                             folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
@@ -1014,20 +1289,30 @@ impl MessageCell {
                         let hidden = highlighted.len().saturating_sub(head + tail);
                         folded.push(Line::from(vec![
                             Span::styled("│ ", Style::default().fg(theme.border_dim).bg(code_bg)),
-                            Span::styled(format!("⋯ {hidden} lines folded (Ctrl+F to expand)"), Style::default().fg(theme.muted).add_modifier(Modifier::ITALIC).bg(code_bg)),
+                            Span::styled(
+                                format!("⋯ {hidden} lines folded (Ctrl+F to expand)"),
+                                Style::default()
+                                    .fg(theme.muted)
+                                    .add_modifier(Modifier::ITALIC)
+                                    .bg(code_bg),
+                            ),
                         ]));
                         for line in highlighted.iter().rev().take(tail).rev() {
                             folded.push(prefix_code_line(line.clone(), theme.border_dim, code_bg));
                         }
                         folded
                     } else {
-                        highlighted.into_iter().map(|line| prefix_code_line(line, theme.border_dim, code_bg)).collect()
+                        highlighted
+                            .into_iter()
+                            .map(|line| prefix_code_line(line, theme.border_dim, code_bg))
+                            .collect()
                     };
 
                     lines.extend(code_lines);
-                    lines.push(Line::from(vec![
-                        Span::styled(format!("╰{}╯", "─".repeat(sep_w.saturating_sub(2))), Style::default().fg(theme.border_dim).bg(code_bg)),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("╰{}╯", "─".repeat(sep_w.saturating_sub(2))),
+                        Style::default().fg(theme.border_dim).bg(code_bg),
+                    )]));
                 }
                 MdSegment::UnorderedList(items) => {
                     // "  • " = 4 chars prefix, wrap to content_width - 4
@@ -1058,7 +1343,10 @@ impl MessageCell {
                         for (i, wl) in wrapped.iter().enumerate() {
                             if i == 0 {
                                 lines.push(Line::from(vec![
-                                    Span::styled(format!("  {num}"), Style::default().fg(theme.accent)),
+                                    Span::styled(
+                                        format!("  {num}"),
+                                        Style::default().fg(theme.accent),
+                                    ),
                                     Span::styled(wl.clone(), Style::default().fg(theme.text)),
                                 ]));
                             } else {
@@ -1079,17 +1367,27 @@ impl MessageCell {
                         let wrapped = wrap_line(line, bq_width);
                         for wl in wrapped {
                             lines.push(Line::from(vec![
-                                Span::styled("  \u{2502} ", Style::default().fg(theme.blockquote).bg(bq_bg)),
-                                Span::styled(wl, Style::default().fg(theme.italic_text).add_modifier(Modifier::ITALIC).bg(bq_bg)),
+                                Span::styled(
+                                    "  \u{2502} ",
+                                    Style::default().fg(theme.blockquote).bg(bq_bg),
+                                ),
+                                Span::styled(
+                                    wl,
+                                    Style::default()
+                                        .fg(theme.italic_text)
+                                        .add_modifier(Modifier::ITALIC)
+                                        .bg(bq_bg),
+                                ),
                             ]));
                         }
                     }
                 }
                 MdSegment::HorizontalRule => {
                     let w = inner_width.min(60);
-                    lines.push(Line::from(vec![
-                        Span::styled("─".repeat(w), Style::default().fg(theme.border_dim)),
-                    ]));
+                    lines.push(Line::from(vec![Span::styled(
+                        "─".repeat(w),
+                        Style::default().fg(theme.border_dim),
+                    )]));
                 }
                 MdSegment::TaskList(items) => {
                     let tl_width = content_width.saturating_sub(4).max(20);
@@ -1121,12 +1419,14 @@ impl MessageCell {
                     // Calculate column widths
                     let mut widths = vec![0usize; col_count];
                     for (i, h) in headers.iter().enumerate() {
-                        widths[i] = widths[i].max(unicode_width::UnicodeWidthStr::width(h.as_str()));
+                        widths[i] =
+                            widths[i].max(unicode_width::UnicodeWidthStr::width(h.as_str()));
                     }
                     for row in rows {
                         for (i, cell) in row.iter().enumerate() {
                             if i < col_count {
-                                widths[i] = widths[i].max(unicode_width::UnicodeWidthStr::width(cell.as_str()));
+                                widths[i] = widths[i]
+                                    .max(unicode_width::UnicodeWidthStr::width(cell.as_str()));
                             }
                         }
                     }
@@ -1135,7 +1435,8 @@ impl MessageCell {
                         *w = (*w).min(40);
                     }
                     // Limit total width
-                    let total: usize = widths.iter().sum::<usize>() + col_count.saturating_sub(1) * 3 + 4;
+                    let total: usize =
+                        widths.iter().sum::<usize>() + col_count.saturating_sub(1) * 3 + 4;
                     let budget = inner_width.min(100);
                     if total > budget && col_count > 0 && total > 0 {
                         let scale = budget as f64 / total as f64;
@@ -1159,8 +1460,13 @@ impl MessageCell {
                     // Top border: ┌──────┬──────┐
                     let mut top = String::from("┌");
                     for (i, &w) in widths.iter().enumerate() {
-                        if i > 0 { top.push('┬'); }
-                        let _ = std::fmt::Write::write_fmt(&mut top, format_args!("{:─>width$}", "", width = w + 2));
+                        if i > 0 {
+                            top.push('┬');
+                        }
+                        let _ = std::fmt::Write::write_fmt(
+                            &mut top,
+                            format_args!("{:─>width$}", "", width = w + 2),
+                        );
                     }
                     top.push('┐');
                     lines.push(Line::from(Span::styled(top, brd)));
@@ -1171,7 +1477,12 @@ impl MessageCell {
                         hdr_spans.push(Span::styled("│".to_string(), brd));
                         let w = widths.get(i).copied().unwrap_or(0);
                         let padded = pad_to_width(h, w);
-                        hdr_spans.push(Span::styled(format!(" {padded} "), Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)));
+                        hdr_spans.push(Span::styled(
+                            format!(" {padded} "),
+                            Style::default()
+                                .fg(theme.accent)
+                                .add_modifier(Modifier::BOLD),
+                        ));
                     }
                     hdr_spans.push(Span::styled("│".to_string(), brd));
                     lines.push(Line::from(hdr_spans));
@@ -1179,8 +1490,13 @@ impl MessageCell {
                     // Header separator: ├──────┼──────┤
                     let mut mid = String::from("├");
                     for (i, &w) in widths.iter().enumerate() {
-                        if i > 0 { mid.push('┼'); }
-                        let _ = std::fmt::Write::write_fmt(&mut mid, format_args!("{:─>width$}", "", width = w + 2));
+                        if i > 0 {
+                            mid.push('┼');
+                        }
+                        let _ = std::fmt::Write::write_fmt(
+                            &mut mid,
+                            format_args!("{:─>width$}", "", width = w + 2),
+                        );
                     }
                     mid.push('┤');
                     lines.push(Line::from(Span::styled(mid, brd)));
@@ -1192,7 +1508,10 @@ impl MessageCell {
                             row_spans.push(Span::styled("│".to_string(), brd));
                             let w = widths.get(i).copied().unwrap_or(0);
                             let padded = pad_to_width(cell, w);
-                            row_spans.push(Span::styled(format!(" {padded} "), Style::default().fg(theme.text)));
+                            row_spans.push(Span::styled(
+                                format!(" {padded} "),
+                                Style::default().fg(theme.text),
+                            ));
                         }
                         // Pad missing cells
                         for i in row.len()..col_count {
@@ -1207,8 +1526,13 @@ impl MessageCell {
                     // Bottom border: └──────┴──────┘
                     let mut bot = String::from("└");
                     for (i, &w) in widths.iter().enumerate() {
-                        if i > 0 { bot.push('┴'); }
-                        let _ = std::fmt::Write::write_fmt(&mut bot, format_args!("{:─>width$}", "", width = w + 2));
+                        if i > 0 {
+                            bot.push('┴');
+                        }
+                        let _ = std::fmt::Write::write_fmt(
+                            &mut bot,
+                            format_args!("{:─>width$}", "", width = w + 2),
+                        );
                     }
                     bot.push('┘');
                     lines.push(Line::from(Span::styled(bot, brd)));
@@ -1233,7 +1557,8 @@ impl MessageCell {
             // Indent remaining lines to align with content after role prefix
             let indent_str = " ".repeat(indent);
             for line in lines.iter_mut().skip(1) {
-                line.spans.insert(0, Span::styled(indent_str.clone(), Style::default()));
+                line.spans
+                    .insert(0, Span::styled(indent_str.clone(), Style::default()));
             }
         } else if lines.is_empty() && msg.role != ChatRole::User {
             // Empty non-user content — just show role label
@@ -1257,10 +1582,10 @@ impl MessageCell {
 
         // Add thin colored left bar to the role label line only (first line)
         if let Some(first) = lines.first_mut() {
-            first.spans.insert(0, Span::styled(
-                "\u{258F} ".to_string(),
-                Style::default().fg(gutter_color),
-            ));
+            first.spans.insert(
+                0,
+                Span::styled("\u{258F} ".to_string(), Style::default().fg(gutter_color)),
+            );
         }
 
         lines
@@ -1291,7 +1616,9 @@ impl Renderable for MessageCell {
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        if self.group_hidden { return 0; }
+        if self.group_hidden {
+            return 0;
+        }
         let cached_w = self.cached_width.load(Ordering::Relaxed);
         let cached_h = self.cached_height.load(Ordering::Relaxed);
         if cached_w == width && cached_h != u16::MAX {
@@ -1343,14 +1670,18 @@ fn build_thinking_lines(
     if expanded {
         // Header: "▼ Thought for 2.3s"
         let label = match duration_secs {
-            Some(d) if d >= 60.0 => format!("\u{25BC} Thought for {}m{:.0}s", d as u64 / 60, d % 60.0),
+            Some(d) if d >= 60.0 => {
+                format!("\u{25BC} Thought for {}m{:.0}s", d as u64 / 60, d % 60.0)
+            }
             Some(d) if d >= 1.0 => format!("\u{25BC} Thought for {d:.1}s"),
             Some(d) => format!("\u{25BC} Thought for {d:.0}ms"),
             None => "\u{25BC} Thought".to_string(),
         };
         lines.push(Line::from(Span::styled(
             format!(" {label}"),
-            Style::default().fg(theme.accent).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
         )));
 
         // Content lines, dimmed and indented
@@ -1368,7 +1699,9 @@ fn build_thinking_lines(
     } else {
         // Collapsed: "▶ Thought for 2.3s"
         let label = match duration_secs {
-            Some(d) if d >= 60.0 => format!("\u{25B6} Thought for {}m{:.0}s", d as u64 / 60, d % 60.0),
+            Some(d) if d >= 60.0 => {
+                format!("\u{25B6} Thought for {}m{:.0}s", d as u64 / 60, d % 60.0)
+            }
             Some(d) if d >= 1.0 => format!("\u{25B6} Thought for {d:.1}s"),
             Some(d) => format!("\u{25B6} Thought for {d:.0}ms"),
             None => "\u{25B6} Thought".to_string(),
@@ -1384,7 +1717,9 @@ fn build_thinking_lines(
 
 /// Simple word-wrap for thinking content.
 fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
-    if max_width == 0 { return vec![text.to_string()]; }
+    if max_width == 0 {
+        return vec![text.to_string()];
+    }
     let mut result = Vec::new();
     let mut current = String::new();
     for word in text.split_whitespace() {
@@ -1448,7 +1783,10 @@ mod tests {
         let cell = MessageCell::new(msg, false);
         let h = cell.desired_height(80);
         // Role line + "(empty)" line
-        assert!(h >= 2, "expected at least 2 lines for empty content, got {h}");
+        assert!(
+            h >= 2,
+            "expected at least 2 lines for empty content, got {h}"
+        );
     }
 
     #[test]
@@ -1460,17 +1798,27 @@ mod tests {
         assert_eq!(h1, h2, "cached height should be stable");
 
         cell.invalidate_cache();
-        assert_eq!(cell.cached_width.load(Ordering::Relaxed), u16::MAX, "cache should be cleared");
+        assert_eq!(
+            cell.cached_width.load(Ordering::Relaxed),
+            u16::MAX,
+            "cache should be cleared"
+        );
     }
 
     #[test]
     fn test_message_cell_cache_invalidation_on_width_change() {
-        let msg = test_message(ChatRole::User, "A longer message that might wrap at narrow widths");
+        let msg = test_message(
+            ChatRole::User,
+            "A longer message that might wrap at narrow widths",
+        );
         let cell = MessageCell::new(msg, false);
         let h_wide = cell.desired_height(80);
         let h_narrow = cell.desired_height(20);
         // Narrow width should produce more or equal lines
-        assert!(h_narrow >= h_wide, "narrower width should have >= lines: {h_narrow} vs {h_wide}");
+        assert!(
+            h_narrow >= h_wide,
+            "narrower width should have >= lines: {h_narrow} vs {h_wide}"
+        );
     }
 
     #[test]
@@ -1479,7 +1827,10 @@ mod tests {
         msg.tool_name = Some("bash".to_string());
         let cell = MessageCell::new(msg, true);
         let h = cell.desired_height(80);
-        assert_eq!(h, 3, "collapsed tool should be separator + 1 line + blank, got {h}");
+        assert_eq!(
+            h, 3,
+            "collapsed tool should be separator + 1 line + blank, got {h}"
+        );
     }
 
     #[test]
@@ -1615,7 +1966,11 @@ mod tests {
 
         let new_msg = test_message(ChatRole::Assistant, "new content");
         cell.set_message(new_msg);
-        assert_eq!(cell.cached_width.load(Ordering::Relaxed), u16::MAX, "cache should be invalidated after set_message");
+        assert_eq!(
+            cell.cached_width.load(Ordering::Relaxed),
+            u16::MAX,
+            "cache should be invalidated after set_message"
+        );
     }
 
     // ── ChatRole equality ─────────────────────────────────────────────────

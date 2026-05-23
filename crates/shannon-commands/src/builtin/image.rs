@@ -4,7 +4,7 @@
 //! help text and tab-completion. Actual execution is handled by the REPL's
 //! media module (`shannon-ui/src/repl/commands/media.rs`).
 
-use crate::command::{Command, CommandBase, CommandSource, LocalCommand, CommandAvailability};
+use crate::command::{Command, CommandAvailability, CommandBase, CommandSource, LocalCommand};
 
 /// Create the /image command
 pub fn command() -> Command {
@@ -12,15 +12,20 @@ pub fn command() -> Command {
         base: CommandBase {
             name: "image".to_string(),
             aliases: vec!["img".to_string(), "screenshot".to_string()],
-            description: "Attach an image file, paste from clipboard, or fetch from URL for AI analysis".to_string(),
+            description:
+                "Attach an image file, paste from clipboard, or fetch from URL for AI analysis"
+                    .to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],
             source: CommandSource::Builtin,
             is_enabled: true,
             is_hidden: false,
-            argument_hint: Some("<path> [prompt] | paste [prompt] | url <url> [prompt]".to_string()),
+            argument_hint: Some(
+                "<path> [prompt] | paste [prompt] | url <url> [prompt]".to_string(),
+            ),
             when_to_use: Some(
-                "Use to share a screenshot, diagram, or photo with the AI for visual analysis".to_string(),
+                "Use to share a screenshot, diagram, or photo with the AI for visual analysis"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,

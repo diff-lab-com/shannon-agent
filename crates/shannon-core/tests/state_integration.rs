@@ -10,9 +10,7 @@
 #[cfg(test)]
 mod state_tests {
     use shannon_core::api::{Message, MessageContent};
-    use shannon_core::state::{
-        SessionData, SessionPersistMetadata, StateManager,
-    };
+    use shannon_core::state::{SessionData, SessionPersistMetadata, StateManager};
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -195,7 +193,9 @@ mod state_tests {
                 },
                 Message {
                     role: "user".to_string(),
-                    content: MessageContent::Text("This is a long user message that should be truncated".to_string()),
+                    content: MessageContent::Text(
+                        "This is a long user message that should be truncated".to_string(),
+                    ),
                 },
             ],
         };

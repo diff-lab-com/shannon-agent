@@ -7,8 +7,8 @@
 //! - Registration into ToolRegistry
 
 use serde_json::json;
-use shannon_core::tools::ToolRegistry;
 use shannon_core::Tool;
+use shannon_core::tools::ToolRegistry;
 
 /// Test: McpToolAdapter can be constructed with valid parameters.
 #[test]
@@ -25,10 +25,7 @@ fn test_mcp_adapter_construction() {
 
     assert_eq!(adapter.name(), "mcp__test-server__fetch");
     assert_eq!(adapter.description(), "Test MCP tool");
-    assert_eq!(
-        adapter.input_schema()["type"],
-        json!("object")
-    );
+    assert_eq!(adapter.input_schema()["type"], json!("object"));
 }
 
 /// Test: McpToolAdapter with environment variables.
@@ -71,7 +68,10 @@ fn test_mcp_adapter_registration_in_tool_registry() {
 
     // Verify the tool is registered with per-tool naming
     let tools = registry.list_tools_info();
-    assert!(tools.iter().any(|t| t.name == "mcp__my-server__echo"), "Tool should be registered as 'mcp__my-server__echo'");
+    assert!(
+        tools.iter().any(|t| t.name == "mcp__my-server__echo"),
+        "Tool should be registered as 'mcp__my-server__echo'"
+    );
 }
 
 /// Test: Multiple MCP adapters from same server can be registered.

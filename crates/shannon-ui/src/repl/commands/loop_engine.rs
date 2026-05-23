@@ -1,7 +1,7 @@
 //! Loop engine command handlers: /loop, /ralph, /routine, /bind, /project, /agent, /stats,
 //! /sandbox, /notify, and related helpers.
 
-use crate::{widgets::ChatRole, Result};
+use crate::{Result, widgets::ChatRole};
 use shannon_tools::Tool;
 
 use super::super::Repl;
@@ -20,11 +20,13 @@ pub(crate) fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
         if let Some(ref mut ls) = repl.state.loop_state {
             ls.active = false;
             let iter = ls.iteration;
-            repl.chat.add_message(ChatRole::System, format!(
-                "Loop stopped after {iter} iteration(s)."
-            ));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Loop stopped after {iter} iteration(s)."),
+            );
         } else {
-            repl.chat.add_message(ChatRole::System, "No active loop to stop.".to_string());
+            repl.chat
+                .add_message(ChatRole::System, "No active loop to stop.".to_string());
         }
         repl.state.loop_state = None;
         return Ok(());
@@ -32,14 +34,22 @@ pub(crate) fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
 
     if input == "status" {
         if let Some(ref ls) = repl.state.loop_state {
-            repl.chat.add_message(ChatRole::System, format!(
-                "Loop active: iteration {}/{}\nTask: {}",
-                ls.iteration,
-                if ls.max_iterations == 0 { "unlimited".to_string() } else { ls.max_iterations.to_string() },
-                ls.task,
-            ));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Loop active: iteration {}/{}\nTask: {}",
+                    ls.iteration,
+                    if ls.max_iterations == 0 {
+                        "unlimited".to_string()
+                    } else {
+                        ls.max_iterations.to_string()
+                    },
+                    ls.task,
+                ),
+            );
         } else {
-            repl.chat.add_message(ChatRole::System, "No active loop.".to_string());
+            repl.chat
+                .add_message(ChatRole::System, "No active loop.".to_string());
         }
         return Ok(());
     }
@@ -75,10 +85,17 @@ pub(crate) fn handle_loop(repl: &mut Repl, args: &str) -> Result<()> {
         active: true,
     });
 
-    repl.chat.add_message(ChatRole::System, format!(
-        "Loop started{}.\nTask: {task}\nType /loop stop to cancel.",
-        if max_iter > 0 { format!(" (max {max_iter} iterations)") } else { String::new() }
-    ));
+    repl.chat.add_message(
+        ChatRole::System,
+        format!(
+            "Loop started{}.\nTask: {task}\nType /loop stop to cancel.",
+            if max_iter > 0 {
+                format!(" (max {max_iter} iterations)")
+            } else {
+                String::new()
+            }
+        ),
+    );
 
     // Trigger first iteration
     let prompt = format!(
@@ -107,9 +124,10 @@ pub(crate) fn check_loop_iteration(repl: &mut Repl) -> bool {
     // Check max iterations
     if ls.max_iterations > 0 && ls.iteration >= ls.max_iterations {
         let iter = ls.iteration;
-        repl.chat.add_message(ChatRole::System, format!(
-            "Loop completed: reached max {iter} iteration(s)."
-        ));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("Loop completed: reached max {iter} iteration(s)."),
+        );
         repl.state.loop_state = None;
         return false;
     }
@@ -146,11 +164,15 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
     if input == "stop" || input == "cancel" {
         if let Some(ref rs) = repl.state.ralph_state {
             let iter = rs.iteration;
-            repl.chat.add_message(ChatRole::System, format!(
-                "Ralph stopped after {iter} iteration(s)."
-            ));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Ralph stopped after {iter} iteration(s)."),
+            );
         } else {
-            repl.chat.add_message(ChatRole::System, "No active ralph loop to stop.".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "No active ralph loop to stop.".to_string(),
+            );
         }
         repl.state.ralph_state = None;
         return Ok(());
@@ -158,15 +180,19 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
 
     if input == "status" {
         if let Some(ref rs) = repl.state.ralph_state {
-            repl.chat.add_message(ChatRole::System, format!(
-                "Ralph active: iteration {}/{}\nKeywords: {}\nTask: {}",
-                rs.iteration,
-                rs.max_iterations,
-                rs.completion_keywords.join(", "),
-                rs.task,
-            ));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Ralph active: iteration {}/{}\nKeywords: {}\nTask: {}",
+                    rs.iteration,
+                    rs.max_iterations,
+                    rs.completion_keywords.join(", "),
+                    rs.task,
+                ),
+            );
         } else {
-            repl.chat.add_message(ChatRole::System, "No active ralph loop.".to_string());
+            repl.chat
+                .add_message(ChatRole::System, "No active ralph loop.".to_string());
         }
         return Ok(());
     }
@@ -181,8 +207,11 @@ pub(crate) fn handle_ralph(repl: &mut Repl, args: &str) -> Result<()> {
     // Parse flags
     let mut max_iter: usize = 10;
     let mut keywords: Vec<String> = vec![
-        "DONE".into(), "FIXED".into(), "COMPLETE".into(),
-        "RESOLVED".into(), "ALL TESTS PASS".into(),
+        "DONE".into(),
+        "FIXED".into(),
+        "COMPLETE".into(),
+        "RESOLVED".into(),
+        "ALL TESTS PASS".into(),
     ];
     let mut remaining = input;
 
@@ -260,10 +289,14 @@ pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
         let found = keywords.iter().any(|kw| msg.contains(&kw.to_uppercase()));
         if found {
             let iter = rs.iteration;
-            let matched_kw = keywords.iter().find(|kw| msg.contains(&kw.to_uppercase())).unwrap_or(&keywords[0]);
-            repl.chat.add_message(ChatRole::System, format!(
-                "Ralph complete: detected \"{matched_kw}\" after {iter} iteration(s)."
-            ));
+            let matched_kw = keywords
+                .iter()
+                .find(|kw| msg.contains(&kw.to_uppercase()))
+                .unwrap_or(&keywords[0]);
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Ralph complete: detected \"{matched_kw}\" after {iter} iteration(s)."),
+            );
             repl.state.ralph_state = None;
             return false;
         }
@@ -272,9 +305,10 @@ pub(crate) fn check_ralph_iteration(repl: &mut Repl) -> bool {
     // Check max iterations
     if rs.iteration >= rs.max_iterations {
         let iter = rs.iteration;
-        repl.chat.add_message(ChatRole::System, format!(
-            "Ralph stopped: reached max {iter} iteration(s) without completion keyword."
-        ));
+        repl.chat.add_message(
+            ChatRole::System,
+            format!("Ralph stopped: reached max {iter} iteration(s) without completion keyword."),
+        );
         repl.state.ralph_state = None;
         return false;
     }
@@ -380,8 +414,10 @@ pub(crate) fn handle_bind(repl: &mut Repl, args: &str) -> Result<()> {
 
         match std::fs::write(&kb_path, &toml_content) {
             Ok(()) => {
-                repl.chat.add_message(ChatRole::System,
-                    format!("Keybindings template saved to {}", kb_path.display()));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Keybindings template saved to {}", kb_path.display()),
+                );
             }
             Err(e) => {
                 super::set_error(repl, &format!("saving keybindings: {e}"));
@@ -396,12 +432,17 @@ pub(crate) fn handle_bind(repl: &mut Repl, args: &str) -> Result<()> {
 
     if trimmed == "load" || trimmed == "reload" {
         if !kb_path.exists() {
-            repl.chat.add_message(ChatRole::System,
-                "No custom keybindings file found. Use /bind save to create one.".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "No custom keybindings file found. Use /bind save to create one.".to_string(),
+            );
         } else {
             match std::fs::read_to_string(&kb_path) {
                 Ok(content) => {
-                    let line_count = content.lines().filter(|l| l.starts_with("[[bind]]")).count();
+                    let line_count = content
+                        .lines()
+                        .filter(|l| l.starts_with("[[bind]]"))
+                        .count();
                     repl.chat.add_message(ChatRole::System,
                         format!("Loaded keybindings config ({line_count} custom binding(s) defined).\nKeybindings take effect on next restart."));
                 }
@@ -425,7 +466,13 @@ pub(crate) fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
         let cwd = &repl.state.working_directory;
         let mut msg = format!("Project Configuration\n\n  Directory: {cwd}\n");
 
-        let config_files = [".shannon.toml", "CLAUDE.md", "AGENTS.md", "GEMINI.md", ".claude/settings.json"];
+        let config_files = [
+            ".shannon.toml",
+            "CLAUDE.md",
+            "AGENTS.md",
+            "GEMINI.md",
+            ".claude/settings.json",
+        ];
         msg.push_str("\n  Config files:\n");
         for file in &config_files {
             let path = std::path::Path::new(cwd).join(file);
@@ -444,7 +491,10 @@ pub(crate) fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
 
         if let Some(ref engine) = repl.query_engine {
             let perms = engine.permissions();
-            let mode = perms.read().map(|p| p.approval_mode()).unwrap_or(shannon_core::permissions::ApprovalMode::Suggest);
+            let mode = perms
+                .read()
+                .map(|p| p.approval_mode())
+                .unwrap_or(shannon_core::permissions::ApprovalMode::Suggest);
             msg.push_str(&format!("\n  Permission mode: {mode:?}"));
         }
 
@@ -452,7 +502,14 @@ pub(crate) fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
             msg.push_str("\n  Plan mode: active");
         }
 
-        msg.push_str(&format!("\n  Notifications: {}", if repl.notifications_enabled { "enabled" } else { "disabled" }));
+        msg.push_str(&format!(
+            "\n  Notifications: {}",
+            if repl.notifications_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
+        ));
 
         let git_check = std::process::Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
@@ -466,7 +523,10 @@ pub(crate) fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
         }
 
         if let Some(ref engine) = repl.query_engine {
-            msg.push_str(&format!("\n  Tools loaded: {}", engine.tools().list().len()));
+            msg.push_str(&format!(
+                "\n  Tools loaded: {}",
+                engine.tools().list().len()
+            ));
         }
 
         repl.chat.add_message(ChatRole::System, msg);
@@ -476,8 +536,10 @@ pub(crate) fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
     if trimmed == "init" {
         let config_path = std::path::Path::new(&repl.state.working_directory).join(".shannon.toml");
         if config_path.exists() {
-            repl.chat.add_message(ChatRole::System,
-                format!("Project config already exists: {}", config_path.display()));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Project config already exists: {}", config_path.display()),
+            );
             return Ok(());
         }
 
@@ -523,8 +585,13 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
     if let Some(rest) = trimmed.strip_prefix("model ") {
         let model = rest.trim();
         if model.is_empty() {
-            repl.chat.add_message(ChatRole::System,
-                format!("Current model: {}", repl.state.model.as_deref().unwrap_or("none")));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Current model: {}",
+                    repl.state.model.as_deref().unwrap_or("none")
+                ),
+            );
         } else {
             repl.state.model = Some(model.to_string());
             crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
@@ -532,8 +599,8 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
                 provider: repl.state.selected_provider.clone(),
                 theme: Some(repl.state.theme.name.to_string()),
             });
-            repl.chat.add_message(ChatRole::System,
-                format!("Project model set to: {model}"));
+            repl.chat
+                .add_message(ChatRole::System, format!("Project model set to: {model}"));
         }
         return Ok(());
     }
@@ -552,8 +619,10 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
         match key {
             "sandbox" => {
                 repl.state.sandbox_mode = shannon_tools::SandboxMode::from_str_loose(value);
-                repl.chat.add_message(ChatRole::System,
-                    format!("Sandbox mode set to: {:?}", repl.state.sandbox_mode));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Sandbox mode set to: {:?}", repl.state.sandbox_mode),
+                );
             }
             "permissions" => {
                 let mode = match value {
@@ -568,13 +637,22 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
                     }
                     repl.state.approval_mode_label = mode.short_label().to_string();
                 }
-                repl.chat.add_message(ChatRole::System,
-                    format!("Permission mode set to: {value}"));
+                repl.chat
+                    .add_message(ChatRole::System, format!("Permission mode set to: {value}"));
             }
             "notifications" => {
                 repl.notifications_enabled = value == "on" || value == "true" || value == "enabled";
-                repl.chat.add_message(ChatRole::System,
-                    format!("Notifications: {}", if repl.notifications_enabled { "enabled" } else { "disabled" }));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Notifications: {}",
+                        if repl.notifications_enabled {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        }
+                    ),
+                );
             }
             _ => {
                 repl.chat.add_message(ChatRole::System,
@@ -584,18 +662,25 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
         return Ok(());
     }
 
-    repl.chat.add_message(ChatRole::System,
+    repl.chat.add_message(
+        ChatRole::System,
         "Usage: /project [status|init|model <name>|set <key> <value>]\n\
          /project status  — Show current project config\n\
          /project init    — Create .shannon.toml template\n\
          /project model <name> — Set project model\n\
-         /project set <key> <value> — Set config value".to_string());
+         /project set <key> <value> — Set config value"
+            .to_string(),
+    );
     Ok(())
 }
 
 pub(crate) fn handle_stats(repl: &mut Repl) -> Result<()> {
     repl.state.sidebar_tab = crate::repl::SidebarTab::Perf;
-    let dur = repl.state.session_start.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+    let dur = repl
+        .state
+        .session_start
+        .map(|t| t.elapsed().as_secs())
+        .unwrap_or(0);
     let tok = repl.state.tokens_used;
     let turns = repl.current_turn;
     let cost = repl.state.total_cost_usd;
@@ -624,13 +709,18 @@ pub(crate) fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
     let args = args.trim();
 
     if args.is_empty() || args == "--help" || args == "help" {
-        let docker_available = repl.runtime.block_on(
-            shannon_tools::DockerSandbox::is_available()
-        );
-        let status = if docker_available { "available" } else { "not installed/unavailable" };
+        let docker_available = repl
+            .runtime
+            .block_on(shannon_tools::DockerSandbox::is_available());
+        let status = if docker_available {
+            "available"
+        } else {
+            "not installed/unavailable"
+        };
         let platform = detect_platform_sandbox();
 
-        repl.chat.add_message(ChatRole::System,
+        repl.chat.add_message(
+            ChatRole::System,
             "Sandbox — execution isolation for shell commands\n\n\
              Usage:\n\
                /sandbox              Show current sandbox status\n\
@@ -638,15 +728,20 @@ pub(crate) fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
                /sandbox docker       Enable Docker isolation\n\
                /sandbox direct       Disable sandbox (run directly)\n\
                /sandbox check        Check if Docker is available\n\n\
-             Docker: ".to_string() + status + "\n\
-             Platform: " + platform + "\n\n\
+             Docker: "
+                .to_string()
+                + status
+                + "\n\
+             Platform: "
+                + platform
+                + "\n\n\
              When Docker sandbox is enabled, all /bash tool commands\n\
              run inside an isolated container with:\n\
                - No network access (network=none)\n\
                - Memory limit (512m)\n\
                - CPU limit (1.0)\n\
                - Read-only root filesystem\n\
-               - Workspace mounted at /workspace"
+               - Workspace mounted at /workspace",
         );
         return Ok(());
     }
@@ -657,7 +752,8 @@ pub(crate) fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
             let mode_str = match &current {
                 shannon_tools::SandboxMode::Direct => "direct (no sandbox)".to_string(),
                 shannon_tools::SandboxMode::Docker(cfg) => {
-                    format!("docker (image={}, network={}, memory={}, cpus={})",
+                    format!(
+                        "docker (image={}, network={}, memory={}, cpus={})",
                         cfg.image,
                         cfg.network,
                         cfg.memory.as_deref().unwrap_or("unlimited"),
@@ -665,37 +761,51 @@ pub(crate) fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
                     )
                 }
             };
-            repl.chat.add_message(ChatRole::System,
-                format!("Sandbox mode: {mode_str}"));
+            repl.chat
+                .add_message(ChatRole::System, format!("Sandbox mode: {mode_str}"));
         }
         "docker" | "on" | "enable" => {
             let config = shannon_tools::DockerSandboxConfig::default();
             repl.state.sandbox_mode = shannon_tools::SandboxMode::Docker(config);
-            repl.chat.add_message(ChatRole::System,
+            repl.chat.add_message(
+                ChatRole::System,
                 "Docker sandbox enabled. Shell commands will run inside an isolated container.\n\
-                 Use /sandbox status for details, /sandbox direct to disable.".to_string());
+                 Use /sandbox status for details, /sandbox direct to disable."
+                    .to_string(),
+            );
         }
         "direct" | "off" | "disable" => {
             repl.state.sandbox_mode = shannon_tools::SandboxMode::Direct;
-            repl.chat.add_message(ChatRole::System,
-                "Sandbox disabled. Shell commands will run directly on the host.".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Sandbox disabled. Shell commands will run directly on the host.".to_string(),
+            );
         }
         "check" => {
-            let available = repl.runtime.block_on(
-                shannon_tools::DockerSandbox::is_available()
-            );
+            let available = repl
+                .runtime
+                .block_on(shannon_tools::DockerSandbox::is_available());
             if available {
-                repl.chat.add_message(ChatRole::System,
-                    "Docker is available and running.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Docker is available and running.".to_string(),
+                );
             } else {
-                repl.chat.add_message(ChatRole::System,
-                    "Docker is not available. Install Docker and ensure the daemon is running.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Docker is not available. Install Docker and ensure the daemon is running."
+                        .to_string(),
+                );
             }
         }
         _ => {
-            repl.chat.add_message(ChatRole::System,
-                format!("Unknown sandbox option: {args}\n\
-                 Use: /sandbox [status|docker|direct|check]"));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Unknown sandbox option: {args}\n\
+                 Use: /sandbox [status|docker|direct|check]"
+                ),
+            );
         }
     }
 
@@ -711,7 +821,8 @@ pub(crate) fn handle_notify(repl: &mut Repl, args: &str) -> Result<()> {
             repl.notifications_enabled = true;
             repl.chat.add_message(
                 ChatRole::System,
-                "Desktop notifications enabled. You'll be notified when queries complete.".to_string(),
+                "Desktop notifications enabled. You'll be notified when queries complete."
+                    .to_string(),
             );
         }
         "off" | "disable" | "false" | "no" => {
@@ -723,13 +834,15 @@ pub(crate) fn handle_notify(repl: &mut Repl, args: &str) -> Result<()> {
         }
         "test" => {
             repl.notifier.info("Shannon", "Test notification!").ok();
-            repl.chat.add_message(
-                ChatRole::System,
-                "Test notification sent.".to_string(),
-            );
+            repl.chat
+                .add_message(ChatRole::System, "Test notification sent.".to_string());
         }
         _ => {
-            let status = if repl.notifications_enabled { "enabled" } else { "disabled" };
+            let status = if repl.notifications_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            };
             repl.chat.add_message(
                 ChatRole::System,
                 format!(
@@ -745,8 +858,14 @@ pub(crate) fn handle_notify(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 /// Send a desktop notification if enabled.
-pub(crate) fn notify_query_complete(notifier: &shannon_core::notifier::Notifier, enabled: bool, message: &str) {
-    if !enabled { return; }
+pub(crate) fn notify_query_complete(
+    notifier: &shannon_core::notifier::Notifier,
+    enabled: bool,
+    message: &str,
+) {
+    if !enabled {
+        return;
+    }
     let notification = shannon_core::notifier::Notification {
         title: "Shannon - Query Complete".to_string(),
         body: message.to_string(),
@@ -768,7 +887,9 @@ pub(crate) fn handle_agent(repl: &mut Repl, args: &str) -> Result<()> {
 
     match subcommand {
         "help" | "" => {
-            repl.chat.add_message(ChatRole::System, "\
+            repl.chat.add_message(
+                ChatRole::System,
+                "\
 /agent list                    — List all available agent definitions
 /agent run <name> [prompt]     — Run an agent with optional prompt
 /agent create <name>           — Interactive agent creation wizard
@@ -779,7 +900,9 @@ Agent definitions are loaded from:
   .claude/agents/*.md  (project-local, highest priority)
   .shannon/agents/*.toml (project-local)
   ~/.claude/agents/*.md (user-global)
-  ~/.shannon/agents/*.toml (user-global)".to_string());
+  ~/.shannon/agents/*.toml (user-global)"
+                    .to_string(),
+            );
         }
         "list" => {
             let registry = AgentDefinitionRegistry::load_from_dirs();
@@ -806,7 +929,10 @@ Agent definitions are loaded from:
                         } else {
                             format!(" tools=[{}]", def.allowed_tools.join(","))
                         };
-                        output.push_str(&format!("  - {}{}: {} ({})\n", name, tools, def.description, model));
+                        output.push_str(&format!(
+                            "  - {}{}: {} ({})\n",
+                            name, tools, def.description, model
+                        ));
                     }
                 }
             }
@@ -820,10 +946,15 @@ Agent definitions are loaded from:
                 for name in &md_names {
                     let def = &custom_agents[name];
                     let model = def.model.as_deref().unwrap_or("default");
-                    let tools = def.allowed_tools.as_ref()
+                    let tools = def
+                        .allowed_tools
+                        .as_ref()
                         .map(|t| format!(" tools=[{}]", t.join(", ")))
                         .unwrap_or_default();
-                    output.push_str(&format!("  - {}{}: {} ({})\n", name, tools, def.description, model));
+                    output.push_str(&format!(
+                        "  - {}{}: {} ({})\n",
+                        name, tools, def.description, model
+                    ));
                 }
             }
 
@@ -837,7 +968,8 @@ Agent definitions are loaded from:
         "show" => {
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Usage: /agent show <name>".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "Usage: /agent show <name>".to_string());
                 return Ok(());
             }
 
@@ -852,12 +984,18 @@ Agent definitions are loaded from:
                     output.push_str(&format!("System Prompt: {prompt}\n"));
                 }
                 if !def.allowed_tools.is_empty() {
-                    output.push_str(&format!("Allowed Tools: {}\n", def.allowed_tools.join(", ")));
+                    output.push_str(&format!(
+                        "Allowed Tools: {}\n",
+                        def.allowed_tools.join(", ")
+                    ));
                 }
                 if !def.capabilities.is_empty() {
                     output.push_str(&format!("Capabilities: {}\n", def.capabilities.join(", ")));
                 }
-                output.push_str(&format!("Max Concurrent Tasks: {}\n", def.max_concurrent_tasks));
+                output.push_str(&format!(
+                    "Max Concurrent Tasks: {}\n",
+                    def.max_concurrent_tasks
+                ));
                 if let Some(temp) = def.temperature {
                     output.push_str(&format!("Temperature: {temp}\n"));
                 }
@@ -892,20 +1030,26 @@ Agent definitions are loaded from:
                 return Ok(());
             }
 
-            repl.chat.add_message(ChatRole::System, format!("Agent '{name}' not found."));
+            repl.chat
+                .add_message(ChatRole::System, format!("Agent '{name}' not found."));
         }
         "run" => {
             let name = parts.get(1).copied().unwrap_or("");
             let prompt = parts.get(2).copied().unwrap_or("");
 
             if name.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Usage: /agent run <name> [prompt]".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Usage: /agent run <name> [prompt]".to_string(),
+                );
                 return Ok(());
             }
 
             let registry = AgentDefinitionRegistry::load_from_dirs();
             let config = if let Some(def) = registry.get(name) {
-                let system_prompt = def.system_prompt.clone()
+                let system_prompt = def
+                    .system_prompt
+                    .clone()
                     .unwrap_or_else(|| def.description.clone());
                 Some((def.clone(), system_prompt))
             } else {
@@ -945,12 +1089,19 @@ Agent definitions are loaded from:
             let (def, system_prompt) = match config {
                 Some(c) => c,
                 None => {
-                    repl.chat.add_message(ChatRole::System, format!("Agent '{name}' not found. Use /agent list to see available agents."));
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "Agent '{name}' not found. Use /agent list to see available agents."
+                        ),
+                    );
                     return Ok(());
                 }
             };
 
-            use shannon_agents::{AgentCoordinator, CoordinatorConfig, SubAgentRegistry, AgentConfig};
+            use shannon_agents::{
+                AgentConfig, AgentCoordinator, CoordinatorConfig, SubAgentRegistry,
+            };
 
             if repl.agent_registry.is_none() {
                 let config = CoordinatorConfig::default();
@@ -969,7 +1120,10 @@ Agent definitions are loaded from:
             let agent_config = AgentConfig {
                 name: format!("agent-{}", def.name),
                 model: def.model.clone().unwrap_or_else(|| {
-                    repl.state.model.clone().unwrap_or_else(|| "claude-sonnet-4-6".to_string())
+                    repl.state
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "claude-sonnet-4-6".to_string())
                 }),
                 system_prompt,
                 tools: def.allowed_tools.clone(),
@@ -981,21 +1135,34 @@ Agent definitions are loaded from:
             let registry = match repl.agent_registry.as_ref() {
                 Some(r) => r.clone(),
                 None => {
-                    repl.chat.add_message(ChatRole::System, "Agent registry not available.".to_string());
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "Agent registry not available.".to_string(),
+                    );
                     return Ok(());
                 }
             };
             match repl.runtime.block_on(registry.spawn(agent_config)) {
                 Ok(agent) => {
-                    repl.chat.add_message(ChatRole::System, format!(
-                        "Agent '{}' spawned (id: {}, status: {})",
-                        agent.name, agent.id, agent.status
-                    ));
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!(
+                            "Agent '{}' spawned (id: {}, status: {})",
+                            agent.name, agent.id, agent.status
+                        ),
+                    );
 
                     if !prompt.is_empty() {
-                        match repl.runtime.block_on(registry.send_message("repl", &agent.name, serde_json::json!(prompt))) {
+                        match repl.runtime.block_on(registry.send_message(
+                            "repl",
+                            &agent.name,
+                            serde_json::json!(prompt),
+                        )) {
                             Ok(_) => {
-                                repl.chat.add_message(ChatRole::System, format!("Message sent to agent '{}'.", agent.name));
+                                repl.chat.add_message(
+                                    ChatRole::System,
+                                    format!("Message sent to agent '{}'.", agent.name),
+                                );
                             }
                             Err(e) => {
                                 super::set_error(repl, &format!("sending message to agent: {e}"));
@@ -1011,48 +1178,65 @@ Agent definitions are loaded from:
         "create" => {
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
-                repl.chat.add_message(ChatRole::System, "\
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "\
 Agent Creation Wizard
 ====================
 
 Usage: /agent create <name>
 
 This will guide you through creating an agent definition interactively.
-The agent will be saved as a markdown file in .claude/agents/{name}.md".to_string());
+The agent will be saved as a markdown file in .claude/agents/{name}.md"
+                        .to_string(),
+                );
                 return Ok(());
             }
 
-            if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+            if !name
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            {
                 repl.chat.add_message(ChatRole::System, "Agent name must contain only alphanumeric characters, hyphens, and underscores.".to_string());
                 return Ok(());
             }
 
             let registry = AgentDefinitionRegistry::load_from_dirs();
             if registry.get(name).is_some() {
-                repl.chat.add_message(ChatRole::System, format!("Agent '{name}' already exists. Use /agent edit {name} to modify it."));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Agent '{name}' already exists. Use /agent edit {name} to modify it."),
+                );
                 return Ok(());
             }
 
             let loader = CustomAgentLoader::new();
             if loader.load(name).is_ok() {
-                repl.chat.add_message(ChatRole::System, format!("Agent '{name}' already exists. Use /agent edit {name} to modify it."));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Agent '{name}' already exists. Use /agent edit {name} to modify it."),
+                );
                 return Ok(());
             }
 
             repl.state.pending_dialog_action = Some(format!("create_agent:{name}"));
 
-            repl.chat.add_message(ChatRole::System, format!(
-                "Creating agent '{name}'. Please provide the following information:\n\
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Creating agent '{name}'. Please provide the following information:\n\
                  1. Description: What does this agent do?\n\
                  2. Model (optional): opus, sonnet, or haiku (default: sonnet)\n\
                  3. Tools (optional): Comma-separated tool names\n\
                  4. Instructions: The agent's system prompt"
-            ));
+                ),
+            );
         }
         "edit" => {
             let name = parts.get(1).copied().unwrap_or("");
             if name.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Usage: /agent edit <name>".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "Usage: /agent edit <name>".to_string());
                 return Ok(());
             }
 
@@ -1067,20 +1251,29 @@ The agent will be saved as a markdown file in .claude/agents/{name}.md".to_strin
                 match loader.load(name) {
                     Ok(def) => def.source_path.clone(),
                     Err(_) => {
-                        repl.chat.add_message(ChatRole::System, format!("Agent '{name}' not found."));
+                        repl.chat
+                            .add_message(ChatRole::System, format!("Agent '{name}' not found."));
                         return Ok(());
                     }
                 }
             };
 
-            repl.chat.add_message(ChatRole::System, format!(
-                "Editing agent '{}' (source: {})\n\
+            repl.chat.add_message(
+                ChatRole::System,
+                format!(
+                    "Editing agent '{}' (source: {})\n\
                  To edit, modify the file directly and run /agent show {} to verify.",
-                name, source_path.display(), name
-            ));
+                    name,
+                    source_path.display(),
+                    name
+                ),
+            );
         }
         _ => {
-            repl.chat.add_message(ChatRole::System, format!("Unknown subcommand: {subcommand}. Use /agent help."));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Unknown subcommand: {subcommand}. Use /agent help."),
+            );
         }
     }
 
@@ -1095,17 +1288,33 @@ pub(crate) fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
         "list" | "ls" | "" => {
             let routines = repl.state.routine_manager.list();
             if routines.is_empty() {
-                repl.chat.add_message(ChatRole::System, "No scheduled routines. Use /routine add <name> <interval_secs> <prompt>".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No scheduled routines. Use /routine add <name> <interval_secs> <prompt>"
+                        .to_string(),
+                );
                 return Ok(());
             }
             let mut msg = String::from("Scheduled Routines:\n\n");
             for r in routines {
                 let status = if r.enabled { "ON" } else { "OFF" };
-                let last = r.last_fired.map(|t| t.format("%H:%M:%S").to_string()).unwrap_or("never".into());
+                let last = r
+                    .last_fired
+                    .map(|t| t.format("%H:%M:%S").to_string())
+                    .unwrap_or("never".into());
                 msg.push_str(&format!(
                     "  [{}] {} ({})\n    Interval: {}s | Fires: {} | Last: {}\n    Prompt: {}\n\n",
-                    r.id, r.name, status, r.interval_secs, r.fire_count, last,
-                    if r.prompt.len() > 60 { format!("{}...", &r.prompt[..57]) } else { r.prompt.clone() }
+                    r.id,
+                    r.name,
+                    status,
+                    r.interval_secs,
+                    r.fire_count,
+                    last,
+                    if r.prompt.len() > 60 {
+                        format!("{}...", &r.prompt[..57])
+                    } else {
+                        r.prompt.clone()
+                    }
                 ));
             }
             repl.chat.add_message(ChatRole::System, msg);
@@ -1120,69 +1329,106 @@ pub(crate) fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
             let interval: u64 = match parts[2].parse() {
                 Ok(i) if i > 0 => i,
                 _ => {
-                    repl.chat.add_message(ChatRole::System, "Interval must be a positive number of seconds.".to_string());
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        "Interval must be a positive number of seconds.".to_string(),
+                    );
                     return Ok(());
                 }
             };
             let prompt = parts[3].to_string();
-            let routine = shannon_core::scheduled_routines::ScheduledRoutine::new(name, prompt, interval);
+            let routine =
+                shannon_core::scheduled_routines::ScheduledRoutine::new(name, prompt, interval);
             let id = routine.id.clone();
             repl.state.routine_manager.add(routine);
-            repl.chat.add_message(ChatRole::System, format!("Added routine [{id}]. Use /routine list to see all."));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Added routine [{id}]. Use /routine list to see all."),
+            );
         }
         "remove" | "rm" | "delete" => {
             let id = parts.get(1).copied().unwrap_or("");
             if id.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Usage: /routine remove <id>".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "Usage: /routine remove <id>".to_string());
                 return Ok(());
             }
             match repl.state.routine_manager.remove(id) {
-                Some(r) => repl.chat.add_message(ChatRole::System, format!("Removed routine: {}", r.name)),
-                None => repl.chat.add_message(ChatRole::System, format!("Routine '{id}' not found.")),
+                Some(r) => repl
+                    .chat
+                    .add_message(ChatRole::System, format!("Removed routine: {}", r.name)),
+                None => repl
+                    .chat
+                    .add_message(ChatRole::System, format!("Routine '{id}' not found.")),
             };
         }
         "toggle" => {
             let id = parts.get(1).copied().unwrap_or("");
             if id.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Usage: /routine toggle <id>".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "Usage: /routine toggle <id>".to_string());
                 return Ok(());
             }
             match repl.state.routine_manager.toggle(id) {
-                Some(enabled) => repl.chat.add_message(ChatRole::System,
-                    format!("Routine {} is now {}", id, if enabled { "enabled" } else { "disabled" })),
-                None => repl.chat.add_message(ChatRole::System, format!("Routine '{id}' not found.")),
+                Some(enabled) => repl.chat.add_message(
+                    ChatRole::System,
+                    format!(
+                        "Routine {} is now {}",
+                        id,
+                        if enabled { "enabled" } else { "disabled" }
+                    ),
+                ),
+                None => repl
+                    .chat
+                    .add_message(ChatRole::System, format!("Routine '{id}' not found.")),
             };
         }
         "fire" => {
             let due = repl.state.routine_manager.drain_due();
             if due.is_empty() {
-                repl.chat.add_message(ChatRole::System, "No routines are due to fire.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No routines are due to fire.".to_string());
             } else {
                 for (name, prompt) in due {
-                    repl.chat.add_message(ChatRole::System, format!("Routine '{name}' fired: {prompt}"));
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Routine '{name}' fired: {prompt}"),
+                    );
                 }
             }
         }
         "save" => {
             let path = shannon_core::scheduled_routines::RoutineManager::default_storage_path();
             match repl.state.routine_manager.save_to_file(&path) {
-                Ok(()) => { repl.chat.add_message(ChatRole::System, format!("Routines saved to {}", path.display())); }
-                Err(e) => { super::set_error(repl, &format!("saving routines: {e}")); }
+                Ok(()) => {
+                    repl.chat.add_message(
+                        ChatRole::System,
+                        format!("Routines saved to {}", path.display()),
+                    );
+                }
+                Err(e) => {
+                    super::set_error(repl, &format!("saving routines: {e}"));
+                }
             };
         }
         "help" | "-h" | "--help" => {
-            repl.chat.add_message(ChatRole::System,
+            repl.chat.add_message(
+                ChatRole::System,
                 "Scheduled Routines — recurring task execution\n\n\
                  Commands:\n  /routine list                     — show all routines\n  \
                  /routine add <name> <secs> <prompt> — add a new routine\n  \
                  /routine remove <id>               — remove a routine\n  \
                  /routine toggle <id>               — enable/disable\n  \
                  /routine fire                      — manually check and fire due routines\n  \
-                 /routine save                      — persist routines to disk".to_string());
+                 /routine save                      — persist routines to disk"
+                    .to_string(),
+            );
         }
         _ => {
-            repl.chat.add_message(ChatRole::System,
-                format!("Unknown routine subcommand: '{subcmd}'. Use /routine help."));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Unknown routine subcommand: '{subcmd}'. Use /routine help."),
+            );
         }
     }
     Ok(())
@@ -1196,11 +1442,18 @@ pub(crate) fn handle_routine(repl: &mut Repl, args: &str) -> Result<()> {
 fn interval_to_cron(interval: &str) -> std::result::Result<String, String> {
     let s = interval.trim();
     if s.len() < 2 {
-        return Err(format!("Invalid interval '{s}'. Use format like 5m, 2h, 30s, 1d"));
+        return Err(format!(
+            "Invalid interval '{s}'. Use format like 5m, 2h, 30s, 1d"
+        ));
     }
-    let unit = s.chars().last().ok_or_else(|| format!("Invalid interval '{s}': empty string"))?;
+    let unit = s
+        .chars()
+        .last()
+        .ok_or_else(|| format!("Invalid interval '{s}': empty string"))?;
     let num_str = &s[..s.len() - 1];
-    let n: u32 = num_str.parse().map_err(|_| format!("Invalid number in '{s}'"))?;
+    let n: u32 = num_str
+        .parse()
+        .map_err(|_| format!("Invalid number in '{s}'"))?;
     if n == 0 {
         return Err("Interval must be > 0".to_string());
     }
@@ -1224,7 +1477,9 @@ fn interval_to_cron(interval: &str) -> std::result::Result<String, String> {
 fn looks_like_interval(s: &str) -> bool {
     let s = s.trim();
     s.len() >= 2
-        && s.chars().last().is_some_and(|c| matches!(c, 's' | 'm' | 'h' | 'd'))
+        && s.chars()
+            .last()
+            .is_some_and(|c| matches!(c, 's' | 'm' | 'h' | 'd'))
         && s[..s.len() - 1].chars().all(|c| c.is_ascii_digit())
 }
 
@@ -1397,17 +1652,35 @@ pub(crate) fn handle_schedule(repl: &mut Repl, args: &str) -> Result<()> {
         return Ok(());
     }
 
-    match repl.runtime.block_on(repl.state.cron_tool.execute(serde_json::json!({
-        "operation": "Create",
-        "cron": cron_expr,
-        "prompt": prompt,
-        "recurring": recurring,
-    }))) {
+    match repl
+        .runtime
+        .block_on(repl.state.cron_tool.execute(serde_json::json!({
+            "operation": "Create",
+            "cron": cron_expr,
+            "prompt": prompt,
+            "recurring": recurring,
+        }))) {
         Ok(output) => {
-            let id = output.metadata.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let human = output.metadata.get("human_schedule").and_then(|v| v.as_str()).unwrap_or(&cron_expr);
-            let next_run = output.metadata.get("next_run").and_then(|v| v.as_str()).unwrap_or("pending");
-            let expires = output.metadata.get("expires_at").and_then(|v| v.as_str()).unwrap_or("N/A");
+            let id = output
+                .metadata
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let human = output
+                .metadata
+                .get("human_schedule")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&cron_expr);
+            let next_run = output
+                .metadata
+                .get("next_run")
+                .and_then(|v| v.as_str())
+                .unwrap_or("pending");
+            let expires = output
+                .metadata
+                .get("expires_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("N/A");
             let kind = if recurring { "Recurring" } else { "One-shot" };
 
             repl.chat.add_message(
@@ -1418,7 +1691,10 @@ pub(crate) fn handle_schedule(repl: &mut Repl, args: &str) -> Result<()> {
             );
 
             // Immediately execute the prompt (like Claude Code's /loop)
-            repl.chat.add_message(ChatRole::System, format!("[Executing scheduled task now] {prompt}"));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("[Executing scheduled task now] {prompt}"),
+            );
             repl.prompt.set_input(prompt.clone());
             super::submit_input(repl, None)?;
         }
@@ -1432,14 +1708,24 @@ pub(crate) fn handle_schedule(repl: &mut Repl, args: &str) -> Result<()> {
 
 /// List all scheduled cron jobs.
 fn schedule_list(repl: &mut Repl) -> Result<()> {
-    match repl.runtime.block_on(repl.state.cron_tool.execute(serde_json::json!({
-        "operation": "List"
-    }))) {
+    match repl
+        .runtime
+        .block_on(repl.state.cron_tool.execute(serde_json::json!({
+            "operation": "List"
+        }))) {
         Ok(output) => {
-            let jobs = output.metadata.get("jobs").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let jobs = output
+                .metadata
+                .get("jobs")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             if jobs.is_empty() {
-                repl.chat.add_message(ChatRole::System,
-                    "No scheduled tasks. Use /schedule <interval> <prompt> to create one.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No scheduled tasks. Use /schedule <interval> <prompt> to create one."
+                        .to_string(),
+                );
                 return Ok(());
             }
 
@@ -1469,7 +1755,8 @@ fn schedule_list(repl: &mut Repl) -> Result<()> {
 /// Remove a scheduled cron job by ID (supports prefix matching).
 fn schedule_remove(repl: &mut Repl, id_prefix: &str) -> Result<()> {
     if id_prefix.is_empty() {
-        repl.chat.add_message(ChatRole::System, "Usage: /schedule remove <id>".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "Usage: /schedule remove <id>".to_string());
         return Ok(());
     }
 
@@ -1483,12 +1770,17 @@ fn schedule_remove(repl: &mut Repl, id_prefix: &str) -> Result<()> {
         }
     };
 
-    match repl.runtime.block_on(repl.state.cron_tool.execute(serde_json::json!({
-        "operation": "Delete",
-        "id": job_id
-    }))) {
+    match repl
+        .runtime
+        .block_on(repl.state.cron_tool.execute(serde_json::json!({
+            "operation": "Delete",
+            "id": job_id
+        }))) {
         Ok(_) => {
-            repl.chat.add_message(ChatRole::System, format!("Cancelled scheduled task {job_id:.8}."));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Cancelled scheduled task {job_id:.8}."),
+            );
         }
         Err(e) => {
             super::set_error(repl, &format!("Failed to cancel: {e}"));
@@ -1498,7 +1790,10 @@ fn schedule_remove(repl: &mut Repl, id_prefix: &str) -> Result<()> {
 }
 
 /// Resolve a job ID from a prefix, returning the full ID or an error message.
-fn resolve_job_id(cron_tool: &shannon_tools::CronTool, id_prefix: &str) -> std::result::Result<String, String> {
+fn resolve_job_id(
+    cron_tool: &shannon_tools::CronTool,
+    id_prefix: &str,
+) -> std::result::Result<String, String> {
     let store = cron_tool.store();
     let store = store.read().map_err(|e| format!("Store error: {e}"))?;
 
@@ -1506,14 +1801,21 @@ fn resolve_job_id(cron_tool: &shannon_tools::CronTool, id_prefix: &str) -> std::
         return Ok(id_prefix.to_string());
     }
 
-    let matches: Vec<&String> = store.keys().filter(|id| id.starts_with(id_prefix)).collect();
+    let matches: Vec<&String> = store
+        .keys()
+        .filter(|id| id.starts_with(id_prefix))
+        .collect();
     match matches.len() {
         0 => Err(format!("No scheduled task matching '{id_prefix}'.")),
         1 => Ok(matches[0].clone()),
         _ => Err(format!(
             "Ambiguous ID '{}'. Matches: {}",
             id_prefix,
-            matches.iter().map(|m| m[..8.min(m.len())].to_string()).collect::<Vec<_>>().join(", ")
+            matches
+                .iter()
+                .map(|m| m[..8.min(m.len())].to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
     }
 }
@@ -1635,11 +1937,11 @@ mod tests {
     fn looks_like_interval_invalid() {
         assert!(!looks_like_interval(""));
         assert!(!looks_like_interval("m"));
-        assert!(!looks_like_interval("5"));     // no unit
+        assert!(!looks_like_interval("5")); // no unit
         assert!(!looks_like_interval("abc"));
-        assert!(!looks_like_interval("5x"));    // invalid unit
-        assert!(!looks_like_interval("-5m"));   // negative sign
-        assert!(!looks_like_interval("m5"));    // unit before number
+        assert!(!looks_like_interval("5x")); // invalid unit
+        assert!(!looks_like_interval("-5m")); // negative sign
+        assert!(!looks_like_interval("m5")); // unit before number
     }
 
     #[test]
@@ -1788,7 +2090,10 @@ mod tests {
     fn default_keybindings_entries_are_non_empty() {
         for (key, action) in default_keybindings() {
             assert!(!key.is_empty(), "key must not be empty");
-            assert!(!action.is_empty(), "action for key '{key}' must not be empty");
+            assert!(
+                !action.is_empty(),
+                "action for key '{key}' must not be empty"
+            );
         }
     }
 
@@ -1868,8 +2173,11 @@ mod tests {
         let input = input.trim();
         let mut max_iter: usize = 10;
         let mut keywords: Vec<String> = vec![
-            "DONE".into(), "FIXED".into(), "COMPLETE".into(),
-            "RESOLVED".into(), "ALL TESTS PASS".into(),
+            "DONE".into(),
+            "FIXED".into(),
+            "COMPLETE".into(),
+            "RESOLVED".into(),
+            "ALL TESTS PASS".into(),
         ];
         let mut remaining = input;
 
@@ -1895,7 +2203,10 @@ mod tests {
         let (max, kw, task) = parse_ralph_flags("fix the tests");
         assert_eq!(max, 10);
         assert_eq!(task, "fix the tests");
-        assert_eq!(kw, vec!["DONE", "FIXED", "COMPLETE", "RESOLVED", "ALL TESTS PASS"]);
+        assert_eq!(
+            kw,
+            vec!["DONE", "FIXED", "COMPLETE", "RESOLVED", "ALL TESTS PASS"]
+        );
     }
 
     #[test]

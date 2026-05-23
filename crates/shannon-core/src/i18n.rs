@@ -66,10 +66,7 @@ pub fn detect_system_locale() -> String {
 ///
 /// Handles formats like `"zh_CN"`, `"zh-Hans"`, `"en_US.UTF-8"`, `"zh"`.
 fn normalize_locale(locale: &str) -> String {
-    let base = locale
-        .split(['_', '-', '.'])
-        .next()
-        .unwrap_or(locale);
+    let base = locale.split(['_', '-', '.']).next().unwrap_or(locale);
     base.to_lowercase()
 }
 
@@ -98,12 +95,18 @@ mod tests {
 
     #[test]
     fn test_translate_with_variable_english() {
-        assert_eq!(t!("commands.model.set", locale = "en", name = "gpt-4o"), "Model set to: gpt-4o");
+        assert_eq!(
+            t!("commands.model.set", locale = "en", name = "gpt-4o"),
+            "Model set to: gpt-4o"
+        );
     }
 
     #[test]
     fn test_translate_with_variable_chinese() {
-        assert_eq!(t!("commands.model.set", locale = "zh", name = "gpt-4o"), "模型已设置为: gpt-4o");
+        assert_eq!(
+            t!("commands.model.set", locale = "zh", name = "gpt-4o"),
+            "模型已设置为: gpt-4o"
+        );
     }
 
     #[test]
@@ -127,7 +130,10 @@ mod tests {
     fn test_all_locales_resolve() {
         for lang in ["en", "zh", "hi", "es", "fr", "ar", "bn", "pt", "ru", "ja"] {
             let msg = t!("repl.chat_cleared", locale = lang);
-            assert!(!msg.is_empty(), "locale '{lang}' returned empty for repl.chat_cleared");
+            assert!(
+                !msg.is_empty(),
+                "locale '{lang}' returned empty for repl.chat_cleared"
+            );
         }
     }
 

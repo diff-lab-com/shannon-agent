@@ -19,9 +19,9 @@
 //! All error paths return proper `ToolError` values. Test code may use
 //! `panic!()` which is acceptable for test assertions.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
-use chrono::{Datelike, Duration, Local, NaiveDateTime, Timelike, TimeZone, Utc};
+use chrono::{Datelike, Duration, Local, NaiveDateTime, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -203,15 +203,29 @@ fn format_next_run_human(dt: &chrono::DateTime<chrono::Local>) -> String {
 
 /// Valid day-of-week name mappings (case-insensitive): name -> numeric (0=Sun..6=Sat)
 const DAY_NAMES: &[(&str, u32)] = &[
-    ("SUN", 0), ("MON", 1), ("TUE", 2), ("WED", 3),
-    ("THU", 4), ("FRI", 5), ("SAT", 6),
+    ("SUN", 0),
+    ("MON", 1),
+    ("TUE", 2),
+    ("WED", 3),
+    ("THU", 4),
+    ("FRI", 5),
+    ("SAT", 6),
 ];
 
 /// Valid month name mappings (case-insensitive): name -> numeric (1=Jan..12=Dec)
 const MONTH_NAMES: &[(&str, u32)] = &[
-    ("JAN", 1), ("FEB", 2), ("MAR", 3), ("APR", 4),
-    ("MAY", 5), ("JUN", 6), ("JUL", 7), ("AUG", 8),
-    ("SEP", 9), ("OCT", 10), ("NOV", 11), ("DEC", 12),
+    ("JAN", 1),
+    ("FEB", 2),
+    ("MAR", 3),
+    ("APR", 4),
+    ("MAY", 5),
+    ("JUN", 6),
+    ("JUL", 7),
+    ("AUG", 8),
+    ("SEP", 9),
+    ("OCT", 10),
+    ("NOV", 11),
+    ("DEC", 12),
 ];
 
 /// Field metadata for the 5 cron fields
@@ -222,23 +236,45 @@ struct FieldMeta {
 }
 
 const FIELD_META: [FieldMeta; 5] = [
-    FieldMeta { name: "minute",        min: 0,  max: 59  },
-    FieldMeta { name: "hour",          min: 0,  max: 23  },
-    FieldMeta { name: "day of month",  min: 1,  max: 31  },
-    FieldMeta { name: "month",         min: 1,  max: 12  },
-    FieldMeta { name: "day of week",   min: 0,  max: 6   },
+    FieldMeta {
+        name: "minute",
+        min: 0,
+        max: 59,
+    },
+    FieldMeta {
+        name: "hour",
+        min: 0,
+        max: 23,
+    },
+    FieldMeta {
+        name: "day of month",
+        min: 1,
+        max: 31,
+    },
+    FieldMeta {
+        name: "month",
+        min: 1,
+        max: 12,
+    },
+    FieldMeta {
+        name: "day of week",
+        min: 0,
+        max: 6,
+    },
 ];
 
 /// Expand a day-of-week name to its numeric value. Returns None if not a valid name.
 fn parse_day_name(s: &str) -> Option<u32> {
-    DAY_NAMES.iter()
+    DAY_NAMES
+        .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case(s))
         .map(|(_, v)| *v)
 }
 
 /// Expand a month name to its numeric value. Returns None if not a valid name.
 fn parse_month_name(s: &str) -> Option<u32> {
-    MONTH_NAMES.iter()
+    MONTH_NAMES
+        .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case(s))
         .map(|(_, v)| *v)
 }
@@ -272,7 +308,8 @@ fn validate_value(value: u32, meta: &FieldMeta) -> bool {
 fn validate_field(field: &str, meta: &FieldMeta, field_index: usize) -> Result<(), ToolError> {
     if field.is_empty() {
         return Err(ToolError::InvalidInput(format!(
-            "Empty {} field in cron expression", meta.name
+            "Empty {} field in cron expression",
+            meta.name
         )));
     }
 
@@ -294,12 +331,14 @@ fn validate_field_part(part: &str, meta: &FieldMeta, field_index: usize) -> Resu
     if let Some((base, step_str)) = part.split_once('/') {
         let step: u32 = step_str.parse::<u32>().map_err(|_| {
             ToolError::InvalidInput(format!(
-                "Invalid step value '{}' in {} field", step_str, meta.name
+                "Invalid step value '{}' in {} field",
+                step_str, meta.name
             ))
         })?;
         if step == 0 {
             return Err(ToolError::InvalidInput(format!(
-                "Step value must be > 0 in {} field", meta.name
+                "Step value must be > 0 in {} field",
+                meta.name
             )));
         }
 
@@ -312,12 +351,14 @@ fn validate_field_part(part: &str, meta: &FieldMeta, field_index: usize) -> Resu
         if let Some((start_str, end_str)) = base.split_once('-') {
             let start = resolve_token(start_str, field_index).ok_or_else(|| {
                 ToolError::InvalidInput(format!(
-                    "Invalid start value '{}' in {} field", start_str, meta.name
+                    "Invalid start value '{}' in {} field",
+                    start_str, meta.name
                 ))
             })?;
             let end = resolve_token(end_str, field_index).ok_or_else(|| {
                 ToolError::InvalidInput(format!(
-                    "Invalid end value '{}' in {} field", end_str, meta.name
+                    "Invalid end value '{}' in {} field",
+                    end_str, meta.name
                 ))
             })?;
             if !validate_value(start, meta) || !validate_value(end, meta) {
@@ -328,7 +369,8 @@ fn validate_field_part(part: &str, meta: &FieldMeta, field_index: usize) -> Resu
             }
             if start > end {
                 return Err(ToolError::InvalidInput(format!(
-                    "Range start {} > end {} in {} field", start, end, meta.name
+                    "Range start {} > end {} in {} field",
+                    start, end, meta.name
                 )));
             }
             return Ok(());
@@ -336,9 +378,7 @@ fn validate_field_part(part: &str, meta: &FieldMeta, field_index: usize) -> Resu
 
         // Single value/step: N/S
         let value = resolve_token(base, field_index).ok_or_else(|| {
-            ToolError::InvalidInput(format!(
-                "Invalid value '{}' in {} field", base, meta.name
-            ))
+            ToolError::InvalidInput(format!("Invalid value '{}' in {} field", base, meta.name))
         })?;
         if !validate_value(value, meta) {
             return Err(ToolError::InvalidInput(format!(
@@ -353,12 +393,14 @@ fn validate_field_part(part: &str, meta: &FieldMeta, field_index: usize) -> Resu
     if let Some((start_str, end_str)) = part.split_once('-') {
         let start = resolve_token(start_str, field_index).ok_or_else(|| {
             ToolError::InvalidInput(format!(
-                "Invalid start value '{}' in {} field", start_str, meta.name
+                "Invalid start value '{}' in {} field",
+                start_str, meta.name
             ))
         })?;
         let end = resolve_token(end_str, field_index).ok_or_else(|| {
             ToolError::InvalidInput(format!(
-                "Invalid end value '{}' in {} field", end_str, meta.name
+                "Invalid end value '{}' in {} field",
+                end_str, meta.name
             ))
         })?;
         if !validate_value(start, meta) || !validate_value(end, meta) {
@@ -369,7 +411,8 @@ fn validate_field_part(part: &str, meta: &FieldMeta, field_index: usize) -> Resu
         }
         if start > end {
             return Err(ToolError::InvalidInput(format!(
-                "Range start {} > end {} in {} field", start, end, meta.name
+                "Range start {} > end {} in {} field",
+                start, end, meta.name
             )));
         }
         return Ok(());
@@ -377,9 +420,7 @@ fn validate_field_part(part: &str, meta: &FieldMeta, field_index: usize) -> Resu
 
     // Single value (numeric or name)
     let value = resolve_token(part, field_index).ok_or_else(|| {
-        ToolError::InvalidInput(format!(
-            "Invalid value '{}' in {} field", part, meta.name
-        ))
+        ToolError::InvalidInput(format!("Invalid value '{}' in {} field", part, meta.name))
     })?;
     if !validate_value(value, meta) {
         return Err(ToolError::InvalidInput(format!(
@@ -438,12 +479,7 @@ fn build_field_values(field: &str, meta: &FieldMeta, field_index: usize) -> Cron
 }
 
 /// Collect matching values from a single field part.
-fn collect_part_values(
-    part: &str,
-    meta: &FieldMeta,
-    field_index: usize,
-    out: &mut Vec<u32>,
-) {
+fn collect_part_values(part: &str, meta: &FieldMeta, field_index: usize, out: &mut Vec<u32>) {
     if part == "*" {
         for v in meta.min..=meta.max {
             out.push(v);
@@ -504,10 +540,10 @@ pub fn calculate_next_fire(cron: &str, after: NaiveDateTime) -> Option<NaiveDate
 
     let parts: Vec<&str> = cron.split_whitespace().collect();
     let minutes = build_field_values(parts[0], &FIELD_META[0], 0);
-    let hours   = build_field_values(parts[1], &FIELD_META[1], 1);
-    let doms    = build_field_values(parts[2], &FIELD_META[2], 2);
-    let months  = build_field_values(parts[3], &FIELD_META[3], 3);
-    let dows    = build_field_values(parts[4], &FIELD_META[4], 4);
+    let hours = build_field_values(parts[1], &FIELD_META[1], 1);
+    let doms = build_field_values(parts[2], &FIELD_META[2], 2);
+    let months = build_field_values(parts[3], &FIELD_META[3], 3);
+    let dows = build_field_values(parts[4], &FIELD_META[4], 4);
 
     // Track whether dom/dow were originally wildcarded.
     // Standard cron behavior: if one is *, only the other is checked.
@@ -518,7 +554,11 @@ pub fn calculate_next_fire(cron: &str, after: NaiveDateTime) -> Option<NaiveDate
     // Advance by one minute to start searching from the next minute
     let mut candidate = after + Duration::minutes(1);
     // Zero out seconds and nanoseconds
-    candidate = candidate.with_second(0).unwrap_or(candidate).with_nanosecond(0).unwrap_or(candidate);
+    candidate = candidate
+        .with_second(0)
+        .unwrap_or(candidate)
+        .with_nanosecond(0)
+        .unwrap_or(candidate);
 
     let max_search = after + Duration::days(366);
 
@@ -553,8 +593,11 @@ pub fn calculate_next_fire(cron: &str, after: NaiveDateTime) -> Option<NaiveDate
 
         if !day_match {
             candidate += Duration::days(1);
-            candidate = candidate.with_hour(0).unwrap_or(candidate)
-                .with_minute(0).unwrap_or(candidate);
+            candidate = candidate
+                .with_hour(0)
+                .unwrap_or(candidate)
+                .with_minute(0)
+                .unwrap_or(candidate);
             continue;
         }
 
@@ -597,7 +640,9 @@ fn skip_to_next_month(current: &NaiveDateTime, months: &CronFieldValues) -> Naiv
     }
 
     NaiveDateTime::new(
-        chrono::NaiveDate::from_ymd_opt(year, month, 1).unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(chrono::NaiveDate::MIN)),
+        chrono::NaiveDate::from_ymd_opt(year, month, 1).unwrap_or_else(|| {
+            chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(chrono::NaiveDate::MIN)
+        }),
         chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap_or_default(),
     )
 }
@@ -647,7 +692,11 @@ fn humanize_field(field: &str, name: &str, names: Option<&[(&str, u32)]>) -> Str
 
     // Handle step
     if let Some((base, step)) = field.split_once('/') {
-        let base_str = if base == "*" { format!("every {name}") } else { base.to_string() };
+        let base_str = if base == "*" {
+            format!("every {name}")
+        } else {
+            base.to_string()
+        };
         return format!("{base_str} (every {step})");
     }
 
@@ -679,7 +728,8 @@ const DURABLE_CRON_FILE: &str = "durable_cron_jobs.json";
 impl CronTool {
     pub fn new() -> Self {
         Self {
-            description: "Schedule recurring or one-shot prompts for time-based task execution".to_string(),
+            description: "Schedule recurring or one-shot prompts for time-based task execution"
+                .to_string(),
             store: Arc::new(RwLock::new(HashMap::new())),
             max_jobs: 50,
             persistence_path: None,
@@ -689,10 +739,10 @@ impl CronTool {
     /// Create a CronTool with persistence enabled.
     /// Durable jobs are saved to/loaded from `~/.shannon/{DURABLE_CRON_FILE}`.
     pub fn with_persistence() -> Self {
-        let path = dirs::home_dir()
-            .map(|h| h.join(".shannon").join(DURABLE_CRON_FILE));
+        let path = dirs::home_dir().map(|h| h.join(".shannon").join(DURABLE_CRON_FILE));
         let mut tool = Self {
-            description: "Schedule recurring or one-shot prompts for time-based task execution".to_string(),
+            description: "Schedule recurring or one-shot prompts for time-based task execution"
+                .to_string(),
             store: Arc::new(RwLock::new(HashMap::new())),
             max_jobs: 50,
             persistence_path: path,
@@ -704,7 +754,8 @@ impl CronTool {
     /// Create a new CronTool with a shared store (for testing).
     pub fn with_store(store: CronStore) -> Self {
         Self {
-            description: "Schedule recurring or one-shot prompts for time-based task execution".to_string(),
+            description: "Schedule recurring or one-shot prompts for time-based task execution"
+                .to_string(),
             store,
             max_jobs: 50,
             persistence_path: None,
@@ -737,7 +788,9 @@ impl CronTool {
                             for job in jobs {
                                 // Skip expired jobs during load
                                 if let Some(ref expires_at) = job.expires_at {
-                                    if let Ok(expiry) = chrono::DateTime::parse_from_rfc3339(expires_at) {
+                                    if let Ok(expiry) =
+                                        chrono::DateTime::parse_from_rfc3339(expires_at)
+                                    {
                                         if expiry <= now {
                                             continue;
                                         }
@@ -747,8 +800,13 @@ impl CronTool {
                                 let mut job = job;
                                 let now_local = Local::now();
                                 if job.recurring {
-                                    if let Some(next) = calculate_next_fire(&job.cron, now_local.naive_local()) {
-                                        let local = Local.from_local_datetime(&next).single().unwrap_or(now_local);
+                                    if let Some(next) =
+                                        calculate_next_fire(&job.cron, now_local.naive_local())
+                                    {
+                                        let local = Local
+                                            .from_local_datetime(&next)
+                                            .single()
+                                            .unwrap_or(now_local);
                                         job.next_run = Some(local.to_rfc3339());
                                     }
                                 }
@@ -763,7 +821,10 @@ impl CronTool {
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to read durable cron jobs from {}: {e}", path.display());
+                tracing::warn!(
+                    "Failed to read durable cron jobs from {}: {e}",
+                    path.display()
+                );
             }
         }
     }
@@ -784,9 +845,7 @@ impl CronTool {
             }
         };
 
-        let durable_jobs: Vec<&CronJob> = store.values()
-            .filter(|j| j.durable)
-            .collect();
+        let durable_jobs: Vec<&CronJob> = store.values().filter(|j| j.durable).collect();
 
         if durable_jobs.is_empty() {
             // Remove the file if no durable jobs remain
@@ -804,7 +863,10 @@ impl CronTool {
         match serde_json::to_string_pretty(&durable_jobs) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&path, json) {
-                    tracing::warn!("Failed to write durable cron jobs to {}: {e}", path.display());
+                    tracing::warn!(
+                        "Failed to write durable cron jobs to {}: {e}",
+                        path.display()
+                    );
                 }
             }
             Err(e) => {
@@ -844,11 +906,10 @@ impl CronTool {
         let created_at = now.to_rfc3339();
 
         // Calculate next fire time
-        let next_run = calculate_next_fire(&input.cron, now.naive_local())
-            .map(|dt| {
-                let local = Local.from_local_datetime(&dt).single().unwrap_or(now);
-                local.to_rfc3339()
-            });
+        let next_run = calculate_next_fire(&input.cron, now.naive_local()).map(|dt| {
+            let local = Local.from_local_datetime(&dt).single().unwrap_or(now);
+            local.to_rfc3339()
+        });
 
         // Recurring jobs auto-expire after 7 days
         let expires_at = if recurring {
@@ -1049,10 +1110,8 @@ impl CronTool {
                     if !job.recurring {
                         job.fired = true;
                     } else if let Some(next) = calculate_next_fire(&job.cron, now.naive_local()) {
-                        let jitter_secs =
-                            shannon_core::scheduled_routines::apply_jitter(300, 900);
-                        let local =
-                            Local.from_local_datetime(&next).single().unwrap_or(now);
+                        let jitter_secs = shannon_core::scheduled_routines::apply_jitter(300, 900);
+                        let local = Local.from_local_datetime(&next).single().unwrap_or(now);
                         let jittered = local + chrono::Duration::seconds(jitter_secs as i64);
                         let next_str = jittered.to_rfc3339();
                         if let Some(last) = due.last_mut() {
@@ -1087,8 +1146,9 @@ impl Tool for CronTool {
 
         match operation {
             "Create" => {
-                let create_input: CronCreateInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid create cron input: {e}")))?;
+                let create_input: CronCreateInput = serde_json::from_value(input).map_err(|e| {
+                    ToolError::InvalidInput(format!("Invalid create cron input: {e}"))
+                })?;
                 let output = self.create_cron(create_input).await?;
                 Ok(ToolOutput {
                     content: format!("Created cron job with ID: {}", output.id),
@@ -1112,8 +1172,9 @@ impl Tool for CronTool {
                 })
             }
             "Delete" => {
-                let delete_input: CronDeleteInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid delete cron input: {e}")))?;
+                let delete_input: CronDeleteInput = serde_json::from_value(input).map_err(|e| {
+                    ToolError::InvalidInput(format!("Invalid delete cron input: {e}"))
+                })?;
                 let output = self.delete_cron(delete_input).await?;
                 Ok(ToolOutput {
                     content: format!("Deleted cron job: {}", output.id),
@@ -1126,8 +1187,9 @@ impl Tool for CronTool {
                 })
             }
             "List" => {
-                let list_input: CronListInput = serde_json::from_value(input)
-                    .map_err(|e| ToolError::InvalidInput(format!("Invalid list cron input: {e}")))?;
+                let list_input: CronListInput = serde_json::from_value(input).map_err(|e| {
+                    ToolError::InvalidInput(format!("Invalid list cron input: {e}"))
+                })?;
                 let output = self.list_cron(list_input).await?;
                 Ok(ToolOutput {
                     content: format!("Found {} cron jobs", output.jobs.len()),
@@ -1415,7 +1477,10 @@ mod tests {
         let next = calculate_next_fire("0 9 * * *", base).unwrap();
         assert_eq!(next.hour(), 9);
         assert_eq!(next.minute(), 0);
-        assert_eq!(next.date(), chrono::NaiveDate::from_ymd_opt(2026, 4, 3).unwrap());
+        assert_eq!(
+            next.date(),
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 3).unwrap()
+        );
     }
 
     #[test]
@@ -1427,7 +1492,10 @@ mod tests {
         );
         let next = calculate_next_fire("0 9 * * *", base).unwrap();
         assert_eq!(next.hour(), 9);
-        assert_eq!(next.date(), chrono::NaiveDate::from_ymd_opt(2026, 4, 4).unwrap());
+        assert_eq!(
+            next.date(),
+            chrono::NaiveDate::from_ymd_opt(2026, 4, 4).unwrap()
+        );
     }
 
     #[test]
@@ -1495,26 +1563,42 @@ mod tests {
     async fn test_create_and_list_cron_job() {
         let tool = CronTool::new();
 
-        let result = tool.execute(json!({
-            "operation": "Create",
-            "cron": "0 9 * * *",
-            "prompt": "Check the deploy"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "operation": "Create",
+                "cron": "0 9 * * *",
+                "prompt": "Check the deploy"
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("Created cron job"));
 
         let id = result.metadata.get("id").unwrap().as_str().unwrap();
-        let human = result.metadata.get("human_schedule").unwrap().as_str().unwrap();
+        let human = result
+            .metadata
+            .get("human_schedule")
+            .unwrap()
+            .as_str()
+            .unwrap();
         assert!(human.contains("9"));
 
         // List should show the job
-        let list_result = tool.execute(json!({
-            "operation": "List"
-        })).await.unwrap();
+        let list_result = tool
+            .execute(json!({
+                "operation": "List"
+            }))
+            .await
+            .unwrap();
 
         assert!(!list_result.is_error);
-        let jobs = list_result.metadata.get("jobs").unwrap().as_array().unwrap();
+        let jobs = list_result
+            .metadata
+            .get("jobs")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0]["id"].as_str().unwrap(), id);
     }
@@ -1523,11 +1607,14 @@ mod tests {
     async fn test_create_recurring_default() {
         let tool = CronTool::new();
 
-        let result = tool.execute(json!({
-            "operation": "Create",
-            "cron": "*/5 * * * *",
-            "prompt": "Ping server"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "operation": "Create",
+                "cron": "*/5 * * * *",
+                "prompt": "Ping server"
+            }))
+            .await
+            .unwrap();
 
         assert!(result.metadata.get("recurring").unwrap().as_bool().unwrap());
         // Should have expires_at (7-day expiry)
@@ -1540,12 +1627,15 @@ mod tests {
     async fn test_create_one_shot() {
         let tool = CronTool::new();
 
-        let result = tool.execute(json!({
-            "operation": "Create",
-            "cron": "30 14 28 2 *",
-            "prompt": "Check deploy",
-            "recurring": false
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "operation": "Create",
+                "cron": "30 14 28 2 *",
+                "prompt": "Check deploy",
+                "recurring": false
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.metadata.get("recurring").unwrap().as_bool().unwrap());
         // Should have expires_at (1-day safety net)
@@ -1556,28 +1646,48 @@ mod tests {
     async fn test_delete_cron_job() {
         let tool = CronTool::new();
 
-        let create_result = tool.execute(json!({
-            "operation": "Create",
-            "cron": "0 9 * * *",
-            "prompt": "Test"
-        })).await.unwrap();
+        let create_result = tool
+            .execute(json!({
+                "operation": "Create",
+                "cron": "0 9 * * *",
+                "prompt": "Test"
+            }))
+            .await
+            .unwrap();
 
-        let id = create_result.metadata.get("id").unwrap().as_str().unwrap().to_string();
+        let id = create_result
+            .metadata
+            .get("id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
 
-        let delete_result = tool.execute(json!({
-            "operation": "Delete",
-            "id": id
-        })).await.unwrap();
+        let delete_result = tool
+            .execute(json!({
+                "operation": "Delete",
+                "id": id
+            }))
+            .await
+            .unwrap();
 
         assert!(!delete_result.is_error);
         assert!(delete_result.content.contains(&id));
 
         // List should be empty
-        let list_result = tool.execute(json!({
-            "operation": "List"
-        })).await.unwrap();
+        let list_result = tool
+            .execute(json!({
+                "operation": "List"
+            }))
+            .await
+            .unwrap();
 
-        let jobs = list_result.metadata.get("jobs").unwrap().as_array().unwrap();
+        let jobs = list_result
+            .metadata
+            .get("jobs")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert_eq!(jobs.len(), 0);
     }
 
@@ -1585,10 +1695,12 @@ mod tests {
     async fn test_delete_nonexistent_job() {
         let tool = CronTool::new();
 
-        let result = tool.execute(json!({
-            "operation": "Delete",
-            "id": "nonexistent-id"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "operation": "Delete",
+                "id": "nonexistent-id"
+            }))
+            .await;
 
         assert!(result.is_err());
     }
@@ -1597,11 +1709,13 @@ mod tests {
     async fn test_create_invalid_cron() {
         let tool = CronTool::new();
 
-        let result = tool.execute(json!({
-            "operation": "Create",
-            "cron": "invalid * * * *",
-            "prompt": "Test"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "operation": "Create",
+                "cron": "invalid * * * *",
+                "prompt": "Test"
+            }))
+            .await;
 
         assert!(result.is_err());
     }
@@ -1610,11 +1724,13 @@ mod tests {
     async fn test_create_missing_fields() {
         let tool = CronTool::new();
 
-        let result = tool.execute(json!({
-            "operation": "Create",
-            "cron": "0 9 * * *"
-            // missing prompt
-        })).await;
+        let result = tool
+            .execute(json!({
+                "operation": "Create",
+                "cron": "0 9 * * *"
+                // missing prompt
+            }))
+            .await;
 
         assert!(result.is_err());
     }
@@ -1623,9 +1739,11 @@ mod tests {
     async fn test_unknown_operation() {
         let tool = CronTool::new();
 
-        let result = tool.execute(json!({
-            "operation": "Update"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "operation": "Update"
+            }))
+            .await;
 
         assert!(result.is_err());
     }
@@ -1634,9 +1752,11 @@ mod tests {
     async fn test_missing_operation() {
         let tool = CronTool::new();
 
-        let result = tool.execute(json!({
-            "cron": "0 9 * * *"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "cron": "0 9 * * *"
+            }))
+            .await;
 
         assert!(result.is_err());
     }
@@ -1650,14 +1770,23 @@ mod tests {
         let store = Arc::new(RwLock::new(HashMap::new()));
         let tool = CronTool::with_store(store.clone());
 
-        let result = tool.execute(json!({
-            "operation": "Create",
-            "cron": "30 14 28 2 *",
-            "prompt": "One-time check",
-            "recurring": false
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "operation": "Create",
+                "cron": "30 14 28 2 *",
+                "prompt": "One-time check",
+                "recurring": false
+            }))
+            .await
+            .unwrap();
 
-        let id = result.metadata.get("id").unwrap().as_str().unwrap().to_string();
+        let id = result
+            .metadata
+            .get("id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Verify job exists
         {
@@ -1681,13 +1810,22 @@ mod tests {
         let store = Arc::new(RwLock::new(HashMap::new()));
         let tool = CronTool::with_store(store.clone());
 
-        let result = tool.execute(json!({
-            "operation": "Create",
-            "cron": "*/5 * * * *",
-            "prompt": "Recurring ping"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "operation": "Create",
+                "cron": "*/5 * * * *",
+                "prompt": "Recurring ping"
+            }))
+            .await
+            .unwrap();
 
-        let id = result.metadata.get("id").unwrap().as_str().unwrap().to_string();
+        let id = result
+            .metadata
+            .get("id")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Verify job exists
         {
@@ -1767,11 +1905,13 @@ mod tests {
         // Try to create 51 jobs (max is 50)
         let mut results = Vec::new();
         for i in 0..51 {
-            let result = tool.execute(json!({
-                "operation": "Create",
-                "cron": format!("{} * * * *", i % 60),
-                "prompt": format!("Job {}", i)
-            })).await;
+            let result = tool
+                .execute(json!({
+                    "operation": "Create",
+                    "cron": format!("{} * * * *", i % 60),
+                    "prompt": format!("Job {}", i)
+                }))
+                .await;
 
             results.push(result);
         }

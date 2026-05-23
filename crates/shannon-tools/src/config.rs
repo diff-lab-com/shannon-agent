@@ -9,10 +9,10 @@
 //! - Default value management
 //! - Change notification callbacks
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -24,10 +24,7 @@ pub enum ConfigAction {
     /// Get a config value
     Get { key: String },
     /// Set a config value
-    Set {
-        key: String,
-        value: Value,
-    },
+    Set { key: String, value: Value },
     /// List config values with optional prefix filter
     List { prefix: Option<String> },
     /// Delete a config value
@@ -60,7 +57,10 @@ impl std::fmt::Debug for ConfigManager {
             .field("config_path", &self.config_path)
             .field("values", &self.values)
             .field("defaults", &self.defaults)
-            .field("on_change", &self.on_change.as_ref().map(|_| "Some(callback)"))
+            .field(
+                "on_change",
+                &self.on_change.as_ref().map(|_| "Some(callback)"),
+            )
             .finish()
     }
 }
@@ -196,10 +196,7 @@ impl ConfigManager {
             .map_err(|e| format!("Failed to parse config file: {e}"))?;
 
         if let Some(values) = data.get("values").and_then(|v| v.as_object()) {
-            self.values = values
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect();
+            self.values = values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         }
 
         if let Some(defaults) = data.get("defaults").and_then(|v| v.as_object()) {
@@ -236,7 +233,9 @@ pub struct ConfigTool {
 impl ConfigTool {
     pub fn new() -> Self {
         Self {
-            description: "Manage runtime configuration with get, set, list, delete, and reset operations".to_string(),
+            description:
+                "Manage runtime configuration with get, set, list, delete, and reset operations"
+                    .to_string(),
             manager: Arc::new(Mutex::new(ConfigManager::new())),
         }
     }
@@ -244,7 +243,9 @@ impl ConfigTool {
     /// Create a ConfigTool with a specific config manager (for testing or shared state).
     pub fn with_manager(manager: SharedConfigManager) -> Self {
         Self {
-            description: "Manage runtime configuration with get, set, list, delete, and reset operations".to_string(),
+            description:
+                "Manage runtime configuration with get, set, list, delete, and reset operations"
+                    .to_string(),
             manager,
         }
     }
@@ -252,13 +253,18 @@ impl ConfigTool {
     /// Create a ConfigTool with a specific config path (for testing).
     pub fn with_path(path: PathBuf) -> Self {
         Self {
-            description: "Manage runtime configuration with get, set, list, delete, and reset operations".to_string(),
+            description:
+                "Manage runtime configuration with get, set, list, delete, and reset operations"
+                    .to_string(),
             manager: Arc::new(Mutex::new(ConfigManager::with_path(path))),
         }
     }
 
     /// Execute a config action.
-    fn execute_action(&self, action: ConfigAction) -> Result<(String, HashMap<String, Value>), ToolError> {
+    fn execute_action(
+        &self,
+        action: ConfigAction,
+    ) -> Result<(String, HashMap<String, Value>), ToolError> {
         let mut manager = self.manager.lock().map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to acquire config lock: {e}"))
         })?;
@@ -392,7 +398,10 @@ fn format_value(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(arr) => {
             if arr.len() <= 3 {
-                format!("[{}]", arr.iter().map(format_value).collect::<Vec<_>>().join(", "))
+                format!(
+                    "[{}]",
+                    arr.iter().map(format_value).collect::<Vec<_>>().join(", ")
+                )
             } else {
                 format!("[{} items]", arr.len())
             }
@@ -511,7 +520,8 @@ mod tests {
 
     #[test]
     fn test_get_set_config_values() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
 
         manager.set("app.name".to_string(), json!("shannon"));
         manager.set("app.version".to_string(), json!("1.0.0"));
@@ -523,7 +533,8 @@ mod tests {
 
     #[test]
     fn test_delete_config_value() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
 
         manager.set("key".to_string(), json!("value"));
         assert_eq!(manager.get("key"), Some(json!("value")));
@@ -538,7 +549,8 @@ mod tests {
 
     #[test]
     fn test_nested_key_dot_notation() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
 
         manager.set("editor.theme".to_string(), json!("dark"));
         manager.set("editor.font.size".to_string(), json!(14));
@@ -553,7 +565,8 @@ mod tests {
 
     #[test]
     fn test_default_values() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
 
         manager.set_default("theme".to_string(), json!("dark"));
         manager.set_default("font_size".to_string(), json!(14));
@@ -569,7 +582,8 @@ mod tests {
 
     #[test]
     fn test_list_with_prefix_filter() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
 
         manager.set("editor.theme".to_string(), json!("dark"));
         manager.set("editor.font_size".to_string(), json!(14));
@@ -597,7 +611,8 @@ mod tests {
 
     #[test]
     fn test_reset_to_default() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
 
         manager.set_default("theme".to_string(), json!("dark"));
         manager.set("theme".to_string(), json!("light"));
@@ -637,7 +652,8 @@ mod tests {
 
     #[test]
     fn test_type_conversions() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
 
         manager.set("string_val".to_string(), json!("hello"));
         manager.set("int_val".to_string(), json!(42));
@@ -656,7 +672,8 @@ mod tests {
 
     #[test]
     fn test_invalid_key_handling() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("config.json"));
 
         assert_eq!(manager.get("nonexistent.key"), None);
         assert!(!manager.delete("nonexistent.key"));
@@ -673,7 +690,10 @@ mod tests {
 
         let mut manager = ConfigManager::with_path(path);
         manager.set_on_change(Box::new(move |key: &str, _value: &Value| {
-            changed_keys_clone.lock().unwrap_or_else(|e| e.into_inner()).push(key.to_string());
+            changed_keys_clone
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(key.to_string());
         }));
 
         manager.set("key1".to_string(), json!("value1"));
@@ -687,7 +707,8 @@ mod tests {
 
     #[test]
     fn test_load_nonexistent_file() {
-        let mut manager = ConfigManager::with_path(TempDir::new().unwrap().path().join("nonexistent.json"));
+        let mut manager =
+            ConfigManager::with_path(TempDir::new().unwrap().path().join("nonexistent.json"));
         // Should succeed without error
         let result = manager.load();
         assert!(result.is_ok());
@@ -717,12 +738,17 @@ mod tests {
         // First set a value
         tool.execute(json!({
             "action": { "set": { "key": "theme", "value": "dark" } }
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
 
         // Then get it
-        let result = tool.execute(json!({
-            "action": { "get": { "key": "theme" } }
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "action": { "get": { "key": "theme" } }
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("theme: dark"));
@@ -732,9 +758,11 @@ mod tests {
     #[tokio::test]
     async fn test_tool_get_nonexistent_key() {
         let tool = make_tool();
-        let result = tool.execute(json!({
-            "action": { "get": { "key": "nonexistent" } }
-        })).await;
+        let result = tool
+            .execute(json!({
+                "action": { "get": { "key": "nonexistent" } }
+            }))
+            .await;
 
         assert!(result.is_err());
     }
@@ -745,14 +773,21 @@ mod tests {
 
         tool.execute(json!({
             "action": { "set": { "key": "editor.theme", "value": "dark" } }
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
         tool.execute(json!({
             "action": { "set": { "key": "server.port", "value": 8080 } }
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
 
-        let result = tool.execute(json!({
-            "action": { "list": {} }
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "action": { "list": {} }
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("2 config key(s)"));
@@ -765,11 +800,16 @@ mod tests {
         // Add some values
         tool.execute(json!({
             "action": { "set": { "key": "editor.theme", "value": "light" } }
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
 
-        let result = tool.execute(json!({
-            "action": { "list": { "prefix": "editor." } }
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "action": { "list": { "prefix": "editor." } }
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("editor."));
@@ -781,11 +821,16 @@ mod tests {
 
         tool.execute(json!({
             "action": { "set": { "key": "temp.key", "value": "temp" } }
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
 
-        let result = tool.execute(json!({
-            "action": { "delete": { "key": "temp.key" } }
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "action": { "delete": { "key": "temp.key" } }
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("Deleted"));
@@ -798,11 +843,16 @@ mod tests {
         // Override a default
         tool.execute(json!({
             "action": { "set": { "key": "editor.theme", "value": "light" } }
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
 
-        let result = tool.execute(json!({
-            "action": { "reset": { "key": "editor.theme" } }
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "action": { "reset": { "key": "editor.theme" } }
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         assert!(result.content.contains("Reset"));

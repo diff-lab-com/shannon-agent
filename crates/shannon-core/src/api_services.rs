@@ -383,13 +383,7 @@ impl UsageStats {
     }
 
     /// Record usage for a specific model.
-    pub fn record(
-        &mut self,
-        model: &str,
-        input_tokens: u64,
-        output_tokens: u64,
-        cost: f64,
-    ) {
+    pub fn record(&mut self, model: &str, input_tokens: u64, output_tokens: u64, cost: f64) {
         let entry = self.by_model.entry(model.to_string()).or_default();
         entry.record(input_tokens, output_tokens, cost);
 
@@ -408,7 +402,11 @@ impl UsageStats {
     pub fn most_expensive_model(&self) -> Option<(String, &ModelUsage)> {
         self.by_model
             .iter()
-            .max_by(|a, b| a.1.cost.partial_cmp(&b.1.cost).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| {
+                a.1.cost
+                    .partial_cmp(&b.1.cost)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .map(|(k, v)| (k.clone(), v))
     }
 
@@ -467,14 +465,9 @@ impl UsageTracker {
     }
 
     /// Record usage from a completed API request.
-    pub fn record(
-        &mut self,
-        model: &str,
-        input_tokens: u64,
-        output_tokens: u64,
-        cost: f64,
-    ) {
-        self.current.record(model, input_tokens, output_tokens, cost);
+    pub fn record(&mut self, model: &str, input_tokens: u64, output_tokens: u64, cost: f64) {
+        self.current
+            .record(model, input_tokens, output_tokens, cost);
     }
 
     /// Get current session usage stats.
@@ -595,7 +588,8 @@ impl ApiManager {
 
     /// Set a default header for all requests.
     pub fn set_default_header(&mut self, key: &str, value: &str) {
-        self.default_headers.insert(key.to_string(), value.to_string());
+        self.default_headers
+            .insert(key.to_string(), value.to_string());
     }
 
     /// Remove a default header.
@@ -625,8 +619,7 @@ impl ApiManager {
 
         // Apply base URL if set and the endpoint is relative
         if let Some(ref base) = self.base_url {
-            if !request.endpoint.starts_with("http://")
-                && !request.endpoint.starts_with("https://")
+            if !request.endpoint.starts_with("http://") && !request.endpoint.starts_with("https://")
             {
                 request.endpoint = format!("{}{}", base.trim_end_matches('/'), request.endpoint);
             }
@@ -658,8 +651,7 @@ impl ApiManager {
                 .iter()
                 .find(|r| r.id == response.request_id)
             {
-                self.rate_limits
-                    .insert(req.endpoint.clone(), rl.clone());
+                self.rate_limits.insert(req.endpoint.clone(), rl.clone());
             }
         }
 
@@ -775,8 +767,7 @@ mod tests {
     #[test]
     fn test_response_rate_limited() {
         let reset_at = Utc::now() + Duration::seconds(60);
-        let resp =
-            ApiResponse::rate_limited("req-789", 50, 5000, 0, 100, reset_at);
+        let resp = ApiResponse::rate_limited("req-789", 50, 5000, 0, 100, reset_at);
 
         assert_eq!(resp.status, 429);
         assert!(!resp.success);
@@ -895,10 +886,7 @@ mod tests {
         let req = ApiRequest::get("/v1/messages");
         let prepared = manager.prepare_request(req);
 
-        assert_eq!(
-            prepared.endpoint,
-            "https://api.example.com/v1/messages"
-        );
+        assert_eq!(prepared.endpoint, "https://api.example.com/v1/messages");
         assert_eq!(prepared.headers.get("X-API-Key").unwrap(), "secret");
     }
 
@@ -913,7 +901,11 @@ mod tests {
         manager.process_response(&resp, "claude-opus-4-6", 100, 200, 0.01);
 
         assert_eq!(manager.usage_tracker().total_requests(), 1);
-        assert!(manager.get_rate_limit("https://api.example.com/data").is_some());
+        assert!(
+            manager
+                .get_rate_limit("https://api.example.com/data")
+                .is_some()
+        );
         assert!(manager.is_rate_limited());
     }
 
@@ -922,8 +914,8 @@ mod tests {
         let mut manager = ApiManager::new();
         manager.set_default_header("Accept", "application/json");
 
-        let req = ApiRequest::get("https://api.example.com/data")
-            .with_header("Accept", "text/plain");
+        let req =
+            ApiRequest::get("https://api.example.com/data").with_header("Accept", "text/plain");
 
         let prepared = manager.prepare_request(req);
         assert_eq!(prepared.headers.get("Accept").unwrap(), "text/plain");

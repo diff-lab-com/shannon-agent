@@ -3,7 +3,7 @@
 //! Measures file read/write/edit patterns, grep search, and glob matching
 //! using underlying operations (std::fs, regex, globset).
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::fs;
 use std::io::Write;
 
@@ -22,8 +22,7 @@ fn create_test_files(
         let path = dir.join(format!("test_file_{i:04}.txt"));
         let content = generate_content(size_bytes, i);
         let mut file = fs::File::create(&path).expect("create test file");
-        file.write_all(content.as_bytes())
-            .expect("write test file");
+        file.write_all(content.as_bytes()).expect("write test file");
         paths.push(path);
     }
     paths
@@ -31,7 +30,9 @@ fn create_test_files(
 
 /// Generate deterministic content of approximately `size_bytes`.
 fn generate_content(size_bytes: usize, seed: usize) -> String {
-    let line = format!("// Line from seed {seed}: Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor.");
+    let line = format!(
+        "// Line from seed {seed}: Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor."
+    );
     let line_len = line.len() + 1; // +1 for newline
     let line_count = size_bytes / line_len;
     let mut content = String::with_capacity(size_bytes);
@@ -67,13 +68,9 @@ fn bench_file_read(c: &mut Criterion) {
         let path = &paths[0];
         let label = file_size_label(size);
 
-        group.bench_with_input(
-            BenchmarkId::new("std_fs_read", label),
-            path,
-            |b, path| {
-                b.iter(|| fs::read(path));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("std_fs_read", label), path, |b, path| {
+            b.iter(|| fs::read(path));
+        });
 
         group.bench_with_input(
             BenchmarkId::new("std_fs_read_to_string", label),

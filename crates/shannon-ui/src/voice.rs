@@ -89,7 +89,8 @@ impl VoiceInput for MockVoiceInput {
 
     fn transcribe(&self, _audio: &[f32]) -> Result<String, String> {
         Err("Voice transcription unavailable: whisper not found. \
-             Install with: pip install openai-whisper".to_string())
+             Install with: pip install openai-whisper"
+            .to_string())
     }
 
     fn state(&self) -> VoiceState {
@@ -229,8 +230,7 @@ impl VoiceInput for WhisperVoiceInput {
             .status()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {
-                    "Whisper binary not found. Install with: pip install openai-whisper"
-                        .to_string()
+                    "Whisper binary not found. Install with: pip install openai-whisper".to_string()
                 } else {
                     format!("Failed to run whisper: {e}")
                 }
@@ -318,7 +318,9 @@ impl VoiceManager {
                     Ok(audio) => {
                         self.state = VoiceState::Transcribing;
                         let _ = audio; // Will be transcribed
-                        Some(VoiceEvent::RecordingStopped { duration_secs: duration })
+                        Some(VoiceEvent::RecordingStopped {
+                            duration_secs: duration,
+                        })
                     }
                     Err(e) => {
                         self.state = VoiceState::Idle;
@@ -360,7 +362,10 @@ impl VoiceManager {
 }
 
 /// Render voice recording indicator
-pub fn render_voice_indicator(state: &VoiceState, theme: &crate::theme::Theme) -> Option<Span<'static>> {
+pub fn render_voice_indicator(
+    state: &VoiceState,
+    theme: &crate::theme::Theme,
+) -> Option<Span<'static>> {
     match state {
         VoiceState::Idle => None,
         VoiceState::Recording => Some(Span::styled(

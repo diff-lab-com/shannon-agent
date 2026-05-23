@@ -11,9 +11,9 @@ use crate::permissions::ApprovalMode;
 use crate::state::StateManager;
 use crate::tools::Tool;
 
+use crate::testing::mock_dsl::MockResponse;
 #[cfg(test)]
 use crate::tools::ToolOutput;
-use crate::testing::mock_dsl::MockResponse;
 
 /// A fully wired test environment for Shannon integration tests.
 pub struct TestShannon {
@@ -74,14 +74,16 @@ impl TestShannonBuilder {
 
     /// Add a file to the workspace.
     pub fn workspace_file(mut self, path: &str, content: &str) -> Self {
-        self.workspace_files.push((path.to_string(), content.to_string()));
+        self.workspace_files
+            .push((path.to_string(), content.to_string()));
         self
     }
 
     /// Add multiple files to the workspace.
     pub fn workspace_files(mut self, files: Vec<(&str, &str)>) -> Self {
         for (path, content) in files {
-            self.workspace_files.push((path.to_string(), content.to_string()));
+            self.workspace_files
+                .push((path.to_string(), content.to_string()));
         }
         self
     }
@@ -216,8 +218,7 @@ impl TestShannon {
     /// Build a state manager using the home directory.
     pub fn build_state_manager(&self) -> StateManager {
         let sessions_dir = self.home_dir.path().join("sessions");
-        StateManager::with_sessions_dir(sessions_dir)
-            .expect("create state manager")
+        StateManager::with_sessions_dir(sessions_dir).expect("create state manager")
     }
 
     /// Get the pre-loaded mock responses for multi-turn testing.
@@ -235,20 +236,27 @@ impl TestShannon {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     /// A simple echo tool for testing.
     struct EchoTool;
 
     #[async_trait]
     impl Tool for EchoTool {
-        fn name(&self) -> &str { "Echo" }
-        fn description(&self) -> &str { "Echoes input as output" }
+        fn name(&self) -> &str {
+            "Echo"
+        }
+        fn description(&self) -> &str {
+            "Echoes input as output"
+        }
         fn input_schema(&self) -> Value {
             json!({"type": "object", "properties": {"text": {"type": "string"}}})
         }
 
-        async fn execute(&self, input: Value) -> Result<ToolOutput, shannon_tool_interface::ToolError> {
+        async fn execute(
+            &self,
+            input: Value,
+        ) -> Result<ToolOutput, shannon_tool_interface::ToolError> {
             Ok(ToolOutput::success(input.to_string()))
         }
     }
@@ -261,14 +269,23 @@ mod tests {
 
     #[async_trait]
     impl Tool for FailingTool {
-        fn name(&self) -> &str { &self.name }
-        fn description(&self) -> &str { "Always-failing test tool" }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "Always-failing test tool"
+        }
         fn input_schema(&self) -> Value {
             json!({"type": "object"})
         }
 
-        async fn execute(&self, _input: Value) -> Result<ToolOutput, shannon_tool_interface::ToolError> {
-            Err(shannon_tool_interface::ToolError::ExecutionFailed(self.error_message.clone()))
+        async fn execute(
+            &self,
+            _input: Value,
+        ) -> Result<ToolOutput, shannon_tool_interface::ToolError> {
+            Err(shannon_tool_interface::ToolError::ExecutionFailed(
+                self.error_message.clone(),
+            ))
         }
     }
 
@@ -301,14 +318,22 @@ mod tests {
 
     #[async_trait]
     impl Tool for RecordableTool {
-        fn name(&self) -> &str { &self.name }
-        fn description(&self) -> &str { "Recordable test tool" }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "Recordable test tool"
+        }
         fn input_schema(&self) -> Value {
             json!({"type": "object"})
         }
 
-        async fn execute(&self, input: Value) -> Result<ToolOutput, shannon_tool_interface::ToolError> {
-            self.call_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async fn execute(
+            &self,
+            input: Value,
+        ) -> Result<ToolOutput, shannon_tool_interface::ToolError> {
+            self.call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.call_inputs.lock().unwrap().push(input);
             let mut responses = self.responses.lock().unwrap();
             if let Some(output) = responses.pop() {
@@ -375,10 +400,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_recordable_tool() {
-        let tool = RecordableTool::new("TestTool", vec![
-            ToolOutput::success("response 1".to_string()),
-            ToolOutput::success("response 2".to_string()),
-        ]);
+        let tool = RecordableTool::new(
+            "TestTool",
+            vec![
+                ToolOutput::success("response 1".to_string()),
+                ToolOutput::success("response 2".to_string()),
+            ],
+        );
 
         let result = tool.execute(json!({"key": "value"})).await;
         assert!(result.is_ok());
@@ -418,10 +446,7 @@ mod tests {
     fn test_mock_responses() {
         use crate::testing::mock_dsl::text_response;
         let env = TestShannonBuilder::new()
-            .mock_responses(vec![
-                text_response("Hello"),
-                text_response("World"),
-            ])
+            .mock_responses(vec![text_response("Hello"), text_response("World")])
             .build();
 
         assert_eq!(env.mock_responses().len(), 2);

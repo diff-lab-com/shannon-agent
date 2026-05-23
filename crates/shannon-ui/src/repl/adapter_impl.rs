@@ -1,6 +1,6 @@
 //! UiAdapter trait implementation for Repl.
 
-use crate::adapter::{UiAdapter, UiError, UiResult, DisplayMessage};
+use crate::adapter::{DisplayMessage, UiAdapter, UiError, UiResult};
 use async_trait::async_trait;
 
 /// Implement UiAdapter for Repl to allow it to be used as a UI backend.

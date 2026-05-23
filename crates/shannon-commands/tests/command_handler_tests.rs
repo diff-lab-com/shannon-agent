@@ -7,15 +7,24 @@
 
 mod export_tests {
     use shannon_commands::export_utils::{
-        ExportFormat, ExportMessage, ExportSession, SessionMetadata, ExportOptions,
-        parse_export_args, generate_filename, export_to_markdown, export_to_json,
+        ExportFormat, ExportMessage, ExportOptions, ExportSession, SessionMetadata, export_to_json,
+        export_to_markdown, generate_filename, parse_export_args,
     };
 
     #[test]
     fn test_parse_format_markdown() {
-        assert_eq!(ExportFormat::parse_format("md"), Some(ExportFormat::Markdown));
-        assert_eq!(ExportFormat::parse_format("markdown"), Some(ExportFormat::Markdown));
-        assert_eq!(ExportFormat::parse_format("Markdown"), Some(ExportFormat::Markdown));
+        assert_eq!(
+            ExportFormat::parse_format("md"),
+            Some(ExportFormat::Markdown)
+        );
+        assert_eq!(
+            ExportFormat::parse_format("markdown"),
+            Some(ExportFormat::Markdown)
+        );
+        assert_eq!(
+            ExportFormat::parse_format("Markdown"),
+            Some(ExportFormat::Markdown)
+        );
     }
 
     #[test]
@@ -152,7 +161,9 @@ mod export_tests {
 // ── Search Utils Tests ───────────────────────────────────────────
 
 mod search_tests {
-    use shannon_commands::search_utils::{SearchOptions, parse_search_args, search_history, format_results};
+    use shannon_commands::search_utils::{
+        SearchOptions, format_results, parse_search_args, search_history,
+    };
 
     #[test]
     fn test_parse_search_args_simple() {
@@ -317,8 +328,7 @@ mod search_tests {
 
 mod diff_tests {
     use shannon_commands::diff_utils::{
-        DiffOptions, DiffScope, build_diff_command, DiffAnalyzer,
-        ChangeCategory,
+        ChangeCategory, DiffAnalyzer, DiffOptions, DiffScope, build_diff_command,
     };
 
     #[test]
@@ -381,7 +391,7 @@ mod diff_tests {
         let analysis = analyzer.analyze(
             "+fn new_function() {\n\
              +    let x = 1;\n\
-             +}\n"
+             +}\n",
         );
         assert!(analysis.total() > 0);
         assert!(analysis.count(ChangeCategory::Function) > 0);
@@ -392,7 +402,7 @@ mod diff_tests {
         let analyzer = DiffAnalyzer::new();
         let analysis = analyzer.analyze(
             "+use std::collections::HashMap;\n\
-             +import os from 'os';\n"
+             +import os from 'os';\n",
         );
         assert!(analysis.total() > 0);
         assert!(analysis.count(ChangeCategory::Import) > 0);
@@ -405,7 +415,7 @@ mod diff_tests {
             "+#[test]\n\
              +fn test_something() {\n\
              +    assert!(true);\n\
-             +}\n"
+             +}\n",
         );
         assert!(analysis.has_test_changes());
     }
@@ -423,7 +433,7 @@ mod diff_tests {
         let analyzer = DiffAnalyzer::new();
         let analysis = analyzer.analyze(
             "+fn foo() {}\n\
-             -fn bar() {}\n"
+             -fn bar() {}\n",
         );
         let summary = analysis.summary();
         assert!(!summary.is_empty());
@@ -434,8 +444,8 @@ mod diff_tests {
 
 mod config_tests {
     use shannon_commands::config_utils::{
-        ConfigAction, parse_config_action,
-        format_config_list, format_config_get, format_config_set, format_config_reset,
+        ConfigAction, format_config_get, format_config_list, format_config_reset,
+        format_config_set, parse_config_action,
     };
 
     #[test]
@@ -497,35 +507,53 @@ mod config_tests {
 
 mod debug_tests {
     use shannon_commands::debug_utils::{
-        DebugSubcommand, LogLevel, parse_debug_subcommand, parse_log_level,
-        format_debug_help, format_system_info,
+        DebugSubcommand, LogLevel, format_debug_help, format_system_info, parse_debug_subcommand,
+        parse_log_level,
     };
 
     #[test]
     fn test_parse_debug_subcommand_help() {
         // Unknown/empty args map to Help
-        assert!(matches!(parse_debug_subcommand("unknown"), DebugSubcommand::Help));
-        assert!(matches!(parse_debug_subcommand("help"), DebugSubcommand::Help));
+        assert!(matches!(
+            parse_debug_subcommand("unknown"),
+            DebugSubcommand::Help
+        ));
+        assert!(matches!(
+            parse_debug_subcommand("help"),
+            DebugSubcommand::Help
+        ));
     }
 
     #[test]
     fn test_parse_debug_subcommand_info() {
-        assert!(matches!(parse_debug_subcommand("info"), DebugSubcommand::Info));
+        assert!(matches!(
+            parse_debug_subcommand("info"),
+            DebugSubcommand::Info
+        ));
     }
 
     #[test]
     fn test_parse_debug_subcommand_log() {
-        assert!(matches!(parse_debug_subcommand("log"), DebugSubcommand::Log));
+        assert!(matches!(
+            parse_debug_subcommand("log"),
+            DebugSubcommand::Log
+        ));
     }
 
     #[test]
     fn test_parse_debug_subcommand_profile() {
-        assert!(matches!(parse_debug_subcommand("profile"), DebugSubcommand::Profile));
+        assert!(matches!(
+            parse_debug_subcommand("profile"),
+            DebugSubcommand::Profile
+        ));
     }
 
     #[test]
     fn test_parse_debug_subcommand_trace() {
-        assert!(matches!(parse_debug_subcommand("trace"), DebugSubcommand::Trace));
+        assert!(matches!(
+            parse_debug_subcommand("trace"),
+            DebugSubcommand::Trace
+        ));
     }
 
     #[test]
@@ -575,8 +603,7 @@ mod debug_tests {
 
 mod pdf_tests {
     use shannon_commands::pdf_utils::{
-        PdfOptions, PdfContent, PdfPage, ImageFormat,
-        PdfTable, PdfMetadata, get_pdf_prompt,
+        ImageFormat, PdfContent, PdfMetadata, PdfOptions, PdfPage, PdfTable, get_pdf_prompt,
     };
 
     #[test]
@@ -662,8 +689,7 @@ mod pdf_tests {
 
 mod review_pr_tests {
     use shannon_commands::review_utils::{
-        ReviewCategory, ReviewIssue, IssueSeverity, ReviewResult, Assessment,
-        get_review_prompt,
+        Assessment, IssueSeverity, ReviewCategory, ReviewIssue, ReviewResult, get_review_prompt,
     };
 
     #[test]
@@ -678,7 +704,10 @@ mod review_pr_tests {
     #[test]
     fn test_review_category_display_name() {
         // ReviewCategory does not impl Display; use display_name() method.
-        assert_eq!(ReviewCategory::Correctness.display_name(), "Code Correctness");
+        assert_eq!(
+            ReviewCategory::Correctness.display_name(),
+            "Code Correctness"
+        );
         assert_eq!(ReviewCategory::Security.display_name(), "Security");
     }
 
@@ -715,16 +744,13 @@ mod review_pr_tests {
 
     #[test]
     fn test_review_result_creation() {
-        let result = ReviewResult::new(
-            "PR overview".to_string(),
-            Assessment::NeedsWork,
-        )
-        .with_pr_number("123".to_string())
-        .with_issue(ReviewIssue::new(
-            ReviewCategory::Correctness,
-            IssueSeverity::Medium,
-            "Off-by-one".to_string(),
-        ));
+        let result = ReviewResult::new("PR overview".to_string(), Assessment::NeedsWork)
+            .with_pr_number("123".to_string())
+            .with_issue(ReviewIssue::new(
+                ReviewCategory::Correctness,
+                IssueSeverity::Medium,
+                "Off-by-one".to_string(),
+            ));
 
         assert_eq!(result.pr_number.as_deref(), Some("123"));
         assert_eq!(result.issues.len(), 1);
@@ -733,12 +759,9 @@ mod review_pr_tests {
 
     #[test]
     fn test_review_result_to_markdown() {
-        let result = ReviewResult::new(
-            "LGTM".to_string(),
-            Assessment::Approve,
-        )
-        .with_pr_number("42".to_string())
-        .with_positive("Good test coverage".to_string());
+        let result = ReviewResult::new("LGTM".to_string(), Assessment::Approve)
+            .with_pr_number("42".to_string())
+            .with_positive("Good test coverage".to_string());
 
         let md = result.to_markdown();
         assert!(md.contains("LGTM"));
@@ -751,8 +774,14 @@ mod review_pr_tests {
     fn test_assessment_variants() {
         assert!(matches!(Assessment::Approve, Assessment::Approve));
         assert!(matches!(Assessment::NeedsWork, Assessment::NeedsWork));
-        assert!(matches!(Assessment::RequestChanges, Assessment::RequestChanges));
-        assert!(matches!(Assessment::ApproveWithSuggestions, Assessment::ApproveWithSuggestions));
+        assert!(matches!(
+            Assessment::RequestChanges,
+            Assessment::RequestChanges
+        ));
+        assert!(matches!(
+            Assessment::ApproveWithSuggestions,
+            Assessment::ApproveWithSuggestions
+        ));
     }
 
     #[test]
@@ -770,10 +799,7 @@ mod review_pr_tests {
 
     #[test]
     fn test_review_result_empty_issues() {
-        let result = ReviewResult::new(
-            "Clean PR".to_string(),
-            Assessment::Approve,
-        );
+        let result = ReviewResult::new("Clean PR".to_string(), Assessment::Approve);
         assert!(result.issues.is_empty());
         assert!(result.positives.is_empty());
         assert_eq!(result.pr_number, None);

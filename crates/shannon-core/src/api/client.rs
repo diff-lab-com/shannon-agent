@@ -36,7 +36,11 @@ impl LlmClient {
     pub fn new(config: LlmClientConfig) -> Self {
         let client = Self::build_client(config.timeout_seconds);
 
-        Self { config, client, ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)) }
+        Self {
+            config,
+            client,
+            ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+        }
     }
 
     /// Create a new LLM API client, returning an error if client construction fails.
@@ -45,7 +49,11 @@ impl LlmClient {
             .timeout(Duration::from_secs(config.timeout_seconds))
             .build()
             .map_err(|e| ApiError::InvalidResponse(format!("Failed to create HTTP client: {e}")))?;
-        Ok(Self { config, client, ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)) })
+        Ok(Self {
+            config,
+            client,
+            ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+        })
     }
 
     /// Create client from environment variables.
@@ -72,7 +80,11 @@ impl LlmClient {
     pub fn new_unauthenticated(config: LlmClientConfig) -> Self {
         let client = Self::build_client(config.timeout_seconds);
 
-        Self { config, client, ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)) }
+        Self {
+            config,
+            client,
+            ollama_info: std::sync::Arc::new(std::sync::RwLock::new(None)),
+        }
     }
 
     /// Build authentication headers for the configured provider
@@ -82,7 +94,10 @@ impl LlmClient {
             LlmProvider::Anthropic => {
                 headers.push(("x-api-key".to_string(), self.config.api_key.clone()));
                 if !self.config.api_version.is_empty() {
-                    headers.push(("anthropic-version".to_string(), self.config.api_version.clone()));
+                    headers.push((
+                        "anthropic-version".to_string(),
+                        self.config.api_version.clone(),
+                    ));
                 }
             }
             LlmProvider::OpenAI
@@ -105,7 +120,10 @@ impl LlmClient {
             | LlmProvider::DashScope
             | LlmProvider::Cloudflare
             | LlmProvider::Replicate => {
-                headers.push(("Authorization".to_string(), format!("Bearer {}", self.config.api_key)));
+                headers.push((
+                    "Authorization".to_string(),
+                    format!("Bearer {}", self.config.api_key),
+                ));
             }
             LlmProvider::Custom => {
                 // Use extra_headers for custom provider auth
@@ -129,7 +147,10 @@ impl LlmClient {
                     headers.push((k.clone(), v.clone()));
                 }
                 if !self.config.api_key.is_empty() && self.config.extra_headers.is_empty() {
-                    headers.push(("Authorization".to_string(), format!("Bearer {}", self.config.api_key)));
+                    headers.push((
+                        "Authorization".to_string(),
+                        format!("Bearer {}", self.config.api_key),
+                    ));
                 }
             }
         }
@@ -138,7 +159,11 @@ impl LlmClient {
 
     /// Get the full endpoint URL for the configured provider
     pub(crate) fn endpoint_url(&self) -> String {
-        format!("{}{}", self.config.base_url, self.config.provider.endpoint())
+        format!(
+            "{}{}",
+            self.config.base_url,
+            self.config.provider.endpoint()
+        )
     }
 
     /// Send a message with streaming response (SSE)
@@ -179,25 +204,27 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(&request_body, &self.config.provider));
+            .json(&super::adapter::serialize_request(
+                &request_body,
+                &self.config.provider,
+            ));
 
         for (key, value) in headers {
             request = request.header(&key, &value);
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| match e.status() {
-                Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
-                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
-                Some(status) if status.is_server_error() => ApiError::HttpError(e),
-                Some(status) => ApiError::ApiError {
-                    status: status.as_u16(),
-                    message: format!("HTTP error: {e}"),
-                },
-                None => ApiError::HttpError(e),
-            })?;
+        let response = request.send().await.map_err(|e| match e.status() {
+            Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
+            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded {
+                retry_after_secs: None,
+            },
+            Some(status) if status.is_server_error() => ApiError::HttpError(e),
+            Some(status) => ApiError::ApiError {
+                status: status.as_u16(),
+                message: format!("HTTP error: {e}"),
+            },
+            None => ApiError::HttpError(e),
+        })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -208,7 +235,9 @@ impl LlmClient {
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
                 let _ = response.text().await; // consume body for connection reuse
-                return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
+                return Err(ApiError::RateLimitExceeded {
+                    retry_after_secs: retry_after,
+                });
             }
             let error_text = response.text().await.unwrap_or_default();
             return Err(ApiError::from_provider_response(
@@ -229,7 +258,10 @@ impl LlmClient {
                 max_reconnects,
             ))
         } else {
-            Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
+            Ok(super::streaming::sse_stream_from_response(
+                response,
+                self.config.provider.clone(),
+            ))
         }
     }
 
@@ -276,19 +308,18 @@ impl LlmClient {
         let body = super::adapter::serialize_request(&request_body, &self.config.provider);
         request = request.json(&body);
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| match e.status() {
-                Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
-                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
-                Some(status) if status.is_server_error() => ApiError::HttpError(e),
-                Some(status) => ApiError::ApiError {
-                    status: status.as_u16(),
-                    message: format!("HTTP error: {e}"),
-                },
-                None => ApiError::HttpError(e),
-            })?;
+        let response = request.send().await.map_err(|e| match e.status() {
+            Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
+            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded {
+                retry_after_secs: None,
+            },
+            Some(status) if status.is_server_error() => ApiError::HttpError(e),
+            Some(status) => ApiError::ApiError {
+                status: status.as_u16(),
+                message: format!("HTTP error: {e}"),
+            },
+            None => ApiError::HttpError(e),
+        })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -299,7 +330,9 @@ impl LlmClient {
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
                 let _ = response.text().await; // consume body for connection reuse
-                return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
+                return Err(ApiError::RateLimitExceeded {
+                    retry_after_secs: retry_after,
+                });
             }
             let error_text = response.text().await.unwrap_or_default();
             return Err(ApiError::from_provider_response(
@@ -309,7 +342,10 @@ impl LlmClient {
             ));
         }
 
-        Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
+        Ok(super::streaming::sse_stream_from_response(
+            response,
+            self.config.provider.clone(),
+        ))
     }
 
     /// Send a streaming message with optional resumption via `Last-Event-ID`.
@@ -348,7 +384,10 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(&request_body, &self.config.provider));
+            .json(&super::adapter::serialize_request(
+                &request_body,
+                &self.config.provider,
+            ));
 
         for (key, value) in headers {
             request = request.header(&key, &value);
@@ -358,19 +397,18 @@ impl LlmClient {
             request = request.header("Last-Event-ID", eid.as_str());
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| match e.status() {
-                Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
-                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
-                Some(status) if status.is_server_error() => ApiError::HttpError(e),
-                Some(status) => ApiError::ApiError {
-                    status: status.as_u16(),
-                    message: format!("HTTP error: {e}"),
-                },
-                None => ApiError::HttpError(e),
-            })?;
+        let response = request.send().await.map_err(|e| match e.status() {
+            Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
+            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded {
+                retry_after_secs: None,
+            },
+            Some(status) if status.is_server_error() => ApiError::HttpError(e),
+            Some(status) => ApiError::ApiError {
+                status: status.as_u16(),
+                message: format!("HTTP error: {e}"),
+            },
+            None => ApiError::HttpError(e),
+        })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -381,7 +419,9 @@ impl LlmClient {
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
                 let _ = response.text().await; // consume body for connection reuse
-                return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
+                return Err(ApiError::RateLimitExceeded {
+                    retry_after_secs: retry_after,
+                });
             }
             let error_text = response.text().await.unwrap_or_default();
             return Err(ApiError::from_provider_response(
@@ -391,7 +431,10 @@ impl LlmClient {
             ));
         }
 
-        Ok(super::streaming::sse_stream_from_response(response, self.config.provider.clone()))
+        Ok(super::streaming::sse_stream_from_response(
+            response,
+            self.config.provider.clone(),
+        ))
     }
 
     /// Send a message and wait for complete response (non-streaming)
@@ -425,25 +468,27 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(&request_body, &self.config.provider));
+            .json(&super::adapter::serialize_request(
+                &request_body,
+                &self.config.provider,
+            ));
 
         for (key, value) in headers {
             request = request.header(&key, &value);
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| match e.status() {
-                Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
-                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded { retry_after_secs: None },
-                Some(status) if status.is_server_error() => ApiError::HttpError(e),
-                Some(status) => ApiError::ApiError {
-                    status: status.as_u16(),
-                    message: format!("HTTP error: {e}"),
-                },
-                None => ApiError::HttpError(e),
-            })?;
+        let response = request.send().await.map_err(|e| match e.status() {
+            Some(reqwest::StatusCode::UNAUTHORIZED) => ApiError::AuthenticationFailed,
+            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => ApiError::RateLimitExceeded {
+                retry_after_secs: None,
+            },
+            Some(status) if status.is_server_error() => ApiError::HttpError(e),
+            Some(status) => ApiError::ApiError {
+                status: status.as_u16(),
+                message: format!("HTTP error: {e}"),
+            },
+            None => ApiError::HttpError(e),
+        })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -454,14 +499,12 @@ impl LlmClient {
                     .and_then(|v| v.to_str().ok())
                     .and_then(|v| v.parse::<u64>().ok());
                 let _ = response.text().await; // consume body for connection reuse
-                return Err(ApiError::RateLimitExceeded { retry_after_secs: retry_after });
+                return Err(ApiError::RateLimitExceeded {
+                    retry_after_secs: retry_after,
+                });
             }
             let error_text = response.text().await.unwrap_or_default();
-            let err = ApiError::from_provider_response(
-                &self.config.provider,
-                status,
-                &error_text,
-            );
+            let err = ApiError::from_provider_response(&self.config.provider, status, &error_text);
             // Ollama can return HTTP 500 with malformed-output errors for tiny
             // models.  Treat as recoverable: return the error as content so the
             // caller can display a warning instead of failing the entire query.
@@ -469,7 +512,11 @@ impl LlmClient {
                 // Extract just the error message from JSON like {"error":"..."}
                 let clean_msg = serde_json::from_str::<serde_json::Value>(&error_text)
                     .ok()
-                    .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(|s| s.to_string()))
+                    .and_then(|v| {
+                        v.get("error")
+                            .and_then(|e| e.as_str())
+                            .map(|s| s.to_string())
+                    })
                     .unwrap_or_else(|| error_text.chars().take(200).collect());
                 tracing::warn!("Ollama HTTP {status} recoverable error: {clean_msg}");
                 return Ok(vec![super::types::ContentBlock::Text {
@@ -480,9 +527,10 @@ impl LlmClient {
         }
 
         // Read the raw text first so we can apply provider-specific normalization
-        let body = response.text().await.map_err(|e| {
-            ApiError::InvalidResponse(format!("Failed to read response body: {e}"))
-        })?;
+        let body = response
+            .text()
+            .await
+            .map_err(|e| ApiError::InvalidResponse(format!("Failed to read response body: {e}")))?;
 
         let api_response = super::adapter::normalize_response(&body, &self.config.provider)?;
 
@@ -591,9 +639,10 @@ impl LlmClient {
             Ok(blocks) => Ok(blocks),
             Err(primary_err) => {
                 // Try fallback provider if configured
-                if let (Some(fallback_provider), Some(fallback_base_url)) =
-                    (&self.config.fallback_provider, &self.config.fallback_base_url)
-                {
+                if let (Some(fallback_provider), Some(fallback_base_url)) = (
+                    &self.config.fallback_provider,
+                    &self.config.fallback_base_url,
+                ) {
                     tracing::warn!(
                         "Primary provider {} failed: {}. Falling back to {} at {}",
                         self.config.provider,
@@ -608,8 +657,11 @@ impl LlmClient {
                     let fallback_retry = fallback_config.retry_config.clone();
                     let fallback_client = Self::new(fallback_config);
                     retry_request(&fallback_retry, || {
-                        fallback_client
-                            .send_message(messages.clone(), tools.clone(), system.clone())
+                        fallback_client.send_message(
+                            messages.clone(),
+                            tools.clone(),
+                            system.clone(),
+                        )
                     })
                     .await
                 } else {
@@ -635,9 +687,10 @@ impl LlmClient {
         match result {
             Ok(stream) => Ok(stream),
             Err(primary_err) => {
-                if let (Some(fallback_provider), Some(fallback_base_url)) =
-                    (&self.config.fallback_provider, &self.config.fallback_base_url)
-                {
+                if let (Some(fallback_provider), Some(fallback_base_url)) = (
+                    &self.config.fallback_provider,
+                    &self.config.fallback_base_url,
+                ) {
                     tracing::warn!(
                         "Primary provider {} stream failed: {}. Falling back to {} at {}",
                         self.config.provider,
@@ -651,8 +704,11 @@ impl LlmClient {
                     let fallback_retry = fallback_config.retry_config.clone();
                     let fallback_client = Self::new(fallback_config);
                     retry_request(&fallback_retry, || {
-                        fallback_client
-                            .send_message_stream(messages.clone(), tools.clone(), system.clone())
+                        fallback_client.send_message_stream(
+                            messages.clone(),
+                            tools.clone(),
+                            system.clone(),
+                        )
                     })
                     .await
                 } else {
@@ -671,16 +727,21 @@ impl LlmClient {
     ) -> Result<MessageStream, ApiError> {
         let retry_config = &self.config.retry_config;
         let result = retry_request(retry_config, || {
-            self.send_message_stream_structured(messages.clone(), tools.clone(), system_blocks.clone())
+            self.send_message_stream_structured(
+                messages.clone(),
+                tools.clone(),
+                system_blocks.clone(),
+            )
         })
         .await;
 
         match result {
             Ok(stream) => Ok(stream),
             Err(primary_err) => {
-                if let (Some(fallback_provider), Some(fallback_base_url)) =
-                    (&self.config.fallback_provider, &self.config.fallback_base_url)
-                {
+                if let (Some(fallback_provider), Some(fallback_base_url)) = (
+                    &self.config.fallback_provider,
+                    &self.config.fallback_base_url,
+                ) {
                     tracing::warn!(
                         "Primary provider {} structured stream failed: {}. Falling back to {} at {}",
                         self.config.provider,
@@ -694,8 +755,11 @@ impl LlmClient {
                     let fallback_retry = fallback_config.retry_config.clone();
                     let fallback_client = Self::new(fallback_config);
                     retry_request(&fallback_retry, || {
-                        fallback_client
-                            .send_message_stream_structured(messages.clone(), tools.clone(), system_blocks.clone())
+                        fallback_client.send_message_stream_structured(
+                            messages.clone(),
+                            tools.clone(),
+                            system_blocks.clone(),
+                        )
                     })
                     .await
                 } else {
@@ -738,12 +802,11 @@ impl LlmClient {
             || template.contains("ToolCall");
 
         // Parse num_ctx: try "parameters" string first, then "model_info" JSON
-        let num_ctx_from_params = raw
-            .get("parameters")
-            .and_then(|p| p.as_str())
-            .and_then(|params| {
-                params.lines()
-                    .find_map(|line| {
+        let num_ctx_from_params =
+            raw.get("parameters")
+                .and_then(|p| p.as_str())
+                .and_then(|params| {
+                    params.lines().find_map(|line| {
                         let parts: Vec<&str> = line.trim().splitn(2, ' ').collect();
                         if parts.len() == 2 && parts[0] == "num_ctx" {
                             parts[1].parse::<usize>().ok()
@@ -751,17 +814,15 @@ impl LlmClient {
                             None
                         }
                     })
-            });
+                });
 
         // Fallback: check model_info for context_length (e.g. {"general.context_length": 8192})
-        let num_ctx_from_model_info = raw
-            .get("model_info")
-            .and_then(|mi| {
-                mi.get("general.context_length")
-                    .or_else(|| mi.get("general.architecture.context_length"))
-                    .and_then(|v| v.as_u64())
-                    .map(|v| v as usize)
-            });
+        let num_ctx_from_model_info = raw.get("model_info").and_then(|mi| {
+            mi.get("general.context_length")
+                .or_else(|| mi.get("general.architecture.context_length"))
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+        });
 
         let num_ctx = num_ctx_from_params
             .or(num_ctx_from_model_info)
@@ -925,7 +986,10 @@ mod tests {
     fn test_add_header() {
         let mut client = LlmClient::new(test_config());
         client.add_header("X-Custom".to_string(), "value".to_string());
-        assert_eq!(client.config().extra_headers.get("X-Custom").unwrap(), "value");
+        assert_eq!(
+            client.config().extra_headers.get("X-Custom").unwrap(),
+            "value"
+        );
     }
 
     #[test]
@@ -945,7 +1009,10 @@ mod tests {
         let headers = client.auth_headers();
         let api_key = headers.iter().find(|(k, _)| k == "x-api-key").unwrap();
         assert_eq!(api_key.1, "test-key");
-        let version = headers.iter().find(|(k, _)| k == "anthropic-version").unwrap();
+        let version = headers
+            .iter()
+            .find(|(k, _)| k == "anthropic-version")
+            .unwrap();
         assert_eq!(version.1, "2023-06-01");
     }
 
@@ -981,7 +1048,8 @@ mod tests {
     fn test_auth_headers_custom_uses_extra() {
         let mut cfg = test_config();
         cfg.provider = LlmProvider::Custom;
-        cfg.extra_headers.insert("X-Api-Key".to_string(), "custom-key".to_string());
+        cfg.extra_headers
+            .insert("X-Api-Key".to_string(), "custom-key".to_string());
         let client = LlmClient::new(cfg);
         let headers = client.auth_headers();
         let key = headers.iter().find(|(k, _)| k == "X-Api-Key").unwrap();

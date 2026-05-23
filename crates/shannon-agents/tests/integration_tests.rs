@@ -40,9 +40,13 @@ mod message_tests {
 
         for mt in &types {
             let json = serde_json::to_string(mt).expect("serialize MessageType");
-            let deserialized: MessageType = serde_json::from_str(&json).expect("deserialize MessageType");
+            let deserialized: MessageType =
+                serde_json::from_str(&json).expect("deserialize MessageType");
             // MessageType doesn't implement PartialEq, so compare via serialization
-            assert_eq!(serde_json::to_string(mt).unwrap(), serde_json::to_string(&deserialized).unwrap());
+            assert_eq!(
+                serde_json::to_string(mt).unwrap(),
+                serde_json::to_string(&deserialized).unwrap()
+            );
         }
     }
 
@@ -57,7 +61,8 @@ mod message_tests {
 
         for p in &priorities {
             let json = serde_json::to_string(p).expect("serialize MessagePriority");
-            let deserialized: MessagePriority = serde_json::from_str(&json).expect("deserialize MessagePriority");
+            let deserialized: MessagePriority =
+                serde_json::from_str(&json).expect("deserialize MessagePriority");
             assert_eq!(*p, deserialized);
         }
     }
@@ -110,7 +115,8 @@ mod message_tests {
         );
 
         let json = serde_json::to_string(&msg).expect("serialize AgentMessage");
-        let deserialized: AgentMessage = serde_json::from_str(&json).expect("deserialize AgentMessage");
+        let deserialized: AgentMessage =
+            serde_json::from_str(&json).expect("deserialize AgentMessage");
 
         assert_eq!(msg.id, deserialized.id);
         assert_eq!(msg.from, deserialized.from);
@@ -128,7 +134,8 @@ mod message_tests {
     fn message_content_text_serialization() {
         let content = MessageContent::Text("hello".to_string());
         let json = serde_json::to_string(&content).expect("serialize Text content");
-        let deserialized: MessageContent = serde_json::from_str(&json).expect("deserialize Text content");
+        let deserialized: MessageContent =
+            serde_json::from_str(&json).expect("deserialize Text content");
         match deserialized {
             MessageContent::Text(s) => assert_eq!(s, "hello"),
             _ => panic!("Expected Text variant"),
@@ -139,7 +146,8 @@ mod message_tests {
     fn message_content_structured_serialization() {
         let content = MessageContent::Structured(serde_json::json!({"key": "value"}));
         let json = serde_json::to_string(&content).expect("serialize Structured content");
-        let deserialized: MessageContent = serde_json::from_str(&json).expect("deserialize Structured content");
+        let deserialized: MessageContent =
+            serde_json::from_str(&json).expect("deserialize Structured content");
         match deserialized {
             MessageContent::Structured(val) => assert_eq!(val["key"], "value"),
             _ => panic!("Expected Structured variant"),
@@ -154,7 +162,8 @@ mod message_tests {
             reason: None,
         });
         let json = serde_json::to_string(&content).expect("serialize Protocol content");
-        let deserialized: MessageContent = serde_json::from_str(&json).expect("deserialize Protocol content");
+        let deserialized: MessageContent =
+            serde_json::from_str(&json).expect("deserialize Protocol content");
         match deserialized {
             MessageContent::Protocol(ProtocolMessage::ShutdownResponse { approve, .. }) => {
                 assert!(approve);
@@ -170,7 +179,8 @@ mod message_tests {
             plan: "refactor module X".to_string(),
         };
         let json = serde_json::to_string(&msg).expect("serialize PlanApprovalRequest");
-        let deserialized: ProtocolMessage = serde_json::from_str(&json).expect("deserialize PlanApprovalRequest");
+        let deserialized: ProtocolMessage =
+            serde_json::from_str(&json).expect("deserialize PlanApprovalRequest");
 
         match deserialized {
             ProtocolMessage::PlanApprovalRequest { plan, .. } => {
@@ -185,7 +195,8 @@ mod message_tests {
         let msg = AgentMessage::broadcast("coordinator".to_string(), "all hands".to_string());
 
         let json = serde_json::to_string(&msg).expect("serialize broadcast");
-        let deserialized: AgentMessage = serde_json::from_str(&json).expect("deserialize broadcast");
+        let deserialized: AgentMessage =
+            serde_json::from_str(&json).expect("deserialize broadcast");
 
         assert_eq!(deserialized.to, "*");
         assert_eq!(deserialized.from, "coordinator");
@@ -216,12 +227,19 @@ mod coordinator_tests {
     fn coordinator_config_serialization_roundtrip() {
         let config = CoordinatorConfig::default();
         let json = serde_json::to_string(&config).expect("serialize CoordinatorConfig");
-        let deserialized: CoordinatorConfig = serde_json::from_str(&json).expect("deserialize CoordinatorConfig");
+        let deserialized: CoordinatorConfig =
+            serde_json::from_str(&json).expect("deserialize CoordinatorConfig");
 
         assert_eq!(config.max_team_size, deserialized.max_team_size);
         assert_eq!(config.message_buffer_size, deserialized.message_buffer_size);
-        assert_eq!(config.enable_worktree_isolation, deserialized.enable_worktree_isolation);
-        assert_eq!(config.heartbeat_interval_secs, deserialized.heartbeat_interval_secs);
+        assert_eq!(
+            config.enable_worktree_isolation,
+            deserialized.enable_worktree_isolation
+        );
+        assert_eq!(
+            config.heartbeat_interval_secs,
+            deserialized.heartbeat_interval_secs
+        );
         assert_eq!(config.assignment_strategy, deserialized.assignment_strategy);
     }
 
@@ -277,10 +295,14 @@ mod coordinator_tests {
         };
 
         let json = serde_json::to_string(&config).expect("serialize custom config");
-        let deserialized: CoordinatorConfig = serde_json::from_str(&json).expect("deserialize custom config");
+        let deserialized: CoordinatorConfig =
+            serde_json::from_str(&json).expect("deserialize custom config");
 
         assert_eq!(deserialized.max_team_size, 3);
-        assert_eq!(deserialized.assignment_strategy, AssignmentStrategy::LeastLoaded);
+        assert_eq!(
+            deserialized.assignment_strategy,
+            AssignmentStrategy::LeastLoaded
+        );
         assert_eq!(deserialized.heartbeat_interval_secs, 15);
     }
 
@@ -290,11 +312,26 @@ mod coordinator_tests {
         let coordinator = AgentCoordinator::new(config).await.unwrap();
 
         // Create team with 2 agents
-        coordinator.create_team("test-team".into(), "A test team".into()).await.unwrap();
-        let cfg1 = TeammateConfig { agent_type: "worker".into(), ..Default::default() };
-        let cfg2 = TeammateConfig { agent_type: "reviewer".into(), ..Default::default() };
-        coordinator.add_teammate("test-team", "agent-1".into(), cfg1).await.unwrap();
-        coordinator.add_teammate("test-team", "agent-2".into(), cfg2).await.unwrap();
+        coordinator
+            .create_team("test-team".into(), "A test team".into())
+            .await
+            .unwrap();
+        let cfg1 = TeammateConfig {
+            agent_type: "worker".into(),
+            ..Default::default()
+        };
+        let cfg2 = TeammateConfig {
+            agent_type: "reviewer".into(),
+            ..Default::default()
+        };
+        coordinator
+            .add_teammate("test-team", "agent-1".into(), cfg1)
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("test-team", "agent-2".into(), cfg2)
+            .await
+            .unwrap();
 
         // Verify team exists with 2 members
         let status = coordinator.team_status("test-team").await.unwrap();
@@ -355,7 +392,8 @@ mod multi_agent_tests {
             .depends_on("agent-0");
 
         let json = serde_json::to_string(&config).expect("serialize AgentConfig");
-        let deserialized: SpawnAgentConfig = serde_json::from_str(&json).expect("deserialize AgentConfig");
+        let deserialized: SpawnAgentConfig =
+            serde_json::from_str(&json).expect("deserialize AgentConfig");
 
         assert_eq!(deserialized.name, "agent-1");
         assert_eq!(deserialized.task, "do something");
@@ -406,7 +444,8 @@ mod multi_agent_tests {
         .with_fail_fast();
 
         let json = serde_json::to_string(&config).expect("serialize MultiAgentConfig");
-        let deserialized: MultiAgentConfig = serde_json::from_str(&json).expect("deserialize MultiAgentConfig");
+        let deserialized: MultiAgentConfig =
+            serde_json::from_str(&json).expect("deserialize MultiAgentConfig");
 
         assert_eq!(deserialized.agents.len(), 2);
         assert_eq!(deserialized.max_parallel, 3);
@@ -459,21 +498,33 @@ mod multi_agent_tests {
         // All succeeded: 3 agents, 3 successes, 0 failures
         let result = MultiAgentResult {
             agent_results: vec![
-                MultiAgentTaskResult::completed("a".to_string(), shannon_core::tools::ToolOutput {
-                    content: String::new(),
-                    is_error: false,
-                    metadata: std::collections::HashMap::new(),
-                }, Duration::ZERO),
-                MultiAgentTaskResult::completed("b".to_string(), shannon_core::tools::ToolOutput {
-                    content: String::new(),
-                    is_error: false,
-                    metadata: std::collections::HashMap::new(),
-                }, Duration::ZERO),
-                MultiAgentTaskResult::completed("c".to_string(), shannon_core::tools::ToolOutput {
-                    content: String::new(),
-                    is_error: false,
-                    metadata: std::collections::HashMap::new(),
-                }, Duration::ZERO),
+                MultiAgentTaskResult::completed(
+                    "a".to_string(),
+                    shannon_core::tools::ToolOutput {
+                        content: String::new(),
+                        is_error: false,
+                        metadata: std::collections::HashMap::new(),
+                    },
+                    Duration::ZERO,
+                ),
+                MultiAgentTaskResult::completed(
+                    "b".to_string(),
+                    shannon_core::tools::ToolOutput {
+                        content: String::new(),
+                        is_error: false,
+                        metadata: std::collections::HashMap::new(),
+                    },
+                    Duration::ZERO,
+                ),
+                MultiAgentTaskResult::completed(
+                    "c".to_string(),
+                    shannon_core::tools::ToolOutput {
+                        content: String::new(),
+                        is_error: false,
+                        metadata: std::collections::HashMap::new(),
+                    },
+                    Duration::ZERO,
+                ),
             ],
             total_duration: Duration::ZERO,
             success_count: 3,
@@ -738,7 +789,8 @@ mod sub_agent_tests {
 
         for status in &statuses {
             let json = serde_json::to_string(status).expect("serialize AgentStatus");
-            let deserialized: AgentStatus = serde_json::from_str(&json).expect("deserialize AgentStatus");
+            let deserialized: AgentStatus =
+                serde_json::from_str(&json).expect("deserialize AgentStatus");
             assert_eq!(*status, deserialized);
         }
     }
@@ -795,7 +847,8 @@ mod task_tests {
 
         for p in &priorities {
             let json = serde_json::to_string(p).expect("serialize TaskPriority");
-            let deserialized: TaskPriority = serde_json::from_str(&json).expect("deserialize TaskPriority");
+            let deserialized: TaskPriority =
+                serde_json::from_str(&json).expect("deserialize TaskPriority");
             assert_eq!(*p, deserialized);
         }
     }
@@ -813,7 +866,8 @@ mod task_tests {
 
         for s in &statuses {
             let json = serde_json::to_string(s).expect("serialize TaskStatus");
-            let deserialized: TaskStatus = serde_json::from_str(&json).expect("deserialize TaskStatus");
+            let deserialized: TaskStatus =
+                serde_json::from_str(&json).expect("deserialize TaskStatus");
             assert_eq!(*s, deserialized);
         }
     }
@@ -842,7 +896,8 @@ mod task_tests {
 
         for dt in &types {
             let json = serde_json::to_string(dt).expect("serialize DependencyType");
-            let deserialized: DependencyType = serde_json::from_str(&json).expect("deserialize DependencyType");
+            let deserialized: DependencyType =
+                serde_json::from_str(&json).expect("deserialize DependencyType");
             assert_eq!(*dt, deserialized);
         }
     }
@@ -856,7 +911,8 @@ mod task_tests {
         };
 
         let json = serde_json::to_string(&dep).expect("serialize TaskDependency");
-        let deserialized: TaskDependency = serde_json::from_str(&json).expect("deserialize TaskDependency");
+        let deserialized: TaskDependency =
+            serde_json::from_str(&json).expect("deserialize TaskDependency");
 
         assert_eq!(dep.task_id, deserialized.task_id);
         assert_eq!(dep.depends_on, deserialized.depends_on);
@@ -872,7 +928,10 @@ mod task_tests {
         );
 
         assert_eq!(task.subject, "Fix the bug");
-        assert_eq!(task.description, "Fix the null pointer dereference in module X");
+        assert_eq!(
+            task.description,
+            "Fix the null pointer dereference in module X"
+        );
         assert_eq!(task.status, TaskStatus::Pending);
         assert_eq!(task.priority, TaskPriority::High);
         assert!(task.owner.is_none());
@@ -892,7 +951,8 @@ mod task_tests {
         assert!(!task.is_ready());
 
         // Even when status is not Pending, it's not ready
-        let mut task2 = AgentTask::new("Task".to_string(), "desc".to_string(), TaskPriority::Medium);
+        let mut task2 =
+            AgentTask::new("Task".to_string(), "desc".to_string(), TaskPriority::Medium);
         task2.status = TaskStatus::InProgress;
         assert!(!task2.is_ready());
     }
@@ -949,7 +1009,11 @@ mod task_tests {
 
     #[test]
     fn agent_task_serialization_roundtrip() {
-        let mut task = AgentTask::new("Fix bug".to_string(), "Fix it".to_string(), TaskPriority::Critical);
+        let mut task = AgentTask::new(
+            "Fix bug".to_string(),
+            "Fix it".to_string(),
+            TaskPriority::Critical,
+        );
         task.assign_to("bob".to_string());
 
         let json = serde_json::to_string(&task).expect("serialize AgentTask");
@@ -1047,10 +1111,7 @@ mod teammate_tests {
 
     #[tokio::test]
     async fn teammate_new_initializes_idle() {
-        let teammate = Teammate::new(
-            "alice".to_string(),
-            TeammateConfig::default(),
-        );
+        let teammate = Teammate::new("alice".to_string(), TeammateConfig::default());
 
         assert_eq!(teammate.name, "alice");
         assert!(teammate.is_available().await);
@@ -1074,7 +1135,8 @@ mod teammate_tests {
         };
 
         let json = serde_json::to_string(&config).expect("serialize TeammateConfig");
-        let deserialized: TeammateConfig = serde_json::from_str(&json).expect("deserialize TeammateConfig");
+        let deserialized: TeammateConfig =
+            serde_json::from_str(&json).expect("deserialize TeammateConfig");
 
         assert_eq!(deserialized.agent_type, "specialist");
         assert_eq!(deserialized.capabilities.len(), 2);
@@ -1193,7 +1255,8 @@ mod teammate_tests {
         };
 
         let json = serde_json::to_string(&state).expect("serialize TeammateState");
-        let deserialized: TeammateState = serde_json::from_str(&json).expect("deserialize TeammateState");
+        let deserialized: TeammateState =
+            serde_json::from_str(&json).expect("deserialize TeammateState");
 
         assert_eq!(state.status, deserialized.status);
         assert_eq!(state.active_tasks, deserialized.active_tasks);
@@ -1209,7 +1272,11 @@ mod summary_tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn make_tool_output(content: &str, is_error: bool, tool_name: &str) -> shannon_core::tools::ToolOutput {
+    fn make_tool_output(
+        content: &str,
+        is_error: bool,
+        tool_name: &str,
+    ) -> shannon_core::tools::ToolOutput {
         let mut metadata = HashMap::new();
         metadata.insert("tool_name".into(), serde_json::json!(tool_name));
         shannon_core::tools::ToolOutput {
@@ -1322,7 +1389,8 @@ mod summary_tests {
         };
 
         let json = serde_json::to_string(&metrics).expect("serialize SuccessMetrics");
-        let deserialized: SuccessMetrics = serde_json::from_str(&json).expect("deserialize SuccessMetrics");
+        let deserialized: SuccessMetrics =
+            serde_json::from_str(&json).expect("deserialize SuccessMetrics");
 
         assert_eq!(metrics.total_agents, deserialized.total_agents);
         assert_eq!(metrics.successful, deserialized.successful);
@@ -1493,29 +1561,44 @@ mod teammate_metadata_tests {
         ]);
         agent.merge_metadata(entries).await;
 
-        assert_eq!(agent.get_metadata("role").await, Some(serde_json::json!("reviewer")));
-        assert_eq!(agent.get_metadata("priority").await, Some(serde_json::json!(42)));
+        assert_eq!(
+            agent.get_metadata("role").await,
+            Some(serde_json::json!("reviewer"))
+        );
+        assert_eq!(
+            agent.get_metadata("priority").await,
+            Some(serde_json::json!(42))
+        );
     }
 
     #[tokio::test]
     async fn merge_metadata_overwrites_existing() {
         let agent = make_teammate();
-        agent.set_metadata("key".to_string(), serde_json::json!("old")).await;
+        agent
+            .set_metadata("key".to_string(), serde_json::json!("old"))
+            .await;
 
-        let entries = std::collections::HashMap::from([
-            ("key".to_string(), serde_json::json!("new")),
-        ]);
+        let entries =
+            std::collections::HashMap::from([("key".to_string(), serde_json::json!("new"))]);
         agent.merge_metadata(entries).await;
 
-        assert_eq!(agent.get_metadata("key").await, Some(serde_json::json!("new")));
+        assert_eq!(
+            agent.get_metadata("key").await,
+            Some(serde_json::json!("new"))
+        );
     }
 
     #[tokio::test]
     async fn merge_metadata_empty_is_noop() {
         let agent = make_teammate();
-        agent.set_metadata("existing".to_string(), serde_json::json!("value")).await;
+        agent
+            .set_metadata("existing".to_string(), serde_json::json!("value"))
+            .await;
         agent.merge_metadata(std::collections::HashMap::new()).await;
-        assert_eq!(agent.get_metadata("existing").await, Some(serde_json::json!("value")));
+        assert_eq!(
+            agent.get_metadata("existing").await,
+            Some(serde_json::json!("value"))
+        );
     }
 }
 
@@ -1525,7 +1608,7 @@ mod teammate_metadata_tests {
 
 mod conversation_history_tests {
     use super::*;
-    use shannon_agents::{Teammate, TeammateConfig, ChatTurn, MockAgentExecutor};
+    use shannon_agents::{ChatTurn, MockAgentExecutor, Teammate, TeammateConfig};
     use std::sync::Arc;
 
     fn make_teammate_with_executor() -> Teammate {
@@ -1579,7 +1662,11 @@ mod conversation_history_tests {
     #[tokio::test]
     async fn chat_with_executor_appends_to_history() {
         let agent = make_teammate_with_executor();
-        let msg = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "Hello".to_string());
+        let msg = AgentMessage::new_text(
+            "leader".to_string(),
+            "test-agent".to_string(),
+            "Hello".to_string(),
+        );
 
         let response = agent.handle_chat_message(msg).await.unwrap();
         match &response.content {
@@ -1599,10 +1686,18 @@ mod conversation_history_tests {
     async fn multiple_turns_accumulate_history() {
         let agent = make_teammate_with_executor();
 
-        let msg1 = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "First".to_string());
+        let msg1 = AgentMessage::new_text(
+            "leader".to_string(),
+            "test-agent".to_string(),
+            "First".to_string(),
+        );
         let _ = agent.handle_chat_message(msg1).await.unwrap();
 
-        let msg2 = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "Second".to_string());
+        let msg2 = AgentMessage::new_text(
+            "leader".to_string(),
+            "test-agent".to_string(),
+            "Second".to_string(),
+        );
         let _ = agent.handle_chat_message(msg2).await.unwrap();
 
         let history = agent.conversation_history().await;
@@ -1615,7 +1710,11 @@ mod conversation_history_tests {
     async fn clear_history_resets_context() {
         let agent = make_teammate_with_executor();
 
-        let msg = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "Hello".to_string());
+        let msg = AgentMessage::new_text(
+            "leader".to_string(),
+            "test-agent".to_string(),
+            "Hello".to_string(),
+        );
         let _ = agent.handle_chat_message(msg).await.unwrap();
         assert_eq!(agent.conversation_history().await.len(), 2);
 
@@ -1626,7 +1725,11 @@ mod conversation_history_tests {
     #[tokio::test]
     async fn placeholder_mode_does_not_append_history() {
         let agent = make_teammate_no_executor();
-        let msg = AgentMessage::new_text("leader".to_string(), "test-agent".to_string(), "Hello".to_string());
+        let msg = AgentMessage::new_text(
+            "leader".to_string(),
+            "test-agent".to_string(),
+            "Hello".to_string(),
+        );
 
         let _ = agent.handle_chat_message(msg).await.unwrap();
         // Placeholder mode should not modify history
@@ -1728,21 +1831,33 @@ mod sub_agent_context_tests {
         // Mixed results: 2 succeeded, 1 failed
         let result = MultiAgentResult {
             agent_results: vec![
-                MultiAgentTaskResult::completed("a".to_string(), ToolOutput {
-                    content: "Success A".to_string(),
-                    is_error: false,
-                    metadata: std::collections::HashMap::new(),
-                }, Duration::ZERO),
-                MultiAgentTaskResult::completed("b".to_string(), ToolOutput {
-                    content: "Error: file not found".to_string(),
-                    is_error: true,
-                    metadata: std::collections::HashMap::new(),
-                }, Duration::ZERO),
-                MultiAgentTaskResult::completed("c".to_string(), ToolOutput {
-                    content: "Success C".to_string(),
-                    is_error: false,
-                    metadata: std::collections::HashMap::new(),
-                }, Duration::ZERO),
+                MultiAgentTaskResult::completed(
+                    "a".to_string(),
+                    ToolOutput {
+                        content: "Success A".to_string(),
+                        is_error: false,
+                        metadata: std::collections::HashMap::new(),
+                    },
+                    Duration::ZERO,
+                ),
+                MultiAgentTaskResult::completed(
+                    "b".to_string(),
+                    ToolOutput {
+                        content: "Error: file not found".to_string(),
+                        is_error: true,
+                        metadata: std::collections::HashMap::new(),
+                    },
+                    Duration::ZERO,
+                ),
+                MultiAgentTaskResult::completed(
+                    "c".to_string(),
+                    ToolOutput {
+                        content: "Success C".to_string(),
+                        is_error: false,
+                        metadata: std::collections::HashMap::new(),
+                    },
+                    Duration::ZERO,
+                ),
             ],
             total_duration: Duration::from_secs(5),
             success_count: 2,
@@ -1754,7 +1869,11 @@ mod sub_agent_context_tests {
         assert_eq!(result.failure_count, 1);
 
         // Verify individual error is captured
-        let failed = result.agent_results.iter().find(|r| r.agent_name == "b").unwrap();
+        let failed = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "b")
+            .unwrap();
         assert!(failed.output.as_ref().unwrap().is_error);
         assert!(failed.output.as_ref().unwrap().content.contains("Error"));
     }
@@ -1765,16 +1884,24 @@ mod sub_agent_context_tests {
 
         let result = MultiAgentResult {
             agent_results: vec![
-                MultiAgentTaskResult::completed("a".to_string(), ToolOutput {
-                    content: String::new(),
-                    is_error: false,
-                    metadata: std::collections::HashMap::new(),
-                }, Duration::ZERO),
-                MultiAgentTaskResult::completed("b".to_string(), ToolOutput {
-                    content: String::new(),
-                    is_error: false,
-                    metadata: std::collections::HashMap::new(),
-                }, Duration::ZERO),
+                MultiAgentTaskResult::completed(
+                    "a".to_string(),
+                    ToolOutput {
+                        content: String::new(),
+                        is_error: false,
+                        metadata: std::collections::HashMap::new(),
+                    },
+                    Duration::ZERO,
+                ),
+                MultiAgentTaskResult::completed(
+                    "b".to_string(),
+                    ToolOutput {
+                        content: String::new(),
+                        is_error: false,
+                        metadata: std::collections::HashMap::new(),
+                    },
+                    Duration::ZERO,
+                ),
             ],
             total_duration: Duration::ZERO,
             success_count: 2,
@@ -1816,11 +1943,15 @@ mod sub_agent_context_tests {
 
     #[test]
     fn multi_agent_config_timeout_limits_execution() {
-        let config = MultiAgentConfig::new(vec![
-            SpawnAgentConfig::new("slow-agent", "long running task"),
-        ])
+        let config = MultiAgentConfig::new(vec![SpawnAgentConfig::new(
+            "slow-agent",
+            "long running task",
+        )])
         .with_timeout(Duration::from_secs(30));
 
-        assert_eq!(config.timeout_secs, 30, "timeout should limit agent execution time");
+        assert_eq!(
+            config.timeout_secs, 30,
+            "timeout should limit agent execution time"
+        );
     }
 }

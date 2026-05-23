@@ -44,12 +44,7 @@ fn git(cwd: &Path, args: &[&str]) {
         .unwrap();
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!(
-            "git {} failed in {:?}: {}",
-            args.join(" "),
-            cwd,
-            stderr
-        );
+        panic!("git {} failed in {:?}: {}", args.join(" "), cwd, stderr);
     }
 }
 
@@ -149,7 +144,10 @@ fn test_checkpoint_creates_git_commit() {
     .trim()
     .to_string();
     assert!(files.contains("hello.txt"), "hello.txt in commit stat");
-    assert!(files.contains("new_file.txt"), "new_file.txt in commit stat");
+    assert!(
+        files.contains("new_file.txt"),
+        "new_file.txt in commit stat"
+    );
 }
 
 // ── Test 2: restore a single file ───────────────────────────────────
@@ -161,7 +159,9 @@ fn test_checkpoint_restores_single_file() {
     let path = dir.path();
 
     let mgr = make_manager();
-    let cp = mgr.create_checkpoint("edit", "before modification").unwrap();
+    let cp = mgr
+        .create_checkpoint("edit", "before modification")
+        .unwrap();
     let cp_hash = cp.hash.clone();
     mgr.record_turn(0, cp, vec!["hello.txt".into()], Some("modify file".into()));
 
@@ -189,9 +189,7 @@ fn test_checkpoint_restores_multiple_files() {
     fs::write(path.join("extra.txt"), "brand new\n").unwrap();
 
     let mgr = make_manager();
-    let cp = mgr
-        .create_checkpoint("edit", "before multi-edit")
-        .unwrap();
+    let cp = mgr.create_checkpoint("edit", "before multi-edit").unwrap();
     mgr.record_turn(
         0,
         cp,
@@ -244,7 +242,10 @@ fn test_checkpoint_handles_untracked_files() {
     )
     .trim()
     .to_string();
-    assert!(!tracked.is_empty(), "untracked file should be tracked after checkpoint");
+    assert!(
+        !tracked.is_empty(),
+        "untracked file should be tracked after checkpoint"
+    );
 }
 
 // ── Test 5: handles file rename ─────────────────────────────────────
@@ -308,7 +309,11 @@ fn test_checkpoint_handles_delete() {
 
     let diff = String::from_utf8_lossy(
         &Command::new("git")
-            .args(["diff", "--name-status", &format!("{}..{}", cp_hash, cp2.hash)])
+            .args([
+                "diff",
+                "--name-status",
+                &format!("{}..{}", cp_hash, cp2.hash),
+            ])
             .current_dir(path)
             .output()
             .unwrap()
@@ -342,9 +347,7 @@ fn test_checkpoint_with_dirty_index() {
     git(path, &["add", "hello.txt"]);
 
     let mgr = make_manager();
-    let cp = mgr
-        .create_checkpoint("edit", "dirty index")
-        .unwrap();
+    let cp = mgr.create_checkpoint("edit", "dirty index").unwrap();
 
     // The checkpoint commit should include the staged content.
     let content = String::from_utf8_lossy(
@@ -374,8 +377,7 @@ fn test_checkpoint_with_merge_conflict() {
     git(path, &["add", "-A"]);
     git(path, &["commit", "-m", "feature commit", "--no-gpg-sign"]);
 
-    let _ = git_ok(path, &["checkout", "master"])
-        || git_ok(path, &["checkout", "main"]);
+    let _ = git_ok(path, &["checkout", "master"]) || git_ok(path, &["checkout", "main"]);
 
     fs::write(path.join("hello.txt"), "main content\n").unwrap();
     git(path, &["add", "-A"]);
@@ -386,7 +388,8 @@ fn test_checkpoint_with_merge_conflict() {
     if !merge_ok {
         // Merge conflict exists — test checkpoint in this state.
         // Write conflict markers into the file to simulate resolution staging.
-        let conflict_content = "<<<<<<< HEAD\nmain content\n=======\nfeature content\n>>>>>>> feature\n";
+        let conflict_content =
+            "<<<<<<< HEAD\nmain content\n=======\nfeature content\n>>>>>>> feature\n";
         fs::write(path.join("hello.txt"), conflict_content).unwrap();
         git(path, &["add", "hello.txt"]);
     }
@@ -483,7 +486,11 @@ fn test_checkpoint_corrupted_state() {
 
     // Now corrupt the file on disk.
     let session_path = dirs::home_dir()
-        .map(|h| h.join(".shannon").join("checkpoints").join("test-corrupted-session.json"))
+        .map(|h| {
+            h.join(".shannon")
+                .join("checkpoints")
+                .join("test-corrupted-session.json")
+        })
         .unwrap();
     if session_path.exists() {
         fs::write(&session_path, "NOT VALID JSON{{{{").unwrap();
@@ -514,9 +521,7 @@ fn test_checkpoint_large_binary_file() {
     fs::write(path.join("large.bin"), &large_data).unwrap();
 
     let mgr = make_manager();
-    let cp = mgr
-        .create_checkpoint("write", "large binary file")
-        .unwrap();
+    let cp = mgr.create_checkpoint("write", "large binary file").unwrap();
 
     assert!(!cp.hash.is_empty());
 
@@ -651,7 +656,10 @@ fn test_conversation_only_revert_preserves_code() {
     assert!(result.is_ok());
 
     let content = fs::read_to_string(path.join("hello.txt")).unwrap();
-    assert_eq!(content, "modified\n", "ConversationOnly should not touch files");
+    assert_eq!(
+        content, "modified\n",
+        "ConversationOnly should not touch files"
+    );
 }
 
 // ── Bonus: turn checkpoint truncation at MAX_CHECKPOINTS ─────────────
@@ -674,11 +682,7 @@ fn test_turn_checkpoint_max_truncation() {
         mgr.record_turn(i, cp, vec![], None);
     }
 
-    assert_eq!(
-        mgr.len(),
-        50,
-        "should truncate to MAX_CHECKPOINTS"
-    );
+    assert_eq!(mgr.len(), 50, "should truncate to MAX_CHECKPOINTS");
 
     // First retained turn should be turn 5 (indices 0-4 dropped).
     let list = mgr.list_checkpoints();
@@ -722,7 +726,11 @@ fn test_persistence_roundtrip_all_fields() {
 
     // Clean up.
     let path = dirs::home_dir()
-        .map(|h| h.join(".shannon").join("checkpoints").join(format!("{session_id}.json")))
+        .map(|h| {
+            h.join(".shannon")
+                .join("checkpoints")
+                .join(format!("{session_id}.json"))
+        })
         .unwrap();
     let _ = fs::remove_file(&path);
 }

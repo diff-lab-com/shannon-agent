@@ -190,9 +190,7 @@ impl ContextBudget {
     }
 
     /// Estimate how many tokens a set of tool definitions will consume.
-    pub fn estimate_total_schema_tokens(
-        definitions: &[crate::api::ToolDefinition],
-    ) -> usize {
+    pub fn estimate_total_schema_tokens(definitions: &[crate::api::ToolDefinition]) -> usize {
         definitions
             .iter()
             .map(|def| {
@@ -219,10 +217,7 @@ impl ContextBudget {
     /// Given a registry, return the indices of tools that should be deferred
     /// to fit within the tool schema budget. Returns tools in order of largest
     /// schema first (greedy eviction).
-    pub fn tools_to_defer(
-        &self,
-        definitions: &[crate::api::ToolDefinition],
-    ) -> Vec<usize> {
+    pub fn tools_to_defer(&self, definitions: &[crate::api::ToolDefinition]) -> Vec<usize> {
         let total = Self::estimate_total_schema_tokens(definitions);
         if total <= self.tool_schema_budget {
             return Vec::new();
@@ -369,9 +364,9 @@ mod tests {
         let pb = PriorityBudget::default();
         let alloc = pb.allocate(120_000);
         assert_eq!(alloc.critical, 48_000); // 40%
-        assert_eq!(alloc.high, 36_000);     // 30%
-        assert_eq!(alloc.normal, 24_000);   // 20%
-        assert_eq!(alloc.low, 12_000);      // 10%
+        assert_eq!(alloc.high, 36_000); // 30%
+        assert_eq!(alloc.normal, 24_000); // 20%
+        assert_eq!(alloc.low, 12_000); // 10%
     }
 
     #[test]
@@ -420,9 +415,9 @@ mod tests {
     #[test]
     fn test_context_budget_small_window() {
         let budget = ContextBudget::new(1_000);
-        assert_eq!(budget.system_prompt_budget, 150);   // 15%
-        assert_eq!(budget.tool_schema_budget, 250);     // 25%
-        assert_eq!(budget.conversation_budget, 600);    // 60%
+        assert_eq!(budget.system_prompt_budget, 150); // 15%
+        assert_eq!(budget.tool_schema_budget, 250); // 25%
+        assert_eq!(budget.conversation_budget, 600); // 60%
     }
 
     #[test]
@@ -499,6 +494,9 @@ mod tests {
 
     #[test]
     fn test_fractions_sum_to_one() {
-        assert!((SYSTEM_PROMPT_FRACTION + TOOL_SCHEMA_FRACTION + CONVERSATION_FRACTION - 1.0).abs() < f32::EPSILON);
+        assert!(
+            (SYSTEM_PROMPT_FRACTION + TOOL_SCHEMA_FRACTION + CONVERSATION_FRACTION - 1.0).abs()
+                < f32::EPSILON
+        );
     }
 }

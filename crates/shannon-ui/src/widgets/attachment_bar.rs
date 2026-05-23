@@ -2,11 +2,11 @@
 
 use crate::theme::Theme;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 /// Type of attached resource
@@ -21,9 +21,9 @@ impl AttachmentKind {
     /// Icon used when rendering this attachment kind
     fn icon(&self) -> &'static str {
         match self {
-            AttachmentKind::File => "\u{25A3}",   // ▣ square with fill
-            AttachmentKind::Image => "\u{25A8}",   // ▨ square with hatched fill
-            AttachmentKind::Url => "\u{2197}",     // ↗ arrow
+            AttachmentKind::File => "\u{25A3}",  // ▣ square with fill
+            AttachmentKind::Image => "\u{25A8}", // ▨ square with hatched fill
+            AttachmentKind::Url => "\u{2197}",   // ↗ arrow
         }
     }
 }
@@ -39,19 +39,21 @@ pub struct Attachment {
 impl Attachment {
     /// Extract the filename portion from the path for display
     fn display_name(&self, max_len: usize) -> String {
-        let name = self
-            .path
-            .rsplit('/')
-            .next()
-            .unwrap_or(&self.path);
+        let name = self.path.rsplit('/').next().unwrap_or(&self.path);
         let name_w = unicode_width::UnicodeWidthStr::width(name);
         if name_w > max_len {
             let end = max_len.saturating_sub(3);
             let mut len = 0;
-            let truncated: String = name.chars()
+            let truncated: String = name
+                .chars()
                 .take_while(|c| {
                     let cw = unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
-                    if len + cw > end { false } else { len += cw; true }
+                    if len + cw > end {
+                        false
+                    } else {
+                        len += cw;
+                        true
+                    }
                 })
                 .collect();
             format!("{truncated}...")
@@ -221,8 +223,10 @@ mod tests {
     #[test]
     fn test_add_respects_limit() {
         let mut bar = AttachmentBarWidget::new(2);
-        bar.add(make_attachment("/a", AttachmentKind::File)).unwrap();
-        bar.add(make_attachment("/b", AttachmentKind::File)).unwrap();
+        bar.add(make_attachment("/a", AttachmentKind::File))
+            .unwrap();
+        bar.add(make_attachment("/b", AttachmentKind::File))
+            .unwrap();
         let result = bar.add(make_attachment("/c", AttachmentKind::File));
         assert!(result.is_err());
         assert_eq!(bar.len(), 2);
@@ -231,8 +235,10 @@ mod tests {
     #[test]
     fn test_remove_attachment() {
         let mut bar = AttachmentBarWidget::new(5);
-        bar.add(make_attachment("/a", AttachmentKind::File)).unwrap();
-        bar.add(make_attachment("/b", AttachmentKind::Image)).unwrap();
+        bar.add(make_attachment("/a", AttachmentKind::File))
+            .unwrap();
+        bar.add(make_attachment("/b", AttachmentKind::Image))
+            .unwrap();
         bar.remove(0);
         assert_eq!(bar.len(), 1);
         assert_eq!(bar.attachments[0].path, "/b");
@@ -241,7 +247,8 @@ mod tests {
     #[test]
     fn test_remove_out_of_bounds_is_noop() {
         let mut bar = AttachmentBarWidget::new(5);
-        bar.add(make_attachment("/a", AttachmentKind::File)).unwrap();
+        bar.add(make_attachment("/a", AttachmentKind::File))
+            .unwrap();
         bar.remove(5); // out of bounds
         assert_eq!(bar.len(), 1);
     }

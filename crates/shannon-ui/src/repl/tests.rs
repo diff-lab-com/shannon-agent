@@ -82,17 +82,28 @@ fn test_repl_quit_command() {
 fn test_repl_confirm_dialog_clear_chat() {
     let mut repl = Repl::new().unwrap();
     repl.running = true;
-    repl.show_confirm_dialog("Clear Chat", "Clear all messages? This cannot be undone.", "clear_chat");
+    repl.show_confirm_dialog(
+        "Clear Chat",
+        "Clear all messages? This cannot be undone.",
+        "clear_chat",
+    );
     assert!(repl.running);
     assert!(repl.state.active_dialog.is_some());
-    assert_eq!(repl.state.pending_dialog_action.as_deref(), Some("clear_chat"));
+    assert_eq!(
+        repl.state.pending_dialog_action.as_deref(),
+        Some("clear_chat")
+    );
 }
 
 #[test]
 fn test_repl_confirm_dialog_clear_chat_confirm() {
     let mut repl = Repl::new().unwrap();
     repl.running = true;
-    repl.show_confirm_dialog("Clear Chat", "Clear all messages? This cannot be undone.", "clear_chat");
+    repl.show_confirm_dialog(
+        "Clear Chat",
+        "Clear all messages? This cannot be undone.",
+        "clear_chat",
+    );
     assert!(repl.state.active_dialog.is_some());
 
     // Navigate to "Confirm" button and press Enter
@@ -113,7 +124,11 @@ fn test_repl_confirm_dialog_clear_chat_confirm() {
 fn test_repl_confirm_dialog_escape_cancels() {
     let mut repl = Repl::new().unwrap();
     repl.running = true;
-    repl.show_confirm_dialog("Clear Chat", "Clear all messages? This cannot be undone.", "clear_chat");
+    repl.show_confirm_dialog(
+        "Clear Chat",
+        "Clear all messages? This cannot be undone.",
+        "clear_chat",
+    );
     assert!(repl.state.active_dialog.is_some());
 
     let key = crossterm::event::KeyEvent::new(
@@ -173,7 +188,10 @@ fn test_repl_init_detects_git() {
     repl.prompt.set_input("/init".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Git repository: detected") || last_msg.contains("Git repository: not found"));
+    assert!(
+        last_msg.contains("Git repository: detected")
+            || last_msg.contains("Git repository: not found")
+    );
 }
 
 #[test]
@@ -202,7 +220,9 @@ fn test_sessions_command_empty() {
     super::commands::submit_input(&mut repl, None).unwrap();
     // With no saved sessions, the picker should be inactive and a chat message shown
     // OR if sessions exist, the fuzzy picker should be open
-    let has_chat_msg = repl.chat.last_message()
+    let has_chat_msg = repl
+        .chat
+        .last_message()
         .map(|m| m.content.contains("No saved sessions") || m.content.contains("Saved sessions"))
         .unwrap_or(false);
     let picker_open = repl.state.fuzzy_picker.is_some() && repl.state.session_picker_active;
@@ -263,7 +283,8 @@ fn test_history_command() {
 fn test_history_command_after_messages() {
     let mut repl = Repl::new().unwrap();
     repl.chat.add_message(ChatRole::User, "hello".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "hi there".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "hi there".to_string());
     repl.state.tokens_used = 500;
     repl.prompt.set_input("/history".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -363,7 +384,9 @@ fn test_spinner_widget_tick() {
     assert_eq!(spinner.current_frame(), 0);
     spinner.tick();
     assert_eq!(spinner.current_frame(), 1);
-    for _ in 0..9 { spinner.tick(); }
+    for _ in 0..9 {
+        spinner.tick();
+    }
     assert_eq!(spinner.current_frame(), 0);
 }
 
@@ -415,7 +438,8 @@ fn test_extract_completion_word_after_space() {
 #[test]
 fn test_extract_completion_word_nested_command() {
     let repl = Repl::new().unwrap();
-    let (prefix, start, end) = crate::repl::input::extract_completion_word("/team add my-team /con", &repl);
+    let (prefix, start, end) =
+        crate::repl::input::extract_completion_word("/team add my-team /con", &repl);
     assert_eq!(prefix, "/con");
     assert_eq!(start, 18);
     assert_eq!(end, 22);
@@ -433,7 +457,8 @@ fn test_extract_completion_word_trailing_spaces() {
 #[test]
 fn test_extract_completion_word_path_argument() {
     let repl = Repl::new().unwrap();
-    let (prefix, start, end) = crate::repl::input::extract_completion_word("/edit /home/user", &repl);
+    let (prefix, start, end) =
+        crate::repl::input::extract_completion_word("/edit /home/user", &repl);
     assert_eq!(prefix, "/home/user");
     assert_eq!(start, 6);
     assert_eq!(end, 16);
@@ -844,7 +869,10 @@ fn test_repl_adapter_read_input_not_supported() {
     let repl = Repl::new().unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(repl.read_input("prompt: "));
-    assert!(matches!(result, Err(crate::adapter::UiError::NotSupported(_))));
+    assert!(matches!(
+        result,
+        Err(crate::adapter::UiError::NotSupported(_))
+    ));
 }
 
 #[test]
@@ -852,7 +880,10 @@ fn test_repl_adapter_confirm_not_supported() {
     let repl = Repl::new().unwrap();
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(repl.confirm("Continue?"));
-    assert!(matches!(result, Err(crate::adapter::UiError::NotSupported(_))));
+    assert!(matches!(
+        result,
+        Err(crate::adapter::UiError::NotSupported(_))
+    ));
 }
 
 // ── /doctor Command Tests ──────────────────────────────────────────
@@ -863,7 +894,9 @@ fn test_repl_doctor_command() {
     repl.prompt.set_input("/doctor".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Diagnostics") || last_msg.contains("PASS") || last_msg.contains("FAIL"));
+    assert!(
+        last_msg.contains("Diagnostics") || last_msg.contains("PASS") || last_msg.contains("FAIL")
+    );
 }
 
 #[test]
@@ -872,7 +905,9 @@ fn test_repl_doctor_check_alias() {
     repl.prompt.set_input("/check".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Diagnostics") || last_msg.contains("PASS") || last_msg.contains("FAIL"));
+    assert!(
+        last_msg.contains("Diagnostics") || last_msg.contains("PASS") || last_msg.contains("FAIL")
+    );
 }
 
 #[test]
@@ -907,8 +942,8 @@ fn test_repl_compact_no_conversation() {
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
         last_msg.contains("Context compacted")
-        || last_msg.contains("No conversation")
-        || last_msg.contains("Compact")
+            || last_msg.contains("No conversation")
+            || last_msg.contains("Compact")
     );
 }
 
@@ -1042,7 +1077,8 @@ fn test_repl_team_add_without_create() {
 #[test]
 fn test_repl_team_task_without_create() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/team task myteam do stuff".to_string());
+    repl.prompt
+        .set_input("/team task myteam do stuff".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("No team created") || last_msg.contains("team create"));
@@ -1117,7 +1153,8 @@ fn test_repl_permissions_allow_tool() {
 #[test]
 fn test_repl_permissions_deny_tool() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/permissions deny FileWrite".to_string());
+    repl.prompt
+        .set_input("/permissions deny FileWrite".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("always denied"));
@@ -1258,7 +1295,8 @@ fn test_repl_permissions_allow_then_deny_same_tool() {
 #[test]
 fn test_repl_plan_create() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/plan add user authentication".to_string());
+    repl.prompt
+        .set_input("/plan add user authentication".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Plan created"));
@@ -1295,7 +1333,8 @@ fn test_repl_plan_status_with_plan() {
 #[test]
 fn test_repl_plan_approve() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/plan refactor database layer".to_string());
+    repl.prompt
+        .set_input("/plan refactor database layer".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/plan approve".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -1340,7 +1379,8 @@ fn test_repl_plan_reject_no_plan() {
 #[test]
 fn test_repl_plan_done() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/plan implement feature X".to_string());
+    repl.prompt
+        .set_input("/plan implement feature X".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/plan done".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -1402,22 +1442,37 @@ fn test_repl_plan_generate_steps_for_feature() {
     let steps = super::commands::extract_plan_steps("add user authentication feature");
     assert!(!steps.is_empty());
     // Should have implementation-related steps
-    assert!(steps.iter().any(|s| s.to_lowercase().contains("implement") || s.to_lowercase().contains("design")));
+    assert!(
+        steps
+            .iter()
+            .any(|s| s.to_lowercase().contains("implement") || s.to_lowercase().contains("design"))
+    );
 }
 
 #[test]
 fn test_repl_plan_generate_steps_for_bug() {
     let steps = super::commands::extract_plan_steps("fix the login bug");
     assert!(!steps.is_empty());
-    assert!(steps.iter().any(|s| s.to_lowercase().contains("reproduce") || s.to_lowercase().contains("root cause")));
-    assert!(steps.iter().any(|s| s.to_lowercase().contains("regression")));
+    assert!(
+        steps
+            .iter()
+            .any(|s| s.to_lowercase().contains("reproduce")
+                || s.to_lowercase().contains("root cause"))
+    );
+    assert!(
+        steps
+            .iter()
+            .any(|s| s.to_lowercase().contains("regression"))
+    );
 }
 
 #[test]
 fn test_repl_plan_generate_steps_for_refactor() {
     let steps = super::commands::extract_plan_steps("refactor the database layer");
     assert!(!steps.is_empty());
-    assert!(steps.iter().any(|s| s.to_lowercase().contains("architecture") || s.to_lowercase().contains("refactor")));
+    assert!(steps.iter().any(
+        |s| s.to_lowercase().contains("architecture") || s.to_lowercase().contains("refactor")
+    ));
 }
 
 #[test]
@@ -1477,7 +1532,9 @@ fn test_completion_suggestion_index_tracks_arrow_keys() {
         crossterm::event::KeyModifiers::NONE,
     );
     crate::repl::input::handle_input(&mut repl, down_key, None).unwrap();
-    assert!(repl.state.completion_suggestion_index > 0 || repl.state.completion_suggestions.len() == 1);
+    assert!(
+        repl.state.completion_suggestion_index > 0 || repl.state.completion_suggestions.len() == 1
+    );
 
     // Tab should accept the selection and dismiss popup
     let tab_key = crossterm::event::KeyEvent::new(
@@ -1543,7 +1600,13 @@ fn test_repl_state_all_fields_mutable() {
 #[test]
 fn test_repl_state_status_variants() {
     let mut state = ReplState::default();
-    let statuses = ["Ready", "Processing", "Querying...", "Error: timeout", "Ready (5 steps completed)"];
+    let statuses = [
+        "Ready",
+        "Processing",
+        "Querying...",
+        "Error: timeout",
+        "Ready (5 steps completed)",
+    ];
     for status in &statuses {
         state.status = status.to_string();
         assert_eq!(state.status, *status);
@@ -1579,8 +1642,8 @@ fn test_repl_web_search_with_query() {
     // Will either show results or an error about missing API key
     assert!(
         last_msg.contains("Web search results")
-        || last_msg.contains("Web search failed")
-        || last_msg.contains("SHANNON_SEARCH_API_KEY")
+            || last_msg.contains("Web search failed")
+            || last_msg.contains("SHANNON_SEARCH_API_KEY")
     );
 }
 
@@ -1839,7 +1902,12 @@ fn test_repl_hooks_command_no_config() {
     assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Either shows configured hooks or "No hooks configured" message
-    assert!(last_msg.contains("hook") || last_msg.contains("Hook") || last_msg.contains("No hooks") || last_msg.contains("Config path"));
+    assert!(
+        last_msg.contains("hook")
+            || last_msg.contains("Hook")
+            || last_msg.contains("No hooks")
+            || last_msg.contains("Config path")
+    );
 }
 
 #[test]
@@ -1849,7 +1917,9 @@ fn test_repl_hooks_path_subcommand() {
     super::commands::submit_input(&mut repl, None).unwrap();
     assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("User:") || last_msg.contains("Project:") || last_msg.contains("path"));
+    assert!(
+        last_msg.contains("User:") || last_msg.contains("Project:") || last_msg.contains("path")
+    );
 }
 
 #[test]
@@ -1860,14 +1930,22 @@ fn test_repl_hooks_reload_subcommand() {
     assert!(!repl.chat.is_empty());
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Reload either succeeds or shows error about missing config
-    assert!(last_msg.contains("reload") || last_msg.contains("Reload") || last_msg.contains("No hooks") || last_msg.contains("Failed"));
+    assert!(
+        last_msg.contains("reload")
+            || last_msg.contains("Reload")
+            || last_msg.contains("No hooks")
+            || last_msg.contains("Failed")
+    );
 }
 
 #[test]
 fn test_repl_hooks_in_help() {
     use shannon_commands::help_utils;
     let help_text = help_utils::generate_help(None);
-    assert!(help_text.contains("hooks"), "Help should list /hooks command");
+    assert!(
+        help_text.contains("hooks"),
+        "Help should list /hooks command"
+    );
 }
 
 #[test]
@@ -1877,7 +1955,10 @@ fn test_repl_hooks_command_recognized() {
     super::commands::submit_input(&mut repl, None).unwrap();
     // Should not show "Unknown command" message
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(!last_msg.contains("Unknown command"), "/hooks should be a recognized command");
+    assert!(
+        !last_msg.contains("Unknown command"),
+        "/hooks should be a recognized command"
+    );
 }
 
 // ── /remember /recall /forget /memory Command Tests ───────────────
@@ -1888,16 +1969,23 @@ fn test_repl_remember_no_args() {
     repl.prompt.set_input("/remember".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage"), "/remember with no args should show usage");
+    assert!(
+        last_msg.contains("Usage"),
+        "/remember with no args should show usage"
+    );
 }
 
 #[test]
 fn test_repl_remember_saves_memory() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/remember Test memory for integration test".to_string());
+    repl.prompt
+        .set_input("/remember Test memory for integration test".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Remembered") || last_msg.contains("store not"), "Should confirm memory saved or report missing store");
+    assert!(
+        last_msg.contains("Remembered") || last_msg.contains("store not"),
+        "Should confirm memory saved or report missing store"
+    );
 }
 
 #[test]
@@ -1907,7 +1995,12 @@ fn test_repl_recall_lists_memories() {
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // Either shows memories or says none found
-    assert!(last_msg.contains("memory") || last_msg.contains("Memory") || last_msg.contains("No memories") || last_msg.contains("store not"));
+    assert!(
+        last_msg.contains("memory")
+            || last_msg.contains("Memory")
+            || last_msg.contains("No memories")
+            || last_msg.contains("store not")
+    );
 }
 
 #[test]
@@ -1924,7 +2017,10 @@ fn test_repl_forget_no_args() {
     repl.prompt.set_input("/forget".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage"), "/forget with no args should show usage");
+    assert!(
+        last_msg.contains("Usage"),
+        "/forget with no args should show usage"
+    );
 }
 
 #[test]
@@ -1933,7 +2029,11 @@ fn test_repl_forget_nonexistent() {
     repl.prompt.set_input("/forget nonexistent123".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("No memory") || last_msg.contains("not found") || last_msg.contains("store not"));
+    assert!(
+        last_msg.contains("No memory")
+            || last_msg.contains("not found")
+            || last_msg.contains("store not")
+    );
 }
 
 #[test]
@@ -1942,7 +2042,9 @@ fn test_repl_memory_stats() {
     repl.prompt.set_input("/memory".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Memory") || last_msg.contains("Total") || last_msg.contains("store"));
+    assert!(
+        last_msg.contains("Memory") || last_msg.contains("Total") || last_msg.contains("store")
+    );
 }
 
 #[test]
@@ -1961,7 +2063,10 @@ fn test_repl_remember_alias_mem() {
     repl.prompt.set_input("/mem Alias test memory".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Remembered") || last_msg.contains("store not"), "/mem should work as alias");
+    assert!(
+        last_msg.contains("Remembered") || last_msg.contains("store not"),
+        "/mem should work as alias"
+    );
 }
 
 // ── /image Command Tests ──────────────────────────────────────────
@@ -1972,16 +2077,23 @@ fn test_repl_image_no_args() {
     repl.prompt.set_input("/image".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage"), "/image with no args should show usage");
+    assert!(
+        last_msg.contains("Usage"),
+        "/image with no args should show usage"
+    );
 }
 
 #[test]
 fn test_repl_image_nonexistent_file() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/image /nonexistent/path/fake.png".to_string());
+    repl.prompt
+        .set_input("/image /nonexistent/path/fake.png".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("not found") || last_msg.contains("File not found"), "Should report missing file");
+    assert!(
+        last_msg.contains("not found") || last_msg.contains("File not found"),
+        "Should report missing file"
+    );
 }
 
 #[test]
@@ -1999,14 +2111,11 @@ fn test_repl_image_with_real_png() {
     let minimal_png: [u8; 69] = [
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
         0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, // IDAT chunk
-        0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
-        0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC,
-        0x33, // IEND
-        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
-        0xAE, 0x42, 0x60, 0x82,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77,
+        0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, // IDAT chunk
+        0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21,
+        0xBC, 0x33, // IEND
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
     let _ = std::fs::write(&png_path, &minimal_png[..]);
 
@@ -2033,8 +2142,12 @@ fn test_repl_image_unsupported_format() {
     repl.prompt.set_input(input);
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Unsupported") || last_msg.contains("not found") || last_msg.contains("format"),
-        "Should report unsupported format");
+    assert!(
+        last_msg.contains("Unsupported")
+            || last_msg.contains("not found")
+            || last_msg.contains("format"),
+        "Should report unsupported format"
+    );
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
@@ -2052,7 +2165,10 @@ fn test_repl_img_alias() {
     repl.prompt.set_input("/img".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Usage"), "/img should work as alias for /image");
+    assert!(
+        last_msg.contains("Usage"),
+        "/img should work as alias for /image"
+    );
 }
 
 // --- /mode command tests ---
@@ -2063,10 +2179,19 @@ fn test_repl_mode_shows_current() {
     repl.prompt.set_input("/mode".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Current approval mode"), "/mode should show current mode");
-    assert!(last_msg.contains("default"), "/mode should list available modes");
+    assert!(
+        last_msg.contains("Current approval mode"),
+        "/mode should show current mode"
+    );
+    assert!(
+        last_msg.contains("default"),
+        "/mode should list available modes"
+    );
     assert!(last_msg.contains("auto"), "/mode should list auto");
-    assert!(last_msg.contains("full-auto"), "/mode should list full-auto");
+    assert!(
+        last_msg.contains("full-auto"),
+        "/mode should list full-auto"
+    );
     assert!(last_msg.contains("readonly"), "/mode should list readonly");
 }
 
@@ -2076,14 +2201,23 @@ fn test_repl_mode_sets_mode() {
     repl.prompt.set_input("/mode full-auto".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Approval mode set to"), "/mode <name> should confirm the change");
-    assert!(last_msg.contains("full-auto"), "should mention the new mode");
+    assert!(
+        last_msg.contains("Approval mode set to"),
+        "/mode <name> should confirm the change"
+    );
+    assert!(
+        last_msg.contains("full-auto"),
+        "should mention the new mode"
+    );
 
     // Verify it persists by checking again
     repl.prompt.set_input("/mode".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("full-auto *"), "full-auto should be marked as current");
+    assert!(
+        last_msg.contains("full-auto *"),
+        "full-auto should be marked as current"
+    );
 }
 
 #[test]
@@ -2092,7 +2226,10 @@ fn test_repl_mode_invalid() {
     repl.prompt.set_input("/mode invalid".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("Unknown mode"), "/mode invalid should show error");
+    assert!(
+        last_msg.contains("Unknown mode"),
+        "/mode invalid should show error"
+    );
     assert!(last_msg.contains("default"), "should list valid modes");
 }
 
@@ -2102,7 +2239,10 @@ fn test_repl_mode_suggest_alias() {
     repl.prompt.set_input("/mode ask".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
-    assert!(last_msg.contains("default"), "'ask' should map to 'default' mode");
+    assert!(
+        last_msg.contains("default"),
+        "'ask' should map to 'default' mode"
+    );
 }
 
 #[test]
@@ -2195,8 +2335,14 @@ fn test_repl_undo_in_help() {
 fn test_repl_checkpoint_manager_enabled() {
     let repl = Repl::new().unwrap();
     // Running in a git repo, so should be enabled
-    assert!(repl.checkpoint_manager.is_enabled(), "checkpoint manager should be enabled in git repo");
-    assert!(repl.checkpoint_manager.is_empty(), "should start with no checkpoints");
+    assert!(
+        repl.checkpoint_manager.is_enabled(),
+        "checkpoint manager should be enabled in git repo"
+    );
+    assert!(
+        repl.checkpoint_manager.is_empty(),
+        "should start with no checkpoints"
+    );
 }
 
 #[test]
@@ -2256,7 +2402,10 @@ fn test_repl_create_pr_help() {
 fn test_repl_create_pr_in_help() {
     use shannon_commands::help_utils;
     let help_text = help_utils::generate_help(None);
-    assert!(help_text.contains("create-pr"), "Help should list /create-pr");
+    assert!(
+        help_text.contains("create-pr"),
+        "Help should list /create-pr"
+    );
 }
 
 #[test]
@@ -2288,7 +2437,8 @@ fn test_repl_patch_help() {
 #[test]
 fn test_repl_patch_no_separator() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/patch Cargo.toml old_text new_text".to_string());
+    repl.prompt
+        .set_input("/patch Cargo.toml old_text new_text".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(
@@ -2349,14 +2499,18 @@ fn test_repl_sandbox_toggle_docker() {
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("enabled"), "should confirm docker enabled");
-    assert!(matches!(repl.state.sandbox_mode, shannon_tools::SandboxMode::Docker(_)));
+    assert!(matches!(
+        repl.state.sandbox_mode,
+        shannon_tools::SandboxMode::Docker(_)
+    ));
 }
 
 #[test]
 fn test_repl_sandbox_toggle_direct() {
     let mut repl = Repl::new().unwrap();
     // First enable docker
-    repl.state.sandbox_mode = shannon_tools::SandboxMode::Docker(shannon_tools::DockerSandboxConfig::default());
+    repl.state.sandbox_mode =
+        shannon_tools::SandboxMode::Docker(shannon_tools::DockerSandboxConfig::default());
     // Then disable
     repl.prompt.set_input("/sandbox direct".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -2408,15 +2562,18 @@ fn test_repl_find_no_results() {
     // The user's command message contains "zzz_not_found_xyz" so handle_find
     // will find 1 result (the command itself). Verify it shows results.
     let last = repl.chat.last_message().unwrap();
-    assert!(last.content.contains("Found") || last.content.contains("No messages matching"),
-        "should show find results");
+    assert!(
+        last.content.contains("Found") || last.content.contains("No messages matching"),
+        "should show find results"
+    );
 }
 
 #[test]
 fn test_repl_find_with_results() {
     let mut repl = Repl::new().unwrap();
     // Add a message that we can search for
-    repl.chat.add_message(ChatRole::User, "I love Rust programming".to_string());
+    repl.chat
+        .add_message(ChatRole::User, "I love Rust programming".to_string());
     repl.prompt.set_input("/find Rust".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
@@ -2441,13 +2598,17 @@ fn test_repl_agents_help() {
     repl.prompt.set_input("/agents".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
-    assert!(msg.contains("spawn") || msg.contains("list"), "should show agents usage");
+    assert!(
+        msg.contains("spawn") || msg.contains("list"),
+        "should show agents usage"
+    );
 }
 
 #[test]
 fn test_repl_agents_spawn() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/agents spawn test-agent You are a helper".to_string());
+    repl.prompt
+        .set_input("/agents spawn test-agent You are a helper".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("spawned"), "should confirm agent spawned");
@@ -2457,7 +2618,8 @@ fn test_repl_agents_spawn() {
 fn test_repl_agents_list() {
     let mut repl = Repl::new().unwrap();
     // First spawn an agent
-    repl.prompt.set_input("/agents spawn list-test helper agent".to_string());
+    repl.prompt
+        .set_input("/agents spawn list-test helper agent".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     // Then list
     repl.prompt.set_input("/agents list".to_string());
@@ -2469,9 +2631,11 @@ fn test_repl_agents_list() {
 #[test]
 fn test_repl_agents_status() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/agents spawn status-check test agent".to_string());
+    repl.prompt
+        .set_input("/agents spawn status-check test agent".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    repl.prompt.set_input("/agents status status-check".to_string());
+    repl.prompt
+        .set_input("/agents status status-check".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("status-check"), "should show agent details");
@@ -2480,7 +2644,8 @@ fn test_repl_agents_status() {
 #[test]
 fn test_repl_agents_status_not_found() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/agents status nonexistent".to_string());
+    repl.prompt
+        .set_input("/agents status nonexistent".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("not found"), "should report agent not found");
@@ -2489,7 +2654,8 @@ fn test_repl_agents_status_not_found() {
 #[test]
 fn test_repl_agents_kill() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/agents spawn killme test agent".to_string());
+    repl.prompt
+        .set_input("/agents spawn killme test agent".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/agents kill killme".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -2500,12 +2666,14 @@ fn test_repl_agents_kill() {
 #[test]
 fn test_repl_agents_run_bg() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/agents run-bg bg-worker do some work".to_string());
+    repl.prompt
+        .set_input("/agents run-bg bg-worker do some work".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     // Check last two messages for completion
     let count = repl.chat.message_count();
     let found = (0..count.min(2)).rev().any(|i| {
-        repl.chat.get_message(i)
+        repl.chat
+            .get_message(i)
             .map(|m| m.content.contains("completed") || m.content.contains("Running agent"))
             .unwrap_or(false)
     });
@@ -2518,8 +2686,14 @@ fn test_repl_agents_in_help() {
     repl.prompt.set_input("/agents help".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
-    assert!(msg.contains("spawn"), "agents help should list spawn subcommand");
-    assert!(msg.contains("list"), "agents help should list list subcommand");
+    assert!(
+        msg.contains("spawn"),
+        "agents help should list spawn subcommand"
+    );
+    assert!(
+        msg.contains("list"),
+        "agents help should list list subcommand"
+    );
 }
 
 // ---- /route command tests ----
@@ -2537,7 +2711,8 @@ fn test_repl_route_help() {
 #[test]
 fn test_repl_route_add_and_list() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/route add explain claude-haiku-4-5".to_string());
+    repl.prompt
+        .set_input("/route add explain claude-haiku-4-5".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Route added"), "should confirm route added");
@@ -2552,7 +2727,8 @@ fn test_repl_route_add_and_list() {
 #[test]
 fn test_repl_route_remove() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/route add test claude-sonnet-4-6".to_string());
+    repl.prompt
+        .set_input("/route add test claude-sonnet-4-6".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/route remove test".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -2562,7 +2738,10 @@ fn test_repl_route_remove() {
     repl.prompt.set_input("/route list".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
-    assert!(msg.contains("No routing rules"), "should have no rules after remove");
+    assert!(
+        msg.contains("No routing rules"),
+        "should have no rules after remove"
+    );
 }
 
 #[test]
@@ -2581,12 +2760,17 @@ fn test_repl_route_clear() {
 #[test]
 fn test_repl_route_test_match() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/route add refactor claude-opus-4-6".to_string());
+    repl.prompt
+        .set_input("/route add refactor claude-opus-4-6".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    repl.prompt.set_input("/route test refactor the auth module".to_string());
+    repl.prompt
+        .set_input("/route test refactor the auth module".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
-    assert!(msg.contains("claude-opus-4-6"), "should match and show the model");
+    assert!(
+        msg.contains("claude-opus-4-6"),
+        "should match and show the model"
+    );
 }
 
 #[test]
@@ -2595,14 +2779,18 @@ fn test_repl_route_test_no_match() {
     repl.prompt.set_input("/route test hello world".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
-    assert!(msg.contains("no routing rules") || msg.contains("matches no routing"), "should report no match");
+    assert!(
+        msg.contains("no routing rules") || msg.contains("matches no routing"),
+        "should report no match"
+    );
 }
 
 #[test]
 fn test_repl_route_routing_state() {
     let mut repl = Repl::new().unwrap();
     // Add a route directly to state
-    repl.prompt.set_input("/route add debug claude-haiku-4-5".to_string());
+    repl.prompt
+        .set_input("/route add debug claude-haiku-4-5".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     // Verify the state has the route
     assert_eq!(repl.model_routes.len(), 1);
@@ -2626,10 +2814,14 @@ fn test_repl_mcp_help() {
 fn test_repl_mcp_add_and_list() {
     let _ = std::fs::remove_dir_all(".shannon-test-mcp");
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/mcp add test-server /usr/bin/test-server".to_string());
+    repl.prompt
+        .set_input("/mcp add test-server /usr/bin/test-server".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
-    assert!(msg.contains("Added") || msg.contains("Updated"), "should confirm server added");
+    assert!(
+        msg.contains("Added") || msg.contains("Updated"),
+        "should confirm server added"
+    );
 
     repl.prompt.set_input("/mcp list".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -2640,7 +2832,8 @@ fn test_repl_mcp_add_and_list() {
 #[test]
 fn test_repl_mcp_show() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/mcp add my-server /usr/bin/echo hello".to_string());
+    repl.prompt
+        .set_input("/mcp add my-server /usr/bin/echo hello".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/mcp show my-server".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -2662,7 +2855,8 @@ fn test_repl_mcp_show_not_found() {
 #[test]
 fn test_repl_mcp_remove() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/mcp add temp-server /usr/bin/true".to_string());
+    repl.prompt
+        .set_input("/mcp add temp-server /usr/bin/true".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     repl.prompt.set_input("/mcp remove temp-server".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -2687,8 +2881,10 @@ fn test_rewind_command_default() {
     // Add some conversation
     repl.chat.add_message(ChatRole::User, "Hello".to_string());
     repl.chat.add_message(ChatRole::Assistant, "Hi".to_string());
-    repl.chat.add_message(ChatRole::User, "How are you?".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "Fine".to_string());
+    repl.chat
+        .add_message(ChatRole::User, "How are you?".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "Fine".to_string());
     assert_eq!(repl.chat.len(), 4);
 
     // Also add to engine
@@ -2773,11 +2969,15 @@ fn test_rewind_command_invalid_arg() {
 #[test]
 fn test_rewind_preserves_earlier_messages() {
     let mut repl = Repl::new().unwrap();
-    repl.chat.add_message(ChatRole::System, "Welcome".to_string());
+    repl.chat
+        .add_message(ChatRole::System, "Welcome".to_string());
     repl.chat.add_message(ChatRole::User, "First Q".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "First A".to_string());
-    repl.chat.add_message(ChatRole::User, "Second Q".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "Second A".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "First A".to_string());
+    repl.chat
+        .add_message(ChatRole::User, "Second Q".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "Second A".to_string());
 
     repl.prompt.set_input("/rewind".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -2793,8 +2993,10 @@ fn test_rewind_preserves_earlier_messages() {
 fn test_rewind_then_continue_conversation() {
     let mut repl = Repl::new().unwrap();
     // Simulate a conversation that went wrong
-    repl.chat.add_message(ChatRole::User, "Bad question".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "Bad answer".to_string());
+    repl.chat
+        .add_message(ChatRole::User, "Bad question".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "Bad answer".to_string());
 
     // Rewind the bad exchange
     repl.prompt.set_input("/rewind".to_string());
@@ -2802,8 +3004,10 @@ fn test_rewind_then_continue_conversation() {
     assert_eq!(repl.chat.len(), 1); // Only the system rewind msg
 
     // Add new conversation
-    repl.chat.add_message(ChatRole::User, "Good question".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "Good answer".to_string());
+    repl.chat
+        .add_message(ChatRole::User, "Good question".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "Good answer".to_string());
     assert_eq!(repl.chat.len(), 3); // rewind msg + new Q + new A
     assert_eq!(repl.chat.get_message(1).unwrap().content, "Good question");
 }
@@ -2883,7 +3087,10 @@ fn test_approval_mode_cycle_sequence() {
     assert_eq!(mode.cycle_next(), ApprovalMode::Suggest);
 
     // BypassPermissions and DontAsk cycle back to Suggest
-    assert_eq!(ApprovalMode::BypassPermissions.cycle_next(), ApprovalMode::Suggest);
+    assert_eq!(
+        ApprovalMode::BypassPermissions.cycle_next(),
+        ApprovalMode::Suggest
+    );
     assert_eq!(ApprovalMode::DontAsk.cycle_next(), ApprovalMode::Suggest);
 }
 
@@ -2911,7 +3118,10 @@ fn test_approval_mode_default_is_auto() {
 #[test]
 fn test_repl_default_approval_label() {
     let state = ReplState::default();
-    assert_eq!(state.approval_mode_label, "EDIT", "default label should match AutoEdit");
+    assert_eq!(
+        state.approval_mode_label, "EDIT",
+        "default label should match AutoEdit"
+    );
 }
 
 #[test]
@@ -2927,7 +3137,10 @@ fn test_repl_set_bypass_pending_action() {
     // Verify PermissionManager was updated
     if let Some(ref engine) = repl.query_engine {
         let perms = engine.permissions().read().unwrap();
-        assert_eq!(perms.approval_mode(), shannon_core::permissions::ApprovalMode::BypassPermissions);
+        assert_eq!(
+            perms.approval_mode(),
+            shannon_core::permissions::ApprovalMode::BypassPermissions
+        );
     }
 }
 
@@ -2950,7 +3163,12 @@ fn test_load_permission_rules_from_file() {
         }
     });
     let mut f = std::fs::File::create(&settings_path).unwrap();
-    f.write_all(serde_json::to_string_pretty(&settings_content).unwrap().as_bytes()).unwrap();
+    f.write_all(
+        serde_json::to_string_pretty(&settings_content)
+            .unwrap()
+            .as_bytes(),
+    )
+    .unwrap();
 
     // Override cwd for the test
     let orig_cwd = std::env::current_dir().unwrap();
@@ -2962,8 +3180,14 @@ fn test_load_permission_rules_from_file() {
     // Verify tool-level allow rules were applied
     let memory = pm.memory();
     let allowed = memory.always_allowed_tools();
-    assert!(allowed.contains(&"Bash".to_string()), "Bash should be allowed");
-    assert!(allowed.contains(&"Read".to_string()), "Read should be allowed");
+    assert!(
+        allowed.contains(&"Bash".to_string()),
+        "Bash should be allowed"
+    );
+    assert!(
+        allowed.contains(&"Read".to_string()),
+        "Read should be allowed"
+    );
 
     // Cleanup
     std::env::set_current_dir(orig_cwd).unwrap();
@@ -3022,7 +3246,12 @@ fn test_load_permission_rules_claude_settings() {
         }
     });
     let mut f = std::fs::File::create(&settings_path).unwrap();
-    f.write_all(serde_json::to_string_pretty(&settings_content).unwrap().as_bytes()).unwrap();
+    f.write_all(
+        serde_json::to_string_pretty(&settings_content)
+            .unwrap()
+            .as_bytes(),
+    )
+    .unwrap();
 
     let orig_cwd = std::env::current_dir().unwrap();
     std::env::set_current_dir(tmp_dir.path()).unwrap();
@@ -3074,8 +3303,11 @@ fn test_permission_mode_bypass_not_in_cycle() {
     for mode in &safe_modes {
         // cycle_next never produces BypassPermissions from safe modes
         // (Readonly cycles to Suggest, not BypassPermissions)
-        assert_ne!(mode.cycle_next(), ApprovalMode::BypassPermissions,
-            "cycle_next from {mode:?} should not produce BypassPermissions");
+        assert_ne!(
+            mode.cycle_next(),
+            ApprovalMode::BypassPermissions,
+            "cycle_next from {mode:?} should not produce BypassPermissions"
+        );
     }
 }
 
@@ -3191,24 +3423,48 @@ fn test_collect_custom_commands_frontmatter_fields() {
 #[test]
 fn test_parse_frontmatter_field() {
     let yaml = "model: claude-opus-4-6\nallowed-tools: Bash, Read, Write\nagent: coder\n";
-    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "model"), Some("claude-opus-4-6".to_string()));
-    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "allowed-tools"), Some("Bash, Read, Write".to_string()));
-    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "agent"), Some("coder".to_string()));
-    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "nonexistent"), None);
+    assert_eq!(
+        super::custom_commands::parse_frontmatter_field(yaml, "model"),
+        Some("claude-opus-4-6".to_string())
+    );
+    assert_eq!(
+        super::custom_commands::parse_frontmatter_field(yaml, "allowed-tools"),
+        Some("Bash, Read, Write".to_string())
+    );
+    assert_eq!(
+        super::custom_commands::parse_frontmatter_field(yaml, "agent"),
+        Some("coder".to_string())
+    );
+    assert_eq!(
+        super::custom_commands::parse_frontmatter_field(yaml, "nonexistent"),
+        None
+    );
 }
 
 #[test]
 fn test_parse_frontmatter_field_quoted() {
     let yaml = "model: \"claude-sonnet-4-6\"\ndescription: 'A test'\n";
-    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "model"), Some("claude-sonnet-4-6".to_string()));
-    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "description"), Some("A test".to_string()));
+    assert_eq!(
+        super::custom_commands::parse_frontmatter_field(yaml, "model"),
+        Some("claude-sonnet-4-6".to_string())
+    );
+    assert_eq!(
+        super::custom_commands::parse_frontmatter_field(yaml, "description"),
+        Some("A test".to_string())
+    );
 }
 
 #[test]
 fn test_parse_frontmatter_field_empty_value() {
     let yaml = "model: \nagent:\n";
-    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "model"), None);
-    assert_eq!(super::custom_commands::parse_frontmatter_field(yaml, "agent"), None);
+    assert_eq!(
+        super::custom_commands::parse_frontmatter_field(yaml, "model"),
+        None
+    );
+    assert_eq!(
+        super::custom_commands::parse_frontmatter_field(yaml, "agent"),
+        None
+    );
 }
 
 #[test]
@@ -3228,7 +3484,10 @@ fn test_collect_custom_commands_description_from_frontmatter() {
     super::collect_custom_commands(dir.path(), "", &mut results);
 
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].description.as_deref(), Some("Reviews code for bugs"));
+    assert_eq!(
+        results[0].description.as_deref(),
+        Some("Reviews code for bugs")
+    );
 }
 
 #[test]
@@ -3335,13 +3594,15 @@ fn test_commands_reload_full_pipeline() {
     std::fs::write(
         user_cmds.join("review.md"),
         "---\ndescription: User review\n---\nReview: $ARGUMENTS\n",
-    ).unwrap();
+    )
+    .unwrap();
 
     // Create another unique user-level command
     std::fs::write(
         user_cmds.join("commit.md"),
         "---\ndescription: Commit changes\nallowed-tools: Bash, Read\n---\nCommit: $ARGUMENTS\n",
-    ).unwrap();
+    )
+    .unwrap();
 
     // Collect from both directories (project after user, like real code)
     let mut commands: Vec<super::CustomCommandEntry> = Vec::new();
@@ -3382,7 +3643,8 @@ fn test_repl_add_dir_valid() {
 #[test]
 fn test_repl_add_dir_not_found() {
     let mut repl = Repl::new().unwrap();
-    repl.prompt.set_input("/add-dir /no/such/directory/xyz123".to_string());
+    repl.prompt
+        .set_input("/add-dir /no/such/directory/xyz123".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("Directory not found:"));
@@ -3413,7 +3675,10 @@ fn test_repl_add_dir_duplicate() {
     let last_msg = &repl.chat.last_message().unwrap().content;
     assert!(last_msg.contains("already added:"));
     // Should still be exactly 1 entry
-    assert_eq!(repl.state.extra_dirs.iter().filter(|d| **d == tmp).count(), 1);
+    assert_eq!(
+        repl.state.extra_dirs.iter().filter(|d| **d == tmp).count(),
+        1
+    );
 }
 
 #[test]
@@ -3479,9 +3744,12 @@ fn test_repl_rename_reset() {
 fn test_repl_copy_nth_response() {
     let mut repl = Repl::new().unwrap();
     // Create 3 assistant messages
-    repl.chat.add_message(ChatRole::Assistant, "first response".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "second response".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "third response".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "first response".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "second response".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "third response".to_string());
 
     // /copy 2 should copy the 2nd from end = "second response"
     repl.prompt.set_input("/copy 2".to_string());
@@ -3489,7 +3757,9 @@ fn test_repl_copy_nth_response() {
     let last_msg = &repl.chat.last_message().unwrap().content;
     // In test env clipboard is likely unavailable; content goes to temp file
     assert!(
-        last_msg.contains("second response") || last_msg.contains("clipboard") || last_msg.contains("Clipboard"),
+        last_msg.contains("second response")
+            || last_msg.contains("clipboard")
+            || last_msg.contains("Clipboard"),
         "expected copy of 2nd response, got: {last_msg}"
     );
 }
@@ -3498,8 +3768,10 @@ fn test_repl_copy_nth_response() {
 fn test_repl_copy_out_of_range() {
     let mut repl = Repl::new().unwrap();
     // Only 2 assistant messages
-    repl.chat.add_message(ChatRole::Assistant, "alpha".to_string());
-    repl.chat.add_message(ChatRole::Assistant, "beta".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "alpha".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "beta".to_string());
 
     // /copy 99 — only 2 responses exist
     repl.prompt.set_input("/copy 99".to_string());
@@ -3512,7 +3784,8 @@ fn test_repl_copy_out_of_range() {
 #[test]
 fn test_repl_copy_zero() {
     let mut repl = Repl::new().unwrap();
-    repl.chat.add_message(ChatRole::Assistant, "some response".to_string());
+    repl.chat
+        .add_message(ChatRole::Assistant, "some response".to_string());
 
     repl.prompt.set_input("/copy 0".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
@@ -3530,20 +3803,39 @@ fn test_repl_compact_with_focus_instructions() {
     if let Some(engine) = repl.query_engine.as_mut() {
         use shannon_core::api::{Message, MessageContent};
         let messages = vec![
-            Message { role: "user".to_string(), content: MessageContent::Text("Tell me about authentication logic".to_string()) },
-            Message { role: "assistant".to_string(), content: MessageContent::Text("Authentication logic verifies user credentials".to_string()) },
-            Message { role: "user".to_string(), content: MessageContent::Text("What about caching?".to_string()) },
-            Message { role: "assistant".to_string(), content: MessageContent::Text("Caching stores frequently accessed data".to_string()) },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("Tell me about authentication logic".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text(
+                    "Authentication logic verifies user credentials".to_string(),
+                ),
+            },
+            Message {
+                role: "user".to_string(),
+                content: MessageContent::Text("What about caching?".to_string()),
+            },
+            Message {
+                role: "assistant".to_string(),
+                content: MessageContent::Text(
+                    "Caching stores frequently accessed data".to_string(),
+                ),
+            },
         ];
         engine.restore_messages(messages);
     }
 
-    repl.prompt.set_input("/compact authentication logic".to_string());
+    repl.prompt
+        .set_input("/compact authentication logic".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let last_msg = &repl.chat.last_message().unwrap().content;
     // The focus branch prints a "Focus compact" message first, then the result
     assert!(
-        last_msg.contains("authentication") || last_msg.contains("Focus compact") || last_msg.contains("compacted"),
+        last_msg.contains("authentication")
+            || last_msg.contains("Focus compact")
+            || last_msg.contains("compacted"),
         "expected focus compact to mention 'authentication' or report compaction, got: {last_msg}"
     );
 }
@@ -3554,15 +3846,22 @@ fn test_repl_compact_with_focus_instructions() {
 fn test_repl_plan_off() {
     let mut repl = Repl::new().unwrap();
     // First create a plan so it's active
-    repl.prompt.set_input("/plan implement search feature".to_string());
+    repl.prompt
+        .set_input("/plan implement search feature".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     assert!(repl.state.plan.active);
 
     // Now deactivate
     repl.prompt.set_input("/plan off".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    assert!(!repl.state.plan.active, "plan.active should be false after /plan off");
-    assert!(!repl.state.plan.approved, "plan.approved should be false after /plan off");
+    assert!(
+        !repl.state.plan.active,
+        "plan.active should be false after /plan off"
+    );
+    assert!(
+        !repl.state.plan.approved,
+        "plan.approved should be false after /plan off"
+    );
     if let Ok(flag) = repl.plan_mode_flag.read() {
         assert!(!*flag, "plan_mode_flag should be false after /plan off");
     }
@@ -3640,7 +3939,10 @@ fn test_empty_message_not_queued() {
         state.queued_messages.push(input);
     }
 
-    assert!(state.queued_messages.is_empty(), "whitespace-only input should not be queued");
+    assert!(
+        state.queued_messages.is_empty(),
+        "whitespace-only input should not be queued"
+    );
 }
 
 /// Verifies that a second queue appends to the first (multi-message queue).
@@ -3681,7 +3983,10 @@ fn test_dequeue_lifecycle() {
     // 4. Dequeue (remove(0)) — simulates query.rs
     let dequeued = state.queued_messages.remove(0);
     assert_eq!(dequeued, "follow-up".to_string());
-    assert!(state.queued_messages.is_empty(), "after remove, queue should be empty");
+    assert!(
+        state.queued_messages.is_empty(),
+        "after remove, queue should be empty"
+    );
     assert!(!state.streaming_active, "streaming should be off");
 }
 
@@ -4005,7 +4310,10 @@ fn test_empty_messages_not_appended() {
             state.queued_messages.push(input.to_string());
         }
     }
-    assert!(state.queued_messages.is_empty(), "empty/whitespace messages should not be queued");
+    assert!(
+        state.queued_messages.is_empty(),
+        "empty/whitespace messages should not be queued"
+    );
 }
 
 // ── Non-Recursive Dequeue Tests ──────────────────────────────────────
@@ -4055,7 +4363,10 @@ fn test_engine_stays_available_across_drain_iterations() {
 
     while !state.queued_messages.is_empty() {
         // Invariant: engine must be available before each dequeue iteration
-        assert!(engine_available, "engine must be available before dequeue iteration");
+        assert!(
+            engine_available,
+            "engine must be available before dequeue iteration"
+        );
 
         let queued = state.queued_messages.remove(0);
         if queued.trim().is_empty() {
@@ -4071,7 +4382,10 @@ fn test_engine_stays_available_across_drain_iterations() {
     }
 
     assert_eq!(processed, 3);
-    assert!(engine_available, "engine must still be available after all dequeues");
+    assert!(
+        engine_available,
+        "engine must still be available after all dequeues"
+    );
 }
 
 /// Verify that whitespace-only queued messages are skipped in the drain loop
@@ -4135,7 +4449,10 @@ fn test_dequeue_does_not_nest_inside_query_processing() {
         // In the OLD buggy code, dequeue would happen HERE (inside query processing),
         // incrementing depth further. In the NEW code, dequeue only happens in
         // the outer while-loop in submit_input.
-        assert_eq!(query_depth, 1, "dequeue must not nest inside query processing");
+        assert_eq!(
+            query_depth, 1,
+            "dequeue must not nest inside query processing"
+        );
 
         // Exit "query processing"
         query_depth -= 1;
@@ -4241,7 +4558,11 @@ fn test_up_always_navigates_history_even_with_queue() {
     // UP navigates history directly — queue is untouched
     let cmd = history.up();
     assert_eq!(cmd, Some("history entry"));
-    assert_eq!(state.queued_messages.len(), 1, "queue should not be touched by UP");
+    assert_eq!(
+        state.queued_messages.len(),
+        1,
+        "queue should not be touched by UP"
+    );
 }
 
 #[test]
@@ -4253,12 +4574,18 @@ fn test_esc_pops_queue_without_canceling_streaming() {
 
     // ESC pops a message — streaming must remain active
     let _ = state.queued_messages.pop();
-    assert!(state.streaming_active, "streaming must remain active after ESC pop");
+    assert!(
+        state.streaming_active,
+        "streaming must remain active after ESC pop"
+    );
 
     // ESC again still pops (queue not yet empty)
     assert!(!state.queued_messages.is_empty());
     let _ = state.queued_messages.pop();
-    assert!(state.streaming_active, "streaming still active after second ESC pop");
+    assert!(
+        state.streaming_active,
+        "streaming still active after second ESC pop"
+    );
 }
 
 // ── Multi-Turn Drain Loop Context Tests ────────────────────────────────
@@ -4268,9 +4595,15 @@ fn test_drain_loop_preserves_conversation_state_across_rounds() {
     let mut state = ReplState::default();
 
     // Simulate queuing a 3-turn conversation
-    state.queued_messages.push("请写一篇200字科幻小说".to_string());
-    state.queued_messages.push("这部科幻小说中有几个人物?几个场景?".to_string());
-    state.queued_messages.push("这部科幻小说有多少字".to_string());
+    state
+        .queued_messages
+        .push("请写一篇200字科幻小说".to_string());
+    state
+        .queued_messages
+        .push("这部科幻小说中有几个人物?几个场景?".to_string());
+    state
+        .queued_messages
+        .push("这部科幻小说有多少字".to_string());
 
     let mut processed = Vec::new();
     let mut turn_count = 0;
@@ -4345,7 +4678,10 @@ fn test_drain_error_midway_preserves_completed_context() {
 #[test]
 fn test_model_default_is_none() {
     let state = ReplState::default();
-    assert!(state.model.is_none(), "model should be None by default until configured");
+    assert!(
+        state.model.is_none(),
+        "model should be None by default until configured"
+    );
 }
 
 #[test]

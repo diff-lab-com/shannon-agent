@@ -40,8 +40,8 @@
 //! ```
 
 use crate::api::{
-    ContentBlock, ContentDelta, LlmClient, LlmProvider, Message, MessageContent, StreamEvent, SystemContentBlock,
-    ToolResultContent,
+    ContentBlock, ContentDelta, LlmClient, LlmProvider, Message, MessageContent, StreamEvent,
+    SystemContentBlock, ToolResultContent,
 };
 use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
@@ -56,9 +56,10 @@ use crate::state::StateManager;
 use crate::tools::ToolRegistry;
 
 /// Minimal system prompt for local/small models that cannot handle tool definitions.
-const LOCAL_MODEL_SYSTEM_PROMPT: &str = "You are Shannon, a helpful AI assistant. Respond concisely in the user's language.";
-use shannon_types::recover_lock;
+const LOCAL_MODEL_SYSTEM_PROMPT: &str =
+    "You are Shannon, a helpful AI assistant. Respond concisely in the user's language.";
 use futures::stream::{self, StreamExt};
+use shannon_types::recover_lock;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -82,13 +83,16 @@ struct ChannelProgressSender {
 
 impl crate::tools::ProgressSender for ChannelProgressSender {
     fn send(&self, line: &str) {
-        send_event!(self.tx, QueryEvent::ToolProgress {
-            query_id: self.query_id,
-            tool_use_id: self.tool_use_id.clone(),
-            tool_name: self.tool_name.clone(),
-            progress: -1.0,
-            message: line.to_string(),
-        });
+        send_event!(
+            self.tx,
+            QueryEvent::ToolProgress {
+                query_id: self.query_id,
+                tool_use_id: self.tool_use_id.clone(),
+                tool_name: self.tool_name.clone(),
+                progress: -1.0,
+                message: line.to_string(),
+            }
+        );
     }
 }
 
@@ -123,15 +127,33 @@ enum QueryComplexity {
 
 /// Keywords that signal planning/architecture queries.
 const PLANNING_KEYWORDS: &[&str] = &[
-    "architect", "architecture", "design", "plan", "planning",
-    "refactor", "migrate", "strategy", "blueprint", "roadmap",
-    "system design", "evaluate", "analyze", "review",
+    "architect",
+    "architecture",
+    "design",
+    "plan",
+    "planning",
+    "refactor",
+    "migrate",
+    "strategy",
+    "blueprint",
+    "roadmap",
+    "system design",
+    "evaluate",
+    "analyze",
+    "review",
 ];
 
 /// Keywords that signal complex implementation queries.
 const COMPLEX_KEYWORDS: &[&str] = &[
-    "implement", "build", "create", "develop", "integrate",
-    "debug", "fix", "solve", "troubleshoot",
+    "implement",
+    "build",
+    "create",
+    "develop",
+    "integrate",
+    "debug",
+    "fix",
+    "solve",
+    "troubleshoot",
 ];
 
 /// Classify a user query by complexity for model routing.
@@ -139,7 +161,10 @@ fn classify_query_complexity(query: &str) -> QueryComplexity {
     let lower = query.to_lowercase();
 
     // Short queries with no complex keywords → Simple
-    if query.len() < 200 && !PLANNING_KEYWORDS.iter().any(|k| lower.contains(k)) && !COMPLEX_KEYWORDS.iter().any(|k| lower.contains(k)) {
+    if query.len() < 200
+        && !PLANNING_KEYWORDS.iter().any(|k| lower.contains(k))
+        && !COMPLEX_KEYWORDS.iter().any(|k| lower.contains(k))
+    {
         return QueryComplexity::Simple;
     }
 
@@ -300,9 +325,8 @@ impl QueryEngine {
     ) -> Self {
         let model = client.model().to_string();
         let session_id = Uuid::new_v4();
-        let effective_max_context_tokens = Self::resolve_max_context_tokens(
-            client.model(), config.max_context_tokens,
-        );
+        let effective_max_context_tokens =
+            Self::resolve_max_context_tokens(client.model(), config.max_context_tokens);
         Self {
             client,
             tools: Arc::new(tools),
@@ -316,7 +340,9 @@ impl QueryEngine {
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
+            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
+                &session_id.to_string(),
+            ),
             effective_max_context_tokens,
         }
     }
@@ -344,7 +370,8 @@ impl QueryEngine {
         let model = client.model().to_string();
         let session_id = Uuid::new_v4();
         let effective_max_context_tokens = Self::resolve_max_context_tokens(
-            client.model(), None, // defaults have no user override
+            client.model(),
+            None, // defaults have no user override
         );
         Self {
             client,
@@ -359,7 +386,9 @@ impl QueryEngine {
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
+            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
+                &session_id.to_string(),
+            ),
             effective_max_context_tokens,
         }
     }
@@ -377,9 +406,8 @@ impl QueryEngine {
         session_id: Uuid,
     ) -> Self {
         let model = client.model().to_string();
-        let effective_max_context_tokens = Self::resolve_max_context_tokens(
-            client.model(), config.max_context_tokens,
-        );
+        let effective_max_context_tokens =
+            Self::resolve_max_context_tokens(client.model(), config.max_context_tokens);
         Self {
             client,
             tools: Arc::new(tools),
@@ -393,7 +421,9 @@ impl QueryEngine {
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
-            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(&session_id.to_string()),
+            checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
+                &session_id.to_string(),
+            ),
             effective_max_context_tokens,
         }
     }
@@ -470,10 +500,7 @@ impl QueryEngine {
 
     /// Check whether plan mode is currently active.
     pub fn is_plan_mode_active(&self) -> bool {
-        self.plan_mode_active
-            .read()
-            .map(|g| *g)
-            .unwrap_or(false)
+        self.plan_mode_active.read().map(|g| *g).unwrap_or(false)
     }
 
     /// Obtain a cloneable handle to the plan-mode flag.
@@ -626,9 +653,8 @@ impl QueryEngine {
     /// Estimate token count of the current conversation including system prompt.
     /// Uses the same CJK-aware estimation as the compression threshold check.
     pub fn estimate_conversation_tokens(&self) -> usize {
-        self.conversation.estimate_tokens_with_system_prompt(
-            self.config.system_prompt.as_deref()
-        )
+        self.conversation
+            .estimate_tokens_with_system_prompt(self.config.system_prompt.as_deref())
     }
 
     /// Get the current conversation messages (for session persistence).
@@ -698,12 +724,16 @@ impl QueryEngine {
         let client_model = self.client.model().to_string();
 
         // Resolve model aliases in fast_model and plan_model
-        let fast_model = self.config.fast_model.as_ref().map(|m| {
-            crate::model_registry::resolve_model(m, Some(self.client.provider()))
-        });
-        let plan_model = self.config.plan_model.as_ref().map(|m| {
-            crate::model_registry::resolve_model(m, Some(self.client.provider()))
-        });
+        let fast_model = self
+            .config
+            .fast_model
+            .as_ref()
+            .map(|m| crate::model_registry::resolve_model(m, Some(self.client.provider())));
+        let plan_model = self
+            .config
+            .plan_model
+            .as_ref()
+            .map(|m| crate::model_registry::resolve_model(m, Some(self.client.provider())));
 
         // Multi-tier model routing
         let client_model = {
@@ -749,7 +779,12 @@ impl QueryEngine {
         // Build structured system prompt with cache breakpoints.
         // Layout: [base prompt] → [memory (cached)] → [smart context (cached)] → [project instructions (cached)]
         let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
-        let use_cache = matches!(client_provider, crate::api::LlmProvider::Anthropic | crate::api::LlmProvider::Bedrock | crate::api::LlmProvider::Custom);
+        let use_cache = matches!(
+            client_provider,
+            crate::api::LlmProvider::Anthropic
+                | crate::api::LlmProvider::Bedrock
+                | crate::api::LlmProvider::Custom
+        );
 
         // Base system prompt — always cache the system prompt prefix for Anthropic,
         // as it's identical across all turns and the largest cache savings come from here.
@@ -781,7 +816,8 @@ impl QueryEngine {
 
         // Smart context: auto-include relevant files based on query
         let smart_context = {
-            let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let working_dir =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             crate::smart_context::find_relevant_context(&user_message, &working_dir)
         };
         if let Some(ctx) = crate::smart_context::format_context_for_prompt(&smart_context) {
@@ -795,7 +831,8 @@ impl QueryEngine {
 
         // Inject CLAUDE.md / AGENTS.md / GEMINI.md project instructions
         {
-            let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let working_dir =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             if let Some(ctx) = crate::project_instructions::load_full_context(&working_dir) {
                 let block = if use_cache {
                     SystemContentBlock::cached(ctx.content)
@@ -844,7 +881,11 @@ impl QueryEngine {
         let mut conversation = self.conversation.clone();
         tracing::debug!(
             existing_msgs = conversation.messages.len(),
-            last_role = conversation.messages.last().map(|m| m.role.as_str()).unwrap_or("none"),
+            last_role = conversation
+                .messages
+                .last()
+                .map(|m| m.role.as_str())
+                .unwrap_or("none"),
             "Starting new query: cloning conversation for background task"
         );
         conversation.messages.push(Message {
@@ -907,7 +948,12 @@ impl QueryEngine {
                     };
                     cfg.reasoning_effort = Some(reasoning_effort);
                     // For Anthropic: also set budget_tokens based on effort level
-                    if matches!(cfg.provider, crate::api::LlmProvider::Anthropic | crate::api::LlmProvider::Bedrock | crate::api::LlmProvider::Custom) {
+                    if matches!(
+                        cfg.provider,
+                        crate::api::LlmProvider::Anthropic
+                            | crate::api::LlmProvider::Bedrock
+                            | crate::api::LlmProvider::Custom
+                    ) {
                         let budget = reasoning_effort.to_anthropic_budget(200_000);
                         cfg.budget_tokens = Some(budget as u32);
                     }
@@ -928,23 +974,32 @@ impl QueryEngine {
             // After MAX_CONSECUTIVE_DENIALS the model is told to stop retrying;
             // if it still retries HARD_LIMIT more times, the loop aborts.
             let mut consecutive_denials: u32 = 0;
-            const DENIAL_SOFT_LIMIT: u32 = 3;  // inject warning to LLM
-            const DENIAL_HARD_LIMIT: u32 = 5;  // abort the agent loop
+            const DENIAL_SOFT_LIMIT: u32 = 3; // inject warning to LLM
+            const DENIAL_HARD_LIMIT: u32 = 5; // abort the agent loop
 
             loop {
                 if turn >= config.max_turns {
-                    let total_cost =
-                        CostTracker::calculate_cost(&client_model, total_input_tokens, total_output_tokens);
-                    send_event!(tx, QueryEvent::Cost {
-                        query_id,
-                        total_cost_usd: total_cost,
-                        input_tokens: total_input_tokens,
-                        output_tokens: total_output_tokens,
-                    });
-                    send_event!(tx, QueryEvent::ConversationUpdate {
-                        query_id,
-                        messages: conversation.messages.clone(),
-                    });
+                    let total_cost = CostTracker::calculate_cost(
+                        &client_model,
+                        total_input_tokens,
+                        total_output_tokens,
+                    );
+                    send_event!(
+                        tx,
+                        QueryEvent::Cost {
+                            query_id,
+                            total_cost_usd: total_cost,
+                            input_tokens: total_input_tokens,
+                            output_tokens: total_output_tokens,
+                        }
+                    );
+                    send_event!(
+                        tx,
+                        QueryEvent::ConversationUpdate {
+                            query_id,
+                            messages: conversation.messages.clone(),
+                        }
+                    );
                     send_event!(tx, QueryEvent::Completed { query_id });
 
                     // Auto-save conversation after completion
@@ -965,10 +1020,13 @@ impl QueryEngine {
 
                 // Auto-compress conversation when approaching token limits
                 if conversation.needs_compression(&config) {
-                    send_event!(tx, QueryEvent::Progress {
-                        query_id,
-                        message: "Compressing conversation context...".to_string(),
-                    });
+                    send_event!(
+                        tx,
+                        QueryEvent::Progress {
+                            query_id,
+                            message: "Compressing conversation context...".to_string(),
+                        }
+                    );
                     conversation.compress(&config);
                     messages = conversation.messages.clone();
                 }
@@ -993,12 +1051,18 @@ impl QueryEngine {
                 // Run every turn — check_ollama_capabilities() caches results after the first
                 // HTTP call, so subsequent turns just read the cache with zero overhead.
                 let mut effective_max_context = effective_max_context_tokens;
-                if client_provider == crate::api::LlmProvider::Ollama && config.max_context_tokens.is_none() {
+                if client_provider == crate::api::LlmProvider::Ollama
+                    && config.max_context_tokens.is_none()
+                {
                     if let Some(info) = client.check_ollama_capabilities().await {
                         if info.num_ctx > 0 {
                             effective_max_context = info.num_ctx;
                         }
-                        tracing::debug!(num_ctx = effective_max_context, turn, "Ollama context resolved");
+                        tracing::debug!(
+                            num_ctx = effective_max_context,
+                            turn,
+                            "Ollama context resolved"
+                        );
                     }
                 }
 
@@ -1017,10 +1081,13 @@ impl QueryEngine {
                             num_ctx = effective_max_context,
                             "Ollama model has small context, auto-disabling tools to preserve conversation history"
                         );
-                        send_event!(tx, QueryEvent::Progress {
-                            query_id,
-                            message: "Tools disabled (model context under 8K)".to_string(),
-                        });
+                        send_event!(
+                            tx,
+                            QueryEvent::Progress {
+                                query_id,
+                                message: "Tools disabled (model context under 8K)".to_string(),
+                            }
+                        );
                         // Replace full system prompt with minimal one to free context
                         system_blocks_opt = None;
                         system_prompt = Some("You are a helpful assistant.".to_string());
@@ -1035,20 +1102,29 @@ impl QueryEngine {
                 // Auto-compress conversation if it exceeds the threshold
                 {
                     let estimated_tokens = crate::compact::helpers::estimate_tokens(&messages)
-                        + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0);
+                        + config
+                            .system_prompt
+                            .as_ref()
+                            .map(|sp| crate::compact::helpers::estimate_text_tokens(sp))
+                            .unwrap_or(0);
                     let max_context = effective_max_context.max(1); // Guard against division by zero
                     let usage_ratio = estimated_tokens as f32 / max_context as f32;
 
                     // Pre-compaction warning at 60% — gives users visibility before compression fires
                     if usage_ratio > 0.6 && usage_ratio <= config.compression_threshold {
-                        send_event!(tx, QueryEvent::Progress {
-                            query_id,
-                            message: format!(
-                                "Context: {:.0}% full ({}/{}) — compaction will trigger at {:.0}%",
-                                usage_ratio * 100.0, estimated_tokens, max_context,
-                                config.compression_threshold * 100.0,
-                            ),
-                        });
+                        send_event!(
+                            tx,
+                            QueryEvent::Progress {
+                                query_id,
+                                message: format!(
+                                    "Context: {:.0}% full ({}/{}) — compaction will trigger at {:.0}%",
+                                    usage_ratio * 100.0,
+                                    estimated_tokens,
+                                    max_context,
+                                    config.compression_threshold * 100.0,
+                                ),
+                            }
+                        );
                     }
 
                     if usage_ratio > config.compression_threshold {
@@ -1063,14 +1139,17 @@ impl QueryEngine {
                                 message: "Compaction skipped (too many failures), truncating old messages".to_string(),
                             });
                         } else {
-                            match crate::compact::CompactEngine::with_llm_summarizer(client.clone()) {
+                            match crate::compact::CompactEngine::with_llm_summarizer(client.clone())
+                            {
                                 Ok(mut compact_engine) => {
                                     // Sync compact engine's context limit with our effective limit
-                                    compact_engine.config.max_context_tokens = effective_max_context;
+                                    compact_engine.config.max_context_tokens =
+                                        effective_max_context;
                                     // Build re-injection context from ContextInjector if available,
                                     // otherwise fall back to the system prompt (truncated).
                                     // Build re-injection context from ContextInjector if available
-                                    let reinjection = context_injector.as_ref()
+                                    let reinjection = context_injector
+                                        .as_ref()
                                         .map(|ci| ci.reinjection_context())
                                         .unwrap_or_default();
 
@@ -1085,48 +1164,63 @@ impl QueryEngine {
                                                 let ctx_msg = crate::api::Message {
                                                     role: "system".to_string(),
                                                     content: crate::api::MessageContent::Text(
-                                                        format!("[Re-injected context after compaction]\n\n{reinjection}")
+                                                        format!(
+                                                            "[Re-injected context after compaction]\n\n{reinjection}"
+                                                        ),
                                                     ),
                                                 };
                                                 messages.insert(0, ctx_msg);
                                             }
 
-                                            send_event!(tx, QueryEvent::Progress {
-                                                query_id,
-                                                message: format!(
-                                                    "Context compressed (3-tier): {} → {} tokens ({:.0}% reduction, {} messages compacted)",
-                                                    result.original_tokens,
-                                                    result.compacted_tokens,
-                                                    result.reduction_ratio * 100.0,
-                                                    result.messages_compacted,
-                                                ),
-                                            });
-                                            send_event!(tx, QueryEvent::Info {
-                                                query_id,
-                                                message: format!(
-                                                    "compaction: {} → {} tokens ({:.0}% reduction, {} removed, {} compacted, {:?})",
-                                                    result.original_tokens,
-                                                    result.compacted_tokens,
-                                                    result.reduction_ratio * 100.0,
-                                                    result.messages_removed,
-                                                    result.messages_compacted,
-                                                    result.strategy,
-                                                ),
-                                            });
+                                            send_event!(
+                                                tx,
+                                                QueryEvent::Progress {
+                                                    query_id,
+                                                    message: format!(
+                                                        "Context compressed (3-tier): {} → {} tokens ({:.0}% reduction, {} messages compacted)",
+                                                        result.original_tokens,
+                                                        result.compacted_tokens,
+                                                        result.reduction_ratio * 100.0,
+                                                        result.messages_compacted,
+                                                    ),
+                                                }
+                                            );
+                                            send_event!(
+                                                tx,
+                                                QueryEvent::Info {
+                                                    query_id,
+                                                    message: format!(
+                                                        "compaction: {} → {} tokens ({:.0}% reduction, {} removed, {} compacted, {:?})",
+                                                        result.original_tokens,
+                                                        result.compacted_tokens,
+                                                        result.reduction_ratio * 100.0,
+                                                        result.messages_removed,
+                                                        result.messages_compacted,
+                                                        result.strategy,
+                                                    ),
+                                                }
+                                            );
                                         }
                                         Err(e) => {
                                             compaction_failures += 1;
-                                            tracing::warn!("Compression failed: {}, truncating instead", e);
+                                            tracing::warn!(
+                                                "Compression failed: {}, truncating instead",
+                                                e
+                                            );
                                             let keep = 20;
                                             if messages.len() > keep {
-                                                messages = messages.split_off(messages.len() - keep);
+                                                messages =
+                                                    messages.split_off(messages.len() - keep);
                                             }
                                         }
                                     }
                                 }
                                 Err(e) => {
                                     compaction_failures += 1;
-                                    tracing::warn!("CompactEngine init failed ({}), truncating old messages", e);
+                                    tracing::warn!(
+                                        "CompactEngine init failed ({}), truncating old messages",
+                                        e
+                                    );
                                     let keep = 20;
                                     if messages.len() > keep {
                                         messages = messages.split_off(messages.len() - keep);
@@ -1162,23 +1256,36 @@ impl QueryEngine {
                 // tools, warn if near limit, and auto-strip tools for Ollama to preserve
                 // conversation history.
                 {
-                    let tools_tokens = tools_schema.as_ref().map(|t| {
-                        // Rough estimate: ~4 chars per token for JSON tool definitions
-                        let json_len = serde_json::to_string(t).map(|s| s.len()).unwrap_or(0);
-                        json_len / 4
-                    }).unwrap_or(0);
+                    let tools_tokens = tools_schema
+                        .as_ref()
+                        .map(|t| {
+                            // Rough estimate: ~4 chars per token for JSON tool definitions
+                            let json_len = serde_json::to_string(t).map(|s| s.len()).unwrap_or(0);
+                            json_len / 4
+                        })
+                        .unwrap_or(0);
                     let mut pre_send_estimate = crate::compact::helpers::estimate_tokens(&messages)
-                        + config.system_prompt.as_ref().map(|sp| crate::compact::helpers::estimate_text_tokens(sp)).unwrap_or(0)
+                        + config
+                            .system_prompt
+                            .as_ref()
+                            .map(|sp| crate::compact::helpers::estimate_text_tokens(sp))
+                            .unwrap_or(0)
                         + tools_tokens;
-                    let mut pre_send_ratio = pre_send_estimate as f32 / effective_max_context as f32;
+                    let mut pre_send_ratio =
+                        pre_send_estimate as f32 / effective_max_context as f32;
                     if pre_send_ratio > 0.9 {
-                        send_event!(tx, QueryEvent::Progress {
-                            query_id,
-                            message: format!(
-                                "Context at {:.0}% ({}/{} tokens) — approaching limit",
-                                pre_send_ratio * 100.0, pre_send_estimate, effective_max_context,
-                            ),
-                        });
+                        send_event!(
+                            tx,
+                            QueryEvent::Progress {
+                                query_id,
+                                message: format!(
+                                    "Context at {:.0}% ({}/{} tokens) — approaching limit",
+                                    pre_send_ratio * 100.0,
+                                    pre_send_estimate,
+                                    effective_max_context,
+                                ),
+                            }
+                        );
                         tracing::warn!(
                             estimated_tokens = pre_send_estimate,
                             tools_tokens,
@@ -1191,27 +1298,44 @@ impl QueryEngine {
                             && tools_schema.is_some()
                             && tools_tokens > 0
                         {
-                            tracing::info!("Auto-stripping tools to preserve conversation context for Ollama");
-                            send_event!(tx, QueryEvent::Progress {
-                                query_id,
-                                message: "Auto-disabling tools — context near limit".to_string(),
-                            });
+                            tracing::info!(
+                                "Auto-stripping tools to preserve conversation context for Ollama"
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::Progress {
+                                    query_id,
+                                    message: "Auto-disabling tools — context near limit"
+                                        .to_string(),
+                                }
+                            );
                             tools_schema = None;
                             pre_send_estimate -= tools_tokens;
-                            pre_send_ratio = pre_send_estimate as f32 / effective_max_context as f32;
+                            pre_send_ratio =
+                                pre_send_estimate as f32 / effective_max_context as f32;
                         }
                         // For Ollama still over limit: strip system prompt/blocks
                         // to free context for conversation history.
-                        if pre_send_ratio > 0.95 && client_provider == crate::api::LlmProvider::Ollama {
+                        if pre_send_ratio > 0.95
+                            && client_provider == crate::api::LlmProvider::Ollama
+                        {
                             if system_blocks_opt.is_some() {
-                                tracing::info!("Stripping system blocks for Ollama — context near limit");
-                                send_event!(tx, QueryEvent::Progress {
-                                    query_id,
-                                    message: "Stripping system context — context near limit".to_string(),
-                                });
+                                tracing::info!(
+                                    "Stripping system blocks for Ollama — context near limit"
+                                );
+                                send_event!(
+                                    tx,
+                                    QueryEvent::Progress {
+                                        query_id,
+                                        message: "Stripping system context — context near limit"
+                                            .to_string(),
+                                    }
+                                );
                                 system_blocks_opt = None;
                             } else if system_prompt.is_some() {
-                                tracing::info!("Stripping system prompt for Ollama — context near limit");
+                                tracing::info!(
+                                    "Stripping system prompt for Ollama — context near limit"
+                                );
                                 system_prompt = None;
                             }
                         }
@@ -1219,7 +1343,8 @@ impl QueryEngine {
                         // to fit within context. Keep the most recent turns.
                         if pre_send_ratio > 1.0 && messages.len() > 2 {
                             let target_tokens = (effective_max_context as f32 * 0.8) as usize;
-                            while crate::compact::helpers::estimate_tokens(&messages) > target_tokens
+                            while crate::compact::helpers::estimate_tokens(&messages)
+                                > target_tokens
                                 && messages.len() > 2
                             {
                                 // Remove the oldest non-adjacent pair to maintain
@@ -1237,19 +1362,38 @@ impl QueryEngine {
                                 new_estimate,
                                 "Truncated older messages to fit context"
                             );
-                            send_event!(tx, QueryEvent::Progress {
-                                query_id,
-                                message: format!("Truncated history to {} messages ({} tokens)", messages.len(), new_estimate),
-                            });
+                            send_event!(
+                                tx,
+                                QueryEvent::Progress {
+                                    query_id,
+                                    message: format!(
+                                        "Truncated history to {} messages ({} tokens)",
+                                        messages.len(),
+                                        new_estimate
+                                    ),
+                                }
+                            );
                         }
                     }
                 }
 
                 // Call the API — use structured system blocks when available for prompt caching
                 let stream_result = if let Some(ref blocks) = system_blocks_opt {
-                    client.send_message_stream_structured_with_retry(messages.clone(), tools_schema.clone(), blocks.clone()).await
+                    client
+                        .send_message_stream_structured_with_retry(
+                            messages.clone(),
+                            tools_schema.clone(),
+                            blocks.clone(),
+                        )
+                        .await
                 } else {
-                    client.send_message_stream_with_retry(messages.clone(), tools_schema.clone(), system_prompt.clone()).await
+                    client
+                        .send_message_stream_with_retry(
+                            messages.clone(),
+                            tools_schema.clone(),
+                            system_prompt.clone(),
+                        )
+                        .await
                 };
                 match stream_result {
                     Ok(mut stream) => {
@@ -1271,26 +1415,27 @@ impl QueryEngine {
                                 Ok(stream_event) => {
                                     match stream_event {
                                         StreamEvent::MessageStart { message } => {
-                                            start_cache_read = message.usage.cache_read_input_tokens as u64;
-                                            start_cache_creation = message.usage.cache_creation_input_tokens as u64;
+                                            start_cache_read =
+                                                message.usage.cache_read_input_tokens as u64;
+                                            start_cache_creation =
+                                                message.usage.cache_creation_input_tokens as u64;
                                         }
                                         StreamEvent::ContentBlockStart {
                                             content_block, ..
                                         } => {
                                             match &content_block {
-                                                ContentBlock::ToolUse {
-                                                    id,
-                                                    name,
-                                                    input,
-                                                } => {
+                                                ContentBlock::ToolUse { id, name, input } => {
                                                     current_tool_use =
                                                         Some((id.clone(), name.clone()));
-                                                    send_event!(tx, QueryEvent::ToolUseRequest {
-                                                        query_id,
-                                                        tool_use_id: id.clone(),
-                                                        tool_name: name.clone(),
-                                                        tool_input: input.clone(),
-                                                    });
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::ToolUseRequest {
+                                                            query_id,
+                                                            tool_use_id: id.clone(),
+                                                            tool_name: name.clone(),
+                                                            tool_input: input.clone(),
+                                                        }
+                                                    );
                                                 }
                                                 ContentBlock::Thinking { .. } => {
                                                     // Thinking block started — deltas will arrive via ThinkingDelta
@@ -1298,54 +1443,81 @@ impl QueryEngine {
                                                 _ => {}
                                             }
                                         }
-                                        StreamEvent::ContentBlockDelta { delta, .. } => {
-                                            match delta {
-                                                ContentDelta::TextDelta { text } => {
-                                                    has_content = true;
-                                                    assistant_text.push_str(&text);
-                                                    send_event!(tx, QueryEvent::Text {
+                                        StreamEvent::ContentBlockDelta { delta, .. } => match delta
+                                        {
+                                            ContentDelta::TextDelta { text } => {
+                                                has_content = true;
+                                                assistant_text.push_str(&text);
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Text {
                                                         query_id,
                                                         content: text,
-                                                    });
-                                                }
-                                                ContentDelta::InputJsonDelta { partial_json } => {
-                                                    accumulated_tool_input.push_str(&partial_json);
-                                                }
-                                                ContentDelta::ThinkingDelta { thinking } => {
-                                                    send_event!(tx, QueryEvent::Thinking {
+                                                    }
+                                                );
+                                            }
+                                            ContentDelta::InputJsonDelta { partial_json } => {
+                                                accumulated_tool_input.push_str(&partial_json);
+                                            }
+                                            ContentDelta::ThinkingDelta { thinking } => {
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Thinking {
                                                         query_id,
                                                         content: thinking,
-                                                    });
-                                                }
+                                                    }
+                                                );
                                             }
-                                        }
+                                        },
                                         StreamEvent::ContentBlockStop { .. } => {
                                             if let Some((id, name)) = current_tool_use.take() {
-                                                let raw = std::mem::take(&mut accumulated_tool_input);
-                                                match serde_json::from_str::<serde_json::Value>(&raw) {
+                                                let raw =
+                                                    std::mem::take(&mut accumulated_tool_input);
+                                                match serde_json::from_str::<serde_json::Value>(
+                                                    &raw,
+                                                ) {
                                                     Ok(json_val) => {
-                                                        tool_inputs.push((id.clone(), name.clone(), json_val.clone()));
-                                                        assistant_tool_uses.push(ContentBlock::ToolUse {
-                                                            id,
-                                                            name,
-                                                            input: json_val,
-                                                        });
+                                                        tool_inputs.push((
+                                                            id.clone(),
+                                                            name.clone(),
+                                                            json_val.clone(),
+                                                        ));
+                                                        assistant_tool_uses.push(
+                                                            ContentBlock::ToolUse {
+                                                                id,
+                                                                name,
+                                                                input: json_val,
+                                                            },
+                                                        );
                                                     }
                                                     Err(e) => {
-                                                        tracing::warn!("Tool input JSON parse failed for '{name}': {e}");
-                                                        send_event!(tx, QueryEvent::ToolUseResult {
-                                                            query_id,
-                                                            tool_use_id: id.clone(),
-                                                            tool_name: name.clone(),
-                                                            result: format!("Failed to parse tool arguments: {e}"),
-                                                            is_error: true,
-                                                        });
-                                                        tool_results.push((id, format!("Malformed tool input: {e}"), true));
-                                                        assistant_tool_uses.push(ContentBlock::ToolUse {
-                                                            id: String::new(),
-                                                            name,
-                                                            input: serde_json::Value::Null,
-                                                        });
+                                                        tracing::warn!(
+                                                            "Tool input JSON parse failed for '{name}': {e}"
+                                                        );
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::ToolUseResult {
+                                                                query_id,
+                                                                tool_use_id: id.clone(),
+                                                                tool_name: name.clone(),
+                                                                result: format!(
+                                                                    "Failed to parse tool arguments: {e}"
+                                                                ),
+                                                                is_error: true,
+                                                            }
+                                                        );
+                                                        tool_results.push((
+                                                            id,
+                                                            format!("Malformed tool input: {e}"),
+                                                            true,
+                                                        ));
+                                                        assistant_tool_uses.push(
+                                                            ContentBlock::ToolUse {
+                                                                id: String::new(),
+                                                                name,
+                                                                input: serde_json::Value::Null,
+                                                            },
+                                                        );
                                                     }
                                                 }
                                             }
@@ -1364,19 +1536,29 @@ impl QueryEngine {
 
                                             // Update shared cost tracker
                                             {
-                                                let mut tracker = cost_tracker.write().unwrap_or_else(|e| e.into_inner());
-                                                tracker.record_usage(&client_model, input_tokens, output_tokens);
+                                                let mut tracker = cost_tracker
+                                                    .write()
+                                                    .unwrap_or_else(|e| e.into_inner());
+                                                tracker.record_usage(
+                                                    &client_model,
+                                                    input_tokens,
+                                                    output_tokens,
+                                                );
 
                                                 // Budget enforcement: check if limit exceeded
                                                 if tracker.is_budget_exceeded() {
-                                                    let limit = tracker.budget_limit_usd.unwrap_or(0.0);
+                                                    let limit =
+                                                        tracker.budget_limit_usd.unwrap_or(0.0);
                                                     let total = tracker.total_cost();
-                                                    send_event!(tx, QueryEvent::Progress {
-                                                        query_id,
-                                                        message: format!(
-                                                            "Budget limit reached (${limit:.2}). Stopping. (spent: ${total:.4})"
-                                                        ),
-                                                    });
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Progress {
+                                                            query_id,
+                                                            message: format!(
+                                                                "Budget limit reached (${limit:.2}). Stopping. (spent: ${total:.4})"
+                                                            ),
+                                                        }
+                                                    );
                                                     // Break out of the loop by setting turn to max
                                                     turn = config.max_turns;
                                                     break;
@@ -1384,43 +1566,63 @@ impl QueryEngine {
 
                                                 // Budget warning at 80% usage (fires once)
                                                 if tracker.check_and_mark_budget_warning() {
-                                                    let limit = tracker.budget_limit_usd.unwrap_or(0.0);
+                                                    let limit =
+                                                        tracker.budget_limit_usd.unwrap_or(0.0);
                                                     let total = tracker.total_cost();
-                                                    let pct = if limit > 0.0 { (total / limit * 100.0) as u32 } else { 0 };
-                                                    send_event!(tx, QueryEvent::Progress {
-                                                        query_id,
-                                                        message: format!(
-                                                            "Budget warning: ${total:.4} / ${limit:.2} ({pct}%)"
-                                                        ),
-                                                    });
+                                                    let pct = if limit > 0.0 {
+                                                        (total / limit * 100.0) as u32
+                                                    } else {
+                                                        0
+                                                    };
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Progress {
+                                                            query_id,
+                                                            message: format!(
+                                                                "Budget warning: ${total:.4} / ${limit:.2} ({pct}%)"
+                                                            ),
+                                                        }
+                                                    );
                                                 }
                                             }
 
-                                            let cache_creation_tokens = start_cache_creation.max(usage.cache_creation_input_tokens as u64);
-                                            let cache_read_tokens = start_cache_read.max(usage.cache_read_input_tokens as u64);
+                                            let cache_creation_tokens = start_cache_creation
+                                                .max(usage.cache_creation_input_tokens as u64);
+                                            let cache_read_tokens = start_cache_read
+                                                .max(usage.cache_read_input_tokens as u64);
 
-                                            send_event!(tx, QueryEvent::Usage {
-                                                query_id,
-                                                input_tokens,
-                                                output_tokens,
-                                                cost_usd,
-                                                cache_creation_tokens,
-                                                cache_read_tokens,
-                                            });
+                                            send_event!(
+                                                tx,
+                                                QueryEvent::Usage {
+                                                    query_id,
+                                                    input_tokens,
+                                                    output_tokens,
+                                                    cost_usd,
+                                                    cache_creation_tokens,
+                                                    cache_read_tokens,
+                                                }
+                                            );
 
                                             if !tool_inputs.is_empty() {
                                                 // Phase 1: Check permissions and hooks (sequential — may need user input)
-                                                let mut approved_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
+                                                let mut approved_tools: Vec<(
+                                                    String,
+                                                    String,
+                                                    serde_json::Value,
+                                                )> = Vec::new();
 
                                                 for (tool_id, tool_name, tool_input) in
                                                     tool_inputs.drain(..)
                                                 {
-                                                    send_event!(tx, QueryEvent::Progress {
-                                                        query_id,
-                                                        message: format!(
-                                                            "Executing tool: {tool_name}"
-                                                        ),
-                                                    });
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Progress {
+                                                            query_id,
+                                                            message: format!(
+                                                                "Executing tool: {tool_name}"
+                                                            ),
+                                                        }
+                                                    );
 
                                                     // Plan mode gate: block write tools when plan mode is active.
                                                     let is_plan_active = plan_mode_active
@@ -1435,21 +1637,26 @@ impl QueryEngine {
                                                                  Use exit_plan_mode to resume editing. \
                                                                  Blocked tool: {tool_name}"
                                                             );
-                                                            send_event!(tx, QueryEvent::ToolUseResult {
-                                                                query_id,
-                                                                tool_use_id: tool_id.clone(),
-                                                                tool_name,
-                                                                result: error_msg.clone(),
-                                                                is_error: true,
-                                                            });
-                                                            tool_results.push((tool_id, error_msg, true));
+                                                            send_event!(
+                                                                tx,
+                                                                QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name,
+                                                                    result: error_msg.clone(),
+                                                                    is_error: true,
+                                                                }
+                                                            );
+                                                            tool_results
+                                                                .push((tool_id, error_msg, true));
                                                             continue;
                                                         }
                                                     }
 
                                                     // Pre-check with classifier and permission system
                                                     let permission_result = {
-                                                        let guard = recover_lock(permissions.read());
+                                                        let guard =
+                                                            recover_lock(permissions.read());
                                                         guard.classify_and_check(
                                                             session_id_for_permissions,
                                                             &tool_name,
@@ -1463,14 +1670,18 @@ impl QueryEngine {
                                                             let error_msg = format!(
                                                                 "Tool denied by classifier: {tool_name}"
                                                             );
-                                                            send_event!(tx, QueryEvent::ToolUseResult {
-                                                                query_id,
-                                                                tool_use_id: tool_id.clone(),
-                                                                tool_name,
-                                                                result: error_msg.clone(),
-                                                                is_error: true,
-                                                            });
-                                                            tool_results.push((tool_id, error_msg, true));
+                                                            send_event!(
+                                                                tx,
+                                                                QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name,
+                                                                    result: error_msg.clone(),
+                                                                    is_error: true,
+                                                                }
+                                                            );
+                                                            tool_results
+                                                                .push((tool_id, error_msg, true));
                                                             continue;
                                                         }
                                                         Ok(None) => {
@@ -1502,8 +1713,17 @@ impl QueryEngine {
                                                                 permission_request_tx
                                                             {
                                                                 // Generate diff preview for file edit/write tools
-                                                                if matches!(tool_name.as_str(), "edit" | "write" | "EditTool" | "WriteTool") {
-                                                                    if let Some(path) = tool_input.get("file_path").and_then(|v| v.as_str()) {
+                                                                if matches!(
+                                                                    tool_name.as_str(),
+                                                                    "edit"
+                                                                        | "write"
+                                                                        | "EditTool"
+                                                                        | "WriteTool"
+                                                                ) {
+                                                                    if let Some(path) = tool_input
+                                                                        .get("file_path")
+                                                                        .and_then(|v| v.as_str())
+                                                                    {
                                                                         let path_buf = std::path::PathBuf::from(path);
                                                                         if path_buf.exists() {
                                                                             if let Ok(old_content) = std::fs::read_to_string(&path_buf) {
@@ -1514,17 +1734,34 @@ impl QueryEngine {
                                                                                 let diff = generate_diff_preview(path, &old_content, new_content);
                                                                                 prompt.diff_preview = Some(diff);
                                                                             }
-                                                                        } else if tool_name == "write" || tool_name == "WriteTool" {
+                                                                        } else if tool_name
+                                                                            == "write"
+                                                                            || tool_name
+                                                                                == "WriteTool"
+                                                                        {
                                                                             // New file — show that it's being created
-                                                                            if let Some(content) = tool_input.get("content").and_then(|v| v.as_str()) {
-                                                                                let preview = if content.len() > 500 {
-                                                                                    let mut end = 500.min(content.len());
-                                                                                    while !content.is_char_boundary(end) { end -= 1; }
-                                                                                    format!("+ Creating new file ({} bytes)\n{}\n... (truncated)", content.len(), &content[..end])
-                                                                                } else {
-                                                                                    format!("+ Creating new file\n{content}")
-                                                                                };
-                                                                                prompt.diff_preview = Some(preview);
+                                                                            if let Some(content) =
+                                                                                tool_input
+                                                                                    .get("content")
+                                                                                    .and_then(|v| {
+                                                                                        v.as_str()
+                                                                                    })
+                                                                            {
+                                                                                let preview =
+                                                                                    if content.len()
+                                                                                        > 500
+                                                                                    {
+                                                                                        let mut end = 500.min(content.len());
+                                                                                        while !content.is_char_boundary(end) { end -= 1; }
+                                                                                        format!("+ Creating new file ({} bytes)\n{}\n... (truncated)", content.len(), &content[..end])
+                                                                                    } else {
+                                                                                        format!(
+                                                                                            "+ Creating new file\n{content}"
+                                                                                        )
+                                                                                    };
+                                                                                prompt
+                                                                                    .diff_preview =
+                                                                                    Some(preview);
                                                                             }
                                                                         }
                                                                     }
@@ -1532,8 +1769,10 @@ impl QueryEngine {
                                                                 let (response_tx, mut response_rx) =
                                                                     mpsc::unbounded_channel();
                                                                 // Clone prompt for the request; keep a reference for deny message
-                                                                let prompt_desc = prompt.description.clone();
-                                                                let prompt_for_choice = prompt.clone();
+                                                                let prompt_desc =
+                                                                    prompt.description.clone();
+                                                                let prompt_for_choice =
+                                                                    prompt.clone();
                                                                 let _ = req_tx.send(
                                                                     super::types::PermissionRequest {
                                                                         prompt,
@@ -1611,10 +1850,11 @@ impl QueryEngine {
                                                     }
 
                                                     // Run PreToolUse hooks
-                                                    let hook_event = crate::hooks::HookEvent::PreToolUse {
-                                                        tool_name: tool_name.clone(),
-                                                        input: tool_input.clone(),
-                                                    };
+                                                    let hook_event =
+                                                        crate::hooks::HookEvent::PreToolUse {
+                                                            tool_name: tool_name.clone(),
+                                                            input: tool_input.clone(),
+                                                        };
                                                     let pre_hook_decision = {
                                                         let hm = hook_manager.read().await;
                                                         match hm.run_hooks(&hook_event).await {
@@ -1628,20 +1868,31 @@ impl QueryEngine {
 
                                                     let mut effective_input = tool_input.clone();
                                                     match &pre_hook_decision {
-                                                        crate::hooks::HookDecision::Deny { reason } => {
-                                                            let error_msg = format!("Hook denied: {reason}");
-                                                            send_event!(tx, QueryEvent::ToolUseResult {
-                                                                query_id,
-                                                                tool_use_id: tool_id.clone(),
-                                                                tool_name,
-                                                                result: error_msg.clone(),
-                                                                is_error: true,
-                                                            });
-                                                            tool_results.push((tool_id, error_msg, true));
+                                                        crate::hooks::HookDecision::Deny {
+                                                            reason,
+                                                        } => {
+                                                            let error_msg =
+                                                                format!("Hook denied: {reason}");
+                                                            send_event!(
+                                                                tx,
+                                                                QueryEvent::ToolUseResult {
+                                                                    query_id,
+                                                                    tool_use_id: tool_id.clone(),
+                                                                    tool_name,
+                                                                    result: error_msg.clone(),
+                                                                    is_error: true,
+                                                                }
+                                                            );
+                                                            tool_results
+                                                                .push((tool_id, error_msg, true));
                                                             continue;
                                                         }
-                                                        crate::hooks::HookDecision::Modify { modified_input, .. } => {
-                                                            if let Some(new_input) = modified_input {
+                                                        crate::hooks::HookDecision::Modify {
+                                                            modified_input,
+                                                            ..
+                                                        } => {
+                                                            if let Some(new_input) = modified_input
+                                                            {
                                                                 tracing::debug!(
                                                                     "PreToolUse hook modified input for tool '{}'",
                                                                     tool_name
@@ -1652,7 +1903,11 @@ impl QueryEngine {
                                                         crate::hooks::HookDecision::Allow => {}
                                                     }
 
-                                                    approved_tools.push((tool_id, tool_name, effective_input));
+                                                    approved_tools.push((
+                                                        tool_id,
+                                                        tool_name,
+                                                        effective_input,
+                                                    ));
                                                 }
 
                                                 // Circuit breaker: check consecutive denials before executing tools.
@@ -1672,42 +1927,80 @@ impl QueryEngine {
                                                 // Read-only tools are grouped into parallel batches.
                                                 // Write tools execute one at a time to avoid race conditions.
                                                 {
-                                                    let batches = tools.partition_tool_calls(approved_tools, config.max_parallel_tools);
+                                                    let batches = tools.partition_tool_calls(
+                                                        approved_tools,
+                                                        config.max_parallel_tools,
+                                                    );
 
                                                     for batch in batches {
                                                         match batch {
-                                                            crate::tools::ToolBatch::Parallel(tool_calls) => {
+                                                            crate::tools::ToolBatch::Parallel(
+                                                                tool_calls,
+                                                            ) => {
                                                                 // Execute read-only tools concurrently
                                                                 let mut exec_handles = Vec::new();
-                                                                for (tool_id, tool_name, effective_input) in tool_calls {
-                                                                    let id_for_error = tool_id.clone();
+                                                                for (
+                                                                    tool_id,
+                                                                    tool_name,
+                                                                    effective_input,
+                                                                ) in tool_calls
+                                                                {
+                                                                    let id_for_error =
+                                                                        tool_id.clone();
                                                                     // Emit progress: tool started
-                                                                    send_event!(tx, QueryEvent::ToolProgress {
-                                                                        query_id,
-                                                                        tool_use_id: tool_id.clone(),
-                                                                        tool_name: tool_name.clone(),
-                                                                        progress: 0.0,
-                                                                        message: format!("{tool_name} started"),
-                                                                    });
+                                                                    send_event!(
+                                                                        tx,
+                                                                        QueryEvent::ToolProgress {
+                                                                            query_id,
+                                                                            tool_use_id: tool_id
+                                                                                .clone(),
+                                                                            tool_name: tool_name
+                                                                                .clone(),
+                                                                            progress: 0.0,
+                                                                            message: format!(
+                                                                                "{tool_name} started"
+                                                                            ),
+                                                                        }
+                                                                    );
                                                                     let tools_exec = tools.clone();
-                                                                    let exec_name = tool_name.clone();
-                                                                    let exec_input = effective_input.clone();
-                                                                    let progress_sender = std::sync::Arc::new(ChannelProgressSender {
-                                                                        tx: tx.clone(),
-                                                                        query_id,
-                                                                        tool_use_id: tool_id.clone(),
-                                                                        tool_name: tool_name.clone(),
-                                                                    });
-                                                                    let handle = tokio::spawn(async move {
-                                                                        (tool_id, tool_name, effective_input, tools_exec.execute_streaming(&exec_name, exec_input, progress_sender).await)
-                                                                    });
-                                                                    exec_handles.push((id_for_error, handle));
+                                                                    let exec_name =
+                                                                        tool_name.clone();
+                                                                    let exec_input =
+                                                                        effective_input.clone();
+                                                                    let progress_sender =
+                                                                        std::sync::Arc::new(
+                                                                            ChannelProgressSender {
+                                                                                tx: tx.clone(),
+                                                                                query_id,
+                                                                                tool_use_id:
+                                                                                    tool_id.clone(),
+                                                                                tool_name:
+                                                                                    tool_name
+                                                                                        .clone(),
+                                                                            },
+                                                                        );
+                                                                    let handle = tokio::spawn(
+                                                                        async move {
+                                                                            (tool_id, tool_name, effective_input, tools_exec.execute_streaming(&exec_name, exec_input, progress_sender).await)
+                                                                        },
+                                                                    );
+                                                                    exec_handles.push((
+                                                                        id_for_error,
+                                                                        handle,
+                                                                    ));
                                                                 }
 
                                                                 let mut batch_had_denial = false;
-                                                                for (saved_tool_id, handle) in exec_handles {
+                                                                for (saved_tool_id, handle) in
+                                                                    exec_handles
+                                                                {
                                                                     match handle.await {
-                                                                        Ok((tool_id, tool_name, effective_input, result)) => {
+                                                                        Ok((
+                                                                            tool_id,
+                                                                            tool_name,
+                                                                            effective_input,
+                                                                            result,
+                                                                        )) => {
                                                                             // Run PostToolUse hooks
                                                                             {
                                                                                 let output_val = match &result {
@@ -1719,8 +2012,15 @@ impl QueryEngine {
                                                                                     input: effective_input,
                                                                                     output: output_val,
                                                                                 };
-                                                                                let hm = hook_manager.read().await;
-                                                                                let _ = hm.run_hooks(&post_event).await;
+                                                                                let hm =
+                                                                                    hook_manager
+                                                                                        .read()
+                                                                                        .await;
+                                                                                let _ = hm
+                                                                                    .run_hooks(
+                                                                                        &post_event,
+                                                                                    )
+                                                                                    .await;
                                                                             }
 
                                                                             // Emit progress: tool completed
@@ -1734,7 +2034,9 @@ impl QueryEngine {
                                                                             match result {
                                                                                 Ok(output) => {
                                                                                     let is_err = output.is_error;
-                                                                                    if is_err { batch_had_denial = true; }
+                                                                                    if is_err {
+                                                                                        batch_had_denial = true;
+                                                                                    }
                                                                                     send_event!(tx, QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
@@ -1742,11 +2044,21 @@ impl QueryEngine {
                                                                                         result: output.content.clone(),
                                                                                         is_error: is_err,
                                                                                     });
-                                                                                    tool_results.push((tool_id, output.content.clone(), is_err));
+                                                                                    tool_results
+                                                                                        .push((
+                                                                                        tool_id,
+                                                                                        output
+                                                                                            .content
+                                                                                            .clone(
+                                                                                            ),
+                                                                                        is_err,
+                                                                                    ));
                                                                                 }
                                                                                 Err(e) => {
                                                                                     // Tool execution errors are not permission denials
-                                                                                    let error_msg = format!("Tool error: {e}");
+                                                                                    let error_msg = format!(
+                                                                                        "Tool error: {e}"
+                                                                                    );
                                                                                     send_event!(tx, QueryEvent::ToolUseResult {
                                                                                         query_id,
                                                                                         tool_use_id: tool_id.clone(),
@@ -1754,13 +2066,20 @@ impl QueryEngine {
                                                                                         result: error_msg.clone(),
                                                                                         is_error: true,
                                                                                     });
-                                                                                    tool_results.push((tool_id, error_msg, true));
+                                                                                    tool_results
+                                                                                        .push((
+                                                                                        tool_id,
+                                                                                        error_msg,
+                                                                                        true,
+                                                                                    ));
                                                                                 }
                                                                             }
                                                                         }
                                                                         Err(e) => {
                                                                             // Task join errors are not permission denials
-                                                                            let error_msg = format!("Task join error: {e}");
+                                                                            let error_msg = format!(
+                                                                                "Task join error: {e}"
+                                                                            );
                                                                             send_event!(tx, QueryEvent::ToolUseResult {
                                                                                 query_id,
                                                                                 tool_use_id: saved_tool_id.clone(),
@@ -1768,7 +2087,11 @@ impl QueryEngine {
                                                                                 result: error_msg.clone(),
                                                                                 is_error: true,
                                                                             });
-                                                                            tool_results.push((saved_tool_id, error_msg, true));
+                                                                            tool_results.push((
+                                                                                saved_tool_id,
+                                                                                error_msg,
+                                                                                true,
+                                                                            ));
                                                                         }
                                                                     }
                                                                 }
@@ -1776,32 +2099,55 @@ impl QueryEngine {
                                                                     consecutive_denials = 0;
                                                                 }
                                                             }
-                                                            crate::tools::ToolBatch::Serial((tool_id, tool_name, effective_input)) => {
+                                                            crate::tools::ToolBatch::Serial((
+                                                                tool_id,
+                                                                tool_name,
+                                                                effective_input,
+                                                            )) => {
                                                                 // Execute write tools sequentially (one at a time)
                                                                 // Create a checkpoint before file-modifying tools for undo support
-                                                                if matches!(tool_name.as_str(), "Edit" | "Write" | "Bash")
-                                                                    && checkpoint_manager.is_enabled()
+                                                                if matches!(
+                                                                    tool_name.as_str(),
+                                                                    "Edit" | "Write" | "Bash"
+                                                                ) && checkpoint_manager
+                                                                    .is_enabled()
                                                                 {
                                                                     if let Err(e) = checkpoint_manager.create_checkpoint(&tool_name, &format!("Before {tool_name} tool execution")) {
                                                                         tracing::debug!("Checkpoint creation skipped: {e}");
                                                                     }
                                                                 }
                                                                 // Emit progress: tool started
-                                                                send_event!(tx, QueryEvent::ToolProgress {
-                                                                    query_id,
-                                                                    tool_use_id: tool_id.clone(),
-                                                                    tool_name: tool_name.clone(),
-                                                                    progress: 0.0,
-                                                                    message: format!("{tool_name} started"),
-                                                                });
-                                                                let progress_sender = std::sync::Arc::new(ChannelProgressSender {
-                                                                    tx: tx.clone(),
-                                                                    query_id,
-                                                                    tool_use_id: tool_id.clone(),
-                                                                    tool_name: tool_name.clone(),
-                                                                });
+                                                                send_event!(
+                                                                    tx,
+                                                                    QueryEvent::ToolProgress {
+                                                                        query_id,
+                                                                        tool_use_id: tool_id
+                                                                            .clone(),
+                                                                        tool_name: tool_name
+                                                                            .clone(),
+                                                                        progress: 0.0,
+                                                                        message: format!(
+                                                                            "{tool_name} started"
+                                                                        ),
+                                                                    }
+                                                                );
+                                                                let progress_sender =
+                                                                    std::sync::Arc::new(
+                                                                        ChannelProgressSender {
+                                                                            tx: tx.clone(),
+                                                                            query_id,
+                                                                            tool_use_id: tool_id
+                                                                                .clone(),
+                                                                            tool_name: tool_name
+                                                                                .clone(),
+                                                                        },
+                                                                    );
                                                                 let result = tools
-                                                                    .execute_streaming(&tool_name, effective_input.clone(), progress_sender)
+                                                                    .execute_streaming(
+                                                                        &tool_name,
+                                                                        effective_input.clone(),
+                                                                        progress_sender,
+                                                                    )
                                                                     .await;
 
                                                                 // Run PostToolUse hooks
@@ -1815,21 +2161,32 @@ impl QueryEngine {
                                                                         input: effective_input,
                                                                         output: output_val,
                                                                     };
-                                                                    let hm = hook_manager.read().await;
-                                                                    let _ = hm.run_hooks(&post_event).await;
+                                                                    let hm =
+                                                                        hook_manager.read().await;
+                                                                    let _ = hm
+                                                                        .run_hooks(&post_event)
+                                                                        .await;
                                                                 }
 
                                                                 // Emit progress: tool completed
-                                                                send_event!(tx, QueryEvent::ToolProgress {
-                                                                    query_id,
-                                                                    tool_use_id: tool_id.clone(),
-                                                                    tool_name: tool_name.clone(),
-                                                                    progress: 1.0,
-                                                                    message: format!("{tool_name} completed"),
-                                                                });
+                                                                send_event!(
+                                                                    tx,
+                                                                    QueryEvent::ToolProgress {
+                                                                        query_id,
+                                                                        tool_use_id: tool_id
+                                                                            .clone(),
+                                                                        tool_name: tool_name
+                                                                            .clone(),
+                                                                        progress: 1.0,
+                                                                        message: format!(
+                                                                            "{tool_name} completed"
+                                                                        ),
+                                                                    }
+                                                                );
                                                                 match result {
                                                                     Ok(output) => {
-                                                                        let is_err = output.is_error;
+                                                                        let is_err =
+                                                                            output.is_error;
                                                                         consecutive_denials = 0; // reset on success
                                                                         send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
@@ -1838,13 +2195,22 @@ impl QueryEngine {
                                                                             result: output.content.clone(),
                                                                             is_error: is_err,
                                                                         });
-                                                                        tool_results.push((tool_id, output.content.clone(), is_err));
-                                                                        if matches!(tool_name.as_str(), "Edit" | "Write") {
+                                                                        tool_results.push((
+                                                                            tool_id,
+                                                                            output.content.clone(),
+                                                                            is_err,
+                                                                        ));
+                                                                        if matches!(
+                                                                            tool_name.as_str(),
+                                                                            "Edit" | "Write"
+                                                                        ) {
                                                                             file_edits_made = true;
                                                                         }
                                                                     }
                                                                     Err(e) => {
-                                                                        let error_msg = format!("Tool error: {e}");
+                                                                        let error_msg = format!(
+                                                                            "Tool error: {e}"
+                                                                        );
                                                                         send_event!(tx, QueryEvent::ToolUseResult {
                                                                             query_id,
                                                                             tool_use_id: tool_id.clone(),
@@ -1852,7 +2218,10 @@ impl QueryEngine {
                                                                             result: error_msg.clone(),
                                                                             is_error: true,
                                                                         });
-                                                                        tool_results.push((tool_id, error_msg, true));
+                                                                        tool_results.push((
+                                                                            tool_id, error_msg,
+                                                                            true,
+                                                                        ));
                                                                     }
                                                                 }
                                                             }
@@ -1861,13 +2230,19 @@ impl QueryEngine {
                                                 }
 
                                                 // Soft-limit warning: inject a message telling the model to stop retrying
-                                                if (DENIAL_SOFT_LIMIT..DENIAL_HARD_LIMIT).contains(&consecutive_denials) {
+                                                if (DENIAL_SOFT_LIMIT..DENIAL_HARD_LIMIT)
+                                                    .contains(&consecutive_denials)
+                                                {
                                                     let warning = format!(
                                                         "The user has denied {consecutive_denials} consecutive tool calls. \
                                                          Stop retrying the same or similar operations. \
                                                          Ask the user for clarification or try a completely different approach."
                                                     );
-                                                    tool_results.push(("denial-warning".to_string(), warning, false));
+                                                    tool_results.push((
+                                                        "denial-warning".to_string(),
+                                                        warning,
+                                                        false,
+                                                    ));
                                                 }
 
                                                 turn += 1;
@@ -1877,17 +2252,21 @@ impl QueryEngine {
                                                 // Without the assistant message, the next API call has no
                                                 // context for which tools were requested.
                                                 {
-                                                    let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
+                                                    let mut assistant_blocks: Vec<ContentBlock> =
+                                                        Vec::new();
                                                     if !assistant_text.is_empty() {
                                                         assistant_blocks.push(ContentBlock::Text {
                                                             text: assistant_text.clone(),
                                                         });
                                                     }
-                                                    assistant_blocks.append(&mut assistant_tool_uses);
+                                                    assistant_blocks
+                                                        .append(&mut assistant_tool_uses);
                                                     if !assistant_blocks.is_empty() {
                                                         conversation.messages.push(Message {
                                                             role: "assistant".to_string(),
-                                                            content: MessageContent::Blocks(assistant_blocks),
+                                                            content: MessageContent::Blocks(
+                                                                assistant_blocks,
+                                                            ),
                                                         });
                                                     }
                                                 }
@@ -1945,13 +2324,16 @@ impl QueryEngine {
                                                     }.await;
                                                 }
 
-                                                send_event!(tx, QueryEvent::TurnCompleted {
-                                                    query_id,
-                                                    turn_number: turn,
-                                                    tokens_used: (usage.input_tokens
-                                                        + usage.output_tokens)
-                                                        as u64,
-                                                });
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::TurnCompleted {
+                                                        query_id,
+                                                        turn_number: turn,
+                                                        tokens_used: (usage.input_tokens
+                                                            + usage.output_tokens)
+                                                            as u64,
+                                                    }
+                                                );
                                                 // Mark finalized so the post-loop safety net
                                                 // doesn't short-circuit the next turn's API call.
                                                 phase = StreamingPhase::Finalized;
@@ -1963,7 +2345,9 @@ impl QueryEngine {
                                                 break;
                                             } else {
                                                 // No tool uses — save assistant text to conversation
-                                                if assistant_text.is_empty() && total_output_tokens > 0 {
+                                                if assistant_text.is_empty()
+                                                    && total_output_tokens > 0
+                                                {
                                                     tracing::warn!(
                                                         output_tokens = total_output_tokens,
                                                         "Model returned output tokens but no text content — context may be too small"
@@ -1976,7 +2360,9 @@ impl QueryEngine {
                                                 if !assistant_text.is_empty() {
                                                     conversation.messages.push(Message {
                                                         role: "assistant".to_string(),
-                                                        content: MessageContent::Text(assistant_text),
+                                                        content: MessageContent::Text(
+                                                            assistant_text,
+                                                        ),
                                                     });
                                                 }
                                                 let total_cost = CostTracker::calculate_cost(
@@ -1984,12 +2370,15 @@ impl QueryEngine {
                                                     total_input_tokens,
                                                     total_output_tokens,
                                                 );
-                                                send_event!(tx, QueryEvent::Cost {
-                                                    query_id,
-                                                    total_cost_usd: total_cost,
-                                                    input_tokens: total_input_tokens,
-                                                    output_tokens: total_output_tokens,
-                                                });
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Cost {
+                                                        query_id,
+                                                        total_cost_usd: total_cost,
+                                                        input_tokens: total_input_tokens,
+                                                        output_tokens: total_output_tokens,
+                                                    }
+                                                );
                                                 let _ =
                                                     tx.send(Ok(QueryEvent::ConversationUpdate {
                                                         query_id,
@@ -2020,7 +2409,8 @@ impl QueryEngine {
                                     // preserve it immediately. Local models (Ollama) often generate
                                     // valid text before hitting a malformed tool-call error, and
                                     // retrying is expensive (new HTTP request) and may hang.
-                                    let has_partial = !assistant_text.is_empty() || !assistant_tool_uses.is_empty();
+                                    let has_partial = !assistant_text.is_empty()
+                                        || !assistant_tool_uses.is_empty();
                                     if has_partial {
                                         let partial_len = assistant_text.len();
                                         let mut blocks: Vec<ContentBlock> = Vec::new();
@@ -2034,23 +2424,33 @@ impl QueryEngine {
                                             role: "assistant".to_string(),
                                             content: MessageContent::Blocks(blocks),
                                         });
-                                        tracing::warn!("Stream error after partial response ({partial_len} chars) — preserving content");
-                                        let suggestion = e.user_suggestion()
+                                        tracing::warn!(
+                                            "Stream error after partial response ({partial_len} chars) — preserving content"
+                                        );
+                                        let suggestion = e
+                                            .user_suggestion()
                                             .map(|s| format!(" {s}"))
                                             .unwrap_or_default();
                                         let warning_msg = if suggestion.is_empty() {
-                                            "Stream ended unexpectedly. Partial response preserved.".to_string()
+                                            "Stream ended unexpectedly. Partial response preserved."
+                                                .to_string()
                                         } else {
                                             format!("Stream ended unexpectedly.{suggestion}")
                                         };
-                                        send_event!(tx, QueryEvent::Warning {
-                                            query_id,
-                                            message: warning_msg,
-                                        });
-                                        send_event!(tx, QueryEvent::ConversationUpdate {
-                                            query_id,
-                                            messages: conversation.messages.clone(),
-                                        });
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Warning {
+                                                query_id,
+                                                message: warning_msg,
+                                            }
+                                        );
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::ConversationUpdate {
+                                                query_id,
+                                                messages: conversation.messages.clone(),
+                                            }
+                                        );
                                         send_event!(tx, QueryEvent::Completed { query_id });
                                         if let Err(err) = save_conversation_to_disk(
                                             &state_for_save,
@@ -2069,17 +2469,29 @@ impl QueryEngine {
                                     // even when the model generates malformed output, unlike streaming
                                     // mode which can return HTTP 500 immediately.
                                     if e.is_ollama_malformed_output() {
-                                        tracing::warn!("Ollama malformed output (no partial content), retrying without tools (non-streaming): {e}");
-                                        send_event!(tx, QueryEvent::Progress {
-                                            query_id,
-                                            message: "Retrying without tools...".to_string(),
-                                        });
-                                        let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
+                                        tracing::warn!(
+                                            "Ollama malformed output (no partial content), retrying without tools (non-streaming): {e}"
+                                        );
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Progress {
+                                                query_id,
+                                                message: "Retrying without tools...".to_string(),
+                                            }
+                                        );
+                                        let no_tools: Option<Vec<crate::api::ToolDefinition>> =
+                                            None;
                                         let no_system: Option<String> = None;
                                         match tokio::time::timeout(
                                             std::time::Duration::from_secs(60),
-                                            client.send_message(messages.clone(), no_tools, no_system),
-                                        ).await {
+                                            client.send_message(
+                                                messages.clone(),
+                                                no_tools,
+                                                no_system,
+                                            ),
+                                        )
+                                        .await
+                                        {
                                             Ok(Ok(content_blocks)) => {
                                                 // If full-history retry returned an Ollama error
                                                 // warning, try once more with just the last user
@@ -2091,12 +2503,14 @@ impl QueryEngine {
                                                     // Keep last 2 turns (up to 4 messages) so the
                                                     // model has enough context to answer the follow-up.
                                                     let minimal: Vec<Message> = {
-                                                        let msgs: Vec<&Message> = messages.iter().rev().take(4).collect();
+                                                        let msgs: Vec<&Message> =
+                                                            messages.iter().rev().take(4).collect();
                                                         msgs.into_iter().cloned().collect()
                                                     };
                                                     tracing::warn!(
                                                         "Ollama retry still errored, last-resort with last {} msgs (of {})",
-                                                        minimal.len(), messages.len()
+                                                        minimal.len(),
+                                                        messages.len()
                                                     );
                                                     match tokio::time::timeout(
                                                         std::time::Duration::from_secs(60),
@@ -2121,10 +2535,13 @@ impl QueryEngine {
                                                 for block in &final_blocks {
                                                     if let ContentBlock::Text { text } = block {
                                                         retry_text.push_str(text);
-                                                        send_event!(tx, QueryEvent::Text {
-                                                            query_id,
-                                                            content: text.clone(),
-                                                        });
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::Text {
+                                                                query_id,
+                                                                content: text.clone(),
+                                                            }
+                                                        );
                                                     }
                                                 }
                                                 if !retry_text.is_empty() {
@@ -2134,7 +2551,9 @@ impl QueryEngine {
                                                     if !already_added {
                                                         conversation.messages.push(Message {
                                                             role: "assistant".to_string(),
-                                                            content: MessageContent::Text(retry_text),
+                                                            content: MessageContent::Text(
+                                                                retry_text,
+                                                            ),
                                                         });
                                                     }
                                                 }
@@ -2143,16 +2562,22 @@ impl QueryEngine {
                                                     total_input_tokens,
                                                     total_output_tokens,
                                                 );
-                                                send_event!(tx, QueryEvent::Cost {
-                                                    query_id,
-                                                    total_cost_usd: total_cost,
-                                                    input_tokens: total_input_tokens,
-                                                    output_tokens: total_output_tokens,
-                                                });
-                                                send_event!(tx, QueryEvent::ConversationUpdate {
-                                                    query_id,
-                                                    messages: conversation.messages.clone(),
-                                                });
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Cost {
+                                                        query_id,
+                                                        total_cost_usd: total_cost,
+                                                        input_tokens: total_input_tokens,
+                                                        output_tokens: total_output_tokens,
+                                                    }
+                                                );
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::ConversationUpdate {
+                                                        query_id,
+                                                        messages: conversation.messages.clone(),
+                                                    }
+                                                );
                                                 send_event!(tx, QueryEvent::Completed { query_id });
                                                 if let Err(err) = save_conversation_to_disk(
                                                     &state_for_save,
@@ -2165,20 +2590,31 @@ impl QueryEngine {
                                                 return;
                                             }
                                             Ok(Err(retry_err)) => {
-                                                tracing::warn!("Non-streaming retry error: {retry_err}");
-                                                let error_msg = if retry_err.is_ollama_malformed_output() {
+                                                tracing::warn!(
+                                                    "Non-streaming retry error: {retry_err}"
+                                                );
+                                                let error_msg = if retry_err
+                                                    .is_ollama_malformed_output()
+                                                {
                                                     "This model cannot produce valid output — it may be too small, corrupted, or incompatible. Try /model to switch.".to_string()
                                                 } else {
-                                                    format!("Local model error — retry without tools failed: {retry_err}")
+                                                    format!(
+                                                        "Local model error — retry without tools failed: {retry_err}"
+                                                    )
                                                 };
-                                                send_event!(tx, QueryEvent::Failed {
-                                                    query_id,
-                                                    error: error_msg,
-                                                });
+                                                send_event!(
+                                                    tx,
+                                                    QueryEvent::Failed {
+                                                        query_id,
+                                                        error: error_msg,
+                                                    }
+                                                );
                                                 return;
                                             }
                                             Err(_) => {
-                                                tracing::warn!("Non-streaming retry timed out (60s)");
+                                                tracing::warn!(
+                                                    "Non-streaming retry timed out (60s)"
+                                                );
                                                 send_event!(tx, QueryEvent::Failed {
                                                     query_id,
                                                     error: "Local model error — retry timed out. The model may be loading, try again.".to_string(),
@@ -2189,7 +2625,8 @@ impl QueryEngine {
                                     }
 
                                     // No partial content, non-recoverable — fail
-                                    let suggestion = e.user_suggestion()
+                                    let suggestion = e
+                                        .user_suggestion()
                                         .map(|s| format!(" {s}"))
                                         .unwrap_or_default();
                                     let user_error = if suggestion.is_empty() {
@@ -2197,10 +2634,13 @@ impl QueryEngine {
                                     } else {
                                         suggestion
                                     };
-                                    send_event!(tx, QueryEvent::Failed {
-                                        query_id,
-                                        error: user_error,
-                                    });
+                                    send_event!(
+                                        tx,
+                                        QueryEvent::Failed {
+                                            query_id,
+                                            error: user_error,
+                                        }
+                                    );
                                     return;
                                 }
                             }
@@ -2212,16 +2652,22 @@ impl QueryEngine {
                                 total_input_tokens,
                                 total_output_tokens,
                             );
-                            send_event!(tx, QueryEvent::Cost {
-                                query_id,
-                                total_cost_usd: total_cost,
-                                input_tokens: total_input_tokens,
-                                output_tokens: total_output_tokens,
-                            });
-                            send_event!(tx, QueryEvent::ConversationUpdate {
-                                query_id,
-                                messages: conversation.messages.clone(),
-                            });
+                            send_event!(
+                                tx,
+                                QueryEvent::Cost {
+                                    query_id,
+                                    total_cost_usd: total_cost,
+                                    input_tokens: total_input_tokens,
+                                    output_tokens: total_output_tokens,
+                                }
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::ConversationUpdate {
+                                    query_id,
+                                    messages: conversation.messages.clone(),
+                                }
+                            );
                             send_event!(tx, QueryEvent::Completed { query_id });
 
                             // Auto-save conversation after completion
@@ -2275,16 +2721,22 @@ impl QueryEngine {
                                 total_input_tokens,
                                 total_output_tokens,
                             );
-                            send_event!(tx, QueryEvent::Cost {
-                                query_id,
-                                total_cost_usd: total_cost,
-                                input_tokens: total_input_tokens,
-                                output_tokens: total_output_tokens,
-                            });
-                            send_event!(tx, QueryEvent::ConversationUpdate {
-                                query_id,
-                                messages: conversation.messages.clone(),
-                            });
+                            send_event!(
+                                tx,
+                                QueryEvent::Cost {
+                                    query_id,
+                                    total_cost_usd: total_cost,
+                                    input_tokens: total_input_tokens,
+                                    output_tokens: total_output_tokens,
+                                }
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::ConversationUpdate {
+                                    query_id,
+                                    messages: conversation.messages.clone(),
+                                }
+                            );
                             send_event!(tx, QueryEvent::Completed { query_id });
 
                             if let Err(e) = save_conversation_to_disk(
@@ -2304,15 +2756,22 @@ impl QueryEngine {
                         if e.is_token_overflow() {
                             let compact_keep = config.keep_recent_messages;
                             if messages.len() > compact_keep {
-                                tracing::warn!("Token overflow detected, auto-compacting and retrying");
+                                tracing::warn!(
+                                    "Token overflow detected, auto-compacting and retrying"
+                                );
                                 messages = messages.split_off(messages.len() - compact_keep);
                                 // Re-inject system prompt at front
                                 if let Some(ref sp) = system_prompt {
                                     if !sp.is_empty() {
-                                        messages.insert(0, crate::api::Message {
-                                            role: "system".to_string(),
-                                            content: crate::api::MessageContent::Text(sp.clone()),
-                                        });
+                                        messages.insert(
+                                            0,
+                                            crate::api::Message {
+                                                role: "system".to_string(),
+                                                content: crate::api::MessageContent::Text(
+                                                    sp.clone(),
+                                                ),
+                                            },
+                                        );
                                     }
                                 }
                                 // Sync compacted messages back to conversation
@@ -2320,9 +2779,21 @@ impl QueryEngine {
                                 conversation.messages = messages.clone();
 
                                 let retry_result = if let Some(ref blocks) = system_blocks_opt {
-                                    client.send_message_stream_structured_with_retry(messages.clone(), tools_schema.clone(), blocks.clone()).await
+                                    client
+                                        .send_message_stream_structured_with_retry(
+                                            messages.clone(),
+                                            tools_schema.clone(),
+                                            blocks.clone(),
+                                        )
+                                        .await
                                 } else {
-                                    client.send_message_stream_with_retry(messages.clone(), tools_schema.clone(), system_prompt.clone()).await
+                                    client
+                                        .send_message_stream_with_retry(
+                                            messages.clone(),
+                                            tools_schema.clone(),
+                                            system_prompt.clone(),
+                                        )
+                                        .await
                                 };
                                 match retry_result {
                                     Ok(mut retry_stream) => {
@@ -2331,26 +2802,48 @@ impl QueryEngine {
                                         let mut retry_text = String::new();
                                         while let Some(event_result) = retry_stream.next().await {
                                             match event_result {
-                                                Ok(StreamEvent::ContentBlockDelta { delta, .. }) => {
-                                                    if let ContentDelta::TextDelta { text } = delta {
+                                                Ok(StreamEvent::ContentBlockDelta {
+                                                    delta,
+                                                    ..
+                                                }) => {
+                                                    if let ContentDelta::TextDelta { text } = delta
+                                                    {
                                                         retry_text.push_str(&text);
-                                                        send_event!(tx, QueryEvent::Text { query_id, content: text });
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::Text {
+                                                                query_id,
+                                                                content: text
+                                                            }
+                                                        );
                                                     }
                                                 }
                                                 Ok(StreamEvent::MessageDelta { delta, .. }) => {
-                                                    if delta.stop_reason.as_deref() == Some("end_turn") {
+                                                    if delta.stop_reason.as_deref()
+                                                        == Some("end_turn")
+                                                    {
                                                         // Add the retry response to conversation before sending update
                                                         if !retry_text.is_empty() {
                                                             conversation.messages.push(Message {
                                                                 role: "assistant".to_string(),
-                                                                content: MessageContent::Text(retry_text.clone()),
+                                                                content: MessageContent::Text(
+                                                                    retry_text.clone(),
+                                                                ),
                                                             });
                                                         }
-                                                        send_event!(tx, QueryEvent::ConversationUpdate {
-                                                            query_id,
-                                                            messages: conversation.messages.clone(),
-                                                        });
-                                                        send_event!(tx, QueryEvent::Completed { query_id });
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::ConversationUpdate {
+                                                                query_id,
+                                                                messages: conversation
+                                                                    .messages
+                                                                    .clone(),
+                                                            }
+                                                        );
+                                                        send_event!(
+                                                            tx,
+                                                            QueryEvent::Completed { query_id }
+                                                        );
                                                     }
                                                 }
                                                 Ok(_) => {} // Ping, MessageStart, MessageStop, etc.
@@ -2359,20 +2852,31 @@ impl QueryEngine {
                                                     if !retry_text.is_empty() {
                                                         conversation.messages.push(Message {
                                                             role: "assistant".to_string(),
-                                                            content: MessageContent::Text(retry_text),
+                                                            content: MessageContent::Text(
+                                                                retry_text,
+                                                            ),
                                                         });
                                                     }
-                                                    let suggestion = retry_err.user_suggestion()
+                                                    let suggestion = retry_err
+                                                        .user_suggestion()
                                                         .map(|s| format!(" {s}"))
                                                         .unwrap_or_default();
-                                                    send_event!(tx, QueryEvent::ConversationUpdate {
-                                                        query_id,
-                                                        messages: conversation.messages.clone(),
-                                                    });
-                                                    send_event!(tx, QueryEvent::Failed {
-                                                        query_id,
-                                                        error: format!("Auto-compact retry also failed: {retry_err}.{suggestion}"),
-                                                    });
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::ConversationUpdate {
+                                                            query_id,
+                                                            messages: conversation.messages.clone(),
+                                                        }
+                                                    );
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Failed {
+                                                            query_id,
+                                                            error: format!(
+                                                                "Auto-compact retry also failed: {retry_err}.{suggestion}"
+                                                            ),
+                                                        }
+                                                    );
                                                     return;
                                                 }
                                             }
@@ -2384,25 +2888,37 @@ impl QueryEngine {
                                                 content: MessageContent::Text(retry_text),
                                             });
                                         }
-                                        send_event!(tx, QueryEvent::ConversationUpdate {
-                                            query_id,
-                                            messages: conversation.messages.clone(),
-                                        });
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::ConversationUpdate {
+                                                query_id,
+                                                messages: conversation.messages.clone(),
+                                            }
+                                        );
                                         send_event!(tx, QueryEvent::Completed { query_id });
                                         return;
                                     }
                                     Err(retry_err) => {
-                                        let suggestion = retry_err.user_suggestion()
+                                        let suggestion = retry_err
+                                            .user_suggestion()
                                             .map(|s| format!(" {s}"))
                                             .unwrap_or_default();
-                                        send_event!(tx, QueryEvent::ConversationUpdate {
-                                            query_id,
-                                            messages: conversation.messages.clone(),
-                                        });
-                                        send_event!(tx, QueryEvent::Failed {
-                                            query_id,
-                                            error: format!("Token overflow — auto-compact retry failed: {retry_err}.{suggestion}"),
-                                        });
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::ConversationUpdate {
+                                                query_id,
+                                                messages: conversation.messages.clone(),
+                                            }
+                                        );
+                                        send_event!(
+                                            tx,
+                                            QueryEvent::Failed {
+                                                query_id,
+                                                error: format!(
+                                                    "Token overflow — auto-compact retry failed: {retry_err}.{suggestion}"
+                                                ),
+                                            }
+                                        );
                                         return;
                                     }
                                 }
@@ -2414,17 +2930,24 @@ impl QueryEngine {
                         // mode which can return HTTP 500 immediately.
                         // Strip system prompt to prevent small models from attempting tool calls.
                         if e.is_ollama_malformed_output() {
-                            tracing::warn!("Ollama HTTP error (malformed output), retrying without tools (non-streaming): {e}");
-                            send_event!(tx, QueryEvent::Progress {
-                                query_id,
-                                message: "Retrying without tools...".to_string(),
-                            });
+                            tracing::warn!(
+                                "Ollama HTTP error (malformed output), retrying without tools (non-streaming): {e}"
+                            );
+                            send_event!(
+                                tx,
+                                QueryEvent::Progress {
+                                    query_id,
+                                    message: "Retrying without tools...".to_string(),
+                                }
+                            );
                             let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
                             let no_system: Option<String> = None;
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(60),
                                 client.send_message(messages.clone(), no_tools, no_system),
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(Ok(content_blocks)) => {
                                     // If full-history retry returned an Ollama error
                                     // warning, try once more with just the last user
@@ -2433,14 +2956,17 @@ impl QueryEngine {
                                         matches!(b, ContentBlock::Text { text } if text.starts_with("⚠️ Ollama model output error"))
                                     });
                                     let final_blocks = if is_ollama_warning {
-                                        let minimal: Vec<Message> = messages.iter().rev()
+                                        let minimal: Vec<Message> = messages
+                                            .iter()
+                                            .rev()
                                             .find(|m| m.role == "user")
                                             .cloned()
                                             .map(|m| vec![m])
                                             .unwrap_or_else(|| messages.clone());
                                         tracing::warn!(
                                             "Ollama retry still errored, last-resort minimal input ({}/{} msgs)",
-                                            minimal.len(), messages.len()
+                                            minimal.len(),
+                                            messages.len()
                                         );
                                         match tokio::time::timeout(
                                             std::time::Duration::from_secs(60),
@@ -2465,10 +2991,13 @@ impl QueryEngine {
                                     for block in &final_blocks {
                                         if let ContentBlock::Text { text } = block {
                                             retry_text.push_str(text);
-                                            send_event!(tx, QueryEvent::Text {
-                                                query_id,
-                                                content: text.clone(),
-                                            });
+                                            send_event!(
+                                                tx,
+                                                QueryEvent::Text {
+                                                    query_id,
+                                                    content: text.clone(),
+                                                }
+                                            );
                                         }
                                     }
                                     if !retry_text.is_empty() {
@@ -2482,16 +3011,22 @@ impl QueryEngine {
                                         total_input_tokens,
                                         total_output_tokens,
                                     );
-                                    send_event!(tx, QueryEvent::Cost {
-                                        query_id,
-                                        total_cost_usd: total_cost,
-                                        input_tokens: total_input_tokens,
-                                        output_tokens: total_output_tokens,
-                                    });
-                                    send_event!(tx, QueryEvent::ConversationUpdate {
-                                        query_id,
-                                        messages: conversation.messages.clone(),
-                                    });
+                                    send_event!(
+                                        tx,
+                                        QueryEvent::Cost {
+                                            query_id,
+                                            total_cost_usd: total_cost,
+                                            input_tokens: total_input_tokens,
+                                            output_tokens: total_output_tokens,
+                                        }
+                                    );
+                                    send_event!(
+                                        tx,
+                                        QueryEvent::ConversationUpdate {
+                                            query_id,
+                                            messages: conversation.messages.clone(),
+                                        }
+                                    );
                                     send_event!(tx, QueryEvent::Completed { query_id });
                                     if let Err(err) = save_conversation_to_disk(
                                         &state_for_save,
@@ -2508,12 +3043,17 @@ impl QueryEngine {
                                     let error_msg = if retry_err.is_ollama_malformed_output() {
                                         "This model cannot produce valid output — it may be too small, corrupted, or incompatible. Try /model to switch.".to_string()
                                     } else {
-                                        format!("Local model error — retry without tools failed: {retry_err}")
+                                        format!(
+                                            "Local model error — retry without tools failed: {retry_err}"
+                                        )
                                     };
-                                    send_event!(tx, QueryEvent::Failed {
-                                        query_id,
-                                        error: error_msg,
-                                    });
+                                    send_event!(
+                                        tx,
+                                        QueryEvent::Failed {
+                                            query_id,
+                                            error: error_msg,
+                                        }
+                                    );
                                     return;
                                 }
                                 Err(_) => {
@@ -2526,7 +3066,8 @@ impl QueryEngine {
                                 }
                             }
                         }
-                        let suggestion = e.user_suggestion()
+                        let suggestion = e
+                            .user_suggestion()
                             .map(|s| format!(" {s}"))
                             .unwrap_or_default();
                         let user_error = if suggestion.is_empty() {
@@ -2534,14 +3075,20 @@ impl QueryEngine {
                         } else {
                             suggestion
                         };
-                        send_event!(tx, QueryEvent::ConversationUpdate {
-                            query_id,
-                            messages: conversation.messages.clone(),
-                        });
-                        send_event!(tx, QueryEvent::Failed {
-                            query_id,
-                            error: user_error,
-                        });
+                        send_event!(
+                            tx,
+                            QueryEvent::ConversationUpdate {
+                                query_id,
+                                messages: conversation.messages.clone(),
+                            }
+                        );
+                        send_event!(
+                            tx,
+                            QueryEvent::Failed {
+                                query_id,
+                                error: user_error,
+                            }
+                        );
                         return;
                     }
                 }
@@ -2620,8 +3167,8 @@ fn save_conversation_to_disk(
     messages: &[Message],
     model: &str,
 ) -> Result<(), String> {
-    use crate::state::SessionPersistMetadata;
     use crate::api::{ContentBlock, MessageContent};
+    use crate::state::SessionPersistMetadata;
 
     // Generate title from first user message
     let title = messages
@@ -2631,28 +3178,30 @@ fn save_conversation_to_disk(
             MessageContent::Text(text) => {
                 let preview = if text.len() > 50 {
                     let mut end = 47.min(text.len());
-                    while !text.is_char_boundary(end) { end -= 1; }
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
                     format!("{}...", &text[..end])
                 } else {
                     text.clone()
                 };
                 Some(preview)
             }
-            MessageContent::Blocks(blocks) => {
-                blocks.iter().find_map(|b| match b {
-                    ContentBlock::Text { text } => {
-                        let preview = if text.len() > 50 {
-                            let mut end = 47.min(text.len());
-                            while !text.is_char_boundary(end) { end -= 1; }
-                            format!("{}...", &text[..end])
-                        } else {
-                            text.clone()
-                        };
-                        Some(preview)
-                    }
-                    _ => None,
-                })
-            }
+            MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                ContentBlock::Text { text } => {
+                    let preview = if text.len() > 50 {
+                        let mut end = 47.min(text.len());
+                        while !text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        format!("{}...", &text[..end])
+                    } else {
+                        text.clone()
+                    };
+                    Some(preview)
+                }
+                _ => None,
+            }),
         });
 
     // Build metadata
@@ -2711,14 +3260,8 @@ mod tests {
         let config = QueryEngineConfig::default();
 
         let specific_id = Uuid::new_v4();
-        let engine = QueryEngine::with_session_id(
-            client,
-            tools,
-            permissions,
-            state,
-            config,
-            specific_id,
-        );
+        let engine =
+            QueryEngine::with_session_id(client, tools, permissions, state, config, specific_id);
 
         assert_eq!(engine.session_id(), specific_id);
     }
@@ -2747,12 +3290,7 @@ mod tests {
         ];
 
         // Save session
-        let result = save_conversation_to_disk(
-            &state,
-            session_id,
-            &messages,
-            "test-model",
-        );
+        let result = save_conversation_to_disk(&state, session_id, &messages, "test-model");
         assert!(result.is_ok(), "Failed to save session: {:?}", result.err());
 
         // Verify file was created
@@ -3046,11 +3584,7 @@ mod tests {
         let project_dir = temp_dir_for_test("blocks_project");
         let storage_dir = temp_dir_for_test("blocks_storage");
 
-        std::fs::write(
-            project_dir.join("CLAUDE.md"),
-            "# Blocks Test\nBe concise.",
-        )
-        .unwrap();
+        std::fs::write(project_dir.join("CLAUDE.md"), "# Blocks Test\nBe concise.").unwrap();
 
         let injector =
             crate::query_engine::ContextInjector::new(project_dir.clone(), storage_dir.clone());
@@ -3204,7 +3738,13 @@ mod tests {
         let permissions = PermissionManager::new();
         let state = StateManager::new();
 
-        let engine = QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default());
+        let engine = QueryEngine::new(
+            client,
+            tools,
+            permissions,
+            state,
+            QueryEngineConfig::default(),
+        );
         assert_eq!(engine.effective_max_context_tokens, 200_000);
     }
 
@@ -3236,17 +3776,18 @@ mod tests {
 
         // Extract cache tokens like the engine now does
         let (cache_read, cache_creation) = match &start_event {
-            StreamEvent::MessageStart { message } => {
-                (
-                    message.usage.cache_read_input_tokens as u64,
-                    message.usage.cache_creation_input_tokens as u64,
-                )
-            }
+            StreamEvent::MessageStart { message } => (
+                message.usage.cache_read_input_tokens as u64,
+                message.usage.cache_creation_input_tokens as u64,
+            ),
             _ => (0, 0),
         };
 
         assert_eq!(cache_read, 800, "cache_read should come from MessageStart");
-        assert_eq!(cache_creation, 500, "cache_creation should come from MessageStart");
+        assert_eq!(
+            cache_creation, 500,
+            "cache_creation should come from MessageStart"
+        );
 
         // Simulate message_delta which only has output_tokens
         let delta_usage = Usage {
@@ -3258,10 +3799,17 @@ mod tests {
 
         // Merge: take the max of both sources
         let merged_cache_read = cache_read.max(delta_usage.cache_read_input_tokens as u64);
-        let merged_cache_creation = cache_creation.max(delta_usage.cache_creation_input_tokens as u64);
+        let merged_cache_creation =
+            cache_creation.max(delta_usage.cache_creation_input_tokens as u64);
 
-        assert_eq!(merged_cache_read, 800, "merged cache_read should preserve MessageStart value");
-        assert_eq!(merged_cache_creation, 500, "merged cache_creation should preserve MessageStart value");
+        assert_eq!(
+            merged_cache_read, 800,
+            "merged cache_read should preserve MessageStart value"
+        );
+        assert_eq!(
+            merged_cache_creation, 500,
+            "merged cache_creation should preserve MessageStart value"
+        );
     }
 
     // ── Context window propagation tests ──────────────────────────────────
@@ -3282,13 +3830,19 @@ mod tests {
     fn test_resolve_max_context_partial_model_id_prefix_match() {
         // "claude-sonnet-4" should match "claude-sonnet-4-20250514" via prefix
         let result = QueryEngine::resolve_max_context_tokens("claude-sonnet-4", None);
-        assert!(result > 0, "Partial model ID should resolve via prefix matching");
+        assert!(
+            result > 0,
+            "Partial model ID should resolve via prefix matching"
+        );
     }
 
     #[test]
     fn test_resolve_max_context_ollama_model_fallback() {
         let result = QueryEngine::resolve_max_context_tokens("ollama/llama3:8b", None);
-        assert_eq!(result, 200_000, "Unknown Ollama model should fall back to 200k");
+        assert_eq!(
+            result, 200_000,
+            "Unknown Ollama model should fall back to 200k"
+        );
     }
 
     #[test]
@@ -3319,11 +3873,20 @@ mod tests {
         let permissions = PermissionManager::new();
         let state = StateManager::new();
 
-        let engine = QueryEngine::new(client, tools, permissions, state, QueryEngineConfig::default());
+        let engine = QueryEngine::new(
+            client,
+            tools,
+            permissions,
+            state,
+            QueryEngineConfig::default(),
+        );
         // Without pre_resolve_context being called (no Ollama server), it should
         // fall back to effective_max_context_tokens (which is the model_registry value)
         let window = engine.resolved_context_window();
-        assert!(window > 0, "Context window should be positive even without Ollama server");
+        assert!(
+            window > 0,
+            "Context window should be positive even without Ollama server"
+        );
     }
 
     #[test]
@@ -3368,7 +3931,13 @@ mod tests {
 
         let hit_rate = total_read as f64 / (total_read + total_creation) as f64;
         // 16000 / (16000 + 12000) ≈ 0.571
-        assert!(hit_rate > 0.5, "Hit rate should be > 50%, got {hit_rate:.3}");
-        assert!(hit_rate < 0.6, "Hit rate should be < 60%, got {hit_rate:.3}");
+        assert!(
+            hit_rate > 0.5,
+            "Hit rate should be > 50%, got {hit_rate:.3}"
+        );
+        assert!(
+            hit_rate < 0.6,
+            "Hit rate should be < 60%, got {hit_rate:.3}"
+        );
     }
 }

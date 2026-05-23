@@ -56,10 +56,18 @@ mod session_recovery_tests {
         let msg3 = make_user_msg("How are you?");
         let msg4 = make_assistant_msg("I'm fine, thanks!");
 
-        recovery.append_message(&project, &session_id, 0, &msg1).unwrap();
-        recovery.append_message(&project, &session_id, 1, &msg2).unwrap();
-        recovery.append_message(&project, &session_id, 2, &msg3).unwrap();
-        recovery.append_message(&project, &session_id, 3, &msg4).unwrap();
+        recovery
+            .append_message(&project, &session_id, 0, &msg1)
+            .unwrap();
+        recovery
+            .append_message(&project, &session_id, 1, &msg2)
+            .unwrap();
+        recovery
+            .append_message(&project, &session_id, 2, &msg3)
+            .unwrap();
+        recovery
+            .append_message(&project, &session_id, 3, &msg4)
+            .unwrap();
 
         // Load and verify
         let loaded = recovery.load_messages(&project, &session_id).unwrap();
@@ -85,7 +93,9 @@ mod session_recovery_tests {
             make_assistant_msg("Response 2"),
         ];
 
-        recovery.append_messages(&project, &session_id, 0, &messages).unwrap();
+        recovery
+            .append_messages(&project, &session_id, 0, &messages)
+            .unwrap();
 
         let loaded = recovery.load_messages(&project, &session_id).unwrap();
         assert_eq!(loaded.len(), 4);
@@ -103,9 +113,15 @@ mod session_recovery_tests {
         let session_id = recovery.create_session(&project, "test-model").unwrap();
 
         // Write 3 valid messages
-        recovery.append_message(&project, &session_id, 0, &make_user_msg("msg1")).unwrap();
-        recovery.append_message(&project, &session_id, 1, &make_assistant_msg("msg2")).unwrap();
-        recovery.append_message(&project, &session_id, 2, &make_user_msg("msg3")).unwrap();
+        recovery
+            .append_message(&project, &session_id, 0, &make_user_msg("msg1"))
+            .unwrap();
+        recovery
+            .append_message(&project, &session_id, 1, &make_assistant_msg("msg2"))
+            .unwrap();
+        recovery
+            .append_message(&project, &session_id, 2, &make_user_msg("msg3"))
+            .unwrap();
 
         // Manually append a truncated/partial line to simulate crash
         let project_dir = recovery.project_session_dir(&project);
@@ -113,12 +129,17 @@ mod session_recovery_tests {
         use std::fs::OpenOptions;
         use std::io::Write;
         let mut file = OpenOptions::new().append(true).open(&log_path).unwrap();
-        file.write_all(b"{\"seq\":3,\"message\":{\"role\":\"user\",\"content\":\"partial...\n").unwrap();
+        file.write_all(b"{\"seq\":3,\"message\":{\"role\":\"user\",\"content\":\"partial...\n")
+            .unwrap();
         file.flush().unwrap();
 
         // Load: should get the 3 complete entries, skip the partial
         let loaded = recovery.load_messages(&project, &session_id).unwrap();
-        assert_eq!(loaded.len(), 3, "Should load 3 complete entries, skip partial");
+        assert_eq!(
+            loaded.len(),
+            3,
+            "Should load 3 complete entries, skip partial"
+        );
         assert_eq!(text_of(&loaded[2]), "msg3");
     }
 
@@ -157,15 +178,25 @@ mod session_recovery_tests {
         let session_id = recovery.create_session(&project, "test-model").unwrap();
 
         // Add messages to update metadata
-        recovery.append_message(&project, &session_id, 0, &make_user_msg("hello")).unwrap();
-        recovery.append_message(&project, &session_id, 1, &make_assistant_msg("world")).unwrap();
+        recovery
+            .append_message(&project, &session_id, 0, &make_user_msg("hello"))
+            .unwrap();
+        recovery
+            .append_message(&project, &session_id, 1, &make_assistant_msg("world"))
+            .unwrap();
 
         // Load metadata
         let meta = recovery.load_metadata(&project, &session_id).unwrap();
         assert_eq!(meta.id, session_id);
         assert_eq!(meta.model, "test-model");
-        assert_eq!(meta.message_count, 2, "Message count should reflect appended messages");
-        assert!(meta.created_at <= meta.updated_at, "updated_at should be >= created_at");
+        assert_eq!(
+            meta.message_count, 2,
+            "Message count should reflect appended messages"
+        );
+        assert!(
+            meta.created_at <= meta.updated_at,
+            "updated_at should be >= created_at"
+        );
 
         // Save custom metadata and reload
         let custom = shannon_core::session_recovery::RecoveryMetadata {
@@ -195,11 +226,17 @@ mod session_recovery_tests {
 
         // Appending to non-existent session should error
         let result = recovery.append_message(&project, "nonexistent-id", 0, &make_user_msg("test"));
-        assert!(result.is_err(), "Should error appending to nonexistent session");
+        assert!(
+            result.is_err(),
+            "Should error appending to nonexistent session"
+        );
 
         // Loading metadata for non-existent session should error
         let result = recovery.load_metadata(&project, "nonexistent-id");
-        assert!(result.is_err(), "Should error loading metadata for nonexistent session");
+        assert!(
+            result.is_err(),
+            "Should error loading metadata for nonexistent session"
+        );
     }
 
     #[test]
@@ -215,8 +252,12 @@ mod session_recovery_tests {
         let id_b = recovery.create_session(&project_b, "model-b").unwrap();
 
         // Add different messages
-        recovery.append_message(&project_a, &id_a, 0, &make_user_msg("project A msg")).unwrap();
-        recovery.append_message(&project_b, &id_b, 0, &make_user_msg("project B msg")).unwrap();
+        recovery
+            .append_message(&project_a, &id_a, 0, &make_user_msg("project A msg"))
+            .unwrap();
+        recovery
+            .append_message(&project_b, &id_b, 0, &make_user_msg("project B msg"))
+            .unwrap();
 
         // Verify isolation
         let msgs_a = recovery.load_messages(&project_a, &id_a).unwrap();

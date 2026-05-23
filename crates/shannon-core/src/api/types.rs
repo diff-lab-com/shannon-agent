@@ -111,9 +111,7 @@ impl LlmProvider {
             LlmProvider::Gemini
         } else if url.contains("openai.azure.com") {
             LlmProvider::Azure
-        } else if url.contains("bedrock-runtime.")
-            || url.contains("amazonaws.com")
-        {
+        } else if url.contains("bedrock-runtime.") || url.contains("amazonaws.com") {
             LlmProvider::Bedrock
         } else if url.contains("api.mistral.ai") {
             LlmProvider::Mistral
@@ -121,9 +119,7 @@ impl LlmProvider {
             LlmProvider::DeepSeek
         } else if url.contains("api.groq.com") {
             LlmProvider::Groq
-        } else if url.contains("api.together.xyz")
-            || url.contains("together.ai")
-        {
+        } else if url.contains("api.together.xyz") || url.contains("together.ai") {
             LlmProvider::Together
         } else if url.contains("openrouter.ai") {
             LlmProvider::OpenRouter
@@ -405,8 +401,9 @@ impl Default for LlmClientConfig {
         };
 
         let api_version = match provider {
-            LlmProvider::Anthropic => std::env::var("ANTHROPIC_API_VERSION")
-                .unwrap_or_else(|_| "2023-06-01".to_string()),
+            LlmProvider::Anthropic => {
+                std::env::var("ANTHROPIC_API_VERSION").unwrap_or_else(|_| "2023-06-01".to_string())
+            }
             _ => String::new(),
         };
 
@@ -415,7 +412,11 @@ impl Default for LlmClientConfig {
             base_url,
             model,
             max_tokens: 4096,
-            timeout_seconds: if provider == LlmProvider::Ollama { 300 } else { 120 },
+            timeout_seconds: if provider == LlmProvider::Ollama {
+                300
+            } else {
+                120
+            },
             api_version,
             provider,
             extra_headers: HashMap::new(),
@@ -509,27 +510,31 @@ impl From<ShannonConfig> for LlmClientConfig {
             } else {
                 std::env::var("SHANNON_MODEL").unwrap_or_else(|_| "llama3".to_string())
             };
-            (String::new(), "http://localhost:11434".to_string(), ollama_model, LlmProvider::Ollama)
+            (
+                String::new(),
+                "http://localhost:11434".to_string(),
+                ollama_model,
+                LlmProvider::Ollama,
+            )
         } else {
             (api_key, base_url, model, provider)
         };
 
         // --- Resolve api_version --------------------------------------------
         let api_version = match provider {
-            LlmProvider::Anthropic => std::env::var("ANTHROPIC_API_VERSION")
-                .unwrap_or_else(|_| "2023-06-01".to_string()),
+            LlmProvider::Anthropic => {
+                std::env::var("ANTHROPIC_API_VERSION").unwrap_or_else(|_| "2023-06-01".to_string())
+            }
             _ => String::new(),
         };
 
         // --- Resolve max_tokens / timeout -----------------------------------
         let max_tokens = cfg.max_tokens.unwrap_or(4096) as u32;
-        let timeout_seconds = cfg
-            .timeout
-            .unwrap_or(if provider == LlmProvider::Ollama {
-                300
-            } else {
-                120
-            });
+        let timeout_seconds = cfg.timeout.unwrap_or(if provider == LlmProvider::Ollama {
+            300
+        } else {
+            120
+        });
 
         Self {
             api_key,
@@ -556,7 +561,9 @@ impl LlmClientConfig {
     /// Returns a human-readable error description if something is wrong.
     pub fn validate(&self) -> Result<(), String> {
         if self.base_url.trim().is_empty() {
-            return Err("base_url is empty. Set SHANNON_BASE_URL or pass --provider ollama".to_string());
+            return Err(
+                "base_url is empty. Set SHANNON_BASE_URL or pass --provider ollama".to_string(),
+            );
         }
 
         // Auth-based providers need an API key
@@ -587,7 +594,11 @@ impl LlmClientConfig {
             if self.api_key.is_empty() {
                 "NO API KEY".to_string()
             } else {
-                format!("key={}..{}", &self.api_key[..2.min(self.api_key.len())], &self.api_key[self.api_key.len().saturating_sub(4)..])
+                format!(
+                    "key={}..{}",
+                    &self.api_key[..2.min(self.api_key.len())],
+                    &self.api_key[self.api_key.len().saturating_sub(4)..]
+                )
             }
         } else {
             "no auth needed".to_string()
@@ -624,8 +635,7 @@ impl LlmClientConfig {
         let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
         let base_url = std::env::var("OPENAI_BASE_URL")
             .unwrap_or_else(|_| "https://api.openai.com".to_string());
-        let model = std::env::var("OPENAI_MODEL")
-            .unwrap_or_else(|_| "gpt-4o".to_string());
+        let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
         Self {
             api_key,
             base_url,
@@ -649,8 +659,8 @@ impl LlmClientConfig {
         let api_key = std::env::var("GEMINI_API_KEY")
             .or_else(|_| std::env::var("GOOGLE_API_KEY"))
             .unwrap_or_default();
-        let model = std::env::var("GEMINI_MODEL")
-            .unwrap_or_else(|_| "gemini-2.0-flash".to_string());
+        let model =
+            std::env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-2.0-flash".to_string());
         Self {
             api_key,
             base_url: "https://generativelanguage.googleapis.com".to_string(),
@@ -674,8 +684,7 @@ impl LlmClientConfig {
         let api_key = std::env::var("AZURE_OPENAI_API_KEY").unwrap_or_default();
         let base_url = std::env::var("AZURE_OPENAI_BASE_URL")
             .unwrap_or_else(|_| "https://your-resource.openai.azure.com".to_string());
-        let model = std::env::var("AZURE_OPENAI_MODEL")
-            .unwrap_or_else(|_| "gpt-4o".to_string());
+        let model = std::env::var("AZURE_OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
         Self {
             api_key,
             base_url,
@@ -722,8 +731,8 @@ impl LlmClientConfig {
     /// Create config for Mistral AI
     pub fn mistral_default() -> Self {
         let api_key = std::env::var("MISTRAL_API_KEY").unwrap_or_default();
-        let model = std::env::var("MISTRAL_MODEL")
-            .unwrap_or_else(|_| "mistral-large-latest".to_string());
+        let model =
+            std::env::var("MISTRAL_MODEL").unwrap_or_else(|_| "mistral-large-latest".to_string());
         Self {
             api_key,
             base_url: "https://api.mistral.ai".to_string(),
@@ -745,8 +754,7 @@ impl LlmClientConfig {
     /// Create config for DeepSeek
     pub fn deepseek_default() -> Self {
         let api_key = std::env::var("DEEPSEEK_API_KEY").unwrap_or_default();
-        let model = std::env::var("DEEPSEEK_MODEL")
-            .unwrap_or_else(|_| "deepseek-chat".to_string());
+        let model = std::env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string());
         Self {
             api_key,
             base_url: "https://api.deepseek.com".to_string(),
@@ -768,8 +776,8 @@ impl LlmClientConfig {
     /// Create config for Groq
     pub fn groq_default() -> Self {
         let api_key = std::env::var("GROQ_API_KEY").unwrap_or_default();
-        let model = std::env::var("GROQ_MODEL")
-            .unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string());
+        let model =
+            std::env::var("GROQ_MODEL").unwrap_or_else(|_| "llama-3.3-70b-versatile".to_string());
         Self {
             api_key,
             base_url: "https://api.groq.com".to_string(),
@@ -907,15 +915,11 @@ pub enum ContentBlock {
     Text { text: String },
 
     #[serde(rename = "image")]
-    Image {
-        source: ImageSource,
-    },
+    Image { source: ImageSource },
 
     /// Thinking block for extended thinking mode (Anthropic-specific)
     #[serde(rename = "thinking")]
-    Thinking {
-        thinking: String,
-    },
+    Thinking { thinking: String },
 
     #[serde(rename = "tool_use")]
     ToolUse {
@@ -1084,8 +1088,7 @@ pub struct ToolDefinition {
 }
 
 /// Usage information from API response
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
@@ -1126,10 +1129,7 @@ pub enum StreamEvent {
     },
 
     #[serde(rename = "content_block_delta")]
-    ContentBlockDelta {
-        index: usize,
-        delta: ContentDelta,
-    },
+    ContentBlockDelta { index: usize, delta: ContentDelta },
 
     #[serde(rename = "content_block_stop")]
     ContentBlockStop { index: usize },
@@ -1229,7 +1229,9 @@ mod tests {
         let msg = Message {
             role: "user".to_string(),
             content: MessageContent::Blocks(vec![
-                ContentBlock::Text { text: "Describe this".to_string() },
+                ContentBlock::Text {
+                    text: "Describe this".to_string(),
+                },
                 ContentBlock::Image {
                     source: ImageSource::base64("image/png", "iVBOR"),
                 },
@@ -1245,18 +1247,30 @@ mod tests {
 
     #[test]
     fn test_provider_detection_anthropic() {
-        assert_eq!(LlmProvider::from_base_url("https://api.anthropic.com"), LlmProvider::Anthropic);
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.anthropic.com"),
+            LlmProvider::Anthropic
+        );
     }
 
     #[test]
     fn test_provider_detection_openai() {
-        assert_eq!(LlmProvider::from_base_url("https://api.openai.com"), LlmProvider::OpenAI);
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.openai.com"),
+            LlmProvider::OpenAI
+        );
     }
 
     #[test]
     fn test_provider_detection_ollama() {
-        assert_eq!(LlmProvider::from_base_url("http://localhost:11434"), LlmProvider::Ollama);
-        assert_eq!(LlmProvider::from_base_url("http://ollama.local"), LlmProvider::Ollama);
+        assert_eq!(
+            LlmProvider::from_base_url("http://localhost:11434"),
+            LlmProvider::Ollama
+        );
+        assert_eq!(
+            LlmProvider::from_base_url("http://ollama.local"),
+            LlmProvider::Ollama
+        );
     }
 
     #[test]
@@ -1285,27 +1299,42 @@ mod tests {
 
     #[test]
     fn test_provider_detection_mistral() {
-        assert_eq!(LlmProvider::from_base_url("https://api.mistral.ai"), LlmProvider::Mistral);
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.mistral.ai"),
+            LlmProvider::Mistral
+        );
     }
 
     #[test]
     fn test_provider_detection_deepseek() {
-        assert_eq!(LlmProvider::from_base_url("https://api.deepseek.com"), LlmProvider::DeepSeek);
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.deepseek.com"),
+            LlmProvider::DeepSeek
+        );
     }
 
     #[test]
     fn test_provider_detection_groq() {
-        assert_eq!(LlmProvider::from_base_url("https://api.groq.com"), LlmProvider::Groq);
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.groq.com"),
+            LlmProvider::Groq
+        );
     }
 
     #[test]
     fn test_provider_detection_together() {
-        assert_eq!(LlmProvider::from_base_url("https://api.together.xyz"), LlmProvider::Together);
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.together.xyz"),
+            LlmProvider::Together
+        );
     }
 
     #[test]
     fn test_provider_detection_custom() {
-        assert_eq!(LlmProvider::from_base_url("https://my-custom-llm.example.com"), LlmProvider::Custom);
+        assert_eq!(
+            LlmProvider::from_base_url("https://my-custom-llm.example.com"),
+            LlmProvider::Custom
+        );
     }
 
     // -- Provider endpoint tests --
@@ -1577,7 +1606,10 @@ mod tests {
 
     #[test]
     fn test_provider_detection_dashscope() {
-        assert_eq!(LlmProvider::from_base_url("https://dashscope.aliyuncs.com"), LlmProvider::DashScope);
+        assert_eq!(
+            LlmProvider::from_base_url("https://dashscope.aliyuncs.com"),
+            LlmProvider::DashScope
+        );
     }
 
     #[test]
@@ -1588,7 +1620,13 @@ mod tests {
 
     #[test]
     fn test_dashscope_endpoint() {
-        assert_eq!(LlmProvider::DashScope.default_base_url(), "https://dashscope.aliyuncs.com");
-        assert_eq!(LlmProvider::DashScope.endpoint(), "/compatible-mode/v1/chat/completions");
+        assert_eq!(
+            LlmProvider::DashScope.default_base_url(),
+            "https://dashscope.aliyuncs.com"
+        );
+        assert_eq!(
+            LlmProvider::DashScope.endpoint(),
+            "/compatible-mode/v1/chat/completions"
+        );
     }
 }

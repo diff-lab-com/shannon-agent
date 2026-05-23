@@ -158,19 +158,15 @@ impl FilePersistence {
     /// Save a team's configuration to disk.
     pub fn save_team(&self, team: &TeamConfigFile) -> Result<(), AgentError> {
         let team_dir = self.team_dir(&team.name)?;
-        std::fs::create_dir_all(&team_dir)
-            .map_err(AgentError::Io)?;
+        std::fs::create_dir_all(&team_dir).map_err(AgentError::Io)?;
 
         let config_path = team_dir.join("config.json");
-        let json = serde_json::to_string_pretty(team)
-            .map_err(AgentError::Serialization)?;
+        let json = serde_json::to_string_pretty(team).map_err(AgentError::Serialization)?;
 
         // Write atomically via temp file + rename
         let tmp_path = config_path.with_extension("json.tmp");
-        std::fs::write(&tmp_path, &json)
-            .map_err(AgentError::Io)?;
-        std::fs::rename(&tmp_path, &config_path)
-            .map_err(AgentError::Io)?;
+        std::fs::write(&tmp_path, &json).map_err(AgentError::Io)?;
+        std::fs::rename(&tmp_path, &config_path).map_err(AgentError::Io)?;
 
         Ok(())
     }
@@ -178,10 +174,8 @@ impl FilePersistence {
     /// Load a team's configuration from disk.
     pub fn load_team(&self, team_name: &str) -> Result<TeamConfigFile, AgentError> {
         let config_path = self.team_dir(team_name)?.join("config.json");
-        let json = std::fs::read_to_string(&config_path)
-            .map_err(AgentError::Io)?;
-        serde_json::from_str(&json)
-            .map_err(AgentError::Serialization)
+        let json = std::fs::read_to_string(&config_path).map_err(AgentError::Io)?;
+        serde_json::from_str(&json).map_err(AgentError::Serialization)
     }
 
     /// List all team names on disk.
@@ -211,8 +205,7 @@ impl FilePersistence {
     pub fn delete_team(&self, team_name: &str) -> Result<(), AgentError> {
         let team_dir = self.team_dir(team_name)?;
         if team_dir.exists() {
-            std::fs::remove_dir_all(&team_dir)
-                .map_err(AgentError::Io)?;
+            std::fs::remove_dir_all(&team_dir).map_err(AgentError::Io)?;
         }
         Ok(())
     }
@@ -222,8 +215,7 @@ impl FilePersistence {
     /// Save a task to disk with file locking for concurrency safety.
     pub fn save_task(&self, team_name: &str, task: &TaskFile) -> Result<(), AgentError> {
         let tasks_dir = self.tasks_dir(team_name)?;
-        std::fs::create_dir_all(&tasks_dir)
-            .map_err(AgentError::Io)?;
+        std::fs::create_dir_all(&tasks_dir).map_err(AgentError::Io)?;
 
         let task_path = tasks_dir.join(format!("{}.json", task.id));
         let lock_path = tasks_dir.join(format!("{}.lock", task.id));
@@ -236,16 +228,15 @@ impl FilePersistence {
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
-        FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::other(
-                format!("Failed to acquire exclusive lock on {lock_path:?}: {e}"),
-            )))?;
+        FileExt::lock_exclusive(&lock_file).map_err(|e| {
+            AgentError::Io(std::io::Error::other(format!(
+                "Failed to acquire exclusive lock on {lock_path:?}: {e}"
+            )))
+        })?;
 
         let result = (|| -> Result<(), AgentError> {
-            let json = serde_json::to_string_pretty(task)
-                .map_err(AgentError::Serialization)?;
-            std::fs::write(&task_path, json)
-                .map_err(AgentError::Io)?;
+            let json = serde_json::to_string_pretty(task).map_err(AgentError::Serialization)?;
+            std::fs::write(&task_path, json).map_err(AgentError::Io)?;
             Ok(())
         })();
 
@@ -271,15 +262,17 @@ impl FilePersistence {
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
-        FileExt::lock_shared(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::other(
-                format!("Failed to acquire shared lock on {lock_path:?}: {e}"),
-            )))?;
+        FileExt::lock_shared(&lock_file).map_err(|e| {
+            AgentError::Io(std::io::Error::other(format!(
+                "Failed to acquire shared lock on {lock_path:?}: {e}"
+            )))
+        })?;
 
         let result = std::fs::read_to_string(&task_path)
             .map_err(AgentError::Io)
-            .and_then(|json| serde_json::from_str::<TaskFile>(&json)
-                .map_err(AgentError::Serialization));
+            .and_then(|json| {
+                serde_json::from_str::<TaskFile>(&json).map_err(AgentError::Serialization)
+            });
 
         if let Err(e) = FileExt::unlock(&lock_file) {
             tracing::warn!("Failed to unlock file: {e}");
@@ -307,8 +300,7 @@ impl FilePersistence {
                     continue;
                 }
 
-                let json = std::fs::read_to_string(&path)
-                    .map_err(AgentError::Io)?;
+                let json = std::fs::read_to_string(&path).map_err(AgentError::Io)?;
                 if let Ok(task) = serde_json::from_str::<TaskFile>(&json) {
                     tasks.push(task);
                 }
@@ -335,16 +327,16 @@ impl FilePersistence {
                 .write(true)
                 .open(&lock_path)
                 .map_err(AgentError::Io)?;
-            FileExt::lock_exclusive(&lock_file)
-                .map_err(|e| AgentError::Io(std::io::Error::other(
-                    format!("Failed to acquire lock for delete: {e}"),
-                )))?;
+            FileExt::lock_exclusive(&lock_file).map_err(|e| {
+                AgentError::Io(std::io::Error::other(format!(
+                    "Failed to acquire lock for delete: {e}"
+                )))
+            })?;
 
-            let result = std::fs::remove_file(&task_path)
-                .map_err(AgentError::Io);
+            let result = std::fs::remove_file(&task_path).map_err(AgentError::Io);
             if let Err(e) = FileExt::unlock(&lock_file) {
-            tracing::warn!("Failed to unlock file: {e}");
-        }
+                tracing::warn!("Failed to unlock file: {e}");
+            }
             let _ = std::fs::remove_file(&lock_path);
             result?;
         }
@@ -359,19 +351,17 @@ impl FilePersistence {
         if !path.exists() {
             return Ok(0);
         }
-        let content = std::fs::read_to_string(&path)
-            .map_err(AgentError::Io)?;
-        content.trim().parse::<u64>()
-            .map_err(|_| AgentError::Configuration(
-                format!("Invalid highwatermark file: {path:?}")
-            ))
+        let content = std::fs::read_to_string(&path).map_err(AgentError::Io)?;
+        content
+            .trim()
+            .parse::<u64>()
+            .map_err(|_| AgentError::Configuration(format!("Invalid highwatermark file: {path:?}")))
     }
 
     /// Write the next high-watermark value.
     pub fn write_highwatermark(&self, team_name: &str, value: u64) -> Result<(), AgentError> {
         let tasks_dir = self.tasks_dir(team_name)?;
-        std::fs::create_dir_all(&tasks_dir)
-            .map_err(AgentError::Io)?;
+        std::fs::create_dir_all(&tasks_dir).map_err(AgentError::Io)?;
 
         let path = tasks_dir.join(".highwatermark");
 
@@ -384,13 +374,13 @@ impl FilePersistence {
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
-        FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::other(
-                format!("Failed to lock highwatermark: {e}"),
-            )))?;
+        FileExt::lock_exclusive(&lock_file).map_err(|e| {
+            AgentError::Io(std::io::Error::other(format!(
+                "Failed to lock highwatermark: {e}"
+            )))
+        })?;
 
-        let result = std::fs::write(&path, value.to_string())
-            .map_err(AgentError::Io);
+        let result = std::fs::write(&path, value.to_string()).map_err(AgentError::Io);
         if let Err(e) = FileExt::unlock(&lock_file) {
             tracing::warn!("Failed to unlock file: {e}");
         }
@@ -402,8 +392,7 @@ impl FilePersistence {
     /// Uses file locking to ensure that concurrent agents get unique IDs.
     pub fn next_task_id(&self, team_name: &str) -> Result<u64, AgentError> {
         let tasks_dir = self.tasks_dir(team_name)?;
-        std::fs::create_dir_all(&tasks_dir)
-            .map_err(AgentError::Io)?;
+        std::fs::create_dir_all(&tasks_dir).map_err(AgentError::Io)?;
 
         let hw_path = tasks_dir.join(".highwatermark");
         let lock_path = tasks_dir.join(".highwatermark.lock");
@@ -416,26 +405,26 @@ impl FilePersistence {
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
-        FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::other(
-                format!("Failed to lock highwatermark for increment: {e}"),
-            )))?;
+        FileExt::lock_exclusive(&lock_file).map_err(|e| {
+            AgentError::Io(std::io::Error::other(format!(
+                "Failed to lock highwatermark for increment: {e}"
+            )))
+        })?;
 
         let current = if hw_path.exists() {
             std::fs::read_to_string(&hw_path)
                 .map_err(AgentError::Io)?
                 .trim()
                 .parse::<u64>()
-                .map_err(|_| AgentError::Configuration(
-                    format!("Invalid highwatermark file: {hw_path:?}")
-                ))?
+                .map_err(|_| {
+                    AgentError::Configuration(format!("Invalid highwatermark file: {hw_path:?}"))
+                })?
         } else {
             0
         };
 
         let next = current + 1;
-        let write_result = std::fs::write(&hw_path, next.to_string())
-            .map_err(AgentError::Io);
+        let write_result = std::fs::write(&hw_path, next.to_string()).map_err(AgentError::Io);
 
         if let Err(e) = FileExt::unlock(&lock_file) {
             tracing::warn!("Failed to unlock file: {e}");
@@ -457,8 +446,7 @@ impl FilePersistence {
         message: &InboxMessage,
     ) -> Result<(), AgentError> {
         let inbox_dir = self.team_dir(team_name)?.join("inboxes");
-        std::fs::create_dir_all(&inbox_dir)
-            .map_err(AgentError::Io)?;
+        std::fs::create_dir_all(&inbox_dir).map_err(AgentError::Io)?;
 
         let inbox_path = inbox_dir.join(format!("{agent_name}.jsonl"));
         let lock_path = inbox_dir.join(format!("{agent_name}.jsonl.lock"));
@@ -471,10 +459,11 @@ impl FilePersistence {
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
-        FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::other(
-                format!("Failed to lock inbox for {agent_name}: {e}"),
-            )))?;
+        FileExt::lock_exclusive(&lock_file).map_err(|e| {
+            AgentError::Io(std::io::Error::other(format!(
+                "Failed to lock inbox for {agent_name}: {e}"
+            )))
+        })?;
 
         let result = (|| -> Result<(), AgentError> {
             let mut file = std::fs::OpenOptions::new()
@@ -483,10 +472,8 @@ impl FilePersistence {
                 .open(&inbox_path)
                 .map_err(AgentError::Io)?;
 
-            let line = serde_json::to_string(message)
-                .map_err(AgentError::Serialization)?;
-            writeln!(file, "{line}")
-                .map_err(AgentError::Io)?;
+            let line = serde_json::to_string(message).map_err(AgentError::Serialization)?;
+            writeln!(file, "{line}").map_err(AgentError::Io)?;
             Ok(())
         })();
 
@@ -521,14 +508,14 @@ impl FilePersistence {
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
-        FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::other(
-                format!("Failed to lock inbox for read: {e}"),
-            )))?;
+        FileExt::lock_exclusive(&lock_file).map_err(|e| {
+            AgentError::Io(std::io::Error::other(format!(
+                "Failed to lock inbox for read: {e}"
+            )))
+        })?;
 
         let result = (|| -> Result<Vec<InboxMessage>, AgentError> {
-            let file = std::fs::File::open(&inbox_path)
-                .map_err(AgentError::Io)?;
+            let file = std::fs::File::open(&inbox_path).map_err(AgentError::Io)?;
             let reader = std::io::BufReader::new(file);
 
             let mut messages = Vec::new();
@@ -544,8 +531,7 @@ impl FilePersistence {
             }
 
             // Clear the inbox after reading
-            std::fs::write(&inbox_path, "")
-                .map_err(AgentError::Io)?;
+            std::fs::write(&inbox_path, "").map_err(AgentError::Io)?;
 
             Ok(messages)
         })();
@@ -569,8 +555,7 @@ impl FilePersistence {
             return Ok(Vec::new());
         }
 
-        let file = std::fs::File::open(&inbox_path)
-            .map_err(AgentError::Io)?;
+        let file = std::fs::File::open(&inbox_path).map_err(AgentError::Io)?;
         let _ = FileExt::lock_shared(&file);
         let reader = std::io::BufReader::new(&file);
 
@@ -611,11 +596,9 @@ impl FilePersistence {
         let lock_path = tasks_dir.join(format!("{task_id}.lock"));
 
         if !task_path.exists() {
-            return Err(AgentError::Task(
-                crate::error::TaskError::TaskNotFound(
-                    Uuid::parse_str(task_id).unwrap_or(Uuid::nil())
-                )
-            ));
+            return Err(AgentError::Task(crate::error::TaskError::TaskNotFound(
+                Uuid::parse_str(task_id).unwrap_or(Uuid::nil()),
+            )));
         }
 
         // Acquire exclusive lock
@@ -626,30 +609,29 @@ impl FilePersistence {
             .write(true)
             .open(&lock_path)
             .map_err(AgentError::Io)?;
-        FileExt::lock_exclusive(&lock_file)
-            .map_err(|e| AgentError::Io(std::io::Error::other(
-                format!("Failed to acquire claim lock for task {task_id}: {e}"),
-            )))?;
+        FileExt::lock_exclusive(&lock_file).map_err(|e| {
+            AgentError::Io(std::io::Error::other(format!(
+                "Failed to acquire claim lock for task {task_id}: {e}"
+            )))
+        })?;
 
         let result = (|| -> Result<TaskFile, AgentError> {
             // Read current task state
-            let json = std::fs::read_to_string(&task_path)
-                .map_err(AgentError::Io)?;
-            let mut task: TaskFile = serde_json::from_str(&json)
-                .map_err(AgentError::Serialization)?;
+            let json = std::fs::read_to_string(&task_path).map_err(AgentError::Io)?;
+            let mut task: TaskFile =
+                serde_json::from_str(&json).map_err(AgentError::Serialization)?;
 
             // Verify claimable: Pending + no owner
             if task.status != "pending" {
-                return Err(AgentError::Task(
-                    crate::error::TaskError::InvalidTaskState(
-                        Uuid::parse_str(task_id).unwrap_or(Uuid::nil())
-                    )
-                ));
+                return Err(AgentError::Task(crate::error::TaskError::InvalidTaskState(
+                    Uuid::parse_str(task_id).unwrap_or(Uuid::nil()),
+                )));
             }
             if task.owner.is_some() {
-                return Err(AgentError::Communication(
-                    format!("Task {} already claimed by {:?}", task_id, task.owner)
-                ));
+                return Err(AgentError::Communication(format!(
+                    "Task {} already claimed by {:?}",
+                    task_id, task.owner
+                )));
             }
 
             // Update task: set owner and status
@@ -658,13 +640,11 @@ impl FilePersistence {
             task.updated_at = chrono::Utc::now().to_rfc3339();
 
             // Write back atomically
-            let updated_json = serde_json::to_string_pretty(&task)
-                .map_err(AgentError::Serialization)?;
+            let updated_json =
+                serde_json::to_string_pretty(&task).map_err(AgentError::Serialization)?;
             let tmp_path = task_path.with_extension("json.tmp");
-            std::fs::write(&tmp_path, &updated_json)
-                .map_err(AgentError::Io)?;
-            std::fs::rename(&tmp_path, &task_path)
-                .map_err(AgentError::Io)?;
+            std::fs::write(&tmp_path, &updated_json).map_err(AgentError::Io)?;
+            std::fs::rename(&tmp_path, &task_path).map_err(AgentError::Io)?;
 
             Ok(task)
         })();
@@ -685,11 +665,7 @@ impl FilePersistence {
         // Filter to Pending + no owner + no blockers, sort by created_at
         let mut claimable: Vec<_> = tasks
             .into_iter()
-            .filter(|t| {
-                t.status == "pending"
-                    && t.owner.is_none()
-                    && t.blocked_by.is_empty()
-            })
+            .filter(|t| t.status == "pending" && t.owner.is_none() && t.blocked_by.is_empty())
             .collect();
         claimable.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
@@ -798,17 +774,18 @@ impl TaskFile {
             _ => TaskPriority::Medium,
         };
 
-        let blocked_by: Result<Vec<Uuid>, _> = self.blocked_by.iter()
+        let blocked_by: Result<Vec<Uuid>, _> = self
+            .blocked_by
+            .iter()
             .map(|id| Uuid::parse_str(id))
             .collect();
         let blocked_by = blocked_by
             .map_err(|_| AgentError::Configuration("Invalid UUID in blocked_by".into()))?;
 
-        let blocks: Result<Vec<Uuid>, _> = self.blocks.iter()
-            .map(|id| Uuid::parse_str(id))
-            .collect();
-        let blocks = blocks
-            .map_err(|_| AgentError::Configuration("Invalid UUID in blocks".into()))?;
+        let blocks: Result<Vec<Uuid>, _> =
+            self.blocks.iter().map(|id| Uuid::parse_str(id)).collect();
+        let blocks =
+            blocks.map_err(|_| AgentError::Configuration("Invalid UUID in blocks".into()))?;
 
         Ok(AgentTask {
             id,
@@ -822,10 +799,8 @@ impl TaskFile {
             active_form: self.active_form.clone(),
             required_capabilities: self.required_capabilities.clone(),
             metadata: self.metadata.clone(),
-            created_at: self.created_at.parse()
-                .unwrap_or(chrono::Utc::now()),
-            updated_at: self.updated_at.parse()
-                .unwrap_or(chrono::Utc::now()),
+            created_at: self.created_at.parse().unwrap_or(chrono::Utc::now()),
+            updated_at: self.updated_at.parse().unwrap_or(chrono::Utc::now()),
         })
     }
 }
@@ -973,7 +948,9 @@ mod tests {
         persist.deliver_message("team", "agent-1", &msg2).unwrap();
 
         // Verify the file is JSONL (one JSON object per line)
-        let inbox_path = persist.team_dir("team").unwrap()
+        let inbox_path = persist
+            .team_dir("team")
+            .unwrap()
             .join("inboxes")
             .join("agent-1.jsonl");
         let raw_content = std::fs::read_to_string(&inbox_path).unwrap();

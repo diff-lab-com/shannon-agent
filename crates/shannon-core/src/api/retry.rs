@@ -92,10 +92,7 @@ fn rand_jitter_factor() -> f64 {
 ///
 /// The closure `f` is called up to `max_retries + 1` times.
 /// On retryable errors, waits with exponential backoff before retrying.
-pub async fn retry_request<F, Fut, T>(
-    config: &RetryConfig,
-    mut f: F,
-) -> Result<T, ApiError>
+pub async fn retry_request<F, Fut, T>(config: &RetryConfig, mut f: F) -> Result<T, ApiError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, ApiError>>,
@@ -112,7 +109,9 @@ where
                 let backoff = config.backoff_duration(attempt);
                 // Honor server-suggested Retry-After for 429 responses
                 let wait = match &e {
-                    ApiError::RateLimitExceeded { retry_after_secs: Some(secs) } => {
+                    ApiError::RateLimitExceeded {
+                        retry_after_secs: Some(secs),
+                    } => {
                         let ra = Duration::from_secs(*secs);
                         if ra > backoff { ra } else { backoff }
                     }
@@ -131,7 +130,8 @@ where
         }
     }
 
-    Err(last_error.unwrap_or_else(|| ApiError::InvalidResponse("All retries exhausted".to_string())))
+    Err(last_error
+        .unwrap_or_else(|| ApiError::InvalidResponse("All retries exhausted".to_string())))
 }
 
 #[cfg(test)]
@@ -160,7 +160,9 @@ mod tests {
     #[test]
     fn test_is_retryable_rate_limit() {
         let config = RetryConfig::default();
-        assert!(config.is_retryable(&ApiError::RateLimitExceeded { retry_after_secs: None }));
+        assert!(config.is_retryable(&ApiError::RateLimitExceeded {
+            retry_after_secs: None
+        }));
     }
 
     #[test]
@@ -232,7 +234,9 @@ mod tests {
             attempts += 1;
             async move {
                 if attempts < 3 {
-                    Err(ApiError::RateLimitExceeded { retry_after_secs: None })
+                    Err(ApiError::RateLimitExceeded {
+                        retry_after_secs: None,
+                    })
                 } else {
                     Ok(99)
                 }
@@ -246,11 +250,16 @@ mod tests {
     async fn test_retry_fails_after_max_retries() {
         let config = RetryConfig::new(2, 10, 100);
         let result: Result<i32, ApiError> = retry_request(&config, || async {
-            Err(ApiError::RateLimitExceeded { retry_after_secs: None })
+            Err(ApiError::RateLimitExceeded {
+                retry_after_secs: None,
+            })
         })
         .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ApiError::RateLimitExceeded { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ApiError::RateLimitExceeded { .. }
+        ));
     }
 
     #[tokio::test]
@@ -278,7 +287,10 @@ mod tests {
             status: 500,
             message: "can't find closing '}' symbol".to_string(),
         };
-        assert!(!config.is_retryable(&err), "Ollama malformed 500 should NOT be retryable at HTTP level");
+        assert!(
+            !config.is_retryable(&err),
+            "Ollama malformed 500 should NOT be retryable at HTTP level"
+        );
     }
 
     #[test]
@@ -288,7 +300,10 @@ mod tests {
             status: 500,
             message: "unexpected end of input".to_string(),
         };
-        assert!(!config.is_retryable(&err), "Ollama 'unexpected end' 500 should NOT be retryable");
+        assert!(
+            !config.is_retryable(&err),
+            "Ollama 'unexpected end' 500 should NOT be retryable"
+        );
     }
 
     #[test]
@@ -298,7 +313,10 @@ mod tests {
             status: 500,
             message: "the model generated malformed output".to_string(),
         };
-        assert!(!config.is_retryable(&err), "Ollama 'malformed output' 500 should NOT be retryable");
+        assert!(
+            !config.is_retryable(&err),
+            "Ollama 'malformed output' 500 should NOT be retryable"
+        );
     }
 
     #[test]
@@ -321,7 +339,10 @@ mod tests {
             error_type: "ollama_error".to_string(),
             message: "can't find closing '}' symbol".to_string(),
         };
-        assert!(!config.is_retryable(&err), "ProviderError should NOT be retryable");
+        assert!(
+            !config.is_retryable(&err),
+            "ProviderError should NOT be retryable"
+        );
     }
 
     #[test]
@@ -332,7 +353,10 @@ mod tests {
             error_type: "ollama_error".to_string(),
             message: "model 'foo' not found".to_string(),
         };
-        assert!(!config.is_retryable(&err), "Ollama 'model not found' should NOT be retryable");
+        assert!(
+            !config.is_retryable(&err),
+            "Ollama 'model not found' should NOT be retryable"
+        );
     }
 
     #[test]
@@ -343,7 +367,10 @@ mod tests {
             error_type: "invalid_request_error".to_string(),
             message: "max_tokens is required".to_string(),
         };
-        assert!(!config.is_retryable(&err), "OpenAI invalid request should NOT be retryable");
+        assert!(
+            !config.is_retryable(&err),
+            "OpenAI invalid request should NOT be retryable"
+        );
     }
 
     #[tokio::test]
@@ -381,6 +408,9 @@ mod tests {
         })
         .await;
         assert!(result.is_err());
-        assert_eq!(attempts, 1, "Non-transient ProviderError should NOT be retried");
+        assert_eq!(
+            attempts, 1,
+            "Non-transient ProviderError should NOT be retried"
+        );
     }
 }

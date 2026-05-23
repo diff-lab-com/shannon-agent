@@ -8,8 +8,8 @@
 
 use shannon_tools::{
     BashTool, ReplTool, SleepTool, Tool,
-    system::{SecurityLevel, analyze_command_security},
     cron::validate_cron,
+    system::{SecurityLevel, analyze_command_security},
 };
 use std::collections::HashMap;
 
@@ -161,11 +161,11 @@ fn test_security_safe_read_only_commands() {
     assert_eq!(analysis.risk_level, SecurityLevel::Low);
     assert!(analysis.is_read_only);
     assert!(!analysis.is_destructive);
-    
+
     let analysis = analyze_command_security("cat file.txt");
     assert_eq!(analysis.risk_level, SecurityLevel::Low);
     assert!(analysis.is_read_only);
-    
+
     let analysis = analyze_command_security("grep pattern file.txt");
     assert_eq!(analysis.risk_level, SecurityLevel::Low);
     assert!(analysis.is_read_only);
@@ -177,7 +177,7 @@ fn test_security_destructive_patterns() {
     assert_eq!(analysis.risk_level, SecurityLevel::Critical);
     assert!(analysis.is_destructive);
     assert!(!analysis.warnings.is_empty());
-    
+
     let analysis = analyze_command_security("dd if=/dev/zero of=/dev/sda");
     assert_eq!(analysis.risk_level, SecurityLevel::Critical);
     assert!(analysis.is_destructive);
@@ -197,7 +197,7 @@ fn test_security_path_traversal_detection() {
     assert!(analysis.contains_path_traversal);
     assert_eq!(analysis.risk_level, SecurityLevel::Critical);
     assert!(!analysis.warnings.is_empty());
-    
+
     let analysis = analyze_command_security("ls ../../tmp");
     assert!(analysis.contains_path_traversal);
 }
@@ -215,7 +215,7 @@ fn test_security_pipe_chain_risk() {
     // Read-only commands with pipes stay Low risk
     let analysis = analyze_command_security("cat file.txt | grep pattern");
     assert_eq!(analysis.risk_level, SecurityLevel::Low);
-    
+
     // Non-read-only commands with pipes become Medium risk
     // Use commands that aren't in READ_ONLY_PATTERNS and don't contain them
     let analysis = analyze_command_security("make build | tee output");
@@ -227,7 +227,7 @@ fn test_security_redirect_overwrite_risk() {
     // echo is in READ_ONLY_PATTERNS, so the redirect doesn't upgrade risk
     let analysis = analyze_command_security("echo data > file.txt");
     assert_eq!(analysis.risk_level, SecurityLevel::Low);
-    
+
     // For a command with redirect that's not read-only, use non-read-only command
     let analysis = analyze_command_security("python script.py > output.txt");
     assert_eq!(analysis.risk_level, SecurityLevel::Medium);
@@ -238,7 +238,7 @@ fn test_security_safe_git_read_operations() {
     let analysis = analyze_command_security("git status");
     assert!(analysis.is_read_only);
     assert_eq!(analysis.risk_level, SecurityLevel::Low);
-    
+
     let analysis = analyze_command_security("git log");
     assert!(analysis.is_read_only);
 }
@@ -268,11 +268,14 @@ async fn test_sleep_tool_interface() {
     let input = serde_json::json!({
         "duration_ms": 50
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(!result.is_error);
     assert!(result.content.contains("50ms"));
-    assert_eq!(result.metadata.get("duration_ms"), Some(&serde_json::json!(50)));
+    assert_eq!(
+        result.metadata.get("duration_ms"),
+        Some(&serde_json::json!(50))
+    );
 }
 
 #[tokio::test]
@@ -288,7 +291,12 @@ async fn test_sleep_tool_input_schema() {
     let schema = tool.input_schema();
     assert_eq!(schema["type"], "object");
     assert!(schema["properties"]["duration_ms"]["type"] == "integer");
-    assert!(schema["required"].as_array().unwrap().contains(&serde_json::json!("duration_ms")));
+    assert!(
+        schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("duration_ms"))
+    );
 }
 
 // ============================================================================
@@ -301,11 +309,14 @@ async fn test_repl_tool_basic_command() {
     let input = serde_json::json!({
         "command": "echo hello world"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(!result.is_error);
     assert!(result.content.contains("hello world"));
-    assert_eq!(result.metadata.get("exit_code"), Some(&serde_json::json!(0)));
+    assert_eq!(
+        result.metadata.get("exit_code"),
+        Some(&serde_json::json!(0))
+    );
 }
 
 #[tokio::test]
@@ -315,7 +326,7 @@ async fn test_repl_tool_with_working_directory() {
         "command": "pwd",
         "cwd": "/tmp"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(!result.is_error);
     assert!(result.content.contains("tmp"));
@@ -326,12 +337,12 @@ async fn test_repl_tool_with_environment_variables() {
     let tool = ReplTool::new();
     let mut env = HashMap::new();
     env.insert("TEST_VAR".to_string(), "test_value".to_string());
-    
+
     let input = serde_json::json!({
         "command": "env",
         "env": {"TEST_VAR": "test_value"}
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(!result.is_error);
     // The env command should list our test variable
@@ -345,7 +356,7 @@ async fn test_repl_tool_failed_command() {
     let input = serde_json::json!({
         "command": "ls /nonexistent_path_xyz_123"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(result.is_error); // Command should fail
     assert!(result.content.contains("failed") || result.content.contains("No such file"));
@@ -357,7 +368,7 @@ async fn test_repl_tool_empty_command_rejected() {
     let input = serde_json::json!({
         "command": ""
     });
-    
+
     let result = tool.execute(input).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Empty command"));
@@ -376,7 +387,12 @@ async fn test_repl_tool_input_schema() {
     let schema = tool.input_schema();
     assert_eq!(schema["type"], "object");
     assert!(schema["properties"]["command"]["type"] == "string");
-    assert!(schema["required"].as_array().unwrap().contains(&serde_json::json!("command")));
+    assert!(
+        schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("command"))
+    );
 }
 
 #[tokio::test]
@@ -385,7 +401,7 @@ async fn test_repl_tool_command_injection_blocked() {
     let input = serde_json::json!({
         "command": "echo hello; rm -rf /"
     });
-    
+
     let result = tool.execute(input).await;
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("command chaining"));
@@ -401,7 +417,7 @@ async fn test_bash_tool_simple_echo() {
     let input = serde_json::json!({
         "command": "echo test"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(!result.is_error);
     assert!(result.content.contains("test"));
@@ -419,7 +435,12 @@ async fn test_bash_tool_input_schema() {
     let tool = BashTool::new();
     let schema = tool.input_schema();
     assert_eq!(schema["type"], "object");
-    assert!(schema["required"].as_array().unwrap().contains(&serde_json::json!("command")));
+    assert!(
+        schema["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("command"))
+    );
 }
 
 #[tokio::test]
@@ -428,7 +449,7 @@ async fn test_bash_tool_critical_command_rejected() {
     let input = serde_json::json!({
         "command": "rm -rf /"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(result.is_error);
     assert!(result.content.contains("critical security risk"));
@@ -442,7 +463,7 @@ async fn test_bash_tool_with_working_directory() {
         "command": "pwd",
         "cwd": "/tmp"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(!result.is_error);
 }
@@ -454,7 +475,7 @@ async fn test_bash_tool_with_timeout() {
         "command": "echo quick",
         "timeout": 5000
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(!result.is_error);
     assert!(result.content.contains("quick"));
@@ -467,7 +488,7 @@ async fn test_bash_tool_with_environment_variables() {
         "command": "echo $MY_VAR",
         "env": {"MY_VAR": "test_value"}
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(!result.is_error);
     assert!(result.content.contains("test_value"));
@@ -517,7 +538,7 @@ async fn test_tool_metadata_includes_risk_level() {
     let input = serde_json::json!({
         "command": "ls -la"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(result.metadata.get("risk_level").is_some());
 }
@@ -528,10 +549,13 @@ async fn test_tool_metadata_includes_destructive_flag() {
     let input = serde_json::json!({
         "command": "rm -rf test_dir"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(result.metadata.get("is_destructive").is_some());
-    assert_eq!(result.metadata.get("is_destructive"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        result.metadata.get("is_destructive"),
+        Some(&serde_json::json!(true))
+    );
 }
 
 #[tokio::test]
@@ -540,10 +564,13 @@ async fn test_tool_metadata_includes_read_only_flag() {
     let input = serde_json::json!({
         "command": "cat file.txt"
     });
-    
+
     let result = tool.execute(input).await.unwrap();
     assert!(result.metadata.get("is_read_only").is_some());
-    assert_eq!(result.metadata.get("is_read_only"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        result.metadata.get("is_read_only"),
+        Some(&serde_json::json!(true))
+    );
 }
 
 #[tokio::test]

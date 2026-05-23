@@ -6,8 +6,8 @@
 //! - Concurrent skill operations
 //! - Skill state persistence
 
-use shannon_skills::registry::SkillRegistry;
 use shannon_skills::definition::Skill;
+use shannon_skills::registry::SkillRegistry;
 
 #[tokio::test]
 async fn test_concurrent_skill_registration() {

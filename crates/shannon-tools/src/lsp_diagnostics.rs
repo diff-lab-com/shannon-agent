@@ -6,9 +6,9 @@
 //! The registry maps file paths to their diagnostic lists and supports filtering
 //! by severity, source, and computing aggregate summaries.
 
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Diagnostic types
@@ -146,8 +146,7 @@ impl LspDiagnostic {
 // ---------------------------------------------------------------------------
 
 /// Aggregate summary of all diagnostics currently stored in the registry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct DiagnosticSummary {
     /// Total number of diagnostics.
     pub total: usize,
@@ -164,7 +163,6 @@ pub struct DiagnosticSummary {
     /// List of files that contain at least one diagnostic of any severity.
     pub files_with_diagnostics: Vec<String>,
 }
-
 
 impl std::fmt::Display for DiagnosticSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -439,7 +437,11 @@ fn parse_cargo_compiler_message(msg: &serde_json::Value) -> Option<Vec<LspDiagno
             .to_string()
     } else {
         // Use first line of rendered as the message
-        rendered.lines().next().unwrap_or("unknown error").to_string()
+        rendered
+            .lines()
+            .next()
+            .unwrap_or("unknown error")
+            .to_string()
     };
 
     let mut diagnostics = Vec::new();
@@ -451,10 +453,7 @@ fn parse_cargo_compiler_message(msg: &serde_json::Value) -> Option<Vec<LspDiagno
                 .get("file_name")
                 .and_then(|f| f.as_str())
                 .unwrap_or("unknown");
-            let line = span
-                .get("line_start")
-                .and_then(|l| l.as_u64())
-                .unwrap_or(0) as usize;
+            let line = span.get("line_start").and_then(|l| l.as_u64()).unwrap_or(0) as usize;
             let column = span
                 .get("column_start")
                 .and_then(|c| c.as_u64())
@@ -491,16 +490,37 @@ mod tests {
     // -- Helper factories --
 
     fn make_error(file: &str, line: usize) -> LspDiagnostic {
-        LspDiagnostic::new(file, line, 0, DiagnosticSeverity::Error, "test error", "rustc")
-            .with_code("E0382")
+        LspDiagnostic::new(
+            file,
+            line,
+            0,
+            DiagnosticSeverity::Error,
+            "test error",
+            "rustc",
+        )
+        .with_code("E0382")
     }
 
     fn make_warning(file: &str, line: usize) -> LspDiagnostic {
-        LspDiagnostic::new(file, line, 0, DiagnosticSeverity::Warning, "unused var", "rustc")
+        LspDiagnostic::new(
+            file,
+            line,
+            0,
+            DiagnosticSeverity::Warning,
+            "unused var",
+            "rustc",
+        )
     }
 
     fn make_info(file: &str, line: usize) -> LspDiagnostic {
-        LspDiagnostic::new(file, line, 0, DiagnosticSeverity::Info, "info msg", "clippy")
+        LspDiagnostic::new(
+            file,
+            line,
+            0,
+            DiagnosticSeverity::Info,
+            "info msg",
+            "clippy",
+        )
     }
 
     fn make_hint(file: &str, line: usize) -> LspDiagnostic {
@@ -508,7 +528,14 @@ mod tests {
     }
 
     fn make_ts_error(file: &str, line: usize) -> LspDiagnostic {
-        LspDiagnostic::new(file, line, 0, DiagnosticSeverity::Error, "ts error", "typescript")
+        LspDiagnostic::new(
+            file,
+            line,
+            0,
+            DiagnosticSeverity::Error,
+            "ts error",
+            "typescript",
+        )
     }
 
     // -- DiagnosticSeverity tests --
@@ -523,11 +550,26 @@ mod tests {
 
     #[test]
     fn test_severity_from_lsp_number() {
-        assert_eq!(DiagnosticSeverity::from_lsp_number(1), DiagnosticSeverity::Error);
-        assert_eq!(DiagnosticSeverity::from_lsp_number(2), DiagnosticSeverity::Warning);
-        assert_eq!(DiagnosticSeverity::from_lsp_number(3), DiagnosticSeverity::Info);
-        assert_eq!(DiagnosticSeverity::from_lsp_number(4), DiagnosticSeverity::Hint);
-        assert_eq!(DiagnosticSeverity::from_lsp_number(99), DiagnosticSeverity::Info);
+        assert_eq!(
+            DiagnosticSeverity::from_lsp_number(1),
+            DiagnosticSeverity::Error
+        );
+        assert_eq!(
+            DiagnosticSeverity::from_lsp_number(2),
+            DiagnosticSeverity::Warning
+        );
+        assert_eq!(
+            DiagnosticSeverity::from_lsp_number(3),
+            DiagnosticSeverity::Info
+        );
+        assert_eq!(
+            DiagnosticSeverity::from_lsp_number(4),
+            DiagnosticSeverity::Hint
+        );
+        assert_eq!(
+            DiagnosticSeverity::from_lsp_number(99),
+            DiagnosticSeverity::Info
+        );
     }
 
     #[test]
@@ -783,14 +825,8 @@ mod tests {
                 make_warning("a.rs", 3),
             ],
         );
-        reg.update(
-            "b.rs",
-            vec![make_info("b.rs", 4), make_hint("b.rs", 5)],
-        );
-        reg.update(
-            "c.rs",
-            vec![make_warning("c.rs", 6)],
-        );
+        reg.update("b.rs", vec![make_info("b.rs", 4), make_hint("b.rs", 5)]);
+        reg.update("c.rs", vec![make_warning("c.rs", 6)]);
 
         let s = reg.summary();
         assert_eq!(s.total, 6);
@@ -910,7 +946,14 @@ mod tests {
     fn test_registry_multiple_updates_same_file() {
         let mut reg = DiagnosticRegistry::new();
         reg.update("a.rs", vec![make_error("a.rs", 1), make_warning("a.rs", 2)]);
-        reg.update("a.rs", vec![make_error("a.rs", 10), make_hint("a.rs", 20), make_info("a.rs", 30)]);
+        reg.update(
+            "a.rs",
+            vec![
+                make_error("a.rs", 10),
+                make_hint("a.rs", 20),
+                make_info("a.rs", 30),
+            ],
+        );
         assert_eq!(reg.get("a.rs").len(), 3);
         assert_eq!(reg.get("a.rs")[0].line, 10);
         assert_eq!(reg.get("a.rs")[1].line, 20);

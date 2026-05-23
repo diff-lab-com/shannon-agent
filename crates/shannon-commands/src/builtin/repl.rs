@@ -4,7 +4,7 @@
 //! They are registered in the CommandRegistry for discovery and completion,
 //! but their execution is handled by the REPL itself.
 
-use crate::command::{Command, CommandBase, CommandSource, LocalCommand, CommandAvailability};
+use crate::command::{Command, CommandAvailability, CommandBase, CommandSource, LocalCommand};
 
 /// /clear command - Clear chat history
 pub fn clear_command() -> Command {
@@ -19,7 +19,9 @@ pub fn clear_command() -> Command {
             is_enabled: true,
             is_hidden: false,
             argument_hint: None,
-            when_to_use: Some("Use to clear the chat history when the screen gets cluttered".to_string()),
+            when_to_use: Some(
+                "Use to clear the chat history when the screen gets cluttered".to_string(),
+            ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
             user_invocable: true,
@@ -123,7 +125,9 @@ pub fn sessions_command() -> Command {
             is_enabled: true,
             is_hidden: false,
             argument_hint: Some("[--all] [--search <query>]".to_string()),
-            when_to_use: Some("Use to see previously saved sessions that can be resumed".to_string()),
+            when_to_use: Some(
+                "Use to see previously saved sessions that can be resumed".to_string(),
+            ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
             user_invocable: true,
@@ -175,7 +179,9 @@ pub fn history_command() -> Command {
             is_enabled: true,
             is_hidden: false,
             argument_hint: Some("[--export <path>]".to_string()),
-            when_to_use: Some("Use to see session statistics or export the conversation".to_string()),
+            when_to_use: Some(
+                "Use to see session statistics or export the conversation".to_string(),
+            ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
             user_invocable: true,
@@ -228,7 +234,8 @@ pub fn branch_command() -> Command {
             is_hidden: false,
             argument_hint: Some("<session-id-or-number> [message-index]".to_string()),
             when_to_use: Some(
-                "Use to fork a conversation from a specific point, creating a new session".to_string(),
+                "Use to fork a conversation from a specific point, creating a new session"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,

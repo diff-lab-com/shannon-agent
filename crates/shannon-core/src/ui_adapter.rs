@@ -366,10 +366,7 @@ mod tests {
     #[tokio::test]
     async fn test_null_adapter_display() {
         let adapter = NullUiAdapter;
-        assert!(adapter
-            .display(&DisplayMessage::info("test"))
-            .await
-            .is_ok());
+        assert!(adapter.display(&DisplayMessage::info("test")).await.is_ok());
     }
 
     #[tokio::test]

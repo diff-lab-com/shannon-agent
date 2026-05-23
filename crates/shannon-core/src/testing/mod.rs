@@ -6,5 +6,5 @@
 //! - **snapshot**: Request shape snapshot helpers for regression detection
 
 pub mod mock_dsl;
-pub mod test_env;
 pub mod snapshot;
+pub mod test_env;

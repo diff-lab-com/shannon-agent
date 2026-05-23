@@ -58,7 +58,10 @@ fn test_orphan_cleanup_on_crash() {
 
     assert_eq!(restored.status, AgentStatus::Failed(crash_reason));
     assert_eq!(restored.turns_used, 1);
-    assert_eq!(restored.last_output.as_deref(), Some("partial output before crash"));
+    assert_eq!(
+        restored.last_output.as_deref(),
+        Some("partial output before crash")
+    );
     assert_eq!(restored.id, agent.id);
     assert_eq!(restored.name, "crash-agent");
 }
@@ -86,14 +89,20 @@ async fn test_worktree_cleanup_on_failure() {
     board.add_task(task).await.unwrap();
 
     // Agent claims the task (simulating worktree checkout)
-    board.assign_task(task_id, "worker-1".to_string()).await.unwrap();
+    board
+        .assign_task(task_id, "worker-1".to_string())
+        .await
+        .unwrap();
     let assigned = board.get_task(task_id).await.unwrap();
     assert_eq!(assigned.status, TaskStatus::InProgress);
     assert_eq!(assigned.owner.as_deref(), Some("worker-1"));
 
     // Task fails during worktree operation
     let failure_reason = "worktree merge conflict".to_string();
-    board.fail_task(task_id, failure_reason.clone()).await.unwrap();
+    board
+        .fail_task(task_id, failure_reason.clone())
+        .await
+        .unwrap();
 
     // Verify failure state
     let failed_task = board.get_task(task_id).await.unwrap();
@@ -153,7 +162,10 @@ fn test_task_board_corruption_recovery() {
 
     for corrupted in &corrupted_jsons {
         let result: Result<AgentTask, _> = serde_json::from_str(corrupted);
-        assert!(result.is_err(), "Expected error for corrupted JSON: {corrupted}");
+        assert!(
+            result.is_err(),
+            "Expected error for corrupted JSON: {corrupted}"
+        );
     }
 
     // TaskStatus also recovers from corruption
@@ -192,8 +204,16 @@ async fn test_deadlock_detection() {
     let board = TaskBoard::new();
 
     // --- Direct 2-node cycle ---
-    let t1 = AgentTask::new("Task A".to_string(), "desc A".to_string(), TaskPriority::High);
-    let t2 = AgentTask::new("Task B".to_string(), "desc B".to_string(), TaskPriority::High);
+    let t1 = AgentTask::new(
+        "Task A".to_string(),
+        "desc A".to_string(),
+        TaskPriority::High,
+    );
+    let t2 = AgentTask::new(
+        "Task B".to_string(),
+        "desc B".to_string(),
+        TaskPriority::High,
+    );
     let id1 = t1.id;
     let id2 = t2.id;
 
@@ -242,10 +262,13 @@ async fn test_deadlock_detection() {
     assert!(result.is_err());
 
     // Also verify DependencyError roundtrips through serialization
-    let dep_err = DependencyError::CircularDependency(vec!["alpha".into(), "beta".into(), "gamma".into()]);
+    let dep_err =
+        DependencyError::CircularDependency(vec!["alpha".into(), "beta".into(), "gamma".into()]);
     let err_msg = dep_err.to_string();
-    assert!(err_msg.contains("circular") || err_msg.contains("Circular") || err_msg.contains("cycle"),
-        "DependencyError::CircularDependency message should mention cycle: {err_msg}");
+    assert!(
+        err_msg.contains("circular") || err_msg.contains("Circular") || err_msg.contains("cycle"),
+        "DependencyError::CircularDependency message should mention cycle: {err_msg}"
+    );
 }
 
 // =========================================================================
@@ -285,15 +308,30 @@ async fn test_coordinator_failure_handling() {
         .unwrap();
 
     let tid1 = coordinator
-        .add_task("fail-team", "Task 1".into(), "desc".into(), TaskPriority::High)
+        .add_task(
+            "fail-team",
+            "Task 1".into(),
+            "desc".into(),
+            TaskPriority::High,
+        )
         .await
         .unwrap();
     let tid2 = coordinator
-        .add_task("fail-team", "Task 2".into(), "desc".into(), TaskPriority::Medium)
+        .add_task(
+            "fail-team",
+            "Task 2".into(),
+            "desc".into(),
+            TaskPriority::Medium,
+        )
         .await
         .unwrap();
     let _tid3 = coordinator
-        .add_task("fail-team", "Task 3".into(), "desc".into(), TaskPriority::Low)
+        .add_task(
+            "fail-team",
+            "Task 3".into(),
+            "desc".into(),
+            TaskPriority::Low,
+        )
         .await
         .unwrap();
 
@@ -417,7 +455,8 @@ fn test_batch_partial_failure_rollback() {
         Duration::from_secs(5),
     );
 
-    let timed_out = MultiAgentTaskResult::timed_out("agent-c".to_string(), Duration::from_secs(300));
+    let timed_out =
+        MultiAgentTaskResult::timed_out("agent-c".to_string(), Duration::from_secs(300));
 
     let skipped = MultiAgentTaskResult::skipped("agent-d".to_string());
 
@@ -454,7 +493,10 @@ fn test_batch_partial_failure_rollback() {
         .find(|r| r.agent_name == "agent-b")
         .unwrap();
     assert_eq!(agent_b.status, AgentResultStatus::Failed);
-    assert_eq!(agent_b.error.as_deref(), Some("compilation error in module B"));
+    assert_eq!(
+        agent_b.error.as_deref(),
+        Some("compilation error in module B")
+    );
     assert!(agent_b.output.is_none());
 
     let agent_c = result
@@ -487,7 +529,10 @@ fn test_batch_partial_failure_rollback() {
         SpawnAgentConfig::new("b", "task b"),
     ])
     .with_fail_fast();
-    assert!(fail_fast_config.fail_fast, "fail_fast should stop on first error");
+    assert!(
+        fail_fast_config.fail_fast,
+        "fail_fast should stop on first error"
+    );
 }
 
 // =========================================================================
@@ -585,7 +630,9 @@ async fn test_agent_communication_failure() {
     let restored: AgentMessage = serde_json::from_str(&json).unwrap();
 
     match &restored.content {
-        MessageContent::Protocol(ProtocolMessage::TaskResult { success, output, .. }) => {
+        MessageContent::Protocol(ProtocolMessage::TaskResult {
+            success, output, ..
+        }) => {
             assert!(!success);
             assert_eq!(output, "Agent crashed: out of memory");
         }
@@ -637,5 +684,8 @@ async fn test_process_manager_failure_paths() {
         startup_timeout_secs: 60,
     };
     let result = mgr.spawn_agent(config).await;
-    assert!(result.is_err(), "Spawning with nonexistent binary should fail");
+    assert!(
+        result.is_err(),
+        "Spawning with nonexistent binary should fail"
+    );
 }

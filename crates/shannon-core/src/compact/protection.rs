@@ -4,8 +4,10 @@ use std::collections::HashSet;
 
 use crate::api::{Message, MessageContent};
 
-use super::compact_messages::{compact_messages, CompactionStrategy, CompactMessagesResult};
-use super::helpers::{estimate_message_tokens, estimate_tokens, extract_text_content, looks_like_code};
+use super::compact_messages::{CompactMessagesResult, CompactionStrategy, compact_messages};
+use super::helpers::{
+    estimate_message_tokens, estimate_tokens, extract_text_content, looks_like_code,
+};
 
 // ============================================================================
 // Message Protection
@@ -328,21 +330,39 @@ mod tests {
 
     #[test]
     fn test_classify_system_critical() {
-        let msg = Message { role: "system".into(), content: MessageContent::Text("instructions".into()) };
-        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Critical);
+        let msg = Message {
+            role: "system".into(),
+            content: MessageContent::Text("instructions".into()),
+        };
+        assert_eq!(
+            classify_message_priority(&msg),
+            crate::context_budget::MessagePriority::Critical
+        );
     }
 
     #[test]
     fn test_classify_short_user_critical() {
-        let msg = Message { role: "user".into(), content: MessageContent::Text("fix the bug".into()) };
-        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Critical);
+        let msg = Message {
+            role: "user".into(),
+            content: MessageContent::Text("fix the bug".into()),
+        };
+        assert_eq!(
+            classify_message_priority(&msg),
+            crate::context_budget::MessagePriority::Critical
+        );
     }
 
     #[test]
     fn test_classify_long_user_normal() {
         let long_text = "x".repeat(300);
-        let msg = Message { role: "user".into(), content: MessageContent::Text(long_text) };
-        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Normal);
+        let msg = Message {
+            role: "user".into(),
+            content: MessageContent::Text(long_text),
+        };
+        assert_eq!(
+            classify_message_priority(&msg),
+            crate::context_budget::MessagePriority::Normal
+        );
     }
 
     #[test]
@@ -352,7 +372,10 @@ mod tests {
             content: MessageContent::Text("```rust\nfn main() {}\n```".into()),
         };
         // looks_like_code should detect the code block
-        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::High);
+        assert_eq!(
+            classify_message_priority(&msg),
+            crate::context_budget::MessagePriority::High
+        );
     }
 
     #[test]
@@ -361,19 +384,34 @@ mod tests {
             role: "assistant".into(),
             content: MessageContent::Text("Sure, I can help with that.".into()),
         };
-        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Normal);
+        assert_eq!(
+            classify_message_priority(&msg),
+            crate::context_budget::MessagePriority::Normal
+        );
     }
 
     #[test]
     fn test_classify_tool_result_low() {
-        let msg = Message { role: "tool".into(), content: MessageContent::Text("output".into()) };
-        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Low);
+        let msg = Message {
+            role: "tool".into(),
+            content: MessageContent::Text("output".into()),
+        };
+        assert_eq!(
+            classify_message_priority(&msg),
+            crate::context_budget::MessagePriority::Low
+        );
     }
 
     #[test]
     fn test_classify_unknown_role_low() {
-        let msg = Message { role: "other".into(), content: MessageContent::Text("data".into()) };
-        assert_eq!(classify_message_priority(&msg), crate::context_budget::MessagePriority::Low);
+        let msg = Message {
+            role: "other".into(),
+            content: MessageContent::Text("data".into()),
+        };
+        assert_eq!(
+            classify_message_priority(&msg),
+            crate::context_budget::MessagePriority::Low
+        );
     }
 
     // ── compact_messages_with_protection ─────────────────────────────────
@@ -382,7 +420,11 @@ mod tests {
     fn test_compact_empty_messages() {
         let protector = MessageProtector::new();
         let result = compact_messages_with_protection(
-            &[], &CompactionStrategy::Summarize, 1000, 2, &protector,
+            &[],
+            &CompactionStrategy::Summarize,
+            1000,
+            2,
+            &protector,
         );
         assert!(!result.did_compact);
         assert_eq!(result.original_count, 0);
@@ -396,7 +438,11 @@ mod tests {
         }];
         let protector = MessageProtector::new();
         let result = compact_messages_with_protection(
-            &msgs, &CompactionStrategy::Summarize, 10000, 2, &protector,
+            &msgs,
+            &CompactionStrategy::Summarize,
+            10000,
+            2,
+            &protector,
         );
         assert!(!result.did_compact);
         assert_eq!(result.compacted_count, 1);
@@ -415,11 +461,19 @@ mod tests {
         let mut protector = MessageProtector::new();
         protector.protect(5); // protect one specific message
         let result = compact_messages_with_protection(
-            &msgs, &CompactionStrategy::Summarize, 2000, 2, &protector,
+            &msgs,
+            &CompactionStrategy::Summarize,
+            2000,
+            2,
+            &protector,
         );
         // Protected message should still be in result
         let protected_content = extract_text_content(&msgs[5]);
-        let result_texts: Vec<String> = result.messages.iter().map(|m| extract_text_content(m)).collect();
+        let result_texts: Vec<String> = result
+            .messages
+            .iter()
+            .map(|m| extract_text_content(m))
+            .collect();
         assert!(result_texts.iter().any(|t| t == &protected_content));
     }
 

@@ -5,8 +5,8 @@
 //! crash isolation, resource boundaries, and parallel execution.
 
 use crate::protocol::{
-    self, AgentReadyParams, AgentIdleParams, ExecuteTaskParams, JsonRpcMessage,
-    TaskCompleteParams, TaskProgressParams, frame_message, parse_message,
+    self, AgentIdleParams, AgentReadyParams, ExecuteTaskParams, JsonRpcMessage, TaskCompleteParams,
+    TaskProgressParams, frame_message, parse_message,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,12 +17,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::{RwLock, mpsc, oneshot};
 
 /// Environment variables blocked from being passed to agent processes.
 const BLOCKED_ENV: &[&str] = &[
-    "LD_PRELOAD", "LD_LIBRARY_PATH", "DYLD_INSERT_LIBRARIES",
-    "DYLD_LIBRARY_PATH", "__KMP_REGISTERED_LIBRARIES",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "__KMP_REGISTERED_LIBRARIES",
 ];
 
 /// Status of an agent process.
@@ -71,7 +74,9 @@ pub struct AgentProcessConfig {
     pub startup_timeout_secs: u64,
 }
 
-fn default_startup_timeout() -> u64 { 60 }
+fn default_startup_timeout() -> u64 {
+    60
+}
 
 /// Configuration for health monitoring and restart policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,11 +98,21 @@ pub struct HealthCheckConfig {
     pub graceful_shutdown_timeout_secs: u64,
 }
 
-fn default_health_interval() -> u64 { 30 }
-fn default_ping_timeout() -> u64 { 10 }
-fn default_max_restarts() -> u32 { 3 }
-fn default_grace_period() -> u64 { 15 }
-fn default_shutdown_timeout() -> u64 { 10 }
+fn default_health_interval() -> u64 {
+    30
+}
+fn default_ping_timeout() -> u64 {
+    10
+}
+fn default_max_restarts() -> u32 {
+    3
+}
+fn default_grace_period() -> u64 {
+    15
+}
+fn default_shutdown_timeout() -> u64 {
+    10
+}
 
 impl Default for HealthCheckConfig {
     fn default() -> Self {
@@ -232,7 +247,12 @@ pub struct AgentProcessManager {
 
 impl Drop for AgentProcessManager {
     fn drop(&mut self) {
-        if let Some(handle) = self.health_monitor_handle.lock().ok().and_then(|mut g| g.take()) {
+        if let Some(handle) = self
+            .health_monitor_handle
+            .lock()
+            .ok()
+            .and_then(|mut g| g.take())
+        {
             handle.abort();
         }
         // Abort all tracked background tasks (timeout guards, watchers)
@@ -292,9 +312,10 @@ impl AgentProcessManager {
         // Validate binary path exists and is executable
         let binary_path = std::path::Path::new(&config.binary_path);
         if !binary_path.exists() {
-            return Err(AgentProcessError::AgentNotFound(
-                format!("Agent binary not found: {}", binary_path.display())
-            ));
+            return Err(AgentProcessError::AgentNotFound(format!(
+                "Agent binary not found: {}",
+                binary_path.display()
+            )));
         }
 
         // Build command — uses `shannon --team-agent` to reuse the main binary
@@ -336,21 +357,19 @@ impl AgentProcessManager {
             source: e,
         })?;
 
-        let stdin = child.stdin.take()
+        let stdin = child
+            .stdin
+            .take()
             .ok_or_else(|| AgentProcessError::SpawnFailed {
                 agent: name.clone(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "stdin not captured",
-                ),
+                source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdin not captured"),
             })?;
-        let stdout = child.stdout.take()
+        let stdout = child
+            .stdout
+            .take()
             .ok_or_else(|| AgentProcessError::SpawnFailed {
                 agent: name.clone(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "stdout not captured",
-                ),
+                source: std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdout not captured"),
             })?;
 
         let event_tx = self.event_tx.clone();
@@ -371,10 +390,12 @@ impl AgentProcessManager {
             // Wait for kill signal or just let it drop
             let _ = kill_rx.await;
             // The child will be killed when AgentHandle is dropped
-            let _ = event_tx_exit.send(AgentEvent::ProcessExited {
-                agent_name: name_exit.clone(),
-                exit_code: None,
-            }).await;
+            let _ = event_tx_exit
+                .send(AgentEvent::ProcessExited {
+                    agent_name: name_exit.clone(),
+                    exit_code: None,
+                })
+                .await;
         });
         self.track_task(watcher_handle);
 
@@ -408,10 +429,13 @@ impl AgentProcessManager {
                         tracing::debug!(agent = %timeout_name, error = %e, "Failed to kill agent process during startup timeout");
                     }
                     handle.status = AgentProcessStatus::Crashed;
-                    if let Err(e) = timeout_event_tx.send(AgentEvent::ProcessExited {
-                        agent_name: timeout_name.clone(),
-                        exit_code: None,
-                    }).await {
+                    if let Err(e) = timeout_event_tx
+                        .send(AgentEvent::ProcessExited {
+                            agent_name: timeout_name.clone(),
+                            exit_code: None,
+                        })
+                        .await
+                    {
                         tracing::debug!(agent = %timeout_name, error = %e, "Failed to send startup timeout event");
                     }
                 }
@@ -434,28 +458,37 @@ impl AgentProcessManager {
         let msg = JsonRpcMessage::request(method, params, rpc_id);
 
         let mut agents = self.agents.write().await;
-        let handle = agents.get_mut(agent_name)
+        let handle = agents
+            .get_mut(agent_name)
             .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
 
         let (tx, rx) = oneshot::channel();
         {
-            let mut rpcs = handle.pending_rpcs.lock().unwrap_or_else(|e| e.into_inner());
+            let mut rpcs = handle
+                .pending_rpcs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             rpcs.insert(rpc_id, PendingRpc { sender: tx });
         }
 
-        let line = frame_message(&msg)
-            .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
-        handle.stdin.write_all(line.as_bytes()).await
+        let line = frame_message(&msg).map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
+        handle
+            .stdin
+            .write_all(line.as_bytes())
+            .await
             .map_err(AgentProcessError::Io)?;
-        handle.stdin.flush().await
-            .map_err(AgentProcessError::Io)?;
+        handle.stdin.flush().await.map_err(AgentProcessError::Io)?;
 
         drop(agents);
 
         // Wait for response
-        rx.await.map_err(|_| AgentProcessError::Protocol(
-            format!("Agent '{agent_name}' dropped response channel for RPC {rpc_id}")
-        ))?.map_err(AgentProcessError::Protocol)
+        rx.await
+            .map_err(|_| {
+                AgentProcessError::Protocol(format!(
+                    "Agent '{agent_name}' dropped response channel for RPC {rpc_id}"
+                ))
+            })?
+            .map_err(AgentProcessError::Protocol)
     }
 
     /// Send a notification (no response expected) to an agent.
@@ -468,15 +501,17 @@ impl AgentProcessManager {
         let msg = JsonRpcMessage::notification(method, params);
 
         let mut agents = self.agents.write().await;
-        let handle = agents.get_mut(agent_name)
+        let handle = agents
+            .get_mut(agent_name)
             .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
 
-        let line = frame_message(&msg)
-            .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
-        handle.stdin.write_all(line.as_bytes()).await
+        let line = frame_message(&msg).map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
+        handle
+            .stdin
+            .write_all(line.as_bytes())
+            .await
             .map_err(AgentProcessError::Io)?;
-        handle.stdin.flush().await
-            .map_err(AgentProcessError::Io)?;
+        handle.stdin.flush().await.map_err(AgentProcessError::Io)?;
 
         Ok(())
     }
@@ -492,14 +527,22 @@ impl AgentProcessManager {
 
         // execute_task is a notification (fire-and-forget); agent sends back
         // task_progress and task_complete notifications.
-        self.send_notification(agent_name, protocol::methods::EXECUTE_TASK, params_value).await
+        self.send_notification(agent_name, protocol::methods::EXECUTE_TASK, params_value)
+            .await
     }
 
     /// Send a `shutdown` notification to an agent.
-    pub async fn shutdown_agent(&self, agent_name: &str, reason: &str) -> Result<(), AgentProcessError> {
-        let params = serde_json::to_value(ShutdownParamsWrapper { reason: reason.to_string() })
-            .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
-        self.send_notification(agent_name, protocol::methods::SHUTDOWN, params).await
+    pub async fn shutdown_agent(
+        &self,
+        agent_name: &str,
+        reason: &str,
+    ) -> Result<(), AgentProcessError> {
+        let params = serde_json::to_value(ShutdownParamsWrapper {
+            reason: reason.to_string(),
+        })
+        .map_err(|e| AgentProcessError::Protocol(e.to_string()))?;
+        self.send_notification(agent_name, protocol::methods::SHUTDOWN, params)
+            .await
     }
 
     /// Kill an agent process immediately.
@@ -524,7 +567,9 @@ impl AgentProcessManager {
         timeout: Duration,
     ) -> Result<(), AgentProcessError> {
         // Send shutdown notification (best-effort)
-        let _ = self.shutdown_agent(agent_name, "coordinator shutting down").await;
+        let _ = self
+            .shutdown_agent(agent_name, "coordinator shutting down")
+            .await;
 
         // Wait for the process to exit
         let deadline = Instant::now() + timeout;
@@ -561,10 +606,7 @@ impl AgentProcessManager {
     ///
     /// Removes the old handle, respawns using the original config, and
     /// increments the restart counter.
-    pub async fn restart_agent(
-        &self,
-        agent_name: &str,
-    ) -> Result<String, AgentProcessError> {
+    pub async fn restart_agent(&self, agent_name: &str) -> Result<String, AgentProcessError> {
         // Extract the stored config and restart count
         let config = {
             let mut agents = self.agents.write().await;
@@ -600,10 +642,13 @@ impl AgentProcessManager {
             }
         }
 
-        let _ = self.event_tx.send(AgentEvent::AgentRestarted {
-            agent_name: name.clone(),
-            restart_count,
-        }).await;
+        let _ = self
+            .event_tx
+            .send(AgentEvent::AgentRestarted {
+                agent_name: name.clone(),
+                restart_count,
+            })
+            .await;
 
         Ok(name)
     }
@@ -641,7 +686,10 @@ impl AgentProcessManager {
                     };
 
                     // Skip agents that are already stopped/crashed
-                    if matches!(handle.status, AgentProcessStatus::Stopped | AgentProcessStatus::Crashed) {
+                    if matches!(
+                        handle.status,
+                        AgentProcessStatus::Stopped | AgentProcessStatus::Crashed
+                    ) {
                         continue;
                     }
 
@@ -654,10 +702,12 @@ impl AgentProcessManager {
                         let failure_count = failures.entry(agent_name.clone()).or_insert(0);
                         *failure_count += 1;
 
-                        let _ = event_tx.send(AgentEvent::HealthCheckFailed {
-                            agent_name: agent_name.clone(),
-                            consecutive_failures: *failure_count,
-                        }).await;
+                        let _ = event_tx
+                            .send(AgentEvent::HealthCheckFailed {
+                                agent_name: agent_name.clone(),
+                                consecutive_failures: *failure_count,
+                            })
+                            .await;
 
                         // Mark as crashed
                         {
@@ -728,20 +778,29 @@ impl AgentProcessManager {
                                             (Some(stdin), Some(stdout)) => {
                                                 let evt_clone = event_tx.clone();
                                                 let name_reader = name.clone();
-                                                let rpc_map = Arc::new(std::sync::Mutex::new(HashMap::new()));
+                                                let rpc_map =
+                                                    Arc::new(std::sync::Mutex::new(HashMap::new()));
                                                 let rpc_map_reader = rpc_map.clone();
                                                 tokio::spawn(async move {
-                                                    Self::read_loop(stdout, evt_clone, name_reader, rpc_map_reader).await;
+                                                    Self::read_loop(
+                                                        stdout,
+                                                        evt_clone,
+                                                        name_reader,
+                                                        rpc_map_reader,
+                                                    )
+                                                    .await;
                                                 });
 
                                                 let evt_exit = event_tx.clone();
                                                 let name_exit = name.clone();
                                                 tokio::spawn(async move {
                                                     let _ = kill_rx.await;
-                                                    let _ = evt_exit.send(AgentEvent::ProcessExited {
-                                                        agent_name: name_exit,
-                                                        exit_code: None,
-                                                    }).await;
+                                                    let _ = evt_exit
+                                                        .send(AgentEvent::ProcessExited {
+                                                            agent_name: name_exit,
+                                                            exit_code: None,
+                                                        })
+                                                        .await;
                                                 });
 
                                                 let handle = AgentHandle {
@@ -760,10 +819,12 @@ impl AgentProcessManager {
                                                 let mut agents_guard = agents.write().await;
                                                 agents_guard.insert(name.clone(), handle);
 
-                                                let _ = event_tx.send(AgentEvent::AgentRestarted {
-                                                    agent_name: name.clone(),
-                                                    restart_count,
-                                                }).await;
+                                                let _ = event_tx
+                                                    .send(AgentEvent::AgentRestarted {
+                                                        agent_name: name.clone(),
+                                                        restart_count,
+                                                    })
+                                                    .await;
 
                                                 tracing::info!(
                                                     agent = %name,
@@ -810,7 +871,10 @@ impl AgentProcessManager {
                 }
             }
         });
-        self.health_monitor_handle.lock().unwrap_or_else(|e| e.into_inner()).replace(handle);
+        self.health_monitor_handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .replace(handle);
     }
 
     /// Get the status of an agent.
@@ -886,55 +950,65 @@ impl AgentProcessManager {
                             _ => None,
                         });
                         if let Some(request_id) = request_id {
-                            let _ = event_tx.send(AgentEvent::RpcRequest {
-                                agent_name: agent_name.clone(),
-                                request_id,
-                                method: method.to_string(),
-                                params: msg.params.clone().unwrap_or_default(),
-                            }).await;
+                            let _ = event_tx
+                                .send(AgentEvent::RpcRequest {
+                                    agent_name: agent_name.clone(),
+                                    request_id,
+                                    method: method.to_string(),
+                                    params: msg.params.clone().unwrap_or_default(),
+                                })
+                                .await;
                         }
                     }
                     protocol::methods::AGENT_READY => {
                         if let Ok(params) = serde_json::from_value::<AgentReadyParams>(
-                            msg.params.unwrap_or_default()
+                            msg.params.unwrap_or_default(),
                         ) {
-                            let _ = event_tx.send(AgentEvent::Ready {
-                                agent_name: params.agent_name.clone(),
-                                capabilities: params.capabilities,
-                            }).await;
+                            let _ = event_tx
+                                .send(AgentEvent::Ready {
+                                    agent_name: params.agent_name.clone(),
+                                    capabilities: params.capabilities,
+                                })
+                                .await;
                         }
                     }
                     protocol::methods::TASK_PROGRESS => {
                         if let Ok(params) = serde_json::from_value::<TaskProgressParams>(
-                            msg.params.unwrap_or_default()
+                            msg.params.unwrap_or_default(),
                         ) {
-                            let _ = event_tx.send(AgentEvent::Progress {
-                                agent_name: agent_name.clone(),
-                                task_id: params.task_id,
-                                chunk: params.chunk,
-                            }).await;
+                            let _ = event_tx
+                                .send(AgentEvent::Progress {
+                                    agent_name: agent_name.clone(),
+                                    task_id: params.task_id,
+                                    chunk: params.chunk,
+                                })
+                                .await;
                         }
                     }
                     protocol::methods::TASK_COMPLETE => {
                         if let Ok(params) = serde_json::from_value::<TaskCompleteParams>(
-                            msg.params.unwrap_or_default()
+                            msg.params.unwrap_or_default(),
                         ) {
-                            let _ = event_tx.send(AgentEvent::TaskComplete {
-                                agent_name: agent_name.clone(),
-                                task_id: params.task_id,
-                                success: params.success,
-                                output: params.output,
-                            }).await;
+                            let _ = event_tx
+                                .send(AgentEvent::TaskComplete {
+                                    agent_name: agent_name.clone(),
+                                    task_id: params.task_id,
+                                    success: params.success,
+                                    output: params.output,
+                                })
+                                .await;
                         }
                     }
                     protocol::methods::AGENT_IDLE => {
                         if let Ok(params) = serde_json::from_value::<AgentIdleParams>(
-                            msg.params.unwrap_or_default()
+                            msg.params.unwrap_or_default(),
                         ) {
-                            let _ = event_tx.send(AgentEvent::Idle {
-                                agent_name: params.agent_name,
-                                available_tasks_count: params.available_tasks_count,
-                            }).await;
+                            let _ = event_tx
+                                .send(AgentEvent::Idle {
+                                    agent_name: params.agent_name,
+                                    available_tasks_count: params.available_tasks_count,
+                                })
+                                .await;
                         }
                     }
                     other => {
@@ -950,7 +1024,11 @@ impl AgentProcessManager {
                 _ => None,
             }) {
                 // JSON-RPC response (has id, no method) — dispatch to pending waiter
-                if let Some(pending) = pending_rpcs.lock().unwrap_or_else(|e| e.into_inner()).remove(&rpc_id) {
+                if let Some(pending) = pending_rpcs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&rpc_id)
+                {
                     let _ = pending.sender.send(Ok(msg));
                 } else {
                     tracing::debug!(
@@ -963,14 +1041,20 @@ impl AgentProcessManager {
         }
 
         // Drain orphaned pending RPCs to prevent memory leak across restarts
-        let orphaned: Vec<_> = pending_rpcs.lock().unwrap_or_else(|e| e.into_inner()).drain().collect();
+        let orphaned: Vec<_> = pending_rpcs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .collect();
         drop(orphaned);
 
         tracing::info!(agent = %agent_name, "Agent stdout closed");
-        let _ = event_tx.send(AgentEvent::ProcessExited {
-            agent_name,
-            exit_code: None,
-        }).await;
+        let _ = event_tx
+            .send(AgentEvent::ProcessExited {
+                agent_name,
+                exit_code: None,
+            })
+            .await;
     }
 
     /// Shut down all agents.
@@ -992,14 +1076,11 @@ impl AgentProcessManager {
         result: serde_json::Value,
     ) -> Result<(), AgentProcessError> {
         let mut agents = self.agents.write().await;
-        let handle = agents.get_mut(agent_name).ok_or_else(|| {
-            AgentProcessError::AgentNotFound(agent_name.to_string())
-        })?;
+        let handle = agents
+            .get_mut(agent_name)
+            .ok_or_else(|| AgentProcessError::AgentNotFound(agent_name.to_string()))?;
 
-        let response = JsonRpcMessage::response(
-            protocol::JsonRpcId::Number(request_id),
-            result,
-        );
+        let response = JsonRpcMessage::response(protocol::JsonRpcId::Number(request_id), result);
         let line = frame_message(&response).map_err(|e| AgentProcessError::SpawnFailed {
             agent: agent_name.to_string(),
             source: std::io::Error::other(e.to_string()),
@@ -1012,12 +1093,14 @@ impl AgentProcessManager {
                 source: e,
             }
         })?;
-        handle.stdin.flush().await.map_err(|e| {
-            AgentProcessError::SpawnFailed {
+        handle
+            .stdin
+            .flush()
+            .await
+            .map_err(|e| AgentProcessError::SpawnFailed {
                 agent: agent_name.to_string(),
                 source: e,
-            }
-        })?;
+            })?;
         Ok(())
     }
 }
@@ -1075,11 +1158,9 @@ mod tests {
     #[tokio::test]
     async fn test_agent_not_found_for_request() {
         let mgr = AgentProcessManager::new();
-        let result = mgr.send_request(
-            "nonexistent",
-            "ping",
-            serde_json::Value::Null,
-        ).await;
+        let result = mgr
+            .send_request("nonexistent", "ping", serde_json::Value::Null)
+            .await;
         assert!(result.is_err());
     }
 

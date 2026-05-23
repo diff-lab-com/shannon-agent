@@ -8,8 +8,7 @@ use shannon_tools::{
     TaskTool, Tool,
     task::TaskStatus,
     todo::{
-        TaskCreateTool, TaskListTool, TaskUpdateTool, TaskGetTool, TaskStore,
-        TodoItem, TodoStatus,
+        TaskCreateTool, TaskGetTool, TaskListTool, TaskStore, TaskUpdateTool, TodoItem, TodoStatus,
     },
 };
 use std::collections::HashMap;
@@ -74,7 +73,10 @@ async fn test_task_lifecycle_pending_to_completed() {
         "description": "Add comprehensive test suite"
     });
     let create_result = tool.execute(create_input).await.unwrap();
-    let task_id = create_result.metadata["task"]["id"].as_str().unwrap().to_string();
+    let task_id = create_result.metadata["task"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(create_result.metadata["task"]["status"], "pending");
 
     // Update to InProgress
@@ -107,7 +109,10 @@ async fn test_task_deletion_via_status() {
         "description": "This task will be deleted"
     });
     let create_result = tool.execute(create_input).await.unwrap();
-    let task_id = create_result.metadata["task"]["id"].as_str().unwrap().to_string();
+    let task_id = create_result.metadata["task"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Mark as Deleted
     let delete_input = serde_json::json!({
@@ -157,7 +162,9 @@ async fn test_task_dependency_tracking() {
         "add_blocked_by": [task1_id]
     });
     let update_result2 = tool.execute(update_input2).await.unwrap();
-    let blocked_by = update_result2.metadata["task"]["blocked_by"].as_array().unwrap();
+    let blocked_by = update_result2.metadata["task"]["blocked_by"]
+        .as_array()
+        .unwrap();
     assert!(blocked_by.iter().any(|b| b.as_str() == Some(&task1_id)));
 }
 
@@ -225,7 +232,10 @@ async fn test_multiple_tasks_listing_and_ordering() {
     let tasks = list_result.metadata["tasks"].as_array().unwrap();
     // Tasks should be sorted by ID (ascending)
     let ids: Vec<&str> = tasks.iter().map(|t| t["id"].as_str().unwrap()).collect();
-    assert!(ids.windows(2).all(|w| w[0] <= w[1]), "Tasks should be sorted by ID");
+    assert!(
+        ids.windows(2).all(|w| w[0] <= w[1]),
+        "Tasks should be sorted by ID"
+    );
 }
 
 #[tokio::test]
@@ -269,7 +279,10 @@ async fn test_task_update_nonexistent_returns_error() {
         "status": "completed"
     });
     let result = tool.execute(input).await;
-    assert!(result.is_err(), "Updating nonexistent task should return Err");
+    assert!(
+        result.is_err(),
+        "Updating nonexistent task should return Err"
+    );
 }
 
 #[tokio::test]
@@ -280,7 +293,12 @@ async fn test_task_unknown_operation_rejected() {
     });
     let result = tool.execute(input).await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Unknown operation"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Unknown operation")
+    );
 }
 
 // ============================================================================
@@ -326,7 +344,10 @@ async fn test_todo_task_update_lifecycle_with_shared_store() {
         "description": "Build the notification feature"
     });
     let create_result = create_tool.execute(create_input).await.unwrap();
-    let task_id = create_result.metadata["task_id"].as_str().unwrap().to_string();
+    let task_id = create_result.metadata["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Update to in_progress
     let update_input = serde_json::json!({
@@ -359,20 +380,29 @@ async fn test_todo_task_list_with_status_filter() {
     create_tool.execute(c2).await.unwrap();
 
     // Complete first task
-    update_tool.execute(serde_json::json!({
-        "task_id": id1, "status": "completed"
-    })).await.unwrap();
+    update_tool
+        .execute(serde_json::json!({
+            "task_id": id1, "status": "completed"
+        }))
+        .await
+        .unwrap();
 
     // Filter for pending only
-    let list_result = list_tool.execute(serde_json::json!({
-        "status_filter": "pending"
-    })).await.unwrap();
+    let list_result = list_tool
+        .execute(serde_json::json!({
+            "status_filter": "pending"
+        }))
+        .await
+        .unwrap();
     assert_eq!(list_result.metadata["count"], 1);
 
     // Filter for completed only
-    let list_result = list_tool.execute(serde_json::json!({
-        "status_filter": "completed"
-    })).await.unwrap();
+    let list_result = list_tool
+        .execute(serde_json::json!({
+            "status_filter": "completed"
+        }))
+        .await
+        .unwrap();
     assert_eq!(list_result.metadata["count"], 1);
 }
 
@@ -397,10 +427,22 @@ fn test_task_status_serialization_roundtrip() {
 
 #[test]
 fn test_task_status_lowercase_serialization() {
-    assert_eq!(serde_json::to_string(&TaskStatus::Pending).unwrap(), "\"pending\"");
-    assert_eq!(serde_json::to_string(&TaskStatus::InProgress).unwrap(), "\"inprogress\"");
-    assert_eq!(serde_json::to_string(&TaskStatus::Completed).unwrap(), "\"completed\"");
-    assert_eq!(serde_json::to_string(&TaskStatus::Deleted).unwrap(), "\"deleted\"");
+    assert_eq!(
+        serde_json::to_string(&TaskStatus::Pending).unwrap(),
+        "\"pending\""
+    );
+    assert_eq!(
+        serde_json::to_string(&TaskStatus::InProgress).unwrap(),
+        "\"inprogress\""
+    );
+    assert_eq!(
+        serde_json::to_string(&TaskStatus::Completed).unwrap(),
+        "\"completed\""
+    );
+    assert_eq!(
+        serde_json::to_string(&TaskStatus::Deleted).unwrap(),
+        "\"deleted\""
+    );
 }
 
 #[test]

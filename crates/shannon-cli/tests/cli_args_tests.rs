@@ -156,42 +156,27 @@ fn test_lang_flag() {
 
 #[test]
 fn test_yes_flag() {
-    shannon()
-        .args(["--yes", "--help"])
-        .assert()
-        .success();
+    shannon().args(["--yes", "--help"]).assert().success();
 }
 
 #[test]
 fn test_quiet_flag() {
-    shannon()
-        .args(["--quiet", "--help"])
-        .assert()
-        .success();
+    shannon().args(["--quiet", "--help"]).assert().success();
 }
 
 #[test]
 fn test_diff_only_flag() {
-    shannon()
-        .args(["--diff-only", "--help"])
-        .assert()
-        .success();
+    shannon().args(["--diff-only", "--help"]).assert().success();
 }
 
 #[test]
 fn test_resume_flag() {
-    shannon()
-        .args(["--resume", "--help"])
-        .assert()
-        .success();
+    shannon().args(["--resume", "--help"]).assert().success();
 }
 
 #[test]
 fn test_continue_flag() {
-    shannon()
-        .args(["--continue", "--help"])
-        .assert()
-        .success();
+    shannon().args(["--continue", "--help"]).assert().success();
 }
 
 // ── Repl Subcommand Args ────────────────────────────────────────────────
@@ -380,16 +365,10 @@ fn test_session_flag() {
 
 #[test]
 fn test_unknown_flag_fails() {
-    shannon()
-        .args(["--nonexistent-flag"])
-        .assert()
-        .failure();
+    shannon().args(["--nonexistent-flag"]).assert().failure();
 }
 
 #[test]
 fn test_invalid_repl_args() {
-    shannon()
-        .args(["repl", "--nonexistent"])
-        .assert()
-        .failure();
+    shannon().args(["repl", "--nonexistent"]).assert().failure();
 }

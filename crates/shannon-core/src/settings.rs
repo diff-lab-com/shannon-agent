@@ -60,7 +60,9 @@ pub struct PermissionRules {
 
 impl PermissionRules {
     /// Create empty permission rules.
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Check if these rules are empty.
     pub fn is_empty(&self) -> bool {
@@ -74,7 +76,6 @@ impl PermissionRules {
         self.allow.extend(other.allow);
     }
 }
-
 
 /// Error type for settings operations
 #[derive(Error, Debug)]
@@ -229,9 +230,9 @@ impl Settings {
         match key {
             "version" => Some(Value::String(self.version.clone())),
             "model" => self.model.as_ref().map(|v| Value::String(v.clone())),
-            "temperature" => self.temperature.and_then(|v| {
-                serde_json::Number::from_f64(v as f64).map(Value::Number)
-            }),
+            "temperature" => self
+                .temperature
+                .and_then(|v| serde_json::Number::from_f64(v as f64).map(Value::Number)),
             "max_tokens" => self.max_tokens.map(|v| Value::Number(v.into())),
             "tools_enabled" => Some(Value::Bool(self.tools_enabled)),
             "permissions_mode" => Some(Value::String(self.permissions_mode.clone())),
@@ -244,32 +245,45 @@ impl Settings {
     /// Set a setting value from a JSON Value
     pub fn set_value(&mut self, key: &str, value: Value) -> Result<(), SettingsError> {
         match key {
-            "model" => {
-                match value {
-                    Value::Null => { self.model = None; }
-                    Value::String(ref s) if s.is_empty() => { self.model = None; }
-                    Value::String(ref s) => { self.model = Some(s.to_string()); }
-                    _ => { return Err(SettingsError::InvalidValue { key: key.to_string(), message: "model must be a string".to_string() }); }
+            "model" => match value {
+                Value::Null => {
+                    self.model = None;
                 }
-            }
+                Value::String(ref s) if s.is_empty() => {
+                    self.model = None;
+                }
+                Value::String(ref s) => {
+                    self.model = Some(s.to_string());
+                }
+                _ => {
+                    return Err(SettingsError::InvalidValue {
+                        key: key.to_string(),
+                        message: "model must be a string".to_string(),
+                    });
+                }
+            },
             "temperature" => {
                 self.temperature = match value {
                     Value::Null => None,
                     Value::Number(n) => n.as_f64().map(|f| f as f32),
-                    _ => return Err(SettingsError::InvalidValue {
-                        key: key.to_string(),
-                        message: "temperature must be a number".to_string(),
-                    }),
+                    _ => {
+                        return Err(SettingsError::InvalidValue {
+                            key: key.to_string(),
+                            message: "temperature must be a number".to_string(),
+                        });
+                    }
                 };
             }
             "max_tokens" => {
                 self.max_tokens = match value {
                     Value::Null => None,
                     Value::Number(n) => n.as_u64().map(|v| v as u32),
-                    _ => return Err(SettingsError::InvalidValue {
-                        key: key.to_string(),
-                        message: "max_tokens must be a number".to_string(),
-                    }),
+                    _ => {
+                        return Err(SettingsError::InvalidValue {
+                            key: key.to_string(),
+                            message: "max_tokens must be a number".to_string(),
+                        });
+                    }
                 };
             }
             "tools_enabled" => {
@@ -376,9 +390,7 @@ impl SettingsManager {
             std::path::PathBuf::from("/tmp")
         });
 
-        let user_config_path = home_dir
-            .join(".shannon")
-            .join("settings.json");
+        let user_config_path = home_dir.join(".shannon").join("settings.json");
 
         let project_config_path = PathBuf::from(".shannon/settings.json");
         let local_config_path = PathBuf::from(".shannon/settings.local.json");
@@ -509,9 +521,13 @@ impl SettingsManager {
                 let key = key.trim();
                 let value = value.trim();
                 // Remove surrounding quotes if present (only if both prefix and suffix match)
-                let value = if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                let value = if let Some(inner) =
+                    value.strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                {
                     inner
-                } else if let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) {
+                } else if let Some(inner) =
+                    value.strip_prefix('\'').and_then(|v| v.strip_suffix('\''))
+                {
                     inner
                 } else {
                     value
@@ -526,7 +542,9 @@ impl SettingsManager {
     /// SHANNON_* → ANTHROPIC_* → OPENAI_* → bare name
     fn load_from_env(&mut self) -> Result<(), SettingsError> {
         // SHANNON_MODEL → ANTHROPIC_MODEL → OPENAI_MODEL → MODEL
-        if let Some(v) = env_priority(&["SHANNON_MODEL", "ANTHROPIC_MODEL", "OPENAI_MODEL", "MODEL"]) {
+        if let Some(v) =
+            env_priority(&["SHANNON_MODEL", "ANTHROPIC_MODEL", "OPENAI_MODEL", "MODEL"])
+        {
             self.settings.model = Some(v);
         }
         // SHANNON_API_KEY → ANTHROPIC_API_KEY → OPENAI_API_KEY (handled by LlmClient, but store model hint)
@@ -617,7 +635,8 @@ impl SettingsManager {
         for pair in overrides {
             if let Some((key, value)) = pair.split_once('=') {
                 let value = value
-                    .strip_prefix('"').and_then(|v| v.strip_suffix('"'))
+                    .strip_prefix('"')
+                    .and_then(|v| v.strip_suffix('"'))
                     .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
                     .unwrap_or(value);
                 self.apply_env_var(key.trim(), value.trim());
@@ -661,8 +680,8 @@ impl SettingsManager {
 
     /// Set a setting value
     pub fn set(&mut self, key: &str, value: &str) -> Result<(), SettingsError> {
-        let json_value: Value = serde_json::from_str(value)
-            .unwrap_or_else(|_| Value::String(value.to_string()));
+        let json_value: Value =
+            serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()));
 
         self.settings.set_value(key, json_value)?;
         Ok(())
@@ -807,15 +826,27 @@ mod tests {
             settings.get_value("model"),
             Some(Value::String("claude-opus-4-6".to_string()))
         );
-        assert_eq!(settings.get_value("temperature"), Some(Value::Number(serde_json::Number::from_f64(0.5).unwrap())));
-        assert_eq!(settings.get_value("max_tokens"), Some(Value::Number(4096.into())));
-        assert_eq!(settings.get_value("tools_enabled"), Some(Value::Bool(false)));
+        assert_eq!(
+            settings.get_value("temperature"),
+            Some(Value::Number(serde_json::Number::from_f64(0.5).unwrap()))
+        );
+        assert_eq!(
+            settings.get_value("max_tokens"),
+            Some(Value::Number(4096.into()))
+        );
+        assert_eq!(
+            settings.get_value("tools_enabled"),
+            Some(Value::Bool(false))
+        );
         assert_eq!(
             settings.get_value("permissions_mode"),
             Some(Value::String("auto".to_string()))
         );
         assert_eq!(settings.get_value("auto_memory"), Some(Value::Bool(false)));
-        assert_eq!(settings.get_value("theme"), Some(Value::String("light".to_string())));
+        assert_eq!(
+            settings.get_value("theme"),
+            Some(Value::String("light".to_string()))
+        );
         assert_eq!(settings.get_value("invalid_key"), None);
     }
 
@@ -830,15 +861,24 @@ mod tests {
         assert_eq!(settings.model, Some("claude-opus-4-6".to_string()));
 
         // Set temperature
-        settings.set_value("temperature", Value::Number(serde_json::Number::from_f64(0.5).unwrap())).unwrap();
+        settings
+            .set_value(
+                "temperature",
+                Value::Number(serde_json::Number::from_f64(0.5).unwrap()),
+            )
+            .unwrap();
         assert_eq!(settings.temperature, Some(0.5));
 
         // Set max_tokens
-        settings.set_value("max_tokens", Value::Number(8192.into())).unwrap();
+        settings
+            .set_value("max_tokens", Value::Number(8192.into()))
+            .unwrap();
         assert_eq!(settings.max_tokens, Some(8192));
 
         // Set tools_enabled
-        settings.set_value("tools_enabled", Value::Bool(false)).unwrap();
+        settings
+            .set_value("tools_enabled", Value::Bool(false))
+            .unwrap();
         assert!(!settings.tools_enabled);
 
         // Set permissions_mode
@@ -848,7 +888,9 @@ mod tests {
         assert_eq!(settings.permissions_mode, "auto");
 
         // Set auto_memory
-        settings.set_value("auto_memory", Value::Bool(false)).unwrap();
+        settings
+            .set_value("auto_memory", Value::Bool(false))
+            .unwrap();
         assert!(!settings.auto_memory);
 
         // Set theme
@@ -858,14 +900,14 @@ mod tests {
         assert_eq!(settings.theme, "light");
 
         // Test invalid key
-        assert!(settings
-            .set_value("invalid_key", Value::String("test".to_string()))
-            .is_err());
+        assert!(
+            settings
+                .set_value("invalid_key", Value::String("test".to_string()))
+                .is_err()
+        );
 
         // Test invalid type
-        assert!(settings
-            .set_value("model", Value::Bool(true))
-            .is_err());
+        assert!(settings.set_value("model", Value::Bool(true)).is_err());
     }
 
     #[test]
@@ -912,7 +954,11 @@ mod tests {
         assert_eq!(base.theme, "light");
         assert!(base.permissions.allow.contains(&"Read(*)".to_string()));
         assert!(base.permissions.allow.contains(&"Bash(git *)".to_string()));
-        assert!(base.permissions.deny.contains(&"Bash(rm -rf /)".to_string()));
+        assert!(
+            base.permissions
+                .deny
+                .contains(&"Bash(rm -rf /)".to_string())
+        );
     }
 
     #[test]
@@ -969,14 +1015,8 @@ mod tests {
         let (mut manager, _temp_dir) = create_temp_manager();
 
         // Test get on default settings
-        assert_eq!(
-            manager.get("model"),
-            manager.settings.get_value("model")
-        );
-        assert_eq!(
-            manager.get("tools_enabled"),
-            Some(Value::Bool(true))
-        );
+        assert_eq!(manager.get("model"), manager.settings.get_value("model"));
+        assert_eq!(manager.get("tools_enabled"), Some(Value::Bool(true)));
 
         // Test set
         manager.set("model", "claude-opus-4-6").unwrap();
@@ -1035,7 +1075,10 @@ mod tests {
 
         let result = manager.load();
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), SettingsError::InvalidVersion { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            SettingsError::InvalidVersion { .. }
+        ));
     }
 
     #[test]
@@ -1244,26 +1287,51 @@ SHANNON_THEME='dark'"#;
         }
 
         // No vars set
-        assert!(env_priority(&["SHANNON_MODEL_TEST", "ANTHROPIC_MODEL_TEST", "OPENAI_MODEL_TEST"]).is_none());
+        assert!(
+            env_priority(&[
+                "SHANNON_MODEL_TEST",
+                "ANTHROPIC_MODEL_TEST",
+                "OPENAI_MODEL_TEST"
+            ])
+            .is_none()
+        );
 
         // Set lowest priority
-        unsafe { std::env::set_var("OPENAI_MODEL_TEST", "gpt-4o"); }
+        unsafe {
+            std::env::set_var("OPENAI_MODEL_TEST", "gpt-4o");
+        }
         assert_eq!(
-            env_priority(&["SHANNON_MODEL_TEST", "ANTHROPIC_MODEL_TEST", "OPENAI_MODEL_TEST"]),
+            env_priority(&[
+                "SHANNON_MODEL_TEST",
+                "ANTHROPIC_MODEL_TEST",
+                "OPENAI_MODEL_TEST"
+            ]),
             Some("gpt-4o".to_string())
         );
 
         // Set middle priority (should win)
-        unsafe { std::env::set_var("ANTHROPIC_MODEL_TEST", "claude-sonnet-4"); }
+        unsafe {
+            std::env::set_var("ANTHROPIC_MODEL_TEST", "claude-sonnet-4");
+        }
         assert_eq!(
-            env_priority(&["SHANNON_MODEL_TEST", "ANTHROPIC_MODEL_TEST", "OPENAI_MODEL_TEST"]),
+            env_priority(&[
+                "SHANNON_MODEL_TEST",
+                "ANTHROPIC_MODEL_TEST",
+                "OPENAI_MODEL_TEST"
+            ]),
             Some("claude-sonnet-4".to_string())
         );
 
         // Set highest priority (should win)
-        unsafe { std::env::set_var("SHANNON_MODEL_TEST", "my-model"); }
+        unsafe {
+            std::env::set_var("SHANNON_MODEL_TEST", "my-model");
+        }
         assert_eq!(
-            env_priority(&["SHANNON_MODEL_TEST", "ANTHROPIC_MODEL_TEST", "OPENAI_MODEL_TEST"]),
+            env_priority(&[
+                "SHANNON_MODEL_TEST",
+                "ANTHROPIC_MODEL_TEST",
+                "OPENAI_MODEL_TEST"
+            ]),
             Some("my-model".to_string())
         );
 
@@ -1287,17 +1355,42 @@ SHANNON_THEME='dark'"#;
         let project_json = r#"{"version": "1.0", "model": "claude-opus-4", "theme": "light", "permissions": {"allow": ["Bash(git *)"], "ask": ["Bash(rm *)"]}}"#;
         fs::write(&manager.project_config_path, project_json).unwrap();
 
-        let local_json = r#"{"version": "1.0", "theme": "auto", "permissions": {"deny": ["Bash(rm -rf /)"]}}"#;
+        let local_json =
+            r#"{"version": "1.0", "theme": "auto", "permissions": {"deny": ["Bash(rm -rf /)"]}}"#;
         fs::write(&manager.local_config_path, local_json).unwrap();
 
         manager.load_from_files().unwrap();
 
         assert_eq!(manager.settings.theme, "auto");
         assert_eq!(manager.settings.model, Some("claude-opus-4".to_string()));
-        assert!(manager.settings.permissions.allow.contains(&"Read(*)".to_string()));
-        assert!(manager.settings.permissions.allow.contains(&"Bash(git *)".to_string()));
-        assert!(manager.settings.permissions.ask.contains(&"Bash(rm *)".to_string()));
-        assert!(manager.settings.permissions.deny.contains(&"Bash(rm -rf /)".to_string()));
+        assert!(
+            manager
+                .settings
+                .permissions
+                .allow
+                .contains(&"Read(*)".to_string())
+        );
+        assert!(
+            manager
+                .settings
+                .permissions
+                .allow
+                .contains(&"Bash(git *)".to_string())
+        );
+        assert!(
+            manager
+                .settings
+                .permissions
+                .ask
+                .contains(&"Bash(rm *)".to_string())
+        );
+        assert!(
+            manager
+                .settings
+                .permissions
+                .deny
+                .contains(&"Bash(rm -rf /)".to_string())
+        );
     }
 
     #[test]
@@ -1358,7 +1451,8 @@ SHANNON_THEME='dark'"#;
     fn test_local_settings_only() {
         let (mut manager, _temp_dir) = create_temp_manager();
 
-        let local_json = r#"{"version": "1.0", "model": "local-model", "permissions": {"deny": ["Bash(*)"]}}"#;
+        let local_json =
+            r#"{"version": "1.0", "model": "local-model", "permissions": {"deny": ["Bash(*)"]}}"#;
         fs::write(&manager.local_config_path, local_json).unwrap();
 
         manager.load_from_files().unwrap();
@@ -1369,6 +1463,11 @@ SHANNON_THEME='dark'"#;
     #[test]
     fn test_local_config_path_is_set() {
         let manager = SettingsManager::new();
-        assert!(manager.local_config_path.to_string_lossy().contains("settings.local.json"));
+        assert!(
+            manager
+                .local_config_path
+                .to_string_lossy()
+                .contains("settings.local.json")
+        );
     }
 }

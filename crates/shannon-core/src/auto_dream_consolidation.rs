@@ -150,10 +150,7 @@ impl ConsolidationLock {
 
     /// Get the time of the last consolidation, if any.
     pub fn last_consolidation(&self) -> Option<DateTime<Utc>> {
-        self.last_consolidation
-            .lock()
-            .ok()
-            .and_then(|g| *g)
+        self.last_consolidation.lock().ok().and_then(|g| *g)
     }
 
     /// Reset the lock (for testing purposes).
@@ -550,9 +547,21 @@ mod tests {
 
     fn make_test_memories() -> Vec<MemoryEntry> {
         vec![
-            MemoryEntry::new("proj", MemoryCategory::Preference, "Always use tabs for indentation"),
-            MemoryEntry::new("proj", MemoryCategory::Decision, "Use PostgreSQL for the database"),
-            MemoryEntry::new("proj", MemoryCategory::Error, "The fix was adding a mutex to prevent race conditions"),
+            MemoryEntry::new(
+                "proj",
+                MemoryCategory::Preference,
+                "Always use tabs for indentation",
+            ),
+            MemoryEntry::new(
+                "proj",
+                MemoryCategory::Decision,
+                "Use PostgreSQL for the database",
+            ),
+            MemoryEntry::new(
+                "proj",
+                MemoryCategory::Error,
+                "The fix was adding a mutex to prevent race conditions",
+            ),
         ]
     }
 
@@ -669,8 +678,7 @@ mod tests {
     fn test_enhanced_result_serialization() {
         let result = EnhancedConsolidationResult::new(50, 40, 7, 3, 120);
         let json = serde_json::to_string(&result).unwrap();
-        let deserialized: EnhancedConsolidationResult =
-            serde_json::from_str(&json).unwrap();
+        let deserialized: EnhancedConsolidationResult = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.memories_before, 50);
         assert_eq!(deserialized.duration_ms, 120);
     }

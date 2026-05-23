@@ -5,11 +5,11 @@
 
 use crate::theme::Theme;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
-    Frame,
 };
 
 /// Command entry in the palette
@@ -121,7 +121,10 @@ impl CommandPaletteWidget {
                 .filter(|cmd| {
                     let name_match = fuzzy_match_cmd(&q, &cmd.name.to_lowercase());
                     let desc_match = fuzzy_match_cmd(&q, &cmd.description.to_lowercase());
-                    let subcmd_match = cmd.subcommands.iter().any(|s| s.to_lowercase().contains(&q));
+                    let subcmd_match = cmd
+                        .subcommands
+                        .iter()
+                        .any(|s| s.to_lowercase().contains(&q));
                     name_match || desc_match || subcmd_match
                 })
                 .collect()
@@ -250,23 +253,25 @@ impl CommandPaletteWidget {
                     .as_deref()
                     .map(|a| format!(" {a}"))
                     .unwrap_or_default();
-                let desc_text = format!(
-                    " {}{}{}",
-                    cmd.description,
-                    args_text,
-                    shortcut_text
-                );
+                let desc_text = format!(" {}{}{}", cmd.description, args_text, shortcut_text);
 
-                let desc_span = Span::styled(desc_text, Style::default().fg(if is_selected {
-                    theme.text_dim
-                } else {
-                    theme.muted
-                }));
+                let desc_span = Span::styled(
+                    desc_text,
+                    Style::default().fg(if is_selected {
+                        theme.text_dim
+                    } else {
+                        theme.muted
+                    }),
+                );
 
                 // Selection indicator
                 let indicator = Span::styled(
                     if is_selected { " ▸" } else { "  " },
-                    Style::default().fg(if is_selected { theme.accent } else { theme.muted }),
+                    Style::default().fg(if is_selected {
+                        theme.accent
+                    } else {
+                        theme.muted
+                    }),
                 );
 
                 ListItem::new(Line::from(vec![indicator, icon_span, name_span, desc_span]))
@@ -292,9 +297,7 @@ impl CommandPaletteWidget {
                             .add_modifier(Modifier::BOLD),
                     )),
             )
-            .highlight_style(
-                Style::default().bg(theme.context_bar_bg),
-            );
+            .highlight_style(Style::default().bg(theme.context_bar_bg));
 
         let mut state = ListState::default();
         let relative_selected = self.selected_index.saturating_sub(self.scroll_offset);
@@ -424,7 +427,14 @@ impl CommandPaletteWidget {
                 shortcut: Some("Ctrl+D".into()),
                 category: CommandCategory::Tools,
                 args_template: Some("[ref]".into()),
-                subcommands: vec!["review".into(), "accept".into(), "reject".into(), "accept-all".into(), "reject-all".into(), "interactive".into()],
+                subcommands: vec![
+                    "review".into(),
+                    "accept".into(),
+                    "reject".into(),
+                    "accept-all".into(),
+                    "reject-all".into(),
+                    "interactive".into(),
+                ],
                 use_count: 0,
             },
             PaletteCommand {
@@ -433,7 +443,14 @@ impl CommandPaletteWidget {
                 shortcut: None,
                 category: CommandCategory::Tools,
                 args_template: Some("[strategy|preview|focus <topic>]".into()),
-                subcommands: vec!["status".into(), "preview".into(), "truncate".into(), "micro".into(), "group".into(), "focus".into()],
+                subcommands: vec![
+                    "status".into(),
+                    "preview".into(),
+                    "truncate".into(),
+                    "micro".into(),
+                    "group".into(),
+                    "focus".into(),
+                ],
                 use_count: 0,
             },
             PaletteCommand {

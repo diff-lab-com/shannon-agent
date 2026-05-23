@@ -1,4 +1,4 @@
-use crate::{widgets::ChatRole, Result};
+use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
@@ -10,7 +10,10 @@ pub(crate) fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
         let limit: f64 = match budget_str.trim().parse() {
             Ok(v) if v > 0.0 => v,
             _ => {
-                repl.chat.add_message(ChatRole::System, "Usage: /cost budget <amount_usd>".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Usage: /cost budget <amount_usd>".to_string(),
+                );
                 return Ok(());
             }
         };
@@ -19,12 +22,14 @@ pub(crate) fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
                 tracker.set_budget(limit);
             }
         }
-        repl.chat.add_message(ChatRole::System, format!("Budget limit set to ${limit:.2}"));
+        repl.chat
+            .add_message(ChatRole::System, format!("Budget limit set to ${limit:.2}"));
         return Ok(());
     }
 
     let Some(ref engine) = repl.query_engine else {
-        repl.chat.add_message(ChatRole::System, "No query engine available.".to_string());
+        repl.chat
+            .add_message(ChatRole::System, "No query engine available.".to_string());
         return Ok(());
     };
 
@@ -55,10 +60,18 @@ pub(crate) fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
     if cache_read > 0 || cache_creation > 0 {
         report.push_str("  Cache:\n");
         if cache_read > 0 {
-            report.push_str(&format!("    ↻ Cache hits (read): {} ({:.1}k tokens)\n", cache_read, cache_read as f64 / 1000.0));
+            report.push_str(&format!(
+                "    ↻ Cache hits (read): {} ({:.1}k tokens)\n",
+                cache_read,
+                cache_read as f64 / 1000.0
+            ));
         }
         if cache_creation > 0 {
-            report.push_str(&format!("    ✦ Cache writes (creation): {} ({:.1}k tokens)\n", cache_creation, cache_creation as f64 / 1000.0));
+            report.push_str(&format!(
+                "    ✦ Cache writes (creation): {} ({:.1}k tokens)\n",
+                cache_creation,
+                cache_creation as f64 / 1000.0
+            ));
         }
         let total_cache = cache_read + cache_creation;
         if total_cache > 0 {
@@ -72,7 +85,9 @@ pub(crate) fn handle_cost(repl: &mut Repl, args: &str) -> Result<()> {
             } else {
                 0.0
             };
-            report.push_str(&format!("    Estimated token savings: {estimated_saved_pct:.0}%\n"));
+            report.push_str(&format!(
+                "    Estimated token savings: {estimated_saved_pct:.0}%\n"
+            ));
         }
     }
 
@@ -146,8 +161,10 @@ pub(crate) fn handle_suggest(repl: &mut Repl, _args: &str) -> Result<()> {
     let suggestions = engine.suggest_for_conversation_start(&context);
 
     if suggestions.is_empty() {
-        repl.chat.add_message(ChatRole::System,
-            "No suggestions available for the current context.".to_string());
+        repl.chat.add_message(
+            ChatRole::System,
+            "No suggestions available for the current context.".to_string(),
+        );
         return Ok(());
     }
 
@@ -155,7 +172,10 @@ pub(crate) fn handle_suggest(repl: &mut Repl, _args: &str) -> Result<()> {
     for (i, s) in suggestions.iter().enumerate() {
         msg.push_str(&format!(
             "  {}. {} (priority: {}, confidence: {:.0}%)\n",
-            i + 1, s.reason, s.priority, s.confidence * 100.0
+            i + 1,
+            s.reason,
+            s.priority,
+            s.confidence * 100.0
         ));
         if let Some(tool) = &s.suggested_tool {
             msg.push_str(&format!("     Tool: {tool}\n"));
@@ -186,8 +206,11 @@ pub(crate) fn handle_billing(repl: &mut Repl, args: &str) -> Result<()> {
             for (model, usage) in &summary.usage_breakdown {
                 msg.push_str(&format!(
                     "\n    {}: ${:.4} ({} req, {} in, {} out)",
-                    model, usage.total_cost, usage.request_count,
-                    usage.total_input_tokens, usage.total_output_tokens
+                    model,
+                    usage.total_cost,
+                    usage.request_count,
+                    usage.total_input_tokens,
+                    usage.total_output_tokens
                 ));
             }
             repl.chat.add_message(ChatRole::System, msg);
@@ -195,15 +218,21 @@ pub(crate) fn handle_billing(repl: &mut Repl, args: &str) -> Result<()> {
         "model" => {
             let breakdown = repl.state.billing_manager.get_model_breakdown();
             if breakdown.is_empty() {
-                repl.chat.add_message(ChatRole::System, "No billing data recorded yet.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No billing data recorded yet.".to_string(),
+                );
                 return Ok(());
             }
             let mut msg = "Usage by Model:\n".to_string();
             for (model, usage) in &breakdown {
                 msg.push_str(&format!(
                     "  {}: ${:.4} ({} req, {}+{} tokens)\n",
-                    model, usage.total_cost, usage.request_count,
-                    usage.total_input_tokens, usage.total_output_tokens
+                    model,
+                    usage.total_cost,
+                    usage.request_count,
+                    usage.total_input_tokens,
+                    usage.total_output_tokens
                 ));
             }
             repl.chat.add_message(ChatRole::System, msg);
@@ -211,15 +240,21 @@ pub(crate) fn handle_billing(repl: &mut Repl, args: &str) -> Result<()> {
         "daily" => {
             let daily = repl.state.billing_manager.get_daily_totals();
             if daily.is_empty() {
-                repl.chat.add_message(ChatRole::System, "No billing data recorded yet.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No billing data recorded yet.".to_string(),
+                );
                 return Ok(());
             }
             let mut msg = "Daily Usage:\n".to_string();
             for d in &daily {
                 msg.push_str(&format!(
                     "  {}: ${:.4} ({} req, {}+{} tokens)\n",
-                    d.date, d.total_cost, d.request_count,
-                    d.total_input_tokens, d.total_output_tokens
+                    d.date,
+                    d.total_cost,
+                    d.request_count,
+                    d.total_input_tokens,
+                    d.total_output_tokens
                 ));
             }
             repl.chat.add_message(ChatRole::System, msg);
@@ -231,26 +266,35 @@ pub(crate) fn handle_billing(repl: &mut Repl, args: &str) -> Result<()> {
                 let mut cfg = repl.state.billing_manager.config().clone();
                 cfg.monthly_budget = None;
                 repl.state.billing_manager.set_config(cfg);
-                repl.chat.add_message(ChatRole::System, "Monthly budget limit removed.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Monthly budget limit removed.".to_string(),
+                );
             } else {
                 let limit: f64 = match amount_str.parse() {
                     Ok(v) if v > 0.0 => v,
                     _ => {
-                        repl.chat.add_message(ChatRole::System,
-                            "Usage: /billing budget <amount_usd|off>".to_string());
+                        repl.chat.add_message(
+                            ChatRole::System,
+                            "Usage: /billing budget <amount_usd|off>".to_string(),
+                        );
                         return Ok(());
                     }
                 };
                 let mut cfg = repl.state.billing_manager.config().clone();
                 cfg.monthly_budget = Some(limit);
                 repl.state.billing_manager.set_config(cfg);
-                repl.chat.add_message(ChatRole::System,
-                    format!("Monthly budget limit set to ${limit:.2}"));
+                repl.chat.add_message(
+                    ChatRole::System,
+                    format!("Monthly budget limit set to ${limit:.2}"),
+                );
             }
         }
         _ => {
-            repl.chat.add_message(ChatRole::System,
-                "Usage: /billing [period|model|daily|budget <amount|off>]".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Usage: /billing [period|model|daily|budget <amount|off>]".to_string(),
+            );
         }
     }
 
@@ -258,7 +302,8 @@ pub(crate) fn handle_billing(repl: &mut Repl, args: &str) -> Result<()> {
     let alerts = repl.state.billing_manager.get_alerts().to_vec();
     if !alerts.is_empty() {
         for alert in &alerts {
-            repl.chat.add_message(ChatRole::System, format!("⚠️ {}", alert.message));
+            repl.chat
+                .add_message(ChatRole::System, format!("⚠️ {}", alert.message));
         }
         repl.state.billing_manager.clear_alerts();
     }
@@ -273,11 +318,17 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
         "" | "status" => {
             let plan = &repl.state.plan;
             if !plan.active {
-                repl.chat.add_message(ChatRole::System,
-                    "No active plan. Use /plan <description> to create one.".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "No active plan. Use /plan <description> to create one.".to_string(),
+                );
                 return Ok(());
             }
-            let status = if plan.approved { "Approved" } else { "Pending review" };
+            let status = if plan.approved {
+                "Approved"
+            } else {
+                "Pending review"
+            };
             let mut msg = format!(
                 "Plan: {}\nStatus: {}\n\n{}",
                 plan.description, status, plan.content
@@ -291,20 +342,25 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
         }
         "approve" => {
             if !repl.state.plan.active {
-                repl.chat.add_message(ChatRole::System, "No active plan to approve.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No active plan to approve.".to_string());
                 return Ok(());
             }
             repl.state.plan.approved = true;
             repl.state.status = "Plan approved".to_string();
             // Save plan to disk
             let plan_dir = std::path::Path::new(&repl.state.working_directory)
-                .join(".claude").join("plans");
+                .join(".claude")
+                .join("plans");
             if let Err(e) = std::fs::create_dir_all(&plan_dir) {
                 tracing::debug!("Failed to create plan dir: {e}");
             }
             let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
             let plan_file = plan_dir.join(format!("plan_{timestamp}.md"));
-            let content = format!("# Plan: {}\n\n{}", repl.state.plan.description, repl.state.plan.content);
+            let content = format!(
+                "# Plan: {}\n\n{}",
+                repl.state.plan.description, repl.state.plan.content
+            );
             if let Err(e) = std::fs::write(&plan_file, content) {
                 tracing::debug!("Failed to save plan file: {e}");
             }
@@ -314,39 +370,48 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
         }
         "reject" => {
             if !repl.state.plan.active {
-                repl.chat.add_message(ChatRole::System, "No active plan to reject.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No active plan to reject.".to_string());
                 return Ok(());
             }
             repl.state.plan = super::super::PlanState::default();
             repl.state.status = "Ready".to_string();
-            repl.chat.add_message(ChatRole::System, "Plan rejected and cleared.".to_string());
+            repl.chat
+                .add_message(ChatRole::System, "Plan rejected and cleared.".to_string());
         }
         "done" => {
             if !repl.state.plan.active {
-                repl.chat.add_message(ChatRole::System, "No active plan.".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "No active plan.".to_string());
                 return Ok(());
             }
             let desc = repl.state.plan.description.clone();
             repl.state.plan = super::super::PlanState::default();
             repl.state.status = "Ready".to_string();
-            repl.chat.add_message(ChatRole::System,
-                format!("Plan '{desc}' completed and cleared."));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Plan '{desc}' completed and cleared."),
+            );
         }
         "help" => {
-            repl.chat.add_message(ChatRole::System,
+            repl.chat.add_message(
+                ChatRole::System,
                 "Plan Commands:\n\
                  /plan <description> — Create a new plan from a description\n\
                  /plan status — Show current plan\n\
                  /plan approve — Approve the current plan\n\
                  /plan reject — Reject and discard the current plan\n\
                  /plan done — Mark plan as completed\n\
-                 /plan help — Show this help".to_string());
+                 /plan help — Show this help"
+                    .to_string(),
+            );
         }
         // Treat anything else as a plan description
         _ => {
             let description = args.trim().to_string();
             if description.is_empty() {
-                repl.chat.add_message(ChatRole::System, "Usage: /plan <description>".to_string());
+                repl.chat
+                    .add_message(ChatRole::System, "Usage: /plan <description>".to_string());
                 return Ok(());
             }
             // Generate a structured plan
@@ -406,30 +471,29 @@ pub(crate) fn extract_plan_steps(description: &str) -> Vec<String> {
     }
 
     if (lower.contains("add") || lower.contains("implement") || lower.contains("feature"))
-        && steps.is_empty() {
-            steps.push("Analyze requirements and design interface".to_string());
-            steps.push("Implement core functionality".to_string());
-            steps.push("Add error handling and input validation".to_string());
-            steps.push("Write tests for new functionality".to_string());
-            steps.push("Update documentation".to_string());
-        }
+        && steps.is_empty()
+    {
+        steps.push("Analyze requirements and design interface".to_string());
+        steps.push("Implement core functionality".to_string());
+        steps.push("Add error handling and input validation".to_string());
+        steps.push("Write tests for new functionality".to_string());
+        steps.push("Update documentation".to_string());
+    }
 
-    if (lower.contains("fix") || lower.contains("bug"))
-        && steps.is_empty() {
-            steps.push("Reproduce the issue and understand root cause".to_string());
-            steps.push("Implement fix with minimal changes".to_string());
-            steps.push("Add regression test".to_string());
-            steps.push("Verify fix resolves the issue".to_string());
-        }
+    if (lower.contains("fix") || lower.contains("bug")) && steps.is_empty() {
+        steps.push("Reproduce the issue and understand root cause".to_string());
+        steps.push("Implement fix with minimal changes".to_string());
+        steps.push("Add regression test".to_string());
+        steps.push("Verify fix resolves the issue".to_string());
+    }
 
-    if (lower.contains("migrate") || lower.contains("upgrade"))
-        && steps.is_empty() {
-            steps.push("Review migration/upgrade guide and breaking changes".to_string());
-            steps.push("Update dependencies".to_string());
-            steps.push("Adapt code to new API surface".to_string());
-            steps.push("Run tests and fix any failures".to_string());
-            steps.push("Verify functionality end-to-end".to_string());
-        }
+    if (lower.contains("migrate") || lower.contains("upgrade")) && steps.is_empty() {
+        steps.push("Review migration/upgrade guide and breaking changes".to_string());
+        steps.push("Update dependencies".to_string());
+        steps.push("Adapt code to new API surface".to_string());
+        steps.push("Run tests and fix any failures".to_string());
+        steps.push("Verify functionality end-to-end".to_string());
+    }
 
     // Default fallback
     if steps.is_empty() {
@@ -455,7 +519,10 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
             if let Some(ref engine) = repl.query_engine {
                 if let Ok(perms) = engine.permissions().read() {
                     // Tool policies
-                    report.push_str(&format!("  Registered policies: {}\n", perms.tool_policies().len()));
+                    report.push_str(&format!(
+                        "  Registered policies: {}\n",
+                        perms.tool_policies().len()
+                    ));
                     let mut policies: Vec<_> = perms.tool_policies().iter().collect();
                     policies.sort_by_key(|(name, _)| name.as_str());
                     for (name, policy) in &policies {
@@ -501,7 +568,10 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
         }
         "allow" => {
             if parts.len() < 2 {
-                repl.chat.add_message(ChatRole::System, "Usage: /permissions allow <tool_name>".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Usage: /permissions allow <tool_name>".to_string(),
+                );
                 return Ok(());
             }
             let tool = parts[1];
@@ -510,11 +580,17 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     perms.allow_tool(tool);
                 }
             }
-            repl.chat.add_message(ChatRole::System, format!("Tool '{tool}' is now always allowed."));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Tool '{tool}' is now always allowed."),
+            );
         }
         "deny" => {
             if parts.len() < 2 {
-                repl.chat.add_message(ChatRole::System, "Usage: /permissions deny <tool_name>".to_string());
+                repl.chat.add_message(
+                    ChatRole::System,
+                    "Usage: /permissions deny <tool_name>".to_string(),
+                );
                 return Ok(());
             }
             let tool = parts[1];
@@ -523,7 +599,10 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     perms.deny_tool(tool);
                 }
             }
-            repl.chat.add_message(ChatRole::System, format!("Tool '{tool}' is now always denied."));
+            repl.chat.add_message(
+                ChatRole::System,
+                format!("Tool '{tool}' is now always denied."),
+            );
         }
         "reset" => {
             if let Some(ref engine) = repl.query_engine {
@@ -531,7 +610,10 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     perms.reset_memory();
                 }
             }
-            repl.chat.add_message(ChatRole::System, "Permission memory cleared. All tool overrides removed.".to_string());
+            repl.chat.add_message(
+                ChatRole::System,
+                "Permission memory cleared. All tool overrides removed.".to_string(),
+            );
         }
         "mode" => {
             let mode_name = parts.get(1).copied().unwrap_or("");
@@ -539,54 +621,75 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                 "strict" | "suggest" => {
                     if let Some(ref engine) = repl.query_engine {
                         if let Ok(mut perms) = engine.permissions().write() {
-                            perms.set_approval_mode(shannon_core::permissions::ApprovalMode::Suggest);
+                            perms.set_approval_mode(
+                                shannon_core::permissions::ApprovalMode::Suggest,
+                            );
                         }
                     }
                     repl.state.approval_mode_label = "ASK".to_string();
-                    repl.chat.add_message(ChatRole::System,
+                    repl.chat.add_message(
+                        ChatRole::System,
                         "Permission mode: **suggest** (strict)\n\
-                         All potentially dangerous tools require explicit approval.".to_string());
+                         All potentially dangerous tools require explicit approval."
+                            .to_string(),
+                    );
                 }
                 "auto" | "auto-accept" | "yolo" | "full-auto" => {
                     if let Some(ref engine) = repl.query_engine {
                         if let Ok(mut perms) = engine.permissions().write() {
-                            perms.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
+                            perms.set_approval_mode(
+                                shannon_core::permissions::ApprovalMode::FullAuto,
+                            );
                         }
                     }
                     repl.state.approval_mode_label = "AUTO".to_string();
-                    repl.chat.add_message(ChatRole::System,
+                    repl.chat.add_message(
+                        ChatRole::System,
                         "Permission mode: **full-auto**\n\
-                         All tools are automatically approved. Use with caution.".to_string());
+                         All tools are automatically approved. Use with caution."
+                            .to_string(),
+                    );
                 }
                 "plan" | "readonly" => {
                     if let Some(ref engine) = repl.query_engine {
                         if let Ok(mut perms) = engine.permissions().write() {
-                            perms.set_approval_mode(shannon_core::permissions::ApprovalMode::Readonly);
+                            perms.set_approval_mode(
+                                shannon_core::permissions::ApprovalMode::Readonly,
+                            );
                         }
                     }
                     repl.state.approval_mode_label = "ASK".to_string();
-                    repl.chat.add_message(ChatRole::System,
+                    repl.chat.add_message(
+                        ChatRole::System,
                         "Permission mode: **readonly**\n\
-                         Tools will only read, not modify files.".to_string());
+                         Tools will only read, not modify files."
+                            .to_string(),
+                    );
                 }
                 _ => {
-                    repl.chat.add_message(ChatRole::System,
+                    repl.chat.add_message(
+                        ChatRole::System,
                         "Permission Modes:\n\
                          /permissions mode suggest   — Require approval for dangerous tools\n\
                          /permissions mode auto      — Auto-accept all tool executions\n\
-                         /permissions mode readonly  — Read-only, no file modifications".to_string());
+                         /permissions mode readonly  — Read-only, no file modifications"
+                            .to_string(),
+                    );
                 }
             }
         }
         _ => {
-            repl.chat.add_message(ChatRole::System,
+            repl.chat.add_message(
+                ChatRole::System,
                 "Permission Commands:\n\
                  /permissions status — Show current permission policies and overrides\n\
                  /permissions allow <tool> — Always allow a tool without prompting\n\
                  /permissions deny <tool> — Always deny a tool\n\
                  /permissions reset — Clear all permission overrides\n\
                  /permissions mode [suggest|auto|readonly] — Change approval mode\n\
-                 /permissions help — Show this help".to_string());
+                 /permissions help — Show this help"
+                    .to_string(),
+            );
         }
     }
 

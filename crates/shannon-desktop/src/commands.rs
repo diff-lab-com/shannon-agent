@@ -97,7 +97,11 @@ pub async fn send_message(
         "[Shannon Desktop] Received: \"{}\"\n\n\
          The desktop app is scaffolded and ready for integration.\n\
          Connect to shannon-core's QueryEngine to enable full AI responses.",
-        if message.len() > 100 { &message[..100] } else { &message }
+        if message.len() > 100 {
+            &message[..100]
+        } else {
+            &message
+        }
     );
 
     // Add assistant message
@@ -156,9 +160,7 @@ pub async fn list_models() -> Result<Vec<ModelInfo>, String> {
 
 /// Get current application status.
 #[tauri::command]
-pub async fn get_status(
-    state: tauri::State<'_, AppState>,
-) -> Result<StatusResponse, String> {
+pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusResponse, String> {
     let model = state.model.lock().await;
     let querying = state.querying.lock().await;
     let messages = state.messages.lock().await;
@@ -176,9 +178,7 @@ pub async fn get_status(
 
 /// Cancel the current query.
 #[tauri::command]
-pub async fn cancel_query(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn cancel_query(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut querying = state.querying.lock().await;
     *querying = false;
     Ok(())
@@ -189,12 +189,36 @@ pub async fn cancel_query(
 pub async fn list_tools() -> Result<Vec<ToolInfo>, String> {
     // TODO: Query tool registry from shannon-core
     Ok(vec![
-        ToolInfo { name: "bash".into(), description: "Execute shell commands".into(), enabled: true },
-        ToolInfo { name: "read".into(), description: "Read file contents".into(), enabled: true },
-        ToolInfo { name: "write".into(), description: "Write file contents".into(), enabled: true },
-        ToolInfo { name: "edit".into(), description: "Edit files with diff".into(), enabled: true },
-        ToolInfo { name: "grep".into(), description: "Search file contents".into(), enabled: true },
-        ToolInfo { name: "glob".into(), description: "Find files by pattern".into(), enabled: true },
+        ToolInfo {
+            name: "bash".into(),
+            description: "Execute shell commands".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "read".into(),
+            description: "Read file contents".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "write".into(),
+            description: "Write file contents".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "edit".into(),
+            description: "Edit files with diff".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "grep".into(),
+            description: "Search file contents".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "glob".into(),
+            description: "Find files by pattern".into(),
+            enabled: true,
+        },
     ])
 }
 

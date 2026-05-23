@@ -109,8 +109,12 @@ async fn test_concurrent_sse_streams() {
     let resp1 = text_response("Stream 1 complete");
     let resp2 = text_response("Stream 2 complete");
     let resp3 = multi_block_response(vec![
-        MockContentBlock::Thinking { text: "Analyzing...".to_string() },
-        MockContentBlock::Text { text: "Stream 3 done".to_string() },
+        MockContentBlock::Thinking {
+            text: "Analyzing...".to_string(),
+        },
+        MockContentBlock::Text {
+            text: "Stream 3 done".to_string(),
+        },
     ]);
 
     mock_sse_stream(&mut server1, &anthropic_sse(&resp1));
@@ -122,15 +126,12 @@ async fn test_concurrent_sse_streams() {
     let url3 = server3.url();
 
     // Parse all 3 concurrently
-    let handle1 = tokio::spawn(async move {
-        collect_stream_events(&url1, LlmProvider::Anthropic).await
-    });
-    let handle2 = tokio::spawn(async move {
-        collect_stream_events(&url2, LlmProvider::Anthropic).await
-    });
-    let handle3 = tokio::spawn(async move {
-        collect_stream_events(&url3, LlmProvider::Anthropic).await
-    });
+    let handle1 =
+        tokio::spawn(async move { collect_stream_events(&url1, LlmProvider::Anthropic).await });
+    let handle2 =
+        tokio::spawn(async move { collect_stream_events(&url2, LlmProvider::Anthropic).await });
+    let handle3 =
+        tokio::spawn(async move { collect_stream_events(&url3, LlmProvider::Anthropic).await });
 
     let events1 = handle1.await.expect("task 1 should not panic");
     let events2 = handle2.await.expect("task 2 should not panic");
@@ -144,7 +145,9 @@ async fn test_concurrent_sse_streams() {
     // Each should have message_start and message_stop
     for (idx, events) in [(1, &events1), (2, &events2), (3, &events3)] {
         assert!(
-            events.iter().any(|e| matches!(e, StreamEvent::MessageStart { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::MessageStart { .. })),
             "Stream {idx} should have MessageStart",
         );
         assert!(
@@ -154,17 +157,25 @@ async fn test_concurrent_sse_streams() {
     }
 
     // Verify text content for streams 1 and 2
-    let text1: String = events1.iter()
+    let text1: String = events1
+        .iter()
         .filter_map(|e| match e {
-            StreamEvent::ContentBlockDelta { delta: ContentDelta::TextDelta { text }, .. } => Some(text.as_str()),
+            StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text },
+                ..
+            } => Some(text.as_str()),
             _ => None,
         })
         .collect();
     assert_eq!(text1, "Stream 1 complete");
 
-    let text2: String = events2.iter()
+    let text2: String = events2
+        .iter()
         .filter_map(|e| match e {
-            StreamEvent::ContentBlockDelta { delta: ContentDelta::TextDelta { text }, .. } => Some(text.as_str()),
+            StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text },
+                ..
+            } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -172,9 +183,13 @@ async fn test_concurrent_sse_streams() {
 
     // Stream 3 should have both thinking and text
     assert!(
-        events3.iter().any(|e| matches!(e, StreamEvent::ContentBlockStart {
-            content_block: ContentBlock::Thinking { .. }, ..
-        })),
+        events3.iter().any(|e| matches!(
+            e,
+            StreamEvent::ContentBlockStart {
+                content_block: ContentBlock::Thinking { .. },
+                ..
+            }
+        )),
         "Stream 3 should have thinking block",
     );
 }
@@ -197,17 +212,27 @@ async fn test_large_sse_response() {
     let elapsed = start.elapsed();
 
     // Should parse successfully
-    assert!(!events.is_empty(), "Should have parsed events from 1MB response");
+    assert!(
+        !events.is_empty(),
+        "Should have parsed events from 1MB response"
+    );
 
     // Verify the text was reassembled correctly
-    let text: String = events.iter()
+    let text: String = events
+        .iter()
         .filter_map(|e| match e {
-            StreamEvent::ContentBlockDelta { delta: ContentDelta::TextDelta { text }, .. } => Some(text.as_str()),
+            StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text },
+                ..
+            } => Some(text.as_str()),
             _ => None,
         })
         .collect();
     assert_eq!(text.len(), 1_000_000, "Reassembled text should be 1MB");
-    assert!(text.chars().all(|c| c == 'A'), "All characters should be 'A'");
+    assert!(
+        text.chars().all(|c| c == 'A'),
+        "All characters should be 'A'"
+    );
 
     // Verify reasonable throughput (> 10MB/s on local mock server)
     let throughput_mbps = (sse_body.len() as f64 / 1_000_000.0) / elapsed.as_secs_f64();
@@ -220,9 +245,7 @@ async fn test_large_sse_response() {
 #[tokio::test]
 async fn test_many_small_chunks() {
     // Create 1000 x 100-byte chunks and verify all received in order.
-    let chunks: Vec<String> = (0..1000)
-        .map(|i| format!("[{:04}]", i))
-        .collect();
+    let chunks: Vec<String> = (0..1000).map(|i| format!("[{:04}]", i)).collect();
 
     let chunk_refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
     let sse_body = build_chunked_sse(&chunk_refs);
@@ -234,15 +257,24 @@ async fn test_many_small_chunks() {
     let events = collect_stream_events(&url, LlmProvider::Anthropic).await;
 
     // Collect all text deltas in order
-    let deltas: Vec<String> = events.iter()
+    let deltas: Vec<String> = events
+        .iter()
         .filter_map(|e| match e {
-            StreamEvent::ContentBlockDelta { delta: ContentDelta::TextDelta { text }, .. } => Some(text.clone()),
+            StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text },
+                ..
+            } => Some(text.clone()),
             _ => None,
         })
         .collect();
 
     // All 1000 chunks should be present
-    assert_eq!(deltas.len(), 1000, "Should have 1000 text deltas, got {}", deltas.len());
+    assert_eq!(
+        deltas.len(),
+        1000,
+        "Should have 1000 text deltas, got {}",
+        deltas.len()
+    );
 
     // Verify ordering is preserved
     let reassembled: String = deltas.join("");
@@ -285,14 +317,20 @@ async fn test_sse_malformed_recovery() {
 
     // Should have events despite malformed data
     assert!(
-        events.iter().any(|e| matches!(e, StreamEvent::MessageStart { .. })),
+        events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::MessageStart { .. })),
         "Should have MessageStart",
     );
 
     // Verify text before and after malformed section
-    let text: String = events.iter()
+    let text: String = events
+        .iter()
         .filter_map(|e| match e {
-            StreamEvent::ContentBlockDelta { delta: ContentDelta::TextDelta { text }, .. } => Some(text.as_str()),
+            StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text },
+                ..
+            } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -312,9 +350,7 @@ async fn test_sse_malformed_recovery() {
 async fn test_sse_backpressure() {
     // Simulate backpressure by using a bounded channel and a slow consumer.
     // Verify no data loss under backpressure.
-    let chunks: Vec<String> = (0..200)
-        .map(|i| format!("chunk-{} ", i))
-        .collect();
+    let chunks: Vec<String> = (0..200).map(|i| format!("chunk-{} ", i)).collect();
 
     let chunk_refs: Vec<&str> = chunks.iter().map(|s| s.as_str()).collect();
     let sse_body = build_chunked_sse(&chunk_refs);
@@ -375,19 +411,20 @@ async fn test_sse_backpressure() {
     );
 
     // Verify no data loss in text content
-    let text: String = received.iter()
+    let text: String = received
+        .iter()
         .filter_map(|e| match e {
-            StreamEvent::ContentBlockDelta { delta: ContentDelta::TextDelta { text }, .. } => Some(text.as_str()),
+            StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::TextDelta { text },
+                ..
+            } => Some(text.as_str()),
             _ => None,
         })
         .collect();
 
     for i in 0..200 {
         let expected = format!("chunk-{} ", i);
-        assert!(
-            text.contains(&expected),
-            "Should contain chunk {i}",
-        );
+        assert!(text.contains(&expected), "Should contain chunk {i}",);
     }
 }
 
@@ -414,15 +451,12 @@ async fn test_cache_tokens_in_concurrent_streams() {
     let url2 = server2.url();
     let url3 = server3.url();
 
-    let handle1 = tokio::spawn(async move {
-        collect_stream_events(&url1, LlmProvider::Anthropic).await
-    });
-    let handle2 = tokio::spawn(async move {
-        collect_stream_events(&url2, LlmProvider::Anthropic).await
-    });
-    let handle3 = tokio::spawn(async move {
-        collect_stream_events(&url3, LlmProvider::Anthropic).await
-    });
+    let handle1 =
+        tokio::spawn(async move { collect_stream_events(&url1, LlmProvider::Anthropic).await });
+    let handle2 =
+        tokio::spawn(async move { collect_stream_events(&url2, LlmProvider::Anthropic).await });
+    let handle3 =
+        tokio::spawn(async move { collect_stream_events(&url3, LlmProvider::Anthropic).await });
 
     let events1 = handle1.await.expect("task 1");
     let events2 = handle2.await.expect("task 2");
@@ -430,13 +464,16 @@ async fn test_cache_tokens_in_concurrent_streams() {
 
     // Extract cache tokens from MessageStart events for each stream
     let extract_cache = |events: &[StreamEvent]| -> (u32, u32) {
-        events.iter().find_map(|e| match e {
-            StreamEvent::MessageStart { message } => Some((
-                message.usage.cache_creation_input_tokens,
-                message.usage.cache_read_input_tokens,
-            )),
-            _ => None,
-        }).unwrap_or((0, 0))
+        events
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::MessageStart { message } => Some((
+                    message.usage.cache_creation_input_tokens,
+                    message.usage.cache_read_input_tokens,
+                )),
+                _ => None,
+            })
+            .unwrap_or((0, 0))
     };
 
     let (creation1, read1) = extract_cache(&events1);
@@ -444,7 +481,10 @@ async fn test_cache_tokens_in_concurrent_streams() {
     let (creation3, read3) = extract_cache(&events3);
 
     // Verify stream 1: cache miss
-    assert_eq!(creation1, 10000, "Stream 1 should have 10000 cache_creation tokens");
+    assert_eq!(
+        creation1, 10000,
+        "Stream 1 should have 10000 cache_creation tokens"
+    );
     assert_eq!(read1, 0, "Stream 1 should have 0 cache_read tokens");
 
     // Verify stream 2: cache hit
@@ -452,7 +492,10 @@ async fn test_cache_tokens_in_concurrent_streams() {
     assert_eq!(read2, 8000, "Stream 2 should have 8000 cache_read tokens");
 
     // Verify stream 3: mixed
-    assert_eq!(creation3, 2000, "Stream 3 should have 2000 cache_creation tokens");
+    assert_eq!(
+        creation3, 2000,
+        "Stream 3 should have 2000 cache_creation tokens"
+    );
     assert_eq!(read3, 5000, "Stream 3 should have 5000 cache_read tokens");
 
     // Verify overall hit rate across streams
@@ -527,21 +570,35 @@ async fn test_cache_tokens_large_stream() {
     let events = collect_stream_events(&url, LlmProvider::Anthropic).await;
 
     // Verify cache tokens from MessageStart
-    let cache_info: (u32, u32) = events.iter().find_map(|e| match e {
-        StreamEvent::MessageStart { message } => Some((
-            message.usage.cache_creation_input_tokens,
-            message.usage.cache_read_input_tokens,
-        )),
-        _ => None,
-    }).unwrap_or((0, 0));
+    let cache_info: (u32, u32) = events
+        .iter()
+        .find_map(|e| match e {
+            StreamEvent::MessageStart { message } => Some((
+                message.usage.cache_creation_input_tokens,
+                message.usage.cache_read_input_tokens,
+            )),
+            _ => None,
+        })
+        .unwrap_or((0, 0));
 
     assert_eq!(cache_info.0, 0, "Should have 0 cache_creation tokens");
-    assert_eq!(cache_info.1, 45000, "Should have 45000 cache_read tokens from large stream");
+    assert_eq!(
+        cache_info.1, 45000,
+        "Should have 45000 cache_read tokens from large stream"
+    );
 
     // Verify all 1000 text chunks arrived
-    let text_count = events.iter().filter(|e| matches!(
-        e,
-        StreamEvent::ContentBlockDelta { delta: ContentDelta::TextDelta { .. }, .. }
-    )).count();
+    let text_count = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                StreamEvent::ContentBlockDelta {
+                    delta: ContentDelta::TextDelta { .. },
+                    ..
+                }
+            )
+        })
+        .count();
     assert_eq!(text_count, 1000, "Should have 1000 text deltas");
 }

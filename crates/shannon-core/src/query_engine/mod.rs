@@ -11,14 +11,14 @@ mod types;
 pub use context_injector::ContextInjector;
 pub use engine::QueryEngine;
 pub use types::{
-    CompressionStrategy, ConversationStats, CostEstimate, CostTracker, PermissionRequest, QueryContext, QueryEngineConfig, QueryError,
-    QueryEvent, QueryMetadata, QueryStream,
+    CompressionStrategy, ConversationStats, CostEstimate, CostTracker, PermissionRequest,
+    QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryMetadata, QueryStream,
 };
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::streaming::ConversationState;
+    use super::*;
     use crate::tools::{Tool, ToolOutput};
     use async_trait::async_trait;
     use std::collections::HashMap;
@@ -1187,9 +1187,17 @@ mod tests {
         use crate::model_registry::{ModelRouter, TaskType};
 
         // Verify ModelRouter returns valid model IDs for all task types
-        for task in [TaskType::QuickQuery, TaskType::CodeGeneration, TaskType::ArchitectureDesign, TaskType::ComplexWorkflow] {
+        for task in [
+            TaskType::QuickQuery,
+            TaskType::CodeGeneration,
+            TaskType::ArchitectureDesign,
+            TaskType::ComplexWorkflow,
+        ] {
             let model = ModelRouter::recommend(task);
-            assert!(!model.is_empty(), "ModelRouter should return a model for {task:?}");
+            assert!(
+                !model.is_empty(),
+                "ModelRouter should return a model for {task:?}"
+            );
         }
 
         // Verify fast_model config field works
@@ -1197,6 +1205,9 @@ mod tests {
             fast_model: Some("claude-3-5-haiku-20241022".to_string()),
             ..QueryEngineConfig::default()
         };
-        assert_eq!(config.fast_model.as_deref(), Some("claude-3-5-haiku-20241022"));
+        assert_eq!(
+            config.fast_model.as_deref(),
+            Some("claude-3-5-haiku-20241022")
+        );
     }
 }

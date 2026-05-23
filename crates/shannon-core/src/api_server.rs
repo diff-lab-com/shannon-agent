@@ -3,19 +3,19 @@
 //! Exposes REST, SSE, and WebSocket APIs so external tools and remote TUI
 //! instances can interact with Shannon over the network.
 
+use crate::VERSION;
 use crate::api::{LlmClient, LlmClientConfig, Message};
 use crate::permissions::PermissionManager;
 use crate::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use crate::state::StateManager;
 use crate::tools::ToolRegistry;
-use crate::VERSION;
-use axum::extract::ws::{Message as WsMsg, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::IntoResponse;
-use axum::routing::{get, post};
 use axum::Json;
+use axum::extract::State;
+use axum::extract::ws::{Message as WsMsg, WebSocket, WebSocketUpgrade};
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::routing::{get, post};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -138,7 +138,10 @@ pub struct WsSession {
 pub enum WsClientMessage {
     /// Send a query to the LLM.
     #[serde(rename = "query")]
-    Query { prompt: String, model: Option<String> },
+    Query {
+        prompt: String,
+        model: Option<String>,
+    },
     /// Clear conversation history for this session.
     #[serde(rename = "clear")]
     Clear,
@@ -159,13 +162,20 @@ pub enum WsServerMessage {
     Text { content: String },
     /// Tool use event.
     #[serde(rename = "tool_use")]
-    ToolUse { name: String, input: serde_json::Value },
+    ToolUse {
+        name: String,
+        input: serde_json::Value,
+    },
     /// Tool result event.
     #[serde(rename = "tool_result")]
     ToolResult { name: String, output: String },
     /// Token usage update.
     #[serde(rename = "usage")]
-    Usage { input_tokens: u64, output_tokens: u64, cost_usd: f64 },
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        cost_usd: f64,
+    },
     /// Query completed.
     #[serde(rename = "completed")]
     Completed { model: String },
@@ -174,7 +184,10 @@ pub enum WsServerMessage {
     Failed { error: String },
     /// Session info response.
     #[serde(rename = "session_info")]
-    SessionInfo { message_count: usize, model: Option<String> },
+    SessionInfo {
+        message_count: usize,
+        model: Option<String>,
+    },
     /// Error in protocol.
     #[serde(rename = "error")]
     Error { message: String },
@@ -450,9 +463,8 @@ async fn query_stream_handler(
                 Some(Ok(Event::default().event(event_type).data(data)))
             }
             Err(e) => {
-                let data =
-                    serde_json::to_string(&serde_json::json!({ "error": e.to_string() }))
-                        .unwrap_or_default();
+                let data = serde_json::to_string(&serde_json::json!({ "error": e.to_string() }))
+                    .unwrap_or_default();
                 Some(Ok(Event::default().event("error").data(data)))
             }
         }
@@ -481,10 +493,7 @@ async fn tools_list_handler(State(state): State<AppState>) -> Json<ToolsListResp
 ///
 /// Clients connect via `ws://host:port/api/ws` and send/receive JSON messages
 /// using the [`WsClientMessage`] / [`WsServerMessage`] protocol.
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
 }
 
@@ -528,8 +537,8 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                 };
                 if let Ok(json) = serde_json::to_string(&err) {
                     if let Err(e) = socket.send(WsMsg::Text(json)).await {
-            tracing::debug!("WebSocket send failed: {e}");
-        }
+                        tracing::debug!("WebSocket send failed: {e}");
+                    }
                 }
                 continue;
             }
@@ -584,27 +593,43 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
 
                 while let Some(result) = stream.next().await {
                     let server_msg = match result {
-                        Ok(QueryEvent::Text { content, .. }) => Some(WsServerMessage::Text { content }),
-                        Ok(QueryEvent::ToolUseRequest { tool_name, tool_input, .. }) => {
-                            Some(WsServerMessage::ToolUse {
-                                name: tool_name,
-                                input: tool_input,
-                            })
+                        Ok(QueryEvent::Text { content, .. }) => {
+                            Some(WsServerMessage::Text { content })
                         }
-                        Ok(QueryEvent::ToolUseResult { tool_name, result, .. }) => {
-                            Some(WsServerMessage::ToolResult { name: tool_name, output: result })
-                        }
-                        Ok(QueryEvent::Usage { input_tokens, output_tokens, cost_usd, .. }) => {
-                            Some(WsServerMessage::Usage { input_tokens, output_tokens, cost_usd })
-                        }
-                        Ok(QueryEvent::Completed { .. }) => {
-                            Some(WsServerMessage::Completed { model: config.model.clone() })
-                        }
+                        Ok(QueryEvent::ToolUseRequest {
+                            tool_name,
+                            tool_input,
+                            ..
+                        }) => Some(WsServerMessage::ToolUse {
+                            name: tool_name,
+                            input: tool_input,
+                        }),
+                        Ok(QueryEvent::ToolUseResult {
+                            tool_name, result, ..
+                        }) => Some(WsServerMessage::ToolResult {
+                            name: tool_name,
+                            output: result,
+                        }),
+                        Ok(QueryEvent::Usage {
+                            input_tokens,
+                            output_tokens,
+                            cost_usd,
+                            ..
+                        }) => Some(WsServerMessage::Usage {
+                            input_tokens,
+                            output_tokens,
+                            cost_usd,
+                        }),
+                        Ok(QueryEvent::Completed { .. }) => Some(WsServerMessage::Completed {
+                            model: config.model.clone(),
+                        }),
                         Ok(QueryEvent::Failed { error, .. }) => {
                             Some(WsServerMessage::Failed { error })
                         }
                         Ok(_) => None,
-                        Err(e) => Some(WsServerMessage::Failed { error: e.to_string() }),
+                        Err(e) => Some(WsServerMessage::Failed {
+                            error: e.to_string(),
+                        }),
                     };
 
                     if let Some(msg) = server_msg {
@@ -631,8 +656,8 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                 };
                 if let Ok(json) = serde_json::to_string(&info) {
                     if let Err(e) = socket.send(WsMsg::Text(json)).await {
-            tracing::debug!("WebSocket send failed: {e}");
-        }
+                        tracing::debug!("WebSocket send failed: {e}");
+                    }
                 }
             }
             WsClientMessage::Info => {
@@ -643,8 +668,8 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                 };
                 if let Ok(json) = serde_json::to_string(&info) {
                     if let Err(e) = socket.send(WsMsg::Text(json)).await {
-            tracing::debug!("WebSocket send failed: {e}");
-        }
+                        tracing::debug!("WebSocket send failed: {e}");
+                    }
                 }
             }
             WsClientMessage::Cancel => {
@@ -654,8 +679,8 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                 };
                 if let Ok(json) = serde_json::to_string(&err) {
                     if let Err(e) = socket.send(WsMsg::Text(json)).await {
-            tracing::debug!("WebSocket send failed: {e}");
-        }
+                        tracing::debug!("WebSocket send failed: {e}");
+                    }
                 }
             }
         }
@@ -673,9 +698,9 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use axum::Router;
     use tower::ServiceExt;
 
     fn test_app() -> Router<()> {

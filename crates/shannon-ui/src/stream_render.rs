@@ -208,7 +208,11 @@ impl StreamingRenderer {
     /// - Inline code markers (`...`) in text segments are styled with
     ///   `theme.secondary`.
     /// - All other text uses `theme.text`.
-    pub fn render_streaming_highlighted(&mut self, width: u16, theme: &Theme) -> Vec<Line<'static>> {
+    pub fn render_streaming_highlighted(
+        &mut self,
+        width: u16,
+        theme: &Theme,
+    ) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         for segment in &self.segments {
@@ -232,7 +236,10 @@ impl StreamingRenderer {
         }
 
         if lines.is_empty() {
-            lines.push(Line::from(Span::styled("", Style::default().fg(theme.text))));
+            lines.push(Line::from(Span::styled(
+                "",
+                Style::default().fg(theme.text),
+            )));
         }
 
         let _ = width;
@@ -244,12 +251,7 @@ impl StreamingRenderer {
     /// Highlight a code block using syntect.
     ///
     /// Falls back to plain monospaced text when the language is unknown.
-    fn highlight_code(
-        &self,
-        code: &str,
-        lang: &str,
-        theme: &Theme,
-    ) -> Vec<Line<'static>> {
+    fn highlight_code(&self, code: &str, lang: &str, theme: &Theme) -> Vec<Line<'static>> {
         if code.is_empty() {
             return Vec::new();
         }
@@ -258,7 +260,10 @@ impl StreamingRenderer {
 
         if let Some(syntax) = self.syntax_set.find_syntax_by_token(&lang_lower) {
             let theme_name = theme.syntect_theme_name();
-            let syn_theme = self.theme_set.themes.get(theme_name)
+            let syn_theme = self
+                .theme_set
+                .themes
+                .get(theme_name)
                 .unwrap_or_else(|| &self.theme_set.themes["base16-eighties.dark"]);
             let mut highlighter = HighlightLines::new(syntax, syn_theme);
             let mut result = Vec::new();
@@ -292,12 +297,7 @@ impl StreamingRenderer {
         } else {
             // Unknown language: plain text with default code style.
             code.lines()
-                .map(|l| {
-                    Line::from(Span::styled(
-                        l.to_string(),
-                        Style::default().fg(theme.text),
-                    ))
-                })
+                .map(|l| Line::from(Span::styled(l.to_string(), Style::default().fg(theme.text))))
                 .collect()
         }
     }
@@ -334,7 +334,10 @@ fn render_text_with_inline_code(text: &str, theme: &Theme) -> Vec<Span<'static>>
                 code_text.push(c);
             }
             if found_close {
-                spans.push(Span::styled(code_text, Style::default().fg(theme.secondary)));
+                spans.push(Span::styled(
+                    code_text,
+                    Style::default().fg(theme.secondary),
+                ));
             } else {
                 spans.push(Span::styled(
                     format!("`{code_text}"),

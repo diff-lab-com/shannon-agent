@@ -2,10 +2,10 @@
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::oneshot;
-use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // Tool permission helpers
@@ -128,13 +128,18 @@ impl ToolResultStore {
 
     /// Get the full content for a chunk ID.
     pub(crate) fn get_full(&self, chunk_id: &str) -> Option<(String, String)> {
-        self.results.get(chunk_id).map(|r| {
-            (r.tool_name.clone(), r.full_content.clone())
-        })
+        self.results
+            .get(chunk_id)
+            .map(|r| (r.tool_name.clone(), r.full_content.clone()))
     }
 
     /// Get a specific chunk (offset, length) of a stored result.
-    pub(crate) fn get_chunk(&self, chunk_id: &str, offset: usize, max_chars: usize) -> Option<ChunkResult> {
+    pub(crate) fn get_chunk(
+        &self,
+        chunk_id: &str,
+        offset: usize,
+        max_chars: usize,
+    ) -> Option<ChunkResult> {
         self.results.get(chunk_id).map(|r| {
             let content = &r.full_content;
             let total_len = content.len();
@@ -165,7 +170,8 @@ impl ToolResultStore {
 
     /// Evict expired results.
     pub(crate) fn evict_expired(&self) {
-        self.results.retain(|_, v| v.stored_at.elapsed() < self.max_age);
+        self.results
+            .retain(|_, v| v.stored_at.elapsed() < self.max_age);
     }
 }
 
@@ -270,7 +276,8 @@ pub(crate) fn truncate_tool_result(content: &str, budget: usize) -> String {
         let omitted_lines = lines.len() - head_lines.len() - tail_lines.len();
         let head_text = head_lines.join("\n");
         let tail_text = tail_lines.join("\n");
-        let pct = ((original_len - head_text.len() - tail_text.len()) as f64 / original_len as f64) * 100.0;
+        let pct = ((original_len - head_text.len() - tail_text.len()) as f64 / original_len as f64)
+            * 100.0;
 
         return format!(
             "{}\n\n... [{} lines omitted] ...\n\n{}\n\n[compressed: showed ~{} of ~{} chars ({:.0}% omitted)]",
@@ -294,7 +301,11 @@ pub(crate) fn truncate_tool_result(content: &str, budget: usize) -> String {
         .rfind("\n\n")
         .or_else(|| truncated.rfind('\n'))
         .unwrap_or(end);
-    let cut = if content.is_char_boundary(cut) { cut } else { end };
+    let cut = if content.is_char_boundary(cut) {
+        cut
+    } else {
+        end
+    };
     let pct = ((original_len - cut) as f64 / original_len as f64) * 100.0;
     format!(
         "{}\n\n[compressed: showed ~{} of ~{} chars ({:.0}% omitted)]",
@@ -329,9 +340,7 @@ pub(crate) fn compress_json(value: &serde_json::Value, budget: usize) -> String 
             }
             let remaining = items.len() - shown;
             if remaining > 0 {
-                result.push_str(&format!(
-                    "  // ... {remaining} more items\n"
-                ));
+                result.push_str(&format!("  // ... {remaining} more items\n"));
             }
             result.push(']');
             result
@@ -388,43 +397,42 @@ pub(crate) fn compress_json(value: &serde_json::Value, budget: usize) -> String 
 pub(crate) fn normalize_error_content(content_array: &[serde_json::Value]) -> String {
     content_array
         .iter()
-        .map(|block| {
-            match block.get("type").and_then(|t| t.as_str()) {
-                Some("text") => block
-                    .get("text")
+        .map(|block| match block.get("type").and_then(|t| t.as_str()) {
+            Some("text") => block
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string(),
+            Some("image") => {
+                let mime = block
+                    .get("mimeType")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("image/unknown");
+                format!("[{mime} image]")
+            }
+            Some("resource") => {
+                let uri = block
+                    .get("resource")
+                    .and_then(|r| r.get("uri"))
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("unknown");
+                let text = block
+                    .get("resource")
+                    .and_then(|r| r.get("text"))
                     .and_then(|t| t.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                Some("image") => {
-                    let mime = block.get("mimeType")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("image/unknown");
-                    format!("[{mime} image]")
+                    .unwrap_or("");
+                if text.is_empty() {
+                    format!("[resource: {uri}]")
+                } else {
+                    format!("[resource: {uri}]\n{text}")
                 }
-                Some("resource") => {
-                    let uri = block.get("resource")
-                        .and_then(|r| r.get("uri"))
-                        .and_then(|u| u.as_str())
-                        .unwrap_or("unknown");
-                    let text = block.get("resource")
-                        .and_then(|r| r.get("text"))
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("");
-                    if text.is_empty() {
-                        format!("[resource: {uri}]")
-                    } else {
-                        format!("[resource: {uri}]\n{text}")
-                    }
-                }
-                other => {
-                    let text = block.get("text")
-                        .and_then(|t| t.as_str())
-                        .unwrap_or("");
-                    if text.is_empty() {
-                        format!("[{} block]", other.unwrap_or("unknown"))
-                    } else {
-                        text.to_string()
-                    }
+            }
+            other => {
+                let text = block.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                if text.is_empty() {
+                    format!("[{} block]", other.unwrap_or("unknown"))
+                } else {
+                    text.to_string()
                 }
             }
         })
@@ -536,36 +544,48 @@ mod tests {
     #[test]
     fn allow_pattern_matches() {
         let patterns = vec!["mcp__fetch__*".to_string()];
-        assert!(is_tool_allowed_by_patterns("mcp__fetch__fetch_url", &patterns));
-        assert!(!is_tool_allowed_by_patterns("mcp__internal__secret", &patterns));
+        assert!(is_tool_allowed_by_patterns(
+            "mcp__fetch__fetch_url",
+            &patterns
+        ));
+        assert!(!is_tool_allowed_by_patterns(
+            "mcp__internal__secret",
+            &patterns
+        ));
     }
 
     #[test]
     fn deny_pattern_overrides_allow() {
-        let patterns = vec![
-            "mcp__*".to_string(),
-            "!mcp__internal__*".to_string(),
-        ];
+        let patterns = vec!["mcp__*".to_string(), "!mcp__internal__*".to_string()];
         assert!(is_tool_allowed_by_patterns("mcp__fetch__tool", &patterns));
-        assert!(!is_tool_allowed_by_patterns("mcp__internal__secret", &patterns));
+        assert!(!is_tool_allowed_by_patterns(
+            "mcp__internal__secret",
+            &patterns
+        ));
     }
 
     #[test]
     fn deny_only_patterns_allow_non_denied() {
         let patterns = vec!["!mcp__internal__*".to_string()];
         assert!(is_tool_allowed_by_patterns("mcp__fetch__tool", &patterns));
-        assert!(!is_tool_allowed_by_patterns("mcp__internal__secret", &patterns));
+        assert!(!is_tool_allowed_by_patterns(
+            "mcp__internal__secret",
+            &patterns
+        ));
     }
 
     #[test]
     fn multiple_allow_patterns() {
-        let patterns = vec![
-            "mcp__fetch__*".to_string(),
-            "mcp__tavily__*".to_string(),
-        ];
+        let patterns = vec!["mcp__fetch__*".to_string(), "mcp__tavily__*".to_string()];
         assert!(is_tool_allowed_by_patterns("mcp__fetch__fetch", &patterns));
-        assert!(is_tool_allowed_by_patterns("mcp__tavily__search", &patterns));
-        assert!(!is_tool_allowed_by_patterns("mcp__internal__tool", &patterns));
+        assert!(is_tool_allowed_by_patterns(
+            "mcp__tavily__search",
+            &patterns
+        ));
+        assert!(!is_tool_allowed_by_patterns(
+            "mcp__internal__tool",
+            &patterns
+        ));
     }
 
     #[test]
@@ -593,7 +613,10 @@ mod tests {
     fn truncate_json_object() {
         let mut map = serde_json::Map::new();
         for i in 0..50 {
-            map.insert(format!("key_{i}"), serde_json::Value::String("x".repeat(100)));
+            map.insert(
+                format!("key_{i}"),
+                serde_json::Value::String("x".repeat(100)),
+            );
         }
         let content = serde_json::to_string(&map).unwrap();
         let result = truncate_tool_result(&content, 300);
@@ -602,7 +625,9 @@ mod tests {
 
     #[test]
     fn truncate_line_based_text() {
-        let lines: Vec<String> = (0..100).map(|i| format!("line {i}: some content here")).collect();
+        let lines: Vec<String> = (0..100)
+            .map(|i| format!("line {i}: some content here"))
+            .collect();
         let content = lines.join("\n");
         let result = truncate_tool_result(&content, 200);
         assert!(result.contains("lines omitted"));

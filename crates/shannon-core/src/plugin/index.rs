@@ -63,9 +63,12 @@ impl PluginIndex {
 
     /// Fetch and refresh the index from the remote URL.
     pub async fn refresh(&mut self) -> PluginResult<()> {
-        let response = reqwest::get(&self.url).await
+        let response = reqwest::get(&self.url)
+            .await
             .map_err(|e| PluginError::IndexRefreshFailed(e.to_string()))?;
-        let json = response.text().await
+        let json = response
+            .text()
+            .await
             .map_err(|e| PluginError::IndexRefreshFailed(e.to_string()))?;
         self.load_from_json(&json)?;
         self.last_refreshed = Some(chrono::Utc::now());
@@ -87,9 +90,10 @@ impl PluginIndex {
                 let name_matches = entry.name.to_lowercase().contains(&query_lower);
                 let desc_matches = entry.description.to_lowercase().contains(&query_lower);
                 let author_matches = entry.author.to_lowercase().contains(&query_lower);
-                let keyword_matches = entry.keywords.iter().any(|k| {
-                    k.to_lowercase().contains(&query_lower)
-                });
+                let keyword_matches = entry
+                    .keywords
+                    .iter()
+                    .any(|k| k.to_lowercase().contains(&query_lower));
 
                 name_matches || desc_matches || author_matches || keyword_matches
             })
@@ -106,7 +110,8 @@ impl PluginIndex {
     pub fn search_ranked(&self, query: &str) -> Vec<(f64, &IndexEntry)> {
         let query_lower = query.to_lowercase();
 
-        let mut scored: Vec<(f64, &IndexEntry)> = self.cache
+        let mut scored: Vec<(f64, &IndexEntry)> = self
+            .cache
             .values()
             .filter_map(|entry| {
                 let name_lower = entry.name.to_lowercase();
@@ -118,14 +123,19 @@ impl PluginIndex {
                     3.0 * 10.0
                 } else if name_lower.contains(&query_lower) {
                     3.0 * 5.0
-                } else if query_lower.split_whitespace().all(|w| name_lower.contains(w)) {
+                } else if query_lower
+                    .split_whitespace()
+                    .all(|w| name_lower.contains(w))
+                {
                     3.0 * 2.0
                 } else {
                     0.0
                 };
 
                 // Keyword scoring (2x weight)
-                let keyword_score: f64 = entry.keywords.iter()
+                let keyword_score: f64 = entry
+                    .keywords
+                    .iter()
                     .map(|k| {
                         let k_lower = k.to_lowercase();
                         if k_lower == query_lower {

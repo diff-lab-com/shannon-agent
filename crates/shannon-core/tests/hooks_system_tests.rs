@@ -465,9 +465,7 @@ mod hook_event_tests {
             HookEvent::Notification {
                 message: "m".into(),
             },
-            HookEvent::UserPromptSubmit {
-                prompt: "p".into(),
-            },
+            HookEvent::UserPromptSubmit { prompt: "p".into() },
         ];
 
         for event in &events {
@@ -524,7 +522,11 @@ mod hook_decision_tests {
             modified_input: Some(json!({"key": "value"})),
             modified_output: None,
         };
-        if let HookDecision::Modify { modified_input, modified_output } = decision {
+        if let HookDecision::Modify {
+            modified_input,
+            modified_output,
+        } = decision
+        {
             assert!(modified_input.is_some());
             assert!(modified_output.is_none());
         } else {
@@ -538,7 +540,11 @@ mod hook_decision_tests {
             modified_input: None,
             modified_output: Some(json!({"result": "ok"})),
         };
-        if let HookDecision::Modify { modified_input, modified_output } = decision {
+        if let HookDecision::Modify {
+            modified_input,
+            modified_output,
+        } = decision
+        {
             assert!(modified_input.is_none());
             assert!(modified_output.is_some());
         } else {
@@ -552,7 +558,11 @@ mod hook_decision_tests {
             modified_input: Some(json!({"in": 1})),
             modified_output: Some(json!({"out": 2})),
         };
-        if let HookDecision::Modify { modified_input, modified_output } = decision {
+        if let HookDecision::Modify {
+            modified_input,
+            modified_output,
+        } = decision
+        {
             assert!(modified_input.is_some());
             assert!(modified_output.is_some());
         } else {
@@ -741,7 +751,8 @@ mod hook_result_tests {
 
     #[test]
     fn parse_decision_modify_with_both() {
-        let stdout = r#"{"decision": "modify", "modified_input": {"a": 1}, "modified_output": {"b": 2}}"#;
+        let stdout =
+            r#"{"decision": "modify", "modified_input": {"a": 1}, "modified_output": {"b": 2}}"#;
         let decision = HookResult::parse_decision(stdout);
         assert_eq!(
             decision,
@@ -805,7 +816,8 @@ mod hook_result_tests {
 
     #[test]
     fn parse_decision_uses_first_line_only() {
-        let stdout = "{\"decision\": \"deny\", \"reason\": \"blocked\"}\nSome debug output\nMore lines";
+        let stdout =
+            "{\"decision\": \"deny\", \"reason\": \"blocked\"}\nSome debug output\nMore lines";
         let decision = HookResult::parse_decision(stdout);
         assert_eq!(
             decision,
@@ -1077,8 +1089,11 @@ mod hook_config_tests {
 
     #[test]
     fn serde_round_trip() {
-        let config = HookConfig::new("Bash")
-            .with_hook(HookDef::new("echo test").with_timeout(5).with_blocking(false));
+        let config = HookConfig::new("Bash").with_hook(
+            HookDef::new("echo test")
+                .with_timeout(5)
+                .with_blocking(false),
+        );
 
         let json = serde_json::to_string(&config).unwrap();
         let parsed: HookConfig = serde_json::from_str(&json).unwrap();
@@ -1250,10 +1265,8 @@ mod hooks_file_tests {
     #[test]
     fn get_for_event_returns_empty_when_no_match() {
         let mut file = HooksFile::new();
-        file.hooks.insert(
-            "PreToolUse".to_string(),
-            vec![HookConfig::new("Bash")],
-        );
+        file.hooks
+            .insert("PreToolUse".to_string(), vec![HookConfig::new("Bash")]);
 
         let configs = file.get_for_event(&HookEventType::SessionStart);
         assert!(configs.is_empty());
@@ -1282,26 +1295,11 @@ mod hooks_file_tests {
         file.hooks
             .insert("UserPromptSubmit".to_string(), vec![HookConfig::new("*")]);
 
-        assert_eq!(
-            file.get_for_event(&HookEventType::PreToolUse).len(),
-            1
-        );
-        assert_eq!(
-            file.get_for_event(&HookEventType::PostToolUse).len(),
-            1
-        );
-        assert_eq!(
-            file.get_for_event(&HookEventType::SessionStart).len(),
-            1
-        );
-        assert_eq!(
-            file.get_for_event(&HookEventType::SessionEnd).len(),
-            1
-        );
-        assert_eq!(
-            file.get_for_event(&HookEventType::Notification).len(),
-            1
-        );
+        assert_eq!(file.get_for_event(&HookEventType::PreToolUse).len(), 1);
+        assert_eq!(file.get_for_event(&HookEventType::PostToolUse).len(), 1);
+        assert_eq!(file.get_for_event(&HookEventType::SessionStart).len(), 1);
+        assert_eq!(file.get_for_event(&HookEventType::SessionEnd).len(), 1);
+        assert_eq!(file.get_for_event(&HookEventType::Notification).len(), 1);
         assert_eq!(
             file.get_for_event(&HookEventType::UserPromptSubmit).len(),
             1
@@ -1313,16 +1311,14 @@ mod hooks_file_tests {
     #[test]
     fn merge_combines_same_event_type() {
         let mut file1 = HooksFile::new();
-        file1.hooks.insert(
-            "PreToolUse".to_string(),
-            vec![HookConfig::new("Bash")],
-        );
+        file1
+            .hooks
+            .insert("PreToolUse".to_string(), vec![HookConfig::new("Bash")]);
 
         let mut file2 = HooksFile::new();
-        file2.hooks.insert(
-            "PreToolUse".to_string(),
-            vec![HookConfig::new("Read")],
-        );
+        file2
+            .hooks
+            .insert("PreToolUse".to_string(), vec![HookConfig::new("Read")]);
 
         file1.merge(file2);
 
@@ -1335,16 +1331,14 @@ mod hooks_file_tests {
     #[test]
     fn merge_adds_new_event_type() {
         let mut file1 = HooksFile::new();
-        file1.hooks.insert(
-            "PreToolUse".to_string(),
-            vec![HookConfig::new("Bash")],
-        );
+        file1
+            .hooks
+            .insert("PreToolUse".to_string(), vec![HookConfig::new("Bash")]);
 
         let mut file2 = HooksFile::new();
-        file2.hooks.insert(
-            "SessionStart".to_string(),
-            vec![HookConfig::new("*")],
-        );
+        file2
+            .hooks
+            .insert("SessionStart".to_string(), vec![HookConfig::new("*")]);
 
         file1.merge(file2);
 
@@ -1356,10 +1350,9 @@ mod hooks_file_tests {
     #[test]
     fn merge_empty_into_populated() {
         let mut file1 = HooksFile::new();
-        file1.hooks.insert(
-            "PreToolUse".to_string(),
-            vec![HookConfig::new("Bash")],
-        );
+        file1
+            .hooks
+            .insert("PreToolUse".to_string(), vec![HookConfig::new("Bash")]);
 
         let file2 = HooksFile::new();
         file1.merge(file2);
@@ -1374,10 +1367,9 @@ mod hooks_file_tests {
         let mut file1 = HooksFile::new();
 
         let mut file2 = HooksFile::new();
-        file2.hooks.insert(
-            "PreToolUse".to_string(),
-            vec![HookConfig::new("Bash")],
-        );
+        file2
+            .hooks
+            .insert("PreToolUse".to_string(), vec![HookConfig::new("Bash")]);
 
         file1.merge(file2);
 
@@ -1393,10 +1385,9 @@ mod hooks_file_tests {
         );
 
         let mut file2 = HooksFile::new();
-        file2.hooks.insert(
-            "PreToolUse".to_string(),
-            vec![HookConfig::new("Write")],
-        );
+        file2
+            .hooks
+            .insert("PreToolUse".to_string(), vec![HookConfig::new("Write")]);
 
         file1.merge(file2);
 
@@ -1453,17 +1444,21 @@ mod hook_manager_tests {
     fn new_creates_with_default_paths() {
         let manager = HookManager::new();
         // User config should be under ~/.shannon/hooks.json
-        assert!(manager
-            .user_config_path()
-            .to_str()
-            .unwrap()
-            .ends_with("hooks.json"));
+        assert!(
+            manager
+                .user_config_path()
+                .to_str()
+                .unwrap()
+                .ends_with("hooks.json")
+        );
         // Project config should be .shannon/hooks.json (now absolute via base_dir)
-        assert!(manager
-            .project_config_path()
-            .to_str()
-            .unwrap()
-            .ends_with(".shannon/hooks.json"));
+        assert!(
+            manager
+                .project_config_path()
+                .to_str()
+                .unwrap()
+                .ends_with(".shannon/hooks.json")
+        );
     }
 
     #[test]
@@ -1487,10 +1482,8 @@ mod hook_manager_tests {
 
     #[test]
     fn hooks_file_default_is_empty() {
-        let manager = HookManager::with_paths(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent"),
-        );
+        let manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
         assert!(manager.hooks_file().hooks.is_empty());
     }
 
@@ -1585,7 +1578,9 @@ mod hook_manager_tests {
         let mut manager = HookManager::with_paths(user_path, project_path);
         manager.load().unwrap();
 
-        let configs = manager.hooks_file().get_for_event(&HookEventType::PreToolUse);
+        let configs = manager
+            .hooks_file()
+            .get_for_event(&HookEventType::PreToolUse);
         assert_eq!(configs.len(), 2);
     }
 
@@ -1605,10 +1600,8 @@ mod hook_manager_tests {
         }"#;
         std::fs::write(&path, json).unwrap();
 
-        let mut manager = HookManager::with_paths(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent"),
-        );
+        let mut manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
         manager.load_from_path(&path).unwrap();
 
         let event_types = manager.configured_event_types();
@@ -1622,19 +1615,15 @@ mod hook_manager_tests {
         let path = temp_dir.path().join("bad_hooks.json");
         std::fs::write(&path, "not valid json").unwrap();
 
-        let mut manager = HookManager::with_paths(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent"),
-        );
+        let mut manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
         assert!(manager.load_from_path(&path).is_err());
     }
 
     #[test]
     fn load_from_path_nonexistent_file_returns_empty() {
-        let mut manager = HookManager::with_paths(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent"),
-        );
+        let mut manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
         // load_from_path delegates to load_from_file which returns empty for missing files
         let result = manager.load_from_path(Path::new("/nonexistent/hooks.json"));
         assert!(result.is_ok());
@@ -1645,10 +1634,8 @@ mod hook_manager_tests {
 
     #[test]
     fn configured_event_types_empty_when_no_config() {
-        let manager = HookManager::with_paths(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent"),
-        );
+        let manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
         assert!(manager.configured_event_types().is_empty());
     }
 
@@ -1666,10 +1653,8 @@ mod hook_manager_tests {
         }"#;
         std::fs::write(&path, json).unwrap();
 
-        let mut manager = HookManager::with_paths(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent"),
-        );
+        let mut manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
         manager.load_from_path(&path).unwrap();
 
         let mut types: Vec<String> = manager
@@ -1696,10 +1681,8 @@ mod hook_manager_tests {
         }"#;
         std::fs::write(&path, json).unwrap();
 
-        let mut manager = HookManager::with_paths(
-            PathBuf::from("/nonexistent"),
-            PathBuf::from("/nonexistent"),
-        );
+        let mut manager =
+            HookManager::with_paths(PathBuf::from("/nonexistent"), PathBuf::from("/nonexistent"));
         manager.load_from_path(&path).unwrap();
 
         let types = manager.configured_event_types();

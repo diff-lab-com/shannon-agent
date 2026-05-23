@@ -56,7 +56,11 @@ impl super::Repl {
             // Entering focus mode disables fullscreen (focus is a subset)
             self.state.fullscreen_mode = false;
         }
-        let label = if self.state.focus_mode { "Focus ON" } else { "Focus OFF" };
+        let label = if self.state.focus_mode {
+            "Focus ON"
+        } else {
+            "Focus OFF"
+        };
         self.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
     }
 
@@ -77,7 +81,11 @@ impl super::Repl {
             // Fullscreen implies focus mode too
             self.state.focus_mode = true;
         }
-        let label = if self.state.fullscreen_mode { "Fullscreen ON (F11)" } else { "Fullscreen OFF" };
+        let label = if self.state.fullscreen_mode {
+            "Fullscreen ON (F11)"
+        } else {
+            "Fullscreen OFF"
+        };
         self.state.toast = Some((format!("  {label}  "), std::time::Instant::now()));
     }
 
@@ -146,8 +154,12 @@ impl super::Repl {
     /// Old notifications (>30s) are pruned automatically.
     pub fn notify(&mut self, message: impl Into<String>) {
         let msg = message.into();
-        self.state.pending_notifications.retain(|(_, t)| t.elapsed().as_secs() < 30);
-        self.state.pending_notifications.push((msg, std::time::Instant::now()));
+        self.state
+            .pending_notifications
+            .retain(|(_, t)| t.elapsed().as_secs() < 30);
+        self.state
+            .pending_notifications
+            .push((msg, std::time::Instant::now()));
     }
 
     /// Check if this is a first run (no config files) and activate onboarding.
@@ -172,7 +184,9 @@ impl super::Repl {
     /// Scroll the pager by `delta` messages (negative = up, positive = down).
     pub fn pager_scroll(&mut self, delta: isize) {
         let total = self.chat.message_count();
-        if total == 0 { return; }
+        if total == 0 {
+            return;
+        }
         let max_scroll = total.saturating_sub(1);
         let new = self.state.pager_scroll as isize + delta;
         self.state.pager_scroll = new.clamp(0, max_scroll as isize) as usize;
@@ -238,7 +252,10 @@ impl super::Repl {
             if let Some(changed) = watcher.check_and_reload() {
                 self.chat.add_message(
                     crate::widgets::ChatRole::System,
-                    format!("[Settings changed: {} — reload with /config or restart to apply]", changed.join(", ")),
+                    format!(
+                        "[Settings changed: {} — reload with /config or restart to apply]",
+                        changed.join(", ")
+                    ),
                 );
             }
         }
@@ -287,7 +304,9 @@ impl super::Repl {
         // Always refresh git branch (lightweight, throttled implicitly)
         self.refresh_git_branch();
 
-        let Some(ref cmd) = self.state.statusline_command else { return };
+        let Some(ref cmd) = self.state.statusline_command else {
+            return;
+        };
 
         // Throttle to once every 5 seconds
         if let Some(t) = self.state.statusline_last_update {

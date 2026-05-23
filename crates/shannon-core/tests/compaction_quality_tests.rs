@@ -7,14 +7,14 @@
 #[cfg(test)]
 mod compaction_quality_tests {
     use shannon_core::api::{ContentBlock, Message, MessageContent, ToolResultContent};
+    use shannon_core::compact::compact_messages::CompactionStrategy;
     use shannon_core::compact::engine::CompactEngine;
     use shannon_core::compact::helpers::{
         estimate_message_tokens, estimate_tokens, extract_text_content,
     };
-    use shannon_core::compact::protection::{compact_messages_with_protection, MessageProtector};
+    use shannon_core::compact::protection::{MessageProtector, compact_messages_with_protection};
     use shannon_core::compact::summarizer::RuleBasedSummarizer;
     use shannon_core::compact::types::CompactConfig;
-    use shannon_core::compact::compact_messages::CompactionStrategy;
 
     // -- Helpers ---------------------------------------------------------------
 
@@ -126,8 +126,7 @@ mod compaction_quality_tests {
             assistant_msg("The session module handles user sessions."),
         ];
 
-        let mut messages =
-            build_large_conversation(old_turns, recent_turns, 12);
+        let mut messages = build_large_conversation(old_turns, recent_turns, 12);
 
         let mut engine = make_engine(6);
         engine.compact(&mut messages).unwrap();
@@ -168,8 +167,7 @@ mod compaction_quality_tests {
             assistant_msg("I will add #[derive(Debug)] to MyStruct."),
         ];
 
-        let mut messages =
-            build_large_conversation(old_turns, recent_turns, 12);
+        let mut messages = build_large_conversation(old_turns, recent_turns, 12);
 
         let mut engine = make_engine(6);
         engine.compact(&mut messages).unwrap();
@@ -190,7 +188,8 @@ mod compaction_quality_tests {
     // 3. Original user request preserved.
     #[test]
     fn test_compaction_preserves_user_intent() {
-        let user_intent = "Refactor the authentication module to use JWT tokens instead of session cookies";
+        let user_intent =
+            "Refactor the authentication module to use JWT tokens instead of session cookies";
 
         let old_turns = vec![
             user_msg(user_intent),
@@ -202,8 +201,7 @@ mod compaction_quality_tests {
             assistant_msg("We should implement a refresh token rotation strategy."),
         ];
 
-        let mut messages =
-            build_large_conversation(old_turns, recent_turns, 15);
+        let mut messages = build_large_conversation(old_turns, recent_turns, 15);
 
         let mut engine = make_engine(6);
         engine.compact(&mut messages).unwrap();
@@ -243,8 +241,7 @@ mod compaction_quality_tests {
             assistant_msg("cargo check passes cleanly."),
         ];
 
-        let mut messages =
-            build_large_conversation(vec![], recent_turns, 15);
+        let mut messages = build_large_conversation(vec![], recent_turns, 15);
 
         let mut engine = make_engine(10);
         engine.compact(&mut messages).unwrap();
@@ -272,10 +269,7 @@ mod compaction_quality_tests {
         // Three reads of the same file across many turns
         let mut old_turns = Vec::new();
         for i in 0..3 {
-            old_turns.push(user_msg(&format!(
-                "Read src/config.rs again (time {})",
-                i
-            )));
+            old_turns.push(user_msg(&format!("Read src/config.rs again (time {})", i)));
             old_turns.push(tool_use_msg(
                 &format!("tu_r{}", i),
                 "Read",
@@ -300,8 +294,7 @@ mod compaction_quality_tests {
             assistant_msg("I'll update the config file."),
         ];
 
-        let mut messages =
-            build_large_conversation(old_turns, recent_turns, 5);
+        let mut messages = build_large_conversation(old_turns, recent_turns, 5);
 
         let original_len = messages.len();
         let mut engine = make_engine(6);
@@ -358,11 +351,8 @@ mod compaction_quality_tests {
             max_output_tokens: 500,
             ..Default::default()
         };
-        let mut engine = CompactEngine::new(
-            extreme_config,
-            Box::new(RuleBasedSummarizer::new()),
-        )
-        .unwrap();
+        let mut engine =
+            CompactEngine::new(extreme_config, Box::new(RuleBasedSummarizer::new())).unwrap();
 
         let result = engine.compact(&mut messages).unwrap();
         let compacted_tokens = estimate_tokens(&messages);
@@ -400,8 +390,7 @@ mod compaction_quality_tests {
         messages.push(system_msg("System prompt"));
 
         // Protected user instruction
-        let protected_text =
-            "CRITICAL INSTRUCTION: Always use unsafe code review guidelines.";
+        let protected_text = "CRITICAL INSTRUCTION: Always use unsafe code review guidelines.";
         messages.push(user_msg(protected_text));
 
         // Many filler messages that will be targeted for removal
@@ -456,8 +445,7 @@ mod compaction_quality_tests {
             assistant_msg("All tests passed."),
         ];
 
-        let mut messages =
-            build_large_conversation(vec![], recent_turns, 15);
+        let mut messages = build_large_conversation(vec![], recent_turns, 15);
 
         let mut engine = make_engine(6);
 
@@ -482,13 +470,16 @@ mod compaction_quality_tests {
                 assert!(
                     token_growth < 1000,
                     "second compaction should not grow excessively: first={}, second={}, growth={}",
-                    first_tokens, second_tokens, token_growth
+                    first_tokens,
+                    second_tokens,
+                    token_growth
                 );
                 assert!(
                     (second_tokens as f64 / first_tokens as f64) < 1.5,
                     "second compaction growth ratio should be under 1.5x: \
                      first={}, second={}, ratio={:.2}",
-                    first_tokens, second_tokens,
+                    first_tokens,
+                    second_tokens,
                     second_tokens as f64 / first_tokens as f64
                 );
                 // Message count should be stable or decrease
@@ -496,7 +487,8 @@ mod compaction_quality_tests {
                     messages.len() <= first_count + 2, // allow summary header
                     "second compaction should not drastically increase message count: \
                      first={}, second={}",
-                    first_count, messages.len()
+                    first_count,
+                    messages.len()
                 );
                 let _ = result;
             }
@@ -542,8 +534,7 @@ mod compaction_quality_tests {
             assistant_msg("I'll add rate limiting to the authenticate function."),
         ];
 
-        let mut messages =
-            build_large_conversation(old_turns, recent_turns, 10);
+        let mut messages = build_large_conversation(old_turns, recent_turns, 10);
 
         let mut engine = make_engine(6);
         engine.compact(&mut messages).unwrap();
@@ -552,7 +543,9 @@ mod compaction_quality_tests {
 
         // Tool names should survive
         assert!(
-            combined.contains("Grep") || combined.contains("Read") || combined.contains("Tools used"),
+            combined.contains("Grep")
+                || combined.contains("Read")
+                || combined.contains("Tools used"),
             "tool names should appear in the summary"
         );
 

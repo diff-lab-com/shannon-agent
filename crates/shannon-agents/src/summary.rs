@@ -111,11 +111,7 @@ impl SummaryGenerator {
             }
 
             // Parse content for file paths and structured data
-            Self::extract_file_operations(
-                &result.content,
-                &mut files_modified,
-                &mut files_created,
-            );
+            Self::extract_file_operations(&result.content, &mut files_modified, &mut files_created);
 
             // Merge metadata (later entries win)
             for (k, v) in &result.metadata {
@@ -322,10 +318,7 @@ impl SummaryGenerator {
         let mut recommendations: Vec<String> = recommendations.into_iter().collect();
         recommendations.sort();
 
-        let merged_task = format!(
-            "Merged task from {} agent(s)",
-            summaries.len()
-        );
+        let merged_task = format!("Merged task from {} agent(s)", summaries.len());
 
         AgentExecutionSummary {
             agent_name: format!("merged({})", agent_names.join(", ")),
@@ -491,8 +484,7 @@ impl SummaryGenerator {
         }
 
         // Absolute or relative path
-        let path_end = trimmed
-            .find(['\n', ',', ')', '}', ';']);
+        let path_end = trimmed.find(['\n', ',', ')', '}', ';']);
         let candidate = match path_end {
             Some(end) => trimmed[..end].trim(),
             None => trimmed.trim(),
@@ -527,9 +519,9 @@ impl SummaryGenerator {
                 let ext = &s[dot_pos + 1..];
                 // Common code file extensions
                 let known_exts = [
-                    "rs", "toml", "json", "yaml", "yml", "md", "txt", "py", "js", "ts",
-                    "go", "java", "c", "h", "cpp", "hpp", "rb", "sh", "bash", "zsh",
-                    "html", "css", "scss", "sql", "lock", "cfg", "ini", "xml",
+                    "rs", "toml", "json", "yaml", "yml", "md", "txt", "py", "js", "ts", "go",
+                    "java", "c", "h", "cpp", "hpp", "rb", "sh", "bash", "zsh", "html", "css",
+                    "scss", "sql", "lock", "cfg", "ini", "xml",
                 ];
                 if known_exts.contains(&ext) {
                     return true;
@@ -765,10 +757,7 @@ mod tests {
 
     #[test]
     fn test_extracts_created_files() {
-        let results = vec![simple_output(
-            "Created file: src/main.rs\nAll good",
-            false,
-        )];
+        let results = vec![simple_output("Created file: src/main.rs\nAll good", false)];
         let summary = SummaryGenerator::summarize(&results, "agent", "task");
         assert!(summary.files_created.contains(&"src/main.rs".to_string()));
     }
@@ -785,10 +774,7 @@ mod tests {
 
     #[test]
     fn test_extracts_backtick_quoted_paths() {
-        let results = vec![simple_output(
-            "Created file: `src/lib.rs`\nDone",
-            false,
-        )];
+        let results = vec![simple_output("Created file: `src/lib.rs`\nDone", false)];
         let summary = SummaryGenerator::summarize(&results, "agent", "task");
         assert!(summary.files_created.contains(&"src/lib.rs".to_string()));
     }
@@ -836,7 +822,10 @@ mod tests {
         )];
         let summary = SummaryGenerator::summarize(&results, "agent", "task");
         assert!(!summary.key_findings.is_empty());
-        assert_eq!(summary.key_findings[0], "Found 3 unused imports in src/main.rs");
+        assert_eq!(
+            summary.key_findings[0],
+            "Found 3 unused imports in src/main.rs"
+        );
     }
 
     #[test]
@@ -848,7 +837,11 @@ mod tests {
         .unwrap();
         let results = vec![simple_output(&content, false)];
         let summary = SummaryGenerator::summarize(&results, "agent", "task");
-        assert!(summary.key_findings.contains(&"All tests passed".to_string()));
+        assert!(
+            summary
+                .key_findings
+                .contains(&"All tests passed".to_string())
+        );
     }
 
     // ---- Recommendations ----
@@ -1222,7 +1215,9 @@ mod tests {
     #[test]
     fn test_looks_like_path_with_slash() {
         assert!(SummaryGenerator::looks_like_path("src/lib.rs"));
-        assert!(SummaryGenerator::looks_like_path("crates/shannon-core/src/main.rs"));
+        assert!(SummaryGenerator::looks_like_path(
+            "crates/shannon-core/src/main.rs"
+        ));
     }
 
     #[test]
@@ -1241,7 +1236,11 @@ mod tests {
 
     // ---- Helpers for tests ----
 
-    fn make_summary(name: &str, status: SummaryStatus, error_count: usize) -> AgentExecutionSummary {
+    fn make_summary(
+        name: &str,
+        status: SummaryStatus,
+        error_count: usize,
+    ) -> AgentExecutionSummary {
         AgentExecutionSummary {
             agent_name: name.to_string(),
             task_description: "test task".to_string(),
@@ -1250,9 +1249,7 @@ mod tests {
             files_modified: vec![],
             files_created: vec![],
             tools_used: vec![],
-            errors: (0..error_count)
-                .map(|i| format!("error {i}"))
-                .collect(),
+            errors: (0..error_count).map(|i| format!("error {i}")).collect(),
             key_findings: vec![],
             recommendations: vec![],
             metadata: HashMap::new(),
@@ -1274,16 +1271,10 @@ mod tests {
                 SummaryStatus::Success
             },
             duration_ms: 0,
-            files_modified: (0..modified)
-                .map(|i| format!("modified_{i}.rs"))
-                .collect(),
-            files_created: (0..created)
-                .map(|i| format!("created_{i}.rs"))
-                .collect(),
+            files_modified: (0..modified).map(|i| format!("modified_{i}.rs")).collect(),
+            files_created: (0..created).map(|i| format!("created_{i}.rs")).collect(),
             tools_used: vec![],
-            errors: (0..errors)
-                .map(|i| format!("error {i}"))
-                .collect(),
+            errors: (0..errors).map(|i| format!("error {i}")).collect(),
             key_findings: vec![],
             recommendations: vec![],
             metadata: HashMap::new(),

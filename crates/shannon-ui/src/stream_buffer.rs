@@ -77,11 +77,7 @@ impl StreamBuffer {
 
         let result = match self.mode {
             StreamMode::CatchUp => {
-                let batch: String = self
-                    .pending_chunks
-                    .drain(..)
-                    .map(|(s, _)| s)
-                    .collect();
+                let batch: String = self.pending_chunks.drain(..).map(|(s, _)| s).collect();
                 self.catchup_count += 1;
                 self.mode = StreamMode::Smooth;
                 batch

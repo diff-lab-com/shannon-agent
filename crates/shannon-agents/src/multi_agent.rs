@@ -9,6 +9,7 @@
 //! - `MultiAgentResult`: Aggregated results from all agents
 //! - `AgentResult`: Individual agent execution result
 
+use crate::executor::AgentExecutor;
 use serde::{Deserialize, Serialize};
 use shannon_core::tools::ToolOutput;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -17,7 +18,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
-use crate::executor::AgentExecutor;
 
 // ---------------------------------------------------------------------------
 // Configuration types
@@ -321,9 +321,7 @@ impl std::fmt::Display for DependencyError {
 /// Perform a topological sort on agent configurations based on their dependencies.
 /// Returns agents in execution order (dependencies first), preserving original
 /// order for agents with no relative dependency constraints.
-pub fn topological_sort(
-    agents: &[AgentConfig],
-) -> Result<Vec<&AgentConfig>, DependencyError> {
+pub fn topological_sort(agents: &[AgentConfig]) -> Result<Vec<&AgentConfig>, DependencyError> {
     // Build name -> index map and check for duplicates
     let mut name_to_idx: HashMap<String, usize> = HashMap::new();
     for (i, agent) in agents.iter().enumerate() {
@@ -378,7 +376,9 @@ pub fn topological_sort(
 
         if let Some(children) = dependents.get(name) {
             for &child in children {
-                let deg = in_degree.get_mut(child).expect("in_degree entry initialized for all agents above");
+                let deg = in_degree
+                    .get_mut(child)
+                    .expect("in_degree entry initialized for all agents above");
                 *deg -= 1;
                 if *deg == 0 {
                     queue.push_back(child);
@@ -462,13 +462,7 @@ impl MultiAgentSpawner {
                 let agent_results: Vec<AgentResult> = config
                     .agents
                     .iter()
-                    .map(|a| {
-                        AgentResult::failed(
-                            a.name.clone(),
-                            e.to_string(),
-                            Duration::ZERO,
-                        )
-                    })
+                    .map(|a| AgentResult::failed(a.name.clone(), e.to_string(), Duration::ZERO))
                     .collect();
                 return MultiAgentResult {
                     agent_results,
@@ -548,7 +542,7 @@ impl MultiAgentSpawner {
                             wave_timeout,
                             Self::execute_agent(&agent, exec.as_deref(), default_prompt.as_deref()),
                         )
-                            .await;
+                        .await;
 
                         let duration = start.elapsed();
 
@@ -706,7 +700,11 @@ impl MultiAgentSpawner {
                 )
                 .await?;
 
-            Ok(AgentResult::completed(agent.name.clone(), result, start.elapsed()))
+            Ok(AgentResult::completed(
+                agent.name.clone(),
+                result,
+                start.elapsed(),
+            ))
         } else {
             // No executor configured: log warning and return a stub result
             tracing::warn!(
@@ -716,7 +714,10 @@ impl MultiAgentSpawner {
             Ok(AgentResult::completed(
                 agent.name.clone(),
                 ToolOutput {
-                    content: format!("Agent '{}' completed task (no executor configured)", agent.name),
+                    content: format!(
+                        "Agent '{}' completed task (no executor configured)",
+                        agent.name
+                    ),
                     is_error: false,
                     metadata: std::collections::HashMap::new(),
                 },
@@ -953,9 +954,11 @@ mod tests {
     #[test]
     fn test_multi_agent_result_serde_roundtrip() {
         let result = MultiAgentResult {
-            agent_results: vec![
-                AgentResult::completed("a".into(), make_output("ok"), Duration::ZERO),
-            ],
+            agent_results: vec![AgentResult::completed(
+                "a".into(),
+                make_output("ok"),
+                Duration::ZERO,
+            )],
             total_duration: Duration::from_secs(2),
             success_count: 1,
             failure_count: 0,
@@ -1019,33 +1022,32 @@ mod tests {
             AgentConfig::new("b", "tb").depends_on("a"),
         ];
         let result = topological_sort(&agents);
-        assert!(matches!(result, Err(DependencyError::CircularDependency(_))));
+        assert!(matches!(
+            result,
+            Err(DependencyError::CircularDependency(_))
+        ));
     }
 
     #[test]
     fn test_topological_sort_self_cycle() {
-        let agents = vec![
-            AgentConfig::new("a", "ta").depends_on("a"),
-        ];
+        let agents = vec![AgentConfig::new("a", "ta").depends_on("a")];
         let result = topological_sort(&agents);
-        assert!(matches!(result, Err(DependencyError::CircularDependency(_))));
+        assert!(matches!(
+            result,
+            Err(DependencyError::CircularDependency(_))
+        ));
     }
 
     #[test]
     fn test_topological_sort_unknown_dep() {
-        let agents = vec![
-            AgentConfig::new("a", "ta").depends_on("nonexistent"),
-        ];
+        let agents = vec![AgentConfig::new("a", "ta").depends_on("nonexistent")];
         let result = topological_sort(&agents);
         assert!(matches!(result, Err(DependencyError::UnknownDependency(_))));
     }
 
     #[test]
     fn test_topological_sort_duplicate_name() {
-        let agents = vec![
-            AgentConfig::new("dup", "ta"),
-            AgentConfig::new("dup", "tb"),
-        ];
+        let agents = vec![AgentConfig::new("dup", "ta"), AgentConfig::new("dup", "tb")];
         let result = topological_sort(&agents);
         assert!(matches!(result, Err(DependencyError::DuplicateAgent(_))));
     }
@@ -1141,9 +1143,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_single_agent() {
-        let config = MultiAgentConfig::new(vec![
-            AgentConfig::new("solo", "Do a thing"),
-        ]);
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("solo", "Do a thing")]);
         let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.agent_results.len(), 1);
         assert_eq!(result.success_count, 1);
@@ -1204,9 +1204,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_unknown_dependency_fails_all() {
-        let config = MultiAgentConfig::new(vec![
-            AgentConfig::new("a", "ta").depends_on("ghost"),
-        ]);
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("a", "ta").depends_on("ghost")]);
         let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.failure_count, 1);
         let err = result.agent_results[0].error.as_deref().unwrap();
@@ -1233,10 +1231,8 @@ mod tests {
         // Note: our synthetic execute_agent completes instantly,
         // so this tests the timeout wiring rather than actual timeout behavior.
         // A real implementation would have agents that take time.
-        let config = MultiAgentConfig::new(vec![
-            AgentConfig::new("fast", "instant task"),
-        ])
-        .with_timeout(Duration::from_secs(5));
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("fast", "instant task")])
+            .with_timeout(Duration::from_secs(5));
 
         let result = MultiAgentSpawner::spawn(config, None).await;
         assert_eq!(result.success_count, 1);
@@ -1258,9 +1254,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_background() {
-        let config = MultiAgentConfig::new(vec![
-            AgentConfig::new("bg-agent", "background task"),
-        ]);
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("bg-agent", "background task")]);
         let handle = MultiAgentSpawner::spawn_background(config);
         let result = handle.await.unwrap();
         assert_eq!(result.success_count, 1);
@@ -1273,7 +1267,9 @@ mod tests {
             AgentConfig::new("a", "root"),
             AgentConfig::new("b", "left").depends_on("a"),
             AgentConfig::new("c", "right").depends_on("a"),
-            AgentConfig::new("d", "join").depends_on("b").depends_on("c"),
+            AgentConfig::new("d", "join")
+                .depends_on("b")
+                .depends_on("c"),
         ]);
         let result = MultiAgentSpawner::spawn(config, None).await;
         assert!(result.all_succeeded());

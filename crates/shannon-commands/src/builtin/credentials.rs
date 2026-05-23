@@ -1,6 +1,8 @@
 //! /credentials command - Manage API credentials and secrets
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Credentials prompt template
 const CREDENTIALS_PROMPT: &str = r##"
@@ -45,7 +47,11 @@ pub fn command() -> Command {
         },
         progress_message: "".to_string(),
         content_length: 2000,
-        arg_names: vec!["action".to_string(), "service".to_string(), "value".to_string()],
+        arg_names: vec![
+            "action".to_string(),
+            "service".to_string(),
+            "value".to_string(),
+        ],
         allowed_tools: vec![],
         model: None,
         hooks: std::collections::HashMap::new(),
@@ -88,8 +94,8 @@ pub fn parse_credential_action(arg: &str) -> CredentialAction {
 
 /// Create a loaded CredentialManager
 fn get_manager() -> Result<shannon_core::credential_manager::CredentialManager, String> {
-    let mut manager = shannon_core::credential_manager::CredentialManager::new()
-        .map_err(|e| format!("{e}"))?;
+    let mut manager =
+        shannon_core::credential_manager::CredentialManager::new().map_err(|e| format!("{e}"))?;
     manager.load().map_err(|e| format!("{e}"))?;
     Ok(manager)
 }
@@ -133,7 +139,8 @@ pub fn format_credentials_list() -> String {
 pub fn format_credential_store(service: &str, value: &str) -> String {
     match get_manager() {
         Ok(mut manager) => {
-            let credential = shannon_core::credential_manager::Credential::new(service, service, value);
+            let credential =
+                shannon_core::credential_manager::Credential::new(service, service, value);
             match manager.store_or_update(credential) {
                 Ok(_) => format!("Credential stored for service: {service}"),
                 Err(e) => format!("Failed to store credential: {e}"),
@@ -154,7 +161,7 @@ pub fn format_credential_get(service: &str) -> String {
                     let masked = if val.len() <= 4 {
                         "*".repeat(val.len())
                     } else {
-                        format!("{}****{}", &val[..2], &val[val.len()-2..])
+                        format!("{}****{}", &val[..2], &val[val.len() - 2..])
                     };
                     format!("Credential for '{service}': {masked}")
                 }
@@ -168,12 +175,10 @@ pub fn format_credential_get(service: &str) -> String {
 /// Format credential delete response
 pub fn format_credential_delete(service: &str) -> String {
     match get_manager() {
-        Ok(mut manager) => {
-            match manager.delete(service) {
-                Ok(_) => format!("Credential deleted for service: {service}"),
-                Err(e) => format!("Failed to delete credential for '{service}': {e}"),
-            }
-        }
+        Ok(mut manager) => match manager.delete(service) {
+            Ok(_) => format!("Credential deleted for service: {service}"),
+            Err(e) => format!("Failed to delete credential for '{service}': {e}"),
+        },
         Err(e) => format!("Error accessing credential manager: {e}"),
     }
 }

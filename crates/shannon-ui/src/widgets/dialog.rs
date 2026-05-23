@@ -4,11 +4,11 @@
 
 use crate::theme::Theme;
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
-    Frame,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -133,7 +133,9 @@ impl DialogWidget {
 
     /// Get the currently selected button action
     pub fn selected_action(&self) -> Option<&str> {
-        self.buttons.get(self.selected_button).map(|b| b.action.as_str())
+        self.buttons
+            .get(self.selected_button)
+            .map(|b| b.action.as_str())
     }
 
     /// Get button by action
@@ -164,22 +166,21 @@ impl DialogWidget {
         let mut content_lines = Vec::new();
 
         // Title
-        content_lines.push(Line::from(vec![
-            Span::styled(
-                &self.title,
-                Style::default()
-                    .fg(theme.accent)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]));
+        content_lines.push(Line::from(vec![Span::styled(
+            &self.title,
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        )]));
         content_lines.push(Line::from(""));
 
         // Subtitle
         if let Some(ref subtitle) = self.subtitle {
             for line in Self::wrap_text(subtitle, dialog_width.saturating_sub(4) as usize) {
-                content_lines.push(Line::from(vec![
-                    Span::styled(line, Style::default().fg(theme.muted)),
-                ]));
+                content_lines.push(Line::from(vec![Span::styled(
+                    line,
+                    Style::default().fg(theme.muted),
+                )]));
             }
             content_lines.push(Line::from(""));
         }
@@ -216,7 +217,7 @@ impl DialogWidget {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(theme.accent))
-                    .border_type(ratatui::widgets::BorderType::Rounded)
+                    .border_type(ratatui::widgets::BorderType::Rounded),
             )
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true });
@@ -233,27 +234,33 @@ impl DialogWidget {
             let is_selected = i == self.selected_button;
 
             let style = if button.is_dangerous {
-                Style::default().fg(if is_selected {
-                    theme.error
-                } else {
-                    theme.text_dim
-                }).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(if is_selected {
+                        theme.error
+                    } else {
+                        theme.text_dim
+                    })
+                    .add_modifier(Modifier::BOLD)
             } else if button.is_primary {
-                Style::default().fg(if is_selected {
-                    theme.success
-                } else {
-                    theme.text_dim
-                }).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(if is_selected {
+                        theme.success
+                    } else {
+                        theme.text_dim
+                    })
+                    .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(if is_selected {
-                    theme.text
-                } else {
-                    theme.text_dim
-                }).add_modifier(if is_selected {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                })
+                Style::default()
+                    .fg(if is_selected {
+                        theme.text
+                    } else {
+                        theme.text_dim
+                    })
+                    .add_modifier(if is_selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    })
             };
 
             let prefix = if is_selected { "▸ " } else { "  " };
@@ -321,11 +328,11 @@ impl ConfirmDialog {
     /// Create a new confirmation dialog
     pub fn new(title: String) -> Self {
         let dialog = DialogWidget::new(title)
-            .with_button(DialogButton::new("Cancel".to_string(), "cancel".to_string()))
-            .with_button(
-                DialogButton::new("Confirm".to_string(), "confirm".to_string())
-                    .primary()
-            );
+            .with_button(DialogButton::new(
+                "Cancel".to_string(),
+                "cancel".to_string(),
+            ))
+            .with_button(DialogButton::new("Confirm".to_string(), "confirm".to_string()).primary());
 
         Self { dialog }
     }
@@ -351,10 +358,7 @@ impl AlertDialog {
     /// Create a new alert dialog
     pub fn new(title: String) -> Self {
         let dialog = DialogWidget::new(title)
-            .with_button(
-                DialogButton::new("OK".to_string(), "ok".to_string())
-                    .primary()
-            );
+            .with_button(DialogButton::new("OK".to_string(), "ok".to_string()).primary());
 
         Self { dialog }
     }
@@ -391,11 +395,11 @@ impl InputDialog {
     /// Create a new input dialog
     pub fn new(title: String) -> Self {
         let dialog = DialogWidget::new(title)
-            .with_button(DialogButton::new("Cancel".to_string(), "cancel".to_string()))
-            .with_button(
-                DialogButton::new("Submit".to_string(), "submit".to_string())
-                    .primary()
-            );
+            .with_button(DialogButton::new(
+                "Cancel".to_string(),
+                "cancel".to_string(),
+            ))
+            .with_button(DialogButton::new("Submit".to_string(), "submit".to_string()).primary());
 
         Self {
             dialog,
@@ -442,7 +446,11 @@ impl InputDialog {
         dialog.content.push(format!(
             "{}{}",
             self.value,
-            if self.value.is_empty() { &self.placeholder } else { "" }
+            if self.value.is_empty() {
+                &self.placeholder
+            } else {
+                ""
+            }
         ));
         dialog.render(frame, area, theme);
     }
@@ -489,7 +497,10 @@ mod tests {
     fn test_dialog_with_buttons() {
         let dialog = DialogWidget::new("Test".to_string())
             .with_button(DialogButton::new("OK".to_string(), "ok".to_string()))
-            .with_button(DialogButton::new("Cancel".to_string(), "cancel".to_string()));
+            .with_button(DialogButton::new(
+                "Cancel".to_string(),
+                "cancel".to_string(),
+            ));
 
         assert_eq!(dialog.buttons.len(), 2);
         assert_eq!(dialog.selected_button, 0);
@@ -499,7 +510,10 @@ mod tests {
     fn test_dialog_navigation() {
         let mut dialog = DialogWidget::new("Test".to_string())
             .with_button(DialogButton::new("OK".to_string(), "ok".to_string()))
-            .with_button(DialogButton::new("Cancel".to_string(), "cancel".to_string()));
+            .with_button(DialogButton::new(
+                "Cancel".to_string(),
+                "cancel".to_string(),
+            ));
 
         dialog.next_button();
         assert_eq!(dialog.selected_button, 1);
@@ -534,8 +548,8 @@ mod tests {
 
     #[test]
     fn test_input_dialog() {
-        let mut input = InputDialog::new("Enter Name".to_string())
-            .with_placeholder("Name...".to_string());
+        let mut input =
+            InputDialog::new("Enter Name".to_string()).with_placeholder("Name...".to_string());
 
         input.add_char('H');
         input.add_char('e');

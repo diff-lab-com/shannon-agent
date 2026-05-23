@@ -80,9 +80,7 @@ impl<T: Transport> McpClient<T> {
             }
         });
 
-        let response = self
-            .send_request("initialize", Some(params))
-            .await?;
+        let response = self.send_request("initialize", Some(params)).await?;
 
         let result: InitializeResult = serde_json::from_value(response)
             .map_err(|e| McpError::Protocol(format!("Invalid initialize result: {e}")))?;
@@ -92,8 +90,16 @@ impl<T: Transport> McpClient<T> {
 
         info!(
             "Initialized with server: {} v{}",
-            result.server_info.as_ref().map(|s| &s.name).unwrap_or(&"unknown".to_string()),
-            result.server_info.as_ref().map(|s| &s.version).unwrap_or(&"unknown".to_string())
+            result
+                .server_info
+                .as_ref()
+                .map(|s| &s.name)
+                .unwrap_or(&"unknown".to_string()),
+            result
+                .server_info
+                .as_ref()
+                .map(|s| &s.version)
+                .unwrap_or(&"unknown".to_string())
         );
 
         Ok(result)
@@ -109,7 +115,11 @@ impl<T: Transport> McpClient<T> {
     }
 
     /// Call a tool
-    pub async fn call_tool(&self, name: &str, arguments: serde_json::Value) -> McpResult<ToolContent> {
+    pub async fn call_tool(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> McpResult<ToolContent> {
         debug!(tool = %name, "Calling tool");
 
         let params = serde_json::json!({
@@ -164,7 +174,11 @@ impl<T: Transport> McpClient<T> {
     }
 
     /// Get a prompt
-    pub async fn get_prompt(&self, name: &str, arguments: Option<HashMap<String, String>>) -> McpResult<ToolContent> {
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<HashMap<String, String>>,
+    ) -> McpResult<ToolContent> {
         debug!(prompt = %name, "Getting prompt");
 
         let params = if let Some(args) = arguments {
@@ -184,7 +198,11 @@ impl<T: Transport> McpClient<T> {
     }
 
     /// Complete a prompt argument or resource name
-    pub async fn complete(&self, reference: CompletionRef, argument: PromptArgument) -> McpResult<CompletionResult> {
+    pub async fn complete(
+        &self,
+        reference: CompletionRef,
+        argument: PromptArgument,
+    ) -> McpResult<CompletionResult> {
         debug!(ref_type = %reference.ref_type, "Requesting completion");
 
         let params = serde_json::json!({
@@ -192,7 +210,9 @@ impl<T: Transport> McpClient<T> {
             "argument": argument
         });
 
-        let response = self.send_request("completion/complete", Some(params)).await?;
+        let response = self
+            .send_request("completion/complete", Some(params))
+            .await?;
         let result: CompletionResult = serde_json::from_value(response)
             .map_err(|e| McpError::Protocol(format!("Invalid completion result: {e}")))?;
 
@@ -214,7 +234,9 @@ impl<T: Transport> McpClient<T> {
         debug!(uri = %uri, "Subscribing to resource");
 
         let params = serde_json::json!({ "uri": uri });
-        let response = self.send_request("resources/subscribe", Some(params)).await?;
+        let response = self
+            .send_request("resources/subscribe", Some(params))
+            .await?;
         let result: SubscribeResult = serde_json::from_value(response)
             .map_err(|e| McpError::Protocol(format!("Invalid subscribe result: {e}")))?;
 
@@ -226,7 +248,9 @@ impl<T: Transport> McpClient<T> {
         debug!(uri = %uri, "Unsubscribing from resource");
 
         let params = serde_json::json!({ "uri": uri });
-        let response = self.send_request("resources/unsubscribe", Some(params)).await?;
+        let response = self
+            .send_request("resources/unsubscribe", Some(params))
+            .await?;
         let result: SubscribeResult = serde_json::from_value(response)
             .map_err(|e| McpError::Protocol(format!("Invalid unsubscribe result: {e}")))?;
 
@@ -240,14 +264,18 @@ impl<T: Transport> McpClient<T> {
 
     /// Check if server supports a specific capability
     pub async fn supports_tools(&self) -> bool {
-        self.server_capabilities.lock().await
+        self.server_capabilities
+            .lock()
+            .await
             .as_ref()
             .and_then(|caps| caps.tools.as_ref())
             .is_some()
     }
 
     pub async fn supports_resources(&self) -> bool {
-        self.server_capabilities.lock().await
+        self.server_capabilities
+            .lock()
+            .await
             .as_ref()
             .and_then(|caps| caps.resources.as_ref())
             .is_some()
@@ -255,7 +283,9 @@ impl<T: Transport> McpClient<T> {
 
     /// Check if the server supports resource subscriptions
     pub async fn supports_subscribe(&self) -> bool {
-        self.server_capabilities.lock().await
+        self.server_capabilities
+            .lock()
+            .await
             .as_ref()
             .and_then(|caps| caps.resources.as_ref())
             .map(|r| r.subscribe)
@@ -263,14 +293,20 @@ impl<T: Transport> McpClient<T> {
     }
 
     pub async fn supports_prompts(&self) -> bool {
-        self.server_capabilities.lock().await
+        self.server_capabilities
+            .lock()
+            .await
             .as_ref()
             .and_then(|caps| caps.prompts.as_ref())
             .is_some()
     }
 
     /// Send a raw JSON-RPC request
-    async fn send_request(&self, method: &str, params: Option<serde_json::Value>) -> McpResult<serde_json::Value> {
+    async fn send_request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> McpResult<serde_json::Value> {
         let id = uuid::Uuid::new_v4().to_string();
         let request = JsonRpcRequest::new(method, params);
 
@@ -284,7 +320,8 @@ impl<T: Transport> McpClient<T> {
         let message = JsonRpcMessage::Request(request);
         let serialized = serde_json::to_string(&message)?;
         if let Some(ref tx) = self.write_tx {
-            tx.send(serialized).await
+            tx.send(serialized)
+                .await
                 .map_err(|e| McpError::Protocol(format!("Write channel closed: {e}")))?;
         } else {
             let mut transport = self.transport.lock().await;
@@ -558,7 +595,11 @@ mod tests {
     ) -> serde_json::Value {
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
         let id = uuid::Uuid::new_v4().to_string();
-        client.pending_requests.lock().await.insert(id.clone(), result_tx);
+        client
+            .pending_requests
+            .lock()
+            .await
+            .insert(id.clone(), result_tx);
 
         // Build and send the JSON-RPC request directly.
         let request = JsonRpcRequest::new(method, params);
@@ -577,7 +618,11 @@ mod tests {
 
         // Move the pending sender to the actual request ID.
         let sender = client.pending_requests.lock().await.remove(&id).unwrap();
-        client.pending_requests.lock().await.insert(actual_id.clone(), sender);
+        client
+            .pending_requests
+            .lock()
+            .await
+            .insert(actual_id.clone(), sender);
 
         // Enqueue the response.
         {
@@ -759,8 +804,13 @@ mod tests {
 
         let caps = ServerCapabilities {
             tools: Some(ToolsCapability { list_changed: true }),
-            resources: Some(ResourcesCapability { subscribe: false, list_changed: false }),
-            prompts: Some(PromptsCapability { list_changed: false }),
+            resources: Some(ResourcesCapability {
+                subscribe: false,
+                list_changed: false,
+            }),
+            prompts: Some(PromptsCapability {
+                list_changed: false,
+            }),
             logging: None,
             ..Default::default()
         };
@@ -793,7 +843,10 @@ mod tests {
         let mock = MockTransport::new();
         let client = McpClient::new(mock);
         *client.server_capabilities.lock().await = Some(ServerCapabilities {
-            resources: Some(ResourcesCapability { subscribe: true, list_changed: false }),
+            resources: Some(ResourcesCapability {
+                subscribe: true,
+                list_changed: false,
+            }),
             ..Default::default()
         });
         assert!(!client.supports_tools().await);
@@ -806,7 +859,9 @@ mod tests {
         let mock = MockTransport::new();
         let client = McpClient::new(mock);
         *client.server_capabilities.lock().await = Some(ServerCapabilities {
-            prompts: Some(PromptsCapability { list_changed: false }),
+            prompts: Some(PromptsCapability {
+                list_changed: false,
+            }),
             ..Default::default()
         });
         assert!(!client.supports_tools().await);
@@ -829,7 +884,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_call_tool_request_params() {
-
         // Verify the call_tool parameter construction.
         let params = serde_json::json!({
             "name": "my_tool",
@@ -900,7 +954,14 @@ mod tests {
         assert_eq!(content.is_error, Some(false));
 
         // Verify the sent request payload.
-        let sent = client.transport.lock().await.sent_messages().last().unwrap().clone();
+        let sent = client
+            .transport
+            .lock()
+            .await
+            .sent_messages()
+            .last()
+            .unwrap()
+            .clone();
         let parsed: serde_json::Value = serde_json::from_str(&sent).unwrap();
         assert_eq!(parsed["method"], "tools/call");
         assert_eq!(parsed["params"]["name"], "test_tool");

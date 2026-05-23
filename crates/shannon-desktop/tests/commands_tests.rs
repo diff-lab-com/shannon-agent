@@ -91,7 +91,11 @@ async fn send_message(state: &AppState, message: String) -> Result<String, Strin
         "[Shannon Desktop] Received: \"{}\"\n\n\
          The desktop app is scaffolded and ready for integration.\n\
          Connect to shannon-core's QueryEngine to enable full AI responses.",
-        if message.len() > 100 { &message[..100] } else { &message }
+        if message.len() > 100 {
+            &message[..100]
+        } else {
+            &message
+        }
     );
 
     {
@@ -161,12 +165,36 @@ async fn cancel_query(state: &AppState) {
 
 fn list_tools() -> Vec<ToolInfo> {
     vec![
-        ToolInfo { name: "bash".into(), description: "Execute shell commands".into(), enabled: true },
-        ToolInfo { name: "read".into(), description: "Read file contents".into(), enabled: true },
-        ToolInfo { name: "write".into(), description: "Write file contents".into(), enabled: true },
-        ToolInfo { name: "edit".into(), description: "Edit files with diff".into(), enabled: true },
-        ToolInfo { name: "grep".into(), description: "Search file contents".into(), enabled: true },
-        ToolInfo { name: "glob".into(), description: "Find files by pattern".into(), enabled: true },
+        ToolInfo {
+            name: "bash".into(),
+            description: "Execute shell commands".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "read".into(),
+            description: "Read file contents".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "write".into(),
+            description: "Write file contents".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "edit".into(),
+            description: "Edit files with diff".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "grep".into(),
+            description: "Search file contents".into(),
+            enabled: true,
+        },
+        ToolInfo {
+            name: "glob".into(),
+            description: "Find files by pattern".into(),
+            enabled: true,
+        },
     ]
 }
 
@@ -230,7 +258,10 @@ async fn send_message_toggles_querying_flag() {
     assert!(!*state.querying.lock().await);
 
     let _ = send_message(&state, "test".into()).await;
-    assert!(!*state.querying.lock().await, "querying should be false after send_message completes");
+    assert!(
+        !*state.querying.lock().await,
+        "querying should be false after send_message completes"
+    );
 }
 
 #[tokio::test]
@@ -238,7 +269,10 @@ async fn send_message_response_contains_echo() {
     let state = AppState::new();
     let msg = "check this out";
     let response = send_message(&state, msg.into()).await.unwrap();
-    assert!(response.contains(msg), "response should echo the user message");
+    assert!(
+        response.contains(msg),
+        "response should echo the user message"
+    );
 }
 
 #[tokio::test]
@@ -246,8 +280,14 @@ async fn send_message_truncates_long_input_in_echo() {
     let state = AppState::new();
     let long_msg = "x".repeat(200);
     let response = send_message(&state, long_msg.clone()).await.unwrap();
-    assert!(response.contains(&"x".repeat(100)), "response should contain first 100 chars");
-    assert!(!response.contains(&long_msg), "response should not contain the full 200-char message");
+    assert!(
+        response.contains(&"x".repeat(100)),
+        "response should contain first 100 chars"
+    );
+    assert!(
+        !response.contains(&long_msg),
+        "response should not contain the full 200-char message"
+    );
 }
 
 #[tokio::test]
@@ -255,8 +295,14 @@ async fn send_message_timestamps_are_positive() {
     let state = AppState::new();
     let _ = send_message(&state, "timing".into()).await;
     let messages = state.messages.lock().await;
-    assert!(messages[0].timestamp > 0, "user message timestamp should be positive");
-    assert!(messages[1].timestamp > 0, "assistant message timestamp should be positive");
+    assert!(
+        messages[0].timestamp > 0,
+        "user message timestamp should be positive"
+    );
+    assert!(
+        messages[1].timestamp > 0,
+        "assistant message timestamp should be positive"
+    );
 }
 
 // ── get_conversation ──────────────────────────────────────────────
@@ -310,7 +356,10 @@ async fn list_models_structure() {
 #[tokio::test]
 async fn list_models_providers() {
     let models = list_models();
-    let anthropic: Vec<_> = models.iter().filter(|m| m.provider == "anthropic").collect();
+    let anthropic: Vec<_> = models
+        .iter()
+        .filter(|m| m.provider == "anthropic")
+        .collect();
     let openai: Vec<_> = models.iter().filter(|m| m.provider == "openai").collect();
     assert_eq!(anthropic.len(), 2, "should have 2 anthropic models");
     assert_eq!(openai.len(), 1, "should have 1 openai model");
@@ -342,7 +391,15 @@ async fn get_status_after_messages() {
 #[tokio::test]
 async fn get_status_reflects_model_change() {
     let state = AppState::new();
-    configure(&state, ConfigUpdate { key: "model".into(), value: "gpt-4".into() }).await.unwrap();
+    configure(
+        &state,
+        ConfigUpdate {
+            key: "model".into(),
+            value: "gpt-4".into(),
+        },
+    )
+    .await
+    .unwrap();
     let status = get_status(&state).await;
     assert_eq!(status.model, "gpt-4");
 }
@@ -372,7 +429,14 @@ async fn cancel_query_when_already_false() {
 #[tokio::test]
 async fn configure_updates_model() {
     let state = AppState::new();
-    let result = configure(&state, ConfigUpdate { key: "model".into(), value: "claude-opus".into() }).await;
+    let result = configure(
+        &state,
+        ConfigUpdate {
+            key: "model".into(),
+            value: "claude-opus".into(),
+        },
+    )
+    .await;
     assert!(result.is_ok());
 
     let model = state.model.lock().await;
@@ -382,7 +446,14 @@ async fn configure_updates_model() {
 #[tokio::test]
 async fn configure_unknown_key_returns_error() {
     let state = AppState::new();
-    let result = configure(&state, ConfigUpdate { key: "unknown_key".into(), value: "v".into() }).await;
+    let result = configure(
+        &state,
+        ConfigUpdate {
+            key: "unknown_key".into(),
+            value: "v".into(),
+        },
+    )
+    .await;
     assert!(result.is_err());
     assert!(matches!(result, Err(ref e) if e.contains("Unknown config key")));
 }
@@ -399,7 +470,11 @@ async fn list_tools_returns_expected_count() {
 async fn list_tools_all_enabled() {
     let tools = list_tools();
     for tool in &tools {
-        assert!(tool.enabled, "tool '{}' should be enabled by default", tool.name);
+        assert!(
+            tool.enabled,
+            "tool '{}' should be enabled by default",
+            tool.name
+        );
     }
 }
 
@@ -419,6 +494,10 @@ async fn list_tools_has_expected_names() {
 async fn list_tools_have_nonempty_descriptions() {
     let tools = list_tools();
     for tool in &tools {
-        assert!(!tool.description.is_empty(), "tool '{}' should have a description", tool.name);
+        assert!(
+            !tool.description.is_empty(),
+            "tool '{}' should have a description",
+            tool.name
+        );
     }
 }

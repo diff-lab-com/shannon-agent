@@ -3,7 +3,9 @@
 //! Decomposes work into independent tasks, runs each in a git worktree,
 //! and creates a PR per task. Similar to Claude Code's `/batch` flow.
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Create the /batch command
 pub fn command() -> Command {
@@ -193,7 +195,11 @@ mod tests {
         match cmd {
             Command::Prompt(pc) => {
                 assert!(pc.allowed_tools.iter().any(|t| t == "Agent"));
-                assert!(pc.allowed_tools.iter().any(|t| t.starts_with("Bash(git worktree")));
+                assert!(
+                    pc.allowed_tools
+                        .iter()
+                        .any(|t| t.starts_with("Bash(git worktree"))
+                );
                 assert!(pc.allowed_tools.iter().any(|t| t.starts_with("Bash(gh pr")));
                 assert!(pc.allowed_tools.contains(&"Read".to_string()));
             }

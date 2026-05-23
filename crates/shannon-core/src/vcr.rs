@@ -186,7 +186,11 @@ impl Vcr {
 
         for recording in self.index.values() {
             // Check tags
-            if recording.tags.iter().any(|t| t.to_lowercase().contains(&query_lower)) {
+            if recording
+                .tags
+                .iter()
+                .any(|t| t.to_lowercase().contains(&query_lower))
+            {
                 return Some(recording.clone());
             }
 
@@ -258,7 +262,10 @@ impl Vcr {
             let file_path = self.recording_path(id);
             if file_path.exists() {
                 if let Err(e) = fs::remove_file(&file_path) {
-                    tracing::debug!("Failed to delete VCR recording {}: {e}", file_path.display());
+                    tracing::debug!(
+                        "Failed to delete VCR recording {}: {e}",
+                        file_path.display()
+                    );
                 }
             }
             true
@@ -318,8 +325,8 @@ impl Vcr {
     /// Load a single recording from a file.
     fn load_recording_from_file(&self, path: &Path) -> Result<VcrRecording, VcrError> {
         let contents = fs::read_to_string(path)?;
-        let recording: VcrRecording = serde_json::from_str(&contents)
-            .map_err(|e| VcrError::InvalidFormat(e.to_string()))?;
+        let recording: VcrRecording =
+            serde_json::from_str(&contents).map_err(|e| VcrError::InvalidFormat(e.to_string()))?;
         Ok(recording)
     }
 }
@@ -583,7 +590,10 @@ mod tests {
         assert_eq!(format!("{err}"), "Recording not found: test-id");
 
         let err = VcrError::ReplayModeActive;
-        assert_eq!(format!("{err}"), "VCR is in replay mode; recording is disabled");
+        assert_eq!(
+            format!("{err}"),
+            "VCR is in replay mode; recording is disabled"
+        );
     }
 
     #[test]

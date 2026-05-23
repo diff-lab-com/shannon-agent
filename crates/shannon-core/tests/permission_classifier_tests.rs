@@ -372,8 +372,7 @@ mod permission_rule_tests {
 
     #[test]
     fn matches_complex_regex_pattern() {
-        let rule =
-            PermissionRule::new("r1", RuleDecision::Deny).pattern(r"(?i)drop\s+table");
+        let rule = PermissionRule::new("r1", RuleDecision::Deny).pattern(r"(?i)drop\s+table");
         assert!(rule.matches("SQL", "DROP TABLE users"));
         assert!(rule.matches("SQL", "drop table if exists foo"));
         assert!(!rule.matches("SQL", "SELECT * FROM users"));
@@ -460,13 +459,7 @@ mod dangerous_pattern_tests {
 
     #[test]
     fn new_sets_fields() {
-        let p = DangerousPattern::new(
-            "test-id",
-            "Test Name",
-            r"rm\s+-rf",
-            "bash",
-            RiskLevel::High,
-        );
+        let p = DangerousPattern::new("test-id", "Test Name", r"rm\s+-rf", "bash", RiskLevel::High);
         assert_eq!(p.id, "test-id");
         assert_eq!(p.name, "Test Name");
         assert_eq!(p.pattern, r"rm\s+-rf");
@@ -620,7 +613,11 @@ mod dangerous_pattern_tests {
     fn built_in_all_have_non_empty_categories() {
         let patterns = built_in_dangerous_patterns();
         for p in &patterns {
-            assert!(!p.category.is_empty(), "pattern '{}' has empty category", p.id);
+            assert!(
+                !p.category.is_empty(),
+                "pattern '{}' has empty category",
+                p.id
+            );
         }
     }
 
@@ -628,7 +625,11 @@ mod dangerous_pattern_tests {
     fn built_in_known_count() {
         // This test documents the expected count; update if catalogue grows
         let patterns = built_in_dangerous_patterns();
-        assert!(patterns.len() >= 10, "expected at least 10 built-in patterns, got {}", patterns.len());
+        assert!(
+            patterns.len() >= 10,
+            "expected at least 10 built-in patterns, got {}",
+            patterns.len()
+        );
     }
 }
 
@@ -860,9 +861,7 @@ mod permission_rule_parser_tests {
     fn parse_rule_missing_id_errors() {
         let j = json!({ "decision": "allow" });
         let err = PermissionRuleParser::parse_rule(&j).unwrap_err();
-        assert!(
-            matches!(err, PermissionClassifierError::ParseError(msg) if msg.contains("'id'"))
-        );
+        assert!(matches!(err, PermissionClassifierError::ParseError(msg) if msg.contains("'id'")));
     }
 
     #[test]
@@ -878,9 +877,7 @@ mod permission_rule_parser_tests {
     fn parse_rule_unknown_decision_errors() {
         let j = json!({ "id": "r1", "decision": "maybe" });
         let err = PermissionRuleParser::parse_rule(&j).unwrap_err();
-        assert!(
-            matches!(err, PermissionClassifierError::ParseError(msg) if msg.contains("maybe"))
-        );
+        assert!(matches!(err, PermissionClassifierError::ParseError(msg) if msg.contains("maybe")));
     }
 
     #[test]
@@ -898,9 +895,7 @@ mod permission_rule_parser_tests {
             "pattern": "(unclosed[bracket"
         });
         let err = PermissionRuleParser::parse_rule(&j).unwrap_err();
-        assert!(
-            matches!(err, PermissionClassifierError::InvalidPattern { id, .. } if id == "r1")
-        );
+        assert!(matches!(err, PermissionClassifierError::InvalidPattern { id, .. } if id == "r1"));
     }
 
     #[test]
@@ -928,9 +923,7 @@ mod permission_rule_parser_tests {
     fn parse_rules_non_array_errors() {
         let j = json!({ "id": "r1", "decision": "allow" });
         let err = PermissionRuleParser::parse_rules(&j).unwrap_err();
-        assert!(
-            matches!(err, PermissionClassifierError::ParseError(msg) if msg.contains("array"))
-        );
+        assert!(matches!(err, PermissionClassifierError::ParseError(msg) if msg.contains("array")));
     }
 
     #[test]
@@ -1058,9 +1051,8 @@ mod permission_classifier_tests {
     #[test]
     fn add_rule_invalid_regex_fails() {
         let mut c = PermissionClassifier::new();
-        let result = c.add_rule(
-            PermissionRule::new("bad", RuleDecision::Deny).pattern("(unclosed"),
-        );
+        let result =
+            c.add_rule(PermissionRule::new("bad", RuleDecision::Deny).pattern("(unclosed"));
         assert!(result.is_err());
         assert_eq!(c.rules().len(), 0);
     }
@@ -1068,9 +1060,8 @@ mod permission_classifier_tests {
     #[test]
     fn add_rule_invalid_regex_error_contains_id() {
         let mut c = PermissionClassifier::new();
-        let result = c.add_rule(
-            PermissionRule::new("my-bad-rule", RuleDecision::Deny).pattern("[invalid"),
-        );
+        let result =
+            c.add_rule(PermissionRule::new("my-bad-rule", RuleDecision::Deny).pattern("[invalid"));
         match result {
             Err(PermissionClassifierError::InvalidPattern { id, .. }) => {
                 assert_eq!(id, "my-bad-rule");
@@ -1132,9 +1123,7 @@ mod permission_classifier_tests {
     #[test]
     fn add_rule_with_valid_regex_succeeds() {
         let mut c = PermissionClassifier::new();
-        let result = c.add_rule(
-            PermissionRule::new("r1", RuleDecision::Deny).pattern(r"rm\s+-rf"),
-        );
+        let result = c.add_rule(PermissionRule::new("r1", RuleDecision::Deny).pattern(r"rm\s+-rf"));
         assert!(result.is_ok());
         assert_eq!(c.rules().len(), 1);
     }
@@ -1370,10 +1359,8 @@ mod permission_classifier_tests {
     #[test]
     fn classify_tool_name_filter_selective() {
         let mut c = PermissionClassifier::new();
-        c.add_rule(
-            PermissionRule::new("deny-bash", RuleDecision::Deny).tool_name("Bash"),
-        )
-        .unwrap();
+        c.add_rule(PermissionRule::new("deny-bash", RuleDecision::Deny).tool_name("Bash"))
+            .unwrap();
 
         // Matches Bash
         let r_bash = c.classify("Bash", &json!({ "command": "ls" }));
@@ -1590,10 +1577,7 @@ mod permission_classifier_tests {
 
         // The dangerous patterns for rm -rf won't match "/tmp/build_artifacts" specifically,
         // but the user rule should still work through classify()
-        let result = c.classify(
-            "Bash",
-            &json!({ "command": "rm -rf /tmp/build_artifacts" }),
-        );
+        let result = c.classify("Bash", &json!({ "command": "rm -rf /tmp/build_artifacts" }));
         assert!(result.is_allowed());
     }
 
@@ -1601,7 +1585,13 @@ mod permission_classifier_tests {
     fn classify_bash_matched_rule_includes_dangerous_prefix() {
         let c = PermissionClassifier::new();
         let result = c.classify_bash_command("rm -rf /");
-        assert!(result.matched_rule.as_deref().unwrap().starts_with("dangerous:"));
+        assert!(
+            result
+                .matched_rule
+                .as_deref()
+                .unwrap()
+                .starts_with("dangerous:")
+        );
     }
 
     #[test]
@@ -1677,16 +1667,10 @@ mod permission_classifier_tests {
     fn classify_regex_pattern_on_json_input() {
         let mut c = PermissionClassifier::new();
         // Pattern matches JSON-serialized input
-        c.add_rule(
-            PermissionRule::new("deny-secret", RuleDecision::Deny)
-                .pattern("secret_key"),
-        )
-        .unwrap();
+        c.add_rule(PermissionRule::new("deny-secret", RuleDecision::Deny).pattern("secret_key"))
+            .unwrap();
 
-        let result = c.classify(
-            "SomeTool",
-            &json!({ "data": "contains secret_key here" }),
-        );
+        let result = c.classify("SomeTool", &json!({ "data": "contains secret_key here" }));
         assert!(result.is_denied());
     }
 

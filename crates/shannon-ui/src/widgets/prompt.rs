@@ -1,14 +1,14 @@
 //! Input prompt widget (multi-line enabled)
 
 use crate::theme::Theme;
-use rust_i18n::t;
 use ratatui::{
+    Frame,
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
+use rust_i18n::t;
 use unicode_width::UnicodeWidthStr;
 
 fn display_width(s: &str) -> usize {
@@ -67,9 +67,21 @@ impl PromptWidget {
             return;
         }
         match c {
-            '(' => { self.buffer.insert_char('('); self.buffer.insert_char(')'); self.buffer.move_left(); }
-            '[' => { self.buffer.insert_char('['); self.buffer.insert_char(']'); self.buffer.move_left(); }
-            '{' => { self.buffer.insert_char('{'); self.buffer.insert_char('}'); self.buffer.move_left(); }
+            '(' => {
+                self.buffer.insert_char('(');
+                self.buffer.insert_char(')');
+                self.buffer.move_left();
+            }
+            '[' => {
+                self.buffer.insert_char('[');
+                self.buffer.insert_char(']');
+                self.buffer.move_left();
+            }
+            '{' => {
+                self.buffer.insert_char('{');
+                self.buffer.insert_char('}');
+                self.buffer.move_left();
+            }
             ')' | ']' | '}' => {
                 let line = self.buffer.current_line();
                 let col = self.buffer.cursor_col();
@@ -80,7 +92,9 @@ impl PromptWidget {
                     self.buffer.insert_char(c);
                 }
             }
-            _ => { self.buffer.insert_char(c); }
+            _ => {
+                self.buffer.insert_char(c);
+            }
         }
     }
 
@@ -238,20 +252,34 @@ impl PromptWidget {
         let col = self.buffer.cursor_col();
         let chars: Vec<char> = line.chars().collect();
         let len = chars.len();
-        if col >= len { return; }
+        if col >= len {
+            return;
+        }
         let mut i = col;
         // Skip current word (alphanumeric/underscore)
         let at_word = i < len && (chars[i].is_alphanumeric() || chars[i] == '_');
         if at_word {
-            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') { i += 1; }
+            while i < len && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
         } else if i < len && !chars[i].is_whitespace() {
             // Skip punctuation
-            while i < len && !chars[i].is_alphanumeric() && chars[i] != '_' && !chars[i].is_whitespace() { i += 1; }
+            while i < len
+                && !chars[i].is_alphanumeric()
+                && chars[i] != '_'
+                && !chars[i].is_whitespace()
+            {
+                i += 1;
+            }
         }
         // Skip whitespace
-        while i < len && chars[i].is_whitespace() { i += 1; }
+        while i < len && chars[i].is_whitespace() {
+            i += 1;
+        }
         let steps = i.saturating_sub(col);
-        for _ in 0..steps { self.buffer.move_right(); }
+        for _ in 0..steps {
+            self.buffer.move_right();
+        }
     }
 
     /// Move cursor to the start of the previous word (or start of line).
@@ -259,25 +287,41 @@ impl PromptWidget {
     pub fn cursor_word_back(&mut self) {
         let line = self.buffer.current_line();
         let col = self.buffer.cursor_col();
-        if col == 0 { return; }
+        if col == 0 {
+            return;
+        }
         let chars: Vec<char> = line.chars().collect();
         let mut i = col;
         // Skip whitespace backward
-        while i > 0 && chars[i - 1].is_whitespace() { i -= 1; }
+        while i > 0 && chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
         if i == 0 {
             let steps = col - i;
-            for _ in 0..steps { self.buffer.move_left(); }
+            for _ in 0..steps {
+                self.buffer.move_left();
+            }
             return;
         }
         // Move back over word/punctuation
         let at_word = chars[i - 1].is_alphanumeric() || chars[i - 1] == '_';
         if at_word {
-            while i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') { i -= 1; }
+            while i > 0 && (chars[i - 1].is_alphanumeric() || chars[i - 1] == '_') {
+                i -= 1;
+            }
         } else {
-            while i > 0 && !chars[i - 1].is_alphanumeric() && chars[i - 1] != '_' && !chars[i - 1].is_whitespace() { i -= 1; }
+            while i > 0
+                && !chars[i - 1].is_alphanumeric()
+                && chars[i - 1] != '_'
+                && !chars[i - 1].is_whitespace()
+            {
+                i -= 1;
+            }
         }
         let steps = col - i;
-        for _ in 0..steps { self.buffer.move_left(); }
+        for _ in 0..steps {
+            self.buffer.move_left();
+        }
     }
 
     /// Compute how many terminal rows the prompt needs, given the available width.
@@ -295,10 +339,13 @@ impl PromptWidget {
             return MIN_PROMPT_HEIGHT;
         }
 
-        let rows: usize = input.split('\n').map(|line| {
-            let w = display_width(line);
-            if w == 0 { 1 } else { w.div_ceil(inner_width) }
-        }).sum();
+        let rows: usize = input
+            .split('\n')
+            .map(|line| {
+                let w = display_width(line);
+                if w == 0 { 1 } else { w.div_ceil(inner_width) }
+            })
+            .sum();
 
         let needed = (rows + 2) as u16; // +2 for top border + bottom hint
         needed.clamp(MIN_PROMPT_HEIGHT, MAX_PROMPT_HEIGHT)
@@ -348,11 +395,8 @@ impl PromptWidget {
 
             if row_idx == cursor_row {
                 // cursor_col is a character index; convert to display column
-                let cursor_display_col: usize = line
-                    .chars()
-                    .take(cursor_col)
-                    .map(char_display_width)
-                    .sum();
+                let cursor_display_col: usize =
+                    line.chars().take(cursor_col).map(char_display_width).sum();
                 let wrap_row = if inner_width > 0 {
                     cursor_display_col / inner_width
                 } else {
@@ -379,7 +423,12 @@ impl PromptWidget {
 
         if input_text.is_empty() {
             display_lines.push(Line::from(vec![
-                Span::styled("> ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "> ",
+                    Style::default()
+                        .fg(theme.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(self.placeholder.clone(), Style::default().fg(theme.muted)),
             ]));
         } else {
@@ -388,7 +437,12 @@ impl PromptWidget {
                 let wrapped = Self::wrap_line(logical_line, inner_width);
                 for (wrap_idx, chunk) in wrapped.iter().enumerate() {
                     let prefix = if line_idx == 0 && wrap_idx == 0 {
-                        Span::styled("> ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD))
+                        Span::styled(
+                            "> ",
+                            Style::default()
+                                .fg(theme.primary)
+                                .add_modifier(Modifier::BOLD),
+                        )
                     } else {
                         Span::styled("  ", Style::default())
                     };
@@ -419,9 +473,10 @@ impl PromptWidget {
         // Bottom border — plain horizontal line (keyboard hints are shown by
         // the centralized KeyHintWidget at the screen bottom).
         let w = area.width as usize;
-        let bottom_line = ratatui::text::Line::from(vec![
-            Span::styled("─".repeat(w), Style::default().fg(border_color)),
-        ]);
+        let bottom_line = ratatui::text::Line::from(vec![Span::styled(
+            "─".repeat(w),
+            Style::default().fg(border_color),
+        )]);
 
         let paragraph = Paragraph::new(display_lines)
             .block(

@@ -9,11 +9,11 @@ use super::helpers::{
     contains_tool_result_for, estimate_message_tokens, estimate_tokens, extract_tool_uses,
     original_tokens_from,
 };
-use super::summarizer::RuleBasedSummarizer;
 use super::summarizer::LlmSummarizer;
+use super::summarizer::RuleBasedSummarizer;
 use super::types::{
-    CompactConfig, CompactError, CompactResult, CompactStrategy, ContextAnalysis,
-    GroupedMessage, MessageGroup, Summarizer,
+    CompactConfig, CompactError, CompactResult, CompactStrategy, ContextAnalysis, GroupedMessage,
+    MessageGroup, Summarizer,
 };
 
 /// Main compression engine for conversation context management
@@ -25,7 +25,10 @@ pub struct CompactEngine {
 
 impl CompactEngine {
     /// Create a new compact engine with the given config and summarizer
-    pub fn new(config: CompactConfig, summarizer: Box<dyn Summarizer>) -> Result<Self, CompactError> {
+    pub fn new(
+        config: CompactConfig,
+        summarizer: Box<dyn Summarizer>,
+    ) -> Result<Self, CompactError> {
         config.validate()?;
         Ok(Self {
             config,
@@ -36,16 +39,20 @@ impl CompactEngine {
 
     /// Create with default config and a rule-based summarizer (no AI needed)
     pub fn with_defaults() -> Result<Self, CompactError> {
-        Self::new(CompactConfig::default(), Box::new(RuleBasedSummarizer::new()))
+        Self::new(
+            CompactConfig::default(),
+            Box::new(RuleBasedSummarizer::new()),
+        )
     }
 
     /// Create with an LLM-powered summarizer for higher quality compression.
     ///
     /// Falls back to rule-based summarization on API errors.
-    pub fn with_llm_summarizer(
-        client: crate::api::LlmClient,
-    ) -> Result<Self, CompactError> {
-        Self::new(CompactConfig::default(), Box::new(LlmSummarizer::new(client)))
+    pub fn with_llm_summarizer(client: crate::api::LlmClient) -> Result<Self, CompactError> {
+        Self::new(
+            CompactConfig::default(),
+            Box::new(LlmSummarizer::new(client)),
+        )
     }
 
     /// Create with an LLM summarizer and custom config.
@@ -66,8 +73,9 @@ impl CompactEngine {
     ) -> Result<Self, CompactError> {
         let config = CompactConfig::default();
         let summarizer = match &config.compact_model {
-            Some(model) => LlmSummarizer::with_handle(client, handle)
-                .with_compact_model(model.clone()),
+            Some(model) => {
+                LlmSummarizer::with_handle(client, handle).with_compact_model(model.clone())
+            }
             None => LlmSummarizer::with_handle(client, handle),
         };
         Self::new(config, Box::new(summarizer))
@@ -82,8 +90,9 @@ impl CompactEngine {
         config: CompactConfig,
     ) -> Result<Self, CompactError> {
         let summarizer = match &config.compact_model {
-            Some(model) => LlmSummarizer::with_handle(client, handle)
-                .with_compact_model(model.clone()),
+            Some(model) => {
+                LlmSummarizer::with_handle(client, handle).with_compact_model(model.clone())
+            }
             None => LlmSummarizer::with_handle(client, handle),
         };
         Self::new(config, Box::new(summarizer))
@@ -207,10 +216,7 @@ impl CompactEngine {
         }
     }
 
-    fn do_compact(
-        &self,
-        messages: &mut Vec<Message>,
-    ) -> Result<CompactResult, CompactError> {
+    fn do_compact(&self, messages: &mut Vec<Message>) -> Result<CompactResult, CompactError> {
         let keep_count = self.config.keep_recent_count;
         let split_point = messages.len().saturating_sub(keep_count);
 
@@ -221,9 +227,9 @@ impl CompactEngine {
         let messages_removed = old_messages.len();
 
         // Summarize the older messages
-        let summary_text =
-            self.summarizer
-                .summarize(&old_messages, self.config.max_output_tokens)?;
+        let summary_text = self
+            .summarizer
+            .summarize(&old_messages, self.config.max_output_tokens)?;
 
         // Verify summary quality — use fallback if clearly degenerate
         let summary_text = if !Self::verify_summary_quality(&summary_text, &old_messages) {
@@ -250,7 +256,10 @@ impl CompactEngine {
         };
 
         // Preserve leading system messages (system prompt) before draining
-        let system_end = messages.iter().position(|m| m.role != "system").unwrap_or(0);
+        let system_end = messages
+            .iter()
+            .position(|m| m.role != "system")
+            .unwrap_or(0);
         let preserved_system: Vec<Message> = messages[..system_end].to_vec();
 
         // Drain old messages (keeps only the recent tail)
@@ -264,7 +273,8 @@ impl CompactEngine {
 
         let compacted_tokens = estimate_tokens(messages);
         let reduction_ratio = if original_tokens_from(&old_messages) > 0 {
-            1.0 - (compacted_tokens as f32 / (original_tokens_from(&old_messages) + compacted_tokens) as f32)
+            1.0 - (compacted_tokens as f32
+                / (original_tokens_from(&old_messages) + compacted_tokens) as f32)
         } else {
             0.0
         };
@@ -294,9 +304,7 @@ impl CompactEngine {
             if let MessageContent::Blocks(blocks) = &mut msg.content {
                 for block in blocks.iter_mut() {
                     if let ContentBlock::ToolResult {
-                        content,
-                        is_error,
-                        ..
+                        content, is_error, ..
                     } = block
                     {
                         let is_err = is_error.unwrap_or(false);
@@ -305,7 +313,11 @@ impl CompactEngine {
                         }
                         if let Some(ToolResultContent::Single(text)) = content {
                             if text.len() > preview_limit * 2 {
-                                *text = format!("{}...[truncated, {} chars]", &text[..preview_limit], text.len());
+                                *text = format!(
+                                    "{}...[truncated, {} chars]",
+                                    &text[..preview_limit],
+                                    text.len()
+                                );
                             }
                         }
                     }
@@ -332,13 +344,18 @@ impl CompactEngine {
 
         // Must be at least 50 chars for any non-trivial conversation
         if original_messages.len() >= 3 && text.len() < 50 {
-            tracing::warn!("Summary quality: too short ({} chars for {} messages)", text.len(), original_messages.len());
+            tracing::warn!(
+                "Summary quality: too short ({} chars for {} messages)",
+                text.len(),
+                original_messages.len()
+            );
             return false;
         }
 
         // Must not be a near-copy of a single message (degenerate echo)
         if original_messages.len() >= 3 {
-            let msg_texts: Vec<&str> = original_messages.iter()
+            let msg_texts: Vec<&str> = original_messages
+                .iter()
                 .filter_map(|m| match &m.content {
                     MessageContent::Text(t) => Some(t.as_str()),
                     _ => None,
@@ -349,10 +366,8 @@ impl CompactEngine {
                     // Simple overlap check: if summary is 90%+ contained in a source message
                     let shorter_len = text.len().min(mt.len());
                     if shorter_len > 0 {
-                        let common: usize = text
-                            .split_whitespace()
-                            .filter(|w| mt.contains(w))
-                            .count();
+                        let common: usize =
+                            text.split_whitespace().filter(|w| mt.contains(w)).count();
                         let total = text.split_whitespace().count();
                         if total > 0 && common * 100 / total > 90 {
                             tracing::warn!("Summary quality: near-identical to source message");
@@ -386,7 +401,10 @@ impl CompactEngine {
         for msg in messages.iter_mut() {
             let msg_tokens = estimate_message_tokens(msg);
             if msg_tokens > self.config.micro_compact_threshold {
-                match self.summarizer.micro_summarize(msg, self.config.micro_compact_threshold / 2) {
+                match self
+                    .summarizer
+                    .micro_summarize(msg, self.config.micro_compact_threshold / 2)
+                {
                     Ok(compressed) => {
                         msg.content = MessageContent::Text(compressed);
                         messages_compacted += 1;
@@ -397,10 +415,7 @@ impl CompactEngine {
                         );
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to micro-compact message: {}",
-                            e
-                        );
+                        tracing::warn!("Failed to micro-compact message: {}", e);
                     }
                 }
             }
@@ -446,16 +461,13 @@ impl CompactEngine {
         let start = Instant::now();
         let original_tokens = estimate_tokens(memory_entries);
 
-        let summary = self.summarizer.summarize(
-            memory_entries,
-            self.config.max_output_tokens,
-        )?;
+        let summary = self
+            .summarizer
+            .summarize(memory_entries, self.config.max_output_tokens)?;
 
         let compacted_tokens = estimate_message_tokens(&Message {
             role: "system".to_string(),
-            content: MessageContent::Text(format!(
-                "[Session memory summary]\n\n{summary}"
-            )),
+            content: MessageContent::Text(format!("[Session memory summary]\n\n{summary}")),
         });
 
         let reduction_ratio = if original_tokens > 0 {
@@ -676,7 +688,10 @@ impl CompactEngine {
     // ========================================================================
 
     /// Compress using message groups for smarter summarization
-    pub fn group_compact(&mut self, messages: &mut Vec<Message>) -> Result<CompactResult, CompactError> {
+    pub fn group_compact(
+        &mut self,
+        messages: &mut Vec<Message>,
+    ) -> Result<CompactResult, CompactError> {
         let original_tokens = estimate_tokens(messages);
         if messages.is_empty() {
             return Err(CompactError::NoMessagesToCompact);
@@ -703,10 +718,16 @@ impl CompactEngine {
         let old_indices: HashSet<usize> = (0..split_point).collect();
         let affected_groups = groups
             .iter()
-            .filter(|g| g.messages().iter().any(|gm| old_indices.contains(&gm.original_index)))
+            .filter(|g| {
+                g.messages()
+                    .iter()
+                    .any(|gm| old_indices.contains(&gm.original_index))
+            })
             .count();
 
-        let summary = self.summarizer.summarize(&old_messages, self.config.max_output_tokens)?;
+        let summary = self
+            .summarizer
+            .summarize(&old_messages, self.config.max_output_tokens)?;
 
         let summary_message = Message {
             role: "system".to_string(),
@@ -716,7 +737,10 @@ impl CompactEngine {
         };
 
         // Preserve leading system messages (system prompt, reinjected context)
-        let system_end = messages.iter().position(|m| m.role != "system").unwrap_or(0);
+        let system_end = messages
+            .iter()
+            .position(|m| m.role != "system")
+            .unwrap_or(0);
         let preserved_system: Vec<Message> = messages[..system_end].to_vec();
 
         messages.drain(..split_point);
@@ -753,7 +777,10 @@ mod tests {
     use crate::api::{ContentBlock, Message, MessageContent, ToolResultContent};
 
     fn text_msg(role: &str, text: &str) -> Message {
-        Message { role: role.into(), content: MessageContent::Text(text.into()) }
+        Message {
+            role: role.into(),
+            content: MessageContent::Text(text.into()),
+        }
     }
 
     fn make_engine() -> CompactEngine {
@@ -762,9 +789,13 @@ mod tests {
 
     fn make_engine_with_max_tokens(max: usize) -> CompactEngine {
         CompactEngine::new(
-            CompactConfig { max_context_tokens: max, ..Default::default() },
+            CompactConfig {
+                max_context_tokens: max,
+                ..Default::default()
+            },
             Box::new(RuleBasedSummarizer::new()),
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     // ── Creation ─────────────────────────────────────────────────────────
@@ -778,7 +809,10 @@ mod tests {
 
     #[test]
     fn test_engine_rejects_invalid_config() {
-        let config = CompactConfig { max_output_tokens: 0, ..Default::default() };
+        let config = CompactConfig {
+            max_output_tokens: 0,
+            ..Default::default()
+        };
         let result = CompactEngine::new(config, Box::new(RuleBasedSummarizer::new()));
         assert!(result.is_err());
     }
@@ -786,7 +820,10 @@ mod tests {
     #[test]
     fn test_set_config() {
         let mut engine = make_engine();
-        let new_config = CompactConfig { max_context_tokens: 50_000, ..Default::default() };
+        let new_config = CompactConfig {
+            max_context_tokens: 50_000,
+            ..Default::default()
+        };
         engine.set_config(new_config).unwrap();
         assert_eq!(engine.config().max_context_tokens, 50_000);
     }
@@ -816,8 +853,12 @@ mod tests {
         // max_context=100, threshold=0.75 => trigger at 75 tokens
         let engine = make_engine_with_max_tokens(100);
         let msgs: Vec<Message> = (0..50)
-            .map(|i| text_msg(if i % 2 == 0 { "user" } else { "assistant" },
-                             &format!("This is message number {} with some content", i)))
+            .map(|i| {
+                text_msg(
+                    if i % 2 == 0 { "user" } else { "assistant" },
+                    &format!("This is message number {} with some content", i),
+                )
+            })
             .collect();
         let analysis = engine.analyze_context(&msgs);
         assert!(analysis.should_compact);
@@ -857,7 +898,11 @@ mod tests {
         }];
         CompactEngine::prune_stale_tool_results(&mut msgs);
         if let MessageContent::Blocks(blocks) = &msgs[0].content {
-            if let ContentBlock::ToolResult { content: Some(ToolResultContent::Single(t)), .. } = &blocks[0] {
+            if let ContentBlock::ToolResult {
+                content: Some(ToolResultContent::Single(t)),
+                ..
+            } = &blocks[0]
+            {
                 assert!(t.len() < 1000);
                 assert!(t.contains("[truncated"));
             }
@@ -877,7 +922,11 @@ mod tests {
         }];
         CompactEngine::prune_stale_tool_results(&mut msgs);
         if let MessageContent::Blocks(blocks) = &msgs[0].content {
-            if let ContentBlock::ToolResult { content: Some(ToolResultContent::Single(t)), .. } = &blocks[0] {
+            if let ContentBlock::ToolResult {
+                content: Some(ToolResultContent::Single(t)),
+                ..
+            } = &blocks[0]
+            {
                 assert_eq!(t, "short");
             }
         }
@@ -896,7 +945,11 @@ mod tests {
         }];
         CompactEngine::prune_stale_tool_results(&mut msgs);
         if let MessageContent::Blocks(blocks) = &msgs[0].content {
-            if let ContentBlock::ToolResult { content: Some(ToolResultContent::Single(t)), .. } = &blocks[0] {
+            if let ContentBlock::ToolResult {
+                content: Some(ToolResultContent::Single(t)),
+                ..
+            } = &blocks[0]
+            {
                 assert_eq!(t.len(), 1000); // unchanged
             }
         }
@@ -906,19 +959,31 @@ mod tests {
 
     #[test]
     fn test_verify_rejects_empty() {
-        let msgs = vec![text_msg("user", "hello"), text_msg("assistant", "hi"), text_msg("user", "bye")];
+        let msgs = vec![
+            text_msg("user", "hello"),
+            text_msg("assistant", "hi"),
+            text_msg("user", "bye"),
+        ];
         assert!(!CompactEngine::verify_summary_quality("", &msgs));
     }
 
     #[test]
     fn test_verify_rejects_too_short() {
-        let msgs = vec![text_msg("user", "hello"), text_msg("assistant", "hi"), text_msg("user", "bye")];
+        let msgs = vec![
+            text_msg("user", "hello"),
+            text_msg("assistant", "hi"),
+            text_msg("user", "bye"),
+        ];
         assert!(!CompactEngine::verify_summary_quality("ok", &msgs));
     }
 
     #[test]
     fn test_verify_accepts_good_summary() {
-        let msgs = vec![text_msg("user", "hello"), text_msg("assistant", "hi"), text_msg("user", "bye")];
+        let msgs = vec![
+            text_msg("user", "hello"),
+            text_msg("assistant", "hi"),
+            text_msg("user", "bye"),
+        ];
         let summary = "The user asked for help with a coding task. The assistant provided \
                        guidance on file operations. The user then confirmed the fix worked.";
         assert!(CompactEngine::verify_summary_quality(summary, &msgs));
@@ -948,16 +1013,15 @@ mod tests {
         ];
         let groups = engine.group_messages(&msgs);
         assert_eq!(groups.len(), 2);
-        assert!(matches!(&groups[0], MessageGroup::SystemMessage { messages } if messages.len() == 2));
+        assert!(
+            matches!(&groups[0], MessageGroup::SystemMessage { messages } if messages.len() == 2)
+        );
     }
 
     #[test]
     fn test_group_user_messages() {
         let engine = make_engine();
-        let msgs = vec![
-            text_msg("user", "hello"),
-            text_msg("user", "world"),
-        ];
+        let msgs = vec![text_msg("user", "hello"), text_msg("user", "world")];
         let groups = engine.group_messages(&msgs);
         assert_eq!(groups.len(), 1);
         assert!(matches!(&groups[0], MessageGroup::UserTurn { messages } if messages.len() == 2));
@@ -979,7 +1043,9 @@ mod tests {
             Message {
                 role: "assistant".into(),
                 content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
-                    id: "t1".into(), name: "Read".into(), input: serde_json::json!({"file": "x.rs"}),
+                    id: "t1".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({"file": "x.rs"}),
                 }]),
             },
             Message {
@@ -993,7 +1059,12 @@ mod tests {
         ];
         let groups = engine.group_messages(&msgs);
         assert_eq!(groups.len(), 1);
-        if let MessageGroup::ToolUseTurn { tool_name, messages, .. } = &groups[0] {
+        if let MessageGroup::ToolUseTurn {
+            tool_name,
+            messages,
+            ..
+        } = &groups[0]
+        {
             assert_eq!(tool_name, "Read");
             assert_eq!(messages.len(), 2);
         } else {
@@ -1021,8 +1092,14 @@ mod tests {
     fn test_cleanup_removes_duplicate_summaries() {
         let engine = make_engine();
         let mut msgs = vec![
-            text_msg("system", "[Previous conversation summary - 5 messages]\nSummary A"),
-            text_msg("system", "[Previous conversation summary - 5 messages]\nSummary A"),
+            text_msg(
+                "system",
+                "[Previous conversation summary - 5 messages]\nSummary A",
+            ),
+            text_msg(
+                "system",
+                "[Previous conversation summary - 5 messages]\nSummary A",
+            ),
             text_msg("user", "hello"),
         ];
         let removed = engine.post_compact_cleanup(&mut msgs);

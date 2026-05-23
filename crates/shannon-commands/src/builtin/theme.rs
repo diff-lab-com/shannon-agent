@@ -1,6 +1,8 @@
 //! /theme command - List, preview, and switch color themes
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 const THEME_PROMPT: &str = r##"
 Manage Shannon Code color themes.

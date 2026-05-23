@@ -3,9 +3,9 @@
 //! These tests load session fixtures and validate that tool call sequences
 //! follow expected patterns (search-driven fix, parallel reads, cascading edits, etc.).
 
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use serde_json::Value;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/sessions")
@@ -14,12 +14,17 @@ fn fixtures_dir() -> PathBuf {
 fn load_tool_calls(name: &str) -> Vec<(String, Value, bool)> {
     let path = fixtures_dir().join(name);
     let content = fs::read_to_string(&path).expect("read fixture");
-    content.lines()
+    content
+        .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|line| {
             let v: Value = serde_json::from_str(line).ok()?;
             if v.get("type").and_then(|t| t.as_str()) == Some("ToolCall") {
-                let tool = v.get("tool").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                let tool = v
+                    .get("tool")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
                 let input = v.get("input").cloned().unwrap_or(Value::Null);
                 let is_error = v.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false);
                 Some((tool, input, is_error))
@@ -31,7 +36,10 @@ fn load_tool_calls(name: &str) -> Vec<(String, Value, bool)> {
 }
 
 fn load_tool_names(name: &str) -> Vec<String> {
-    load_tool_calls(name).into_iter().map(|(t, _, _)| t).collect()
+    load_tool_calls(name)
+        .into_iter()
+        .map(|(t, _, _)| t)
+        .collect()
 }
 
 /// Check if a tool name list contains a given tool.
@@ -49,8 +57,11 @@ fn count_tool(tools: &[String], name: &str) -> usize {
 #[test]
 fn test_search_driven_fix_tool_chain() {
     let tools = load_tool_names("search_driven_fix.jsonl");
-    assert!(tools.first().map(|t| t.as_str()) == Some("Grep"),
-        "Expected Grep first, got {:?}", tools);
+    assert!(
+        tools.first().map(|t| t.as_str()) == Some("Grep"),
+        "Expected Grep first, got {:?}",
+        tools
+    );
     assert!(contains_tool(&tools, "Read"), "Expected Read in chain");
     assert!(contains_tool(&tools, "Edit"), "Expected Edit in chain");
     assert!(contains_tool(&tools, "Bash"), "Expected Bash in chain");
@@ -70,7 +81,11 @@ fn test_search_driven_fix_no_errors() {
 fn test_parallel_tool_use_has_multiple_reads() {
     let tools = load_tool_names("parallel_tool_use.jsonl");
     let read_count = count_tool(&tools, "Read");
-    assert!(read_count >= 3, "Expected >= 3 parallel reads, got {}", read_count);
+    assert!(
+        read_count >= 3,
+        "Expected >= 3 parallel reads, got {}",
+        read_count
+    );
 }
 
 #[test]
@@ -87,7 +102,11 @@ fn test_parallel_tool_use_no_errors() {
 fn test_cascading_edits_multiple_edits() {
     let tools = load_tool_names("cascading_edits.jsonl");
     let edit_count = count_tool(&tools, "Edit");
-    assert!(edit_count >= 3, "Expected >= 3 cascading edits, got {}", edit_count);
+    assert!(
+        edit_count >= 3,
+        "Expected >= 3 cascading edits, got {}",
+        edit_count
+    );
     assert!(contains_tool(&tools, "Grep"), "Expected Grep in chain");
     assert!(contains_tool(&tools, "Read"), "Expected Read in chain");
     assert!(contains_tool(&tools, "Bash"), "Expected Bash verification");
@@ -98,10 +117,20 @@ fn test_cascading_edits_multiple_edits() {
 #[test]
 fn test_tdd_cycle_has_write_and_bash() {
     let tools = load_tool_names("tdd_cycle.jsonl");
-    assert!(contains_tool(&tools, "Write"), "Expected Write for test file");
-    assert!(contains_tool(&tools, "Bash"), "Expected Bash for running tests");
+    assert!(
+        contains_tool(&tools, "Write"),
+        "Expected Write for test file"
+    );
+    assert!(
+        contains_tool(&tools, "Bash"),
+        "Expected Bash for running tests"
+    );
     let bash_count = count_tool(&tools, "Bash");
-    assert!(bash_count >= 2, "Expected >= 2 Bash calls (fail then pass), got {}", bash_count);
+    assert!(
+        bash_count >= 2,
+        "Expected >= 2 Bash calls (fail then pass), got {}",
+        bash_count
+    );
 }
 
 // ── Error cascade recovery: Bash(err) → Read → Edit → Bash(ok) ──
@@ -135,7 +164,11 @@ fn test_permission_denied_has_error_then_alternative() {
 #[test]
 fn test_tool_chain_depth_5_has_5_tools() {
     let tools = load_tool_names("tool_chain_depth_5.jsonl");
-    assert!(tools.len() >= 5, "Expected >= 5 tools in depth-5 chain, got {}", tools.len());
+    assert!(
+        tools.len() >= 5,
+        "Expected >= 5 tools in depth-5 chain, got {}",
+        tools.len()
+    );
     assert!(contains_tool(&tools, "Grep"), "Expected Grep");
     assert!(contains_tool(&tools, "Read"), "Expected Read");
     assert!(contains_tool(&tools, "Edit"), "Expected Edit");
@@ -169,16 +202,23 @@ fn test_refactoring_safety_tests_pass() {
 #[test]
 fn test_git_workflow_has_git_commands() {
     let calls = load_tool_calls("git_workflow.jsonl");
-    let git_calls: Vec<_> = calls.iter()
+    let git_calls: Vec<_> = calls
+        .iter()
         .filter(|(t, _, _)| t == "Bash")
         .filter_map(|(_, input, _)| input.get("command").and_then(|c| c.as_str()))
         .collect();
-    assert!(git_calls.iter().any(|c| c.contains("git status")),
-        "Expected git status");
-    assert!(git_calls.iter().any(|c| c.contains("git diff")),
-        "Expected git diff");
-    assert!(git_calls.iter().any(|c| c.contains("git commit")),
-        "Expected git commit");
+    assert!(
+        git_calls.iter().any(|c| c.contains("git status")),
+        "Expected git status"
+    );
+    assert!(
+        git_calls.iter().any(|c| c.contains("git diff")),
+        "Expected git diff"
+    );
+    assert!(
+        git_calls.iter().any(|c| c.contains("git commit")),
+        "Expected git commit"
+    );
 }
 
 // ── Code generation: Write → Bash(check) ──
@@ -186,10 +226,14 @@ fn test_git_workflow_has_git_commands() {
 #[test]
 fn test_code_generation_creates_file() {
     let calls = load_tool_calls("code_generation.jsonl");
-    assert!(calls.iter().any(|(t, _, _)| t == "Write"),
-        "Expected Write to create new file");
-    assert!(calls.iter().any(|(t, _, _)| t == "Bash"),
-        "Expected Bash to verify compilation");
+    assert!(
+        calls.iter().any(|(t, _, _)| t == "Write"),
+        "Expected Write to create new file"
+    );
+    assert!(
+        calls.iter().any(|(t, _, _)| t == "Bash"),
+        "Expected Bash to verify compilation"
+    );
 }
 
 // ── Snapshot tool chain test using snapshot helpers ──
@@ -204,7 +248,10 @@ fn test_snapshot_tool_chain_from_fixture() {
         .collect();
 
     let snapshot = snapshot_tool_chain(&calls);
-    assert!(snapshot.contains("tool_chain:"), "Expected tool_chain header");
+    assert!(
+        snapshot.contains("tool_chain:"),
+        "Expected tool_chain header"
+    );
     assert!(snapshot.contains("Grep"), "Expected Grep in snapshot");
     assert!(snapshot.contains("[OK]"), "Expected OK status");
 }

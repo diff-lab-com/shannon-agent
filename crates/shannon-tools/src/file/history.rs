@@ -50,7 +50,10 @@ use uuid::Uuid;
 #[derive(Error, Debug)]
 pub enum FileHistoryError {
     #[error("Snapshot not found: {file_path} / {snapshot_id}")]
-    SnapshotNotFound { file_path: String, snapshot_id: String },
+    SnapshotNotFound {
+        file_path: String,
+        snapshot_id: String,
+    },
 
     #[error("No history for file: {0}")]
     NoHistory(String),
@@ -134,11 +137,7 @@ pub struct FileSnapshot {
 
 impl FileSnapshot {
     /// Create a new snapshot.
-    pub fn new(
-        file_path: PathBuf,
-        content: String,
-        operation: FileOperation,
-    ) -> Self {
+    pub fn new(file_path: PathBuf, content: String, operation: FileOperation) -> Self {
         let line_count = content.lines().count();
         let hash = compute_content_hash(&content);
         Self {
@@ -390,7 +389,8 @@ impl FileHistoryManager {
 
     /// Create a new manager with a temporary directory (for testing).
     pub fn new_temp() -> Result<Self, FileHistoryError> {
-        let temp_path = std::env::temp_dir().join(format!("shannon_history_test_{}", Uuid::new_v4()));
+        let temp_path =
+            std::env::temp_dir().join(format!("shannon_history_test_{}", Uuid::new_v4()));
         let config = FileHistoryConfig {
             history_dir: temp_path,
             max_history_per_file: 10,
@@ -574,11 +574,7 @@ impl FileHistoryManager {
     /// Roll back a file to a specific snapshot.
     ///
     /// Returns the content at that snapshot point.
-    pub fn rollback(
-        &mut self,
-        file_path: &Path,
-        id: &str,
-    ) -> Result<String, FileHistoryError> {
+    pub fn rollback(&mut self, file_path: &Path, id: &str) -> Result<String, FileHistoryError> {
         self.ensure_cache_loaded()?;
 
         let snapshot = self.get_snapshot(file_path, id)?;
@@ -607,7 +603,10 @@ impl FileHistoryManager {
 
         // First pass: determine which snapshots to remove
         for (file_path, history) in &mut self.cache {
-            let excess = history.snapshots.len().saturating_sub(history.max_snapshots);
+            let excess = history
+                .snapshots
+                .len()
+                .saturating_sub(history.max_snapshots);
             if excess > 0 {
                 for _ in 0..excess {
                     if let Some(removed_snapshot) = history.snapshots.first() {
@@ -621,8 +620,7 @@ impl FileHistoryManager {
 
         // Second pass: delete the snapshot files
         for (file_path, snapshot_id) in &files_to_delete {
-            let snapshot_path =
-                self.file_dir(file_path).join(format!("{snapshot_id}.json"));
+            let snapshot_path = self.file_dir(file_path).join(format!("{snapshot_id}.json"));
             if let Err(e) = std::fs::remove_file(&snapshot_path) {
                 tracing::debug!("Failed to remove old snapshot: {e}");
             }
@@ -668,8 +666,16 @@ fn compute_diff(
 
     let hunks = compute_hunks(&before_lines, &after_lines);
 
-    let additions = hunks.iter().filter(|h| h.new_count > 0).map(|h| h.new_count).sum();
-    let deletions = hunks.iter().filter(|h| h.old_count > 0).map(|h| h.old_count).sum();
+    let additions = hunks
+        .iter()
+        .filter(|h| h.new_count > 0)
+        .map(|h| h.new_count)
+        .sum();
+    let deletions = hunks
+        .iter()
+        .filter(|h| h.old_count > 0)
+        .map(|h| h.old_count)
+        .sum();
 
     Ok(FileDiff {
         snapshot_before,
@@ -957,7 +963,6 @@ fn dir_size(path: &Path) -> Result<u64, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     // ---- FileOperation tests -----------------------------------------------
 
@@ -1050,8 +1055,16 @@ mod tests {
     #[test]
     fn test_history_add_snapshot() {
         let mut history = FileHistory::new(PathBuf::from("/tmp/test.rs"), 5);
-        let s1 = FileSnapshot::new(PathBuf::from("/tmp/test.rs"), "v1".to_string(), FileOperation::Edit);
-        let s2 = FileSnapshot::new(PathBuf::from("/tmp/test.rs"), "v2".to_string(), FileOperation::Edit);
+        let s1 = FileSnapshot::new(
+            PathBuf::from("/tmp/test.rs"),
+            "v1".to_string(),
+            FileOperation::Edit,
+        );
+        let s2 = FileSnapshot::new(
+            PathBuf::from("/tmp/test.rs"),
+            "v2".to_string(),
+            FileOperation::Edit,
+        );
 
         assert!(history.add_snapshot(s1).is_some());
         assert_eq!(history.len(), 1);
@@ -1064,8 +1077,16 @@ mod tests {
     #[test]
     fn test_history_deduplication() {
         let mut history = FileHistory::new(PathBuf::from("/tmp/test.rs"), 5);
-        let s1 = FileSnapshot::new(PathBuf::from("/tmp/test.rs"), "same".to_string(), FileOperation::Edit);
-        let s2 = FileSnapshot::new(PathBuf::from("/tmp/test.rs"), "same".to_string(), FileOperation::Edit);
+        let s1 = FileSnapshot::new(
+            PathBuf::from("/tmp/test.rs"),
+            "same".to_string(),
+            FileOperation::Edit,
+        );
+        let s2 = FileSnapshot::new(
+            PathBuf::from("/tmp/test.rs"),
+            "same".to_string(),
+            FileOperation::Edit,
+        );
 
         assert!(history.add_snapshot(s1).is_some());
         assert!(history.add_snapshot(s2).is_none()); // deduplicated
@@ -1078,7 +1099,8 @@ mod tests {
 
         for i in 0..5 {
             let content = format!("version_{i}");
-            let snapshot = FileSnapshot::new(PathBuf::from("/tmp/test.rs"), content, FileOperation::Edit);
+            let snapshot =
+                FileSnapshot::new(PathBuf::from("/tmp/test.rs"), content, FileOperation::Edit);
             history.add_snapshot(snapshot);
         }
 
@@ -1090,8 +1112,18 @@ mod tests {
     #[test]
     fn test_history_get_by_id() {
         let mut history = FileHistory::new(PathBuf::from("/tmp/test.rs"), 5);
-        let s1 = FileSnapshot::with_id("id-1", PathBuf::from("/tmp/test.rs"), "v1".to_string(), FileOperation::Edit);
-        let s2 = FileSnapshot::with_id("id-2", PathBuf::from("/tmp/test.rs"), "v2".to_string(), FileOperation::Edit);
+        let s1 = FileSnapshot::with_id(
+            "id-1",
+            PathBuf::from("/tmp/test.rs"),
+            "v1".to_string(),
+            FileOperation::Edit,
+        );
+        let s2 = FileSnapshot::with_id(
+            "id-2",
+            PathBuf::from("/tmp/test.rs"),
+            "v2".to_string(),
+            FileOperation::Edit,
+        );
 
         history.add_snapshot(s1);
         history.add_snapshot(s2);

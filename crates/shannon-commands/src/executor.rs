@@ -149,7 +149,9 @@ impl CommandExecutor {
                 if let Some(ref template) = cmd.prompt_template {
                     Ok(template.replace("{args}", args))
                 } else {
-                    Ok(format!("Execute the /{command_name} command with args: '{args}'"))
+                    Ok(format!(
+                        "Execute the /{command_name} command with args: '{args}'"
+                    ))
                 }
             }
             _ => Err(CommandError::ExecutionError(
@@ -211,11 +213,8 @@ impl SharedExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    
 
     fn create_test_registry() -> CommandRegistry {
-        
         // Commands would be registered here
         CommandRegistry::new()
     }
@@ -223,7 +222,11 @@ mod tests {
     #[tokio::test]
     async fn test_execute_nonexistent() {
         let executor = CommandExecutor::new(create_test_registry());
-        let parsed = ParsedCommand::new("nonexistent".to_string(), "".to_string(), "/nonexistent".to_string());
+        let parsed = ParsedCommand::new(
+            "nonexistent".to_string(),
+            "".to_string(),
+            "/nonexistent".to_string(),
+        );
         let context = CommandContext::default();
 
         let result = executor.execute(&parsed, &context).await;

@@ -76,7 +76,10 @@ pub enum ToolExecutionError {
     InvalidInput { tool_name: String, reason: String },
 
     #[error("Tool timed out after {timeout_secs}s: {tool_name}")]
-    Timeout { tool_name: String, timeout_secs: u64 },
+    Timeout {
+        tool_name: String,
+        timeout_secs: u64,
+    },
 
     #[error("Hook blocked tool execution: {0}")]
     HookBlocked(String),
@@ -155,11 +158,7 @@ pub struct ToolProgress {
 
 impl ToolProgress {
     /// Create a new progress event.
-    pub fn new(
-        tool_id: String,
-        tool_name: String,
-        status: ToolProgressStatus,
-    ) -> Self {
+    pub fn new(tool_id: String, tool_name: String, status: ToolProgressStatus) -> Self {
         Self {
             tool_id,
             tool_name,
@@ -172,7 +171,11 @@ impl ToolProgress {
 
     /// Create a started progress event.
     pub fn started(tool_id: &str, tool_name: &str) -> Self {
-        Self::new(tool_id.to_string(), tool_name.to_string(), ToolProgressStatus::Started)
+        Self::new(
+            tool_id.to_string(),
+            tool_name.to_string(),
+            ToolProgressStatus::Started,
+        )
     }
 
     /// Create an update progress event with a message.
@@ -286,12 +289,7 @@ pub struct AttachmentMessage {
 
 impl AttachmentMessage {
     /// Create a new attachment message.
-    pub fn new(
-        source_tool: &str,
-        tool_id: &str,
-        content: &str,
-        content_type: &str,
-    ) -> Self {
+    pub fn new(source_tool: &str, tool_id: &str, content: &str, content_type: &str) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             source_tool: source_tool.to_string(),
@@ -356,7 +354,11 @@ pub struct ToolExecutionResult {
 
 impl ToolExecutionResult {
     /// Build metadata from a tool execution.
-    fn build_metadata(tool_name: &str, input: &Value, output: &ToolOutput) -> HashMap<String, Value> {
+    fn build_metadata(
+        tool_name: &str,
+        input: &Value,
+        output: &ToolOutput,
+    ) -> HashMap<String, Value> {
         let mut metadata = HashMap::new();
 
         // Extract file extensions for file-related tools
@@ -401,7 +403,14 @@ impl ToolExecutionResult {
         let mut attachments = Vec::new();
 
         // File-related tools produce attachments
-        let file_tools = ["Read", "read", "FileRead", "file_read", "Write", "FileWrite"];
+        let file_tools = [
+            "Read",
+            "read",
+            "FileRead",
+            "file_read",
+            "Write",
+            "FileWrite",
+        ];
         if file_tools.contains(&tool_name) && !output.is_error {
             let attachment = AttachmentMessage::file_attachment(
                 tool_name,
@@ -477,10 +486,18 @@ impl ProgressCallback for LoggingProgressCallback {
 
 /// Tools that modify files and should trigger auto-checkpointing.
 const FILE_MODIFYING_TOOLS: &[&str] = &[
-    "Write", "write", "FileWrite", "file_write",
-    "Edit", "edit", "FileEdit", "file_edit",
-    "MultiEdit", "multi_edit",
-    "Bash", "bash",  // Bash may modify files via commands
+    "Write",
+    "write",
+    "FileWrite",
+    "file_write",
+    "Edit",
+    "edit",
+    "FileEdit",
+    "file_edit",
+    "MultiEdit",
+    "multi_edit",
+    "Bash",
+    "bash", // Bash may modify files via commands
 ];
 
 /// Returns true if the tool is known to modify files.
@@ -533,10 +550,7 @@ pub struct ToolExecutionService {
 
 impl ToolExecutionService {
     /// Create a new tool execution service.
-    pub fn new(
-        registry: Arc<ToolRegistry>,
-        permission_manager: Arc<PermissionManager>,
-    ) -> Self {
+    pub fn new(registry: Arc<ToolRegistry>, permission_manager: Arc<PermissionManager>) -> Self {
         Self {
             registry,
             permission_manager,
@@ -645,11 +659,7 @@ impl ToolExecutionService {
             && !files_modified.is_empty()
         {
             if let Some(ref mgr) = self.checkpoint_manager {
-                let desc = format!(
-                    "{}: {}",
-                    tool_name,
-                    files_modified.join(", ")
-                );
+                let desc = format!("{}: {}", tool_name, files_modified.join(", "));
                 match mgr.create_checkpoint(tool_name, &desc) {
                     Ok(_) => checkpoint_created = true,
                     Err(e) => {
@@ -673,8 +683,7 @@ impl ToolExecutionService {
                     match decision {
                         HookDecision::Deny { reason } => {
                             let msg = format!("Hook blocked: {reason}");
-                            let progress =
-                                ToolProgress::failed(&tool_id, tool_name, &msg);
+                            let progress = ToolProgress::failed(&tool_id, tool_name, &msg);
                             progress_events.push(progress.clone());
                             self.emit_progress(progress).await;
                             return Err(ToolExecutionError::HookBlocked(msg));
@@ -720,7 +729,8 @@ impl ToolExecutionService {
                 self.emit_progress(progress).await;
 
                 // Fire PostToolUseFailure hook
-                self.fire_post_failure_hook(tool_name, &effective_input, &msg).await;
+                self.fire_post_failure_hook(tool_name, &effective_input, &msg)
+                    .await;
 
                 return Err(ToolExecutionError::ExecutionFailed(msg));
             }
@@ -736,7 +746,8 @@ impl ToolExecutionService {
                 progress_events.push(progress.clone());
                 self.emit_progress(progress).await;
 
-                self.fire_post_failure_hook(tool_name, &effective_input, &msg).await;
+                self.fire_post_failure_hook(tool_name, &effective_input, &msg)
+                    .await;
 
                 return Err(ToolExecutionError::Timeout {
                     tool_name: tool_name.to_string(),
@@ -769,11 +780,7 @@ impl ToolExecutionService {
 
         // 5. Emit completed/failed progress
         if is_error {
-            let progress = ToolProgress::failed(
-                &tool_id,
-                tool_name,
-                &output.content,
-            );
+            let progress = ToolProgress::failed(&tool_id, tool_name, &output.content);
             progress_events.push(progress.clone());
             self.emit_progress(progress).await;
         } else {
@@ -867,8 +874,7 @@ impl ToolExecutionService {
         input: Value,
         timeout: Duration,
     ) -> Result<ToolExecutionResult, ToolExecutionError> {
-        match tokio::time::timeout(timeout, self.run_tool_use(session_id, tool_name, input)).await
-        {
+        match tokio::time::timeout(timeout, self.run_tool_use(session_id, tool_name, input)).await {
             Ok(result) => result,
             Err(_) => Err(ToolExecutionError::Timeout {
                 tool_name: tool_name.to_string(),
@@ -1154,7 +1160,11 @@ mod tests {
 
     #[test]
     fn test_tool_progress_new() {
-        let p = ToolProgress::new("id-1".to_string(), "Echo".to_string(), ToolProgressStatus::Started);
+        let p = ToolProgress::new(
+            "id-1".to_string(),
+            "Echo".to_string(),
+            ToolProgressStatus::Started,
+        );
         assert_eq!(p.tool_id, "id-1");
         assert_eq!(p.tool_name, "Echo");
         assert_eq!(p.status, ToolProgressStatus::Started);
@@ -1230,7 +1240,8 @@ mod tests {
 
     #[test]
     fn test_attachment_message_file_no_extension() {
-        let att = AttachmentMessage::file_attachment("Read", "id-1", "content", "/path/to/Makefile");
+        let att =
+            AttachmentMessage::file_attachment("Read", "id-1", "content", "/path/to/Makefile");
         assert!(att.file_extension.is_none());
     }
 
@@ -1371,12 +1382,13 @@ mod tests {
         let service = make_service().await;
         let session_id = Uuid::new_v4();
 
-        let result = service
-            .run_tool_use(session_id, "Panic", Value::Null)
-            .await;
+        let result = service.run_tool_use(session_id, "Panic", Value::Null).await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ToolExecutionError::ExecutionFailed(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            ToolExecutionError::ExecutionFailed(_)
+        ));
     }
 
     #[tokio::test]
@@ -1571,7 +1583,8 @@ mod tests {
         registry.register(Box::new(FailTool)).unwrap();
         registry.register(Box::new(PanicTool)).unwrap();
 
-        let mut service = ToolExecutionService::new(Arc::new(registry), Arc::new(PermissionManager::new()));
+        let mut service =
+            ToolExecutionService::new(Arc::new(registry), Arc::new(PermissionManager::new()));
         service.set_hook_manager(Arc::new(tokio::sync::RwLock::new(mgr)));
         service
     }
@@ -1579,7 +1592,8 @@ mod tests {
     #[tokio::test]
     async fn test_hook_pre_tool_use_allows_execution() {
         // Hook that echoes something (default Allow decision)
-        let service = make_service_with_hooks(r#"{
+        let service = make_service_with_hooks(
+            r#"{
             "hooks": {
                 "PreToolUse": [
                     {
@@ -1590,7 +1604,9 @@ mod tests {
                     }
                 ]
             }
-        }"#).await;
+        }"#,
+        )
+        .await;
 
         let session_id = Uuid::new_v4();
         let result = service
@@ -1651,7 +1667,11 @@ mod tests {
 
         let session_id = Uuid::new_v4();
         let result = service
-            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "original"}))
+            .run_tool_use(
+                session_id,
+                "Echo",
+                serde_json::json!({"message": "original"}),
+            )
             .await
             .unwrap();
 
@@ -1678,7 +1698,8 @@ mod tests {
     #[tokio::test]
     async fn test_hook_post_tool_use_fires_on_success() {
         // PostToolUse hook runs after success - the tool still executes
-        let service = make_service_with_hooks(r#"{
+        let service = make_service_with_hooks(
+            r#"{
             "hooks": {
                 "PostToolUse": [
                     {
@@ -1689,7 +1710,9 @@ mod tests {
                     }
                 ]
             }
-        }"#).await;
+        }"#,
+        )
+        .await;
 
         let session_id = Uuid::new_v4();
         let result = service
@@ -1704,7 +1727,8 @@ mod tests {
     #[tokio::test]
     async fn test_hook_post_tool_use_failure_fires_on_error_output() {
         // PostToolUseFailure hook fires when tool returns is_error=true
-        let service = make_service_with_hooks(r#"{
+        let service = make_service_with_hooks(
+            r#"{
             "hooks": {
                 "PostToolUseFailure": [
                     {
@@ -1715,7 +1739,9 @@ mod tests {
                     }
                 ]
             }
-        }"#).await;
+        }"#,
+        )
+        .await;
 
         let session_id = Uuid::new_v4();
         let result = service
@@ -1779,7 +1805,8 @@ mod tests {
     #[tokio::test]
     async fn test_session_lifecycle_hooks() {
         // SessionStart and SessionEnd hooks should fire without error
-        let service = make_service_with_hooks(r#"{
+        let service = make_service_with_hooks(
+            r#"{
             "hooks": {
                 "SessionStart": [
                     {
@@ -1798,7 +1825,9 @@ mod tests {
                     }
                 ]
             }
-        }"#).await;
+        }"#,
+        )
+        .await;
 
         // These should not panic or error
         service.on_session_start("test-session-1").await;
@@ -1815,7 +1844,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_user_prompt_submit_hook_allow() {
-        let service = make_service_with_hooks(r#"{
+        let service = make_service_with_hooks(
+            r#"{
             "hooks": {
                 "UserPromptSubmit": [
                     {
@@ -1826,7 +1856,9 @@ mod tests {
                     }
                 ]
             }
-        }"#).await;
+        }"#,
+        )
+        .await;
 
         let result = service.on_user_prompt_submit("hello world").await;
         assert!(result.is_ok());
@@ -1886,7 +1918,8 @@ mod tests {
     #[tokio::test]
     async fn test_hook_pre_then_post_both_fire() {
         // Both PreToolUse and PostToolUse should fire in order
-        let service = make_service_with_hooks(r#"{
+        let service = make_service_with_hooks(
+            r#"{
             "hooks": {
                 "PreToolUse": [
                     {
@@ -1905,7 +1938,9 @@ mod tests {
                     }
                 ]
             }
-        }"#).await;
+        }"#,
+        )
+        .await;
 
         let session_id = Uuid::new_v4();
         let result = service
@@ -1971,8 +2006,12 @@ mod tests {
 
     #[test]
     fn test_tool_progress_status_serde_roundtrip() {
-        for status in [ToolProgressStatus::Started, ToolProgressStatus::Updated,
-                       ToolProgressStatus::Completed, ToolProgressStatus::Failed] {
+        for status in [
+            ToolProgressStatus::Started,
+            ToolProgressStatus::Updated,
+            ToolProgressStatus::Completed,
+            ToolProgressStatus::Failed,
+        ] {
             let json = serde_json::to_string(&status).unwrap();
             let back: ToolProgressStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(status, back);
@@ -1984,7 +2023,10 @@ mod tests {
         let e = ToolExecutionError::ToolNotFound("Foo".to_string());
         assert!(e.to_string().contains("Foo"));
 
-        let e = ToolExecutionError::Timeout { tool_name: "Bash".to_string(), timeout_secs: 30 };
+        let e = ToolExecutionError::Timeout {
+            tool_name: "Bash".to_string(),
+            timeout_secs: 30,
+        };
         assert!(e.to_string().contains("30"));
         assert!(e.to_string().contains("Bash"));
 

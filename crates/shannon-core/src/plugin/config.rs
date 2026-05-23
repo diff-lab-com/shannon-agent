@@ -27,7 +27,10 @@ pub struct PluginsConfig {
 impl Default for PluginsConfig {
     fn default() -> Self {
         Self {
-            registry_url: Some("https://raw.githubusercontent.com/shannon-code/plugins-index/main/index.json".to_string()),
+            registry_url: Some(
+                "https://raw.githubusercontent.com/shannon-code/plugins-index/main/index.json"
+                    .to_string(),
+            ),
             enabled: HashSet::new(),
             disabled: HashSet::new(),
             plugins_dir: None,
@@ -38,8 +41,7 @@ impl Default for PluginsConfig {
 impl PluginsConfig {
     /// Check if a plugin is enabled
     pub fn is_enabled(&self, name: &str) -> bool {
-        !self.disabled.contains(name) &&
-            (self.enabled.is_empty() || self.enabled.contains(name))
+        !self.disabled.contains(name) && (self.enabled.is_empty() || self.enabled.contains(name))
     }
 
     /// Enable a plugin

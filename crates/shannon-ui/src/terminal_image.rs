@@ -8,8 +8,8 @@
 //! Also supports Kitty Graphics Protocol for high-fidelity rendering in
 //! Kitty terminal. Falls back to half-block encoding for other terminals.
 
-use base64::Engine;
 use crate::theme::Theme;
+use base64::Engine;
 use image::{DynamicImage, GenericImageView, Rgba};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
@@ -36,19 +36,16 @@ fn supports_kitty() -> bool {
 /// Check if terminal supports Sixel protocol
 fn supports_sixel() -> bool {
     // Check TERM_PROGRAM for known Sixel-capable terminals
-    if std::env::var("TERM_PROGRAM").is_ok_and(|tp| {
-        matches!(
-            tp.as_str(),
-            "WezTerm" | "mlterm" | "mintty" | "xt"
-        )
-    }) {
+    if std::env::var("TERM_PROGRAM")
+        .is_ok_and(|tp| matches!(tp.as_str(), "WezTerm" | "mlterm" | "mintty" | "xt"))
+    {
         return true;
     }
 
     // Check TERM variable
-    if std::env::var("TERM").is_ok_and(|t| {
-        t.contains("xterm") || t.contains("sixel") || t.contains("mlterm")
-    }) {
+    if std::env::var("TERM")
+        .is_ok_and(|t| t.contains("xterm") || t.contains("sixel") || t.contains("mlterm"))
+    {
         return true;
     }
 
@@ -194,7 +191,11 @@ fn decode_image(data: &[u8], media_type: &str) -> Option<DynamicImage> {
 ///
 /// Each character cell represents 2 vertical pixels using the upper
 /// half-block character (▀) with foreground = top pixel, background = bottom pixel.
-fn render_halfblock_image(img: &DynamicImage, config: &ImageRenderConfig, theme: &Theme) -> Vec<Line<'static>> {
+fn render_halfblock_image(
+    img: &DynamicImage,
+    config: &ImageRenderConfig,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let (orig_w, orig_h) = img.dimensions();
 
     // Calculate target dimensions
@@ -228,7 +229,11 @@ fn render_halfblock_image(img: &DynamicImage, config: &ImageRenderConfig, theme:
     }
 
     // Resize the image to target pixel dimensions
-    let resized = img.resize_exact(pixel_width, pixel_height, image::imageops::FilterType::Triangle);
+    let resized = img.resize_exact(
+        pixel_width,
+        pixel_height,
+        image::imageops::FilterType::Triangle,
+    );
 
     // Build lines using half-block characters
     let mut lines = Vec::new();
@@ -280,7 +285,12 @@ fn rgba_to_ratatui_color(px: Rgba<u8>) -> Color {
 /// Generate a placeholder line for an image that cannot be rendered inline.
 ///
 /// Useful when image data is too large or terminal doesn't support rendering.
-pub fn image_placeholder(width: u32, height: u32, media_type: &str, theme: &Theme) -> Line<'static> {
+pub fn image_placeholder(
+    width: u32,
+    height: u32,
+    media_type: &str,
+    theme: &Theme,
+) -> Line<'static> {
     let label = format!("[{width}x{height} {media_type}]");
     Line::from(vec![
         Span::styled(" 🖼 ", Style::default().fg(theme.accent)),
@@ -392,7 +402,11 @@ fn render_kitty_image(
     let pixel_w = char_w;
     let pixel_h = if config.preserve_aspect {
         let h = (pixel_w as f64 * orig_h as f64 / orig_w as f64).round() as u32;
-        if config.max_height > 0 { h.min(config.max_height * 2) } else { h }
+        if config.max_height > 0 {
+            h.min(config.max_height * 2)
+        } else {
+            h
+        }
     } else if config.max_height > 0 {
         config.max_height * 2
     } else {
@@ -413,10 +427,7 @@ fn render_kitty_image(
 
     // The Kitty escape goes on the first line; subsequent lines are empty to
     // create vertical space so the image doesn't overlap other content.
-    lines.push(Line::from(Span::styled(
-        encoded,
-        Style::default(),
-    )));
+    lines.push(Line::from(Span::styled(encoded, Style::default())));
 
     // Reserve vertical space: each char row = 2 pixel rows
     for _ in 1..char_rows {
@@ -520,7 +531,12 @@ mod tests {
     #[test]
     fn test_render_image_base64_invalid_data() {
         let config = ImageRenderConfig::default();
-        let lines = render_image_base64("not-valid-base64!!!", "image/png", &config, &Theme::default_dark());
+        let lines = render_image_base64(
+            "not-valid-base64!!!",
+            "image/png",
+            &config,
+            &Theme::default_dark(),
+        );
         assert!(!lines.is_empty());
         // Should contain error message
         let text: String = lines
@@ -533,10 +549,8 @@ mod tests {
     #[test]
     fn test_render_image_base64_valid_png() {
         // Create a minimal 4x4 red PNG
-        let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            4, 4,
-            image::Rgb([255, 0, 0]),
-        ));
+        let img =
+            DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([255, 0, 0])));
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
             .unwrap();
@@ -559,10 +573,8 @@ mod tests {
 
     #[test]
     fn test_render_image_bytes_direct() {
-        let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            8, 8,
-            image::Rgb([0, 255, 0]),
-        ));
+        let img =
+            DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([0, 255, 0])));
         let mut buf = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
             .unwrap();
@@ -597,7 +609,8 @@ mod tests {
     fn test_render_preserves_aspect_ratio() {
         // Wide image (200x100) with max_width=40
         let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            200, 100,
+            200,
+            100,
             image::Rgb([128, 128, 128]),
         ));
         let mut buf = Vec::new();
@@ -621,7 +634,8 @@ mod tests {
     fn test_render_tall_image() {
         // Tall image (100x200) with max_width=20, max_height=30
         let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            100, 200,
+            100,
+            200,
             image::Rgb([64, 64, 64]),
         ));
         let mut buf = Vec::new();
@@ -642,7 +656,8 @@ mod tests {
     fn test_decode_image_jpeg_hint() {
         // Create a minimal JPEG-like header won't work, test with PNG hint on PNG data
         let img = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
-            2, 2,
+            2,
+            2,
             image::Rgb([100, 100, 100]),
         ));
         let mut buf = Vec::new();

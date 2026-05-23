@@ -1,6 +1,8 @@
 //! Comprehensive tests for TaskBoard — the core multi-agent task coordination structure.
 
-use shannon_agents::{AgentError, TaskError, TaskPriority, TaskStatus, AgentTask, TaskBoard, TaskBoardEvent};
+use shannon_agents::{
+    AgentError, AgentTask, TaskBoard, TaskBoardEvent, TaskError, TaskPriority, TaskStatus,
+};
 use uuid::Uuid;
 
 fn make_task(subject: &str, priority: TaskPriority) -> AgentTask {
@@ -40,7 +42,10 @@ async fn test_add_duplicate_task_fails() {
 async fn test_get_nonexistent_task() {
     let board = TaskBoard::new();
     let result = board.get_task(Uuid::new_v4()).await;
-    assert!(matches!(result, Err(AgentError::Task(TaskError::TaskNotFound(_)))));
+    assert!(matches!(
+        result,
+        Err(AgentError::Task(TaskError::TaskNotFound(_)))
+    ));
 }
 
 #[tokio::test]
@@ -68,7 +73,10 @@ async fn test_clear_board() {
     let board = TaskBoard::new();
 
     for i in 0..5 {
-        board.add_task(make_task(&format!("Task {i}"), TaskPriority::Medium)).await.unwrap();
+        board
+            .add_task(make_task(&format!("Task {i}"), TaskPriority::Medium))
+            .await
+            .unwrap();
     }
 
     assert_eq!(board.list_all_tasks().await.len(), 5);
@@ -81,9 +89,18 @@ async fn test_clear_board() {
 #[tokio::test]
 async fn test_list_all_tasks() {
     let board = TaskBoard::new();
-    board.add_task(make_task("A", TaskPriority::High)).await.unwrap();
-    board.add_task(make_task("B", TaskPriority::Low)).await.unwrap();
-    board.add_task(make_task("C", TaskPriority::Medium)).await.unwrap();
+    board
+        .add_task(make_task("A", TaskPriority::High))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("B", TaskPriority::Low))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("C", TaskPriority::Medium))
+        .await
+        .unwrap();
 
     let all = board.list_all_tasks().await;
     assert_eq!(all.len(), 3);
@@ -128,9 +145,18 @@ async fn test_list_tasks_by_status() {
 #[tokio::test]
 async fn test_list_tasks_by_priority() {
     let board = TaskBoard::new();
-    board.add_task(make_task("H1", TaskPriority::High)).await.unwrap();
-    board.add_task(make_task("M1", TaskPriority::Medium)).await.unwrap();
-    board.add_task(make_task("H2", TaskPriority::High)).await.unwrap();
+    board
+        .add_task(make_task("H1", TaskPriority::High))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("M1", TaskPriority::Medium))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("H2", TaskPriority::High))
+        .await
+        .unwrap();
 
     let high = board.list_tasks_by_priority(TaskPriority::High).await;
     assert_eq!(high.len(), 2);
@@ -148,8 +174,14 @@ async fn test_list_tasks_by_priority() {
 async fn test_summary_counts() {
     let board = TaskBoard::new();
 
-    board.add_task(make_task("P1", TaskPriority::High)).await.unwrap();
-    board.add_task(make_task("P2", TaskPriority::Medium)).await.unwrap();
+    board
+        .add_task(make_task("P1", TaskPriority::High))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("P2", TaskPriority::Medium))
+        .await
+        .unwrap();
 
     let mut wip = make_task("WIP", TaskPriority::Low);
     wip.status = TaskStatus::InProgress;
@@ -165,9 +197,18 @@ async fn test_summary_counts() {
 #[tokio::test]
 async fn test_summary_priority_breakdown() {
     let board = TaskBoard::new();
-    board.add_task(make_task("H", TaskPriority::High)).await.unwrap();
-    board.add_task(make_task("H2", TaskPriority::High)).await.unwrap();
-    board.add_task(make_task("M", TaskPriority::Medium)).await.unwrap();
+    board
+        .add_task(make_task("H", TaskPriority::High))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("H2", TaskPriority::High))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("M", TaskPriority::Medium))
+        .await
+        .unwrap();
 
     let summary = board.summary().await;
     assert_eq!(*summary.by_priority.get("High").unwrap_or(&0), 2);
@@ -291,7 +332,10 @@ async fn test_update_task_status() {
     let id = task.id;
 
     board.add_task(task).await.unwrap();
-    board.update_task_status(id, TaskStatus::Cancelled).await.unwrap();
+    board
+        .update_task_status(id, TaskStatus::Cancelled)
+        .await
+        .unwrap();
 
     let fetched = board.get_task(id).await.unwrap();
     assert_eq!(fetched.status, TaskStatus::Cancelled);
@@ -337,7 +381,10 @@ async fn test_circular_dependency_rejected() {
     board.add_dependency(id3, id2).await.unwrap();
 
     let result = board.add_dependency(id1, id3).await;
-    assert!(matches!(result, Err(AgentError::Task(TaskError::CircularDependency(_)))));
+    assert!(matches!(
+        result,
+        Err(AgentError::Task(TaskError::CircularDependency(_)))
+    ));
 }
 
 #[tokio::test]
@@ -348,7 +395,10 @@ async fn test_self_dependency_rejected() {
 
     board.add_task(task).await.unwrap();
     let result = board.add_dependency(id, id).await;
-    assert!(matches!(result, Err(AgentError::Task(TaskError::CircularDependency(_)))));
+    assert!(matches!(
+        result,
+        Err(AgentError::Task(TaskError::CircularDependency(_)))
+    ));
 }
 
 #[tokio::test]
@@ -495,10 +545,16 @@ async fn test_get_next_task_agent_limit() {
         let task = make_task(&format!("Task {i}"), TaskPriority::High);
         let id = task.id;
         board.add_task(task).await.unwrap();
-        board.assign_task(id, "busy-agent".to_string()).await.unwrap();
+        board
+            .assign_task(id, "busy-agent".to_string())
+            .await
+            .unwrap();
     }
 
-    board.add_task(make_task("Extra", TaskPriority::High)).await.unwrap();
+    board
+        .add_task(make_task("Extra", TaskPriority::High))
+        .await
+        .unwrap();
 
     let next = board.get_next_task("busy-agent").await;
     assert!(next.is_none());
@@ -515,7 +571,10 @@ async fn test_get_next_task_other_agent_can_claim() {
         board.assign_task(id, "agent-a".to_string()).await.unwrap();
     }
 
-    board.add_task(make_task("Extra", TaskPriority::High)).await.unwrap();
+    board
+        .add_task(make_task("Extra", TaskPriority::High))
+        .await
+        .unwrap();
 
     let next = board.get_next_task("agent-b").await;
     assert!(next.is_some());
@@ -549,7 +608,9 @@ async fn test_task_assigned_event() {
     board.assign_task(id, "worker".to_string()).await.unwrap();
 
     let event = rx.try_recv().unwrap();
-    assert!(matches!(event, TaskBoardEvent::TaskAssigned { task_id, agent } if task_id == id && agent == "worker"));
+    assert!(
+        matches!(event, TaskBoardEvent::TaskAssigned { task_id, agent } if task_id == id && agent == "worker")
+    );
 }
 
 #[tokio::test]
@@ -568,10 +629,15 @@ async fn test_task_completed_event() {
     board.complete_task(id).await.unwrap();
 
     let status_event = rx.try_recv().unwrap();
-    assert!(matches!(status_event, TaskBoardEvent::TaskStatusChanged { .. }));
+    assert!(matches!(
+        status_event,
+        TaskBoardEvent::TaskStatusChanged { .. }
+    ));
 
     let complete_event = rx.try_recv().unwrap();
-    assert!(matches!(complete_event, TaskBoardEvent::TaskCompleted { task_id, agent } if task_id == id && agent == "worker"));
+    assert!(
+        matches!(complete_event, TaskBoardEvent::TaskCompleted { task_id, agent } if task_id == id && agent == "worker")
+    );
 }
 
 #[tokio::test]
@@ -587,7 +653,9 @@ async fn test_task_failed_event() {
     board.fail_task(id, "crashed".to_string()).await.unwrap();
 
     let event = rx.try_recv().unwrap();
-    assert!(matches!(event, TaskBoardEvent::TaskFailed { task_id, reason } if task_id == id && reason == "crashed"));
+    assert!(
+        matches!(event, TaskBoardEvent::TaskFailed { task_id, reason } if task_id == id && reason == "crashed")
+    );
 }
 
 #[tokio::test]
@@ -608,7 +676,9 @@ async fn test_dependency_added_event() {
     board.add_dependency(id2, id1).await.unwrap();
 
     let event = rx.try_recv().unwrap();
-    assert!(matches!(event, TaskBoardEvent::DependencyAdded { task_id, depends_on } if task_id == id2 && depends_on == id1));
+    assert!(
+        matches!(event, TaskBoardEvent::DependencyAdded { task_id, depends_on } if task_id == id2 && depends_on == id1)
+    );
 }
 
 #[tokio::test]
@@ -655,10 +725,22 @@ async fn test_remove_task_cleans_up_assignment() {
 #[tokio::test]
 async fn test_multiple_priorities_summary() {
     let board = TaskBoard::new();
-    board.add_task(make_task("Critical", TaskPriority::Critical)).await.unwrap();
-    board.add_task(make_task("High", TaskPriority::High)).await.unwrap();
-    board.add_task(make_task("Medium", TaskPriority::Medium)).await.unwrap();
-    board.add_task(make_task("Low", TaskPriority::Low)).await.unwrap();
+    board
+        .add_task(make_task("Critical", TaskPriority::Critical))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("High", TaskPriority::High))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("Medium", TaskPriority::Medium))
+        .await
+        .unwrap();
+    board
+        .add_task(make_task("Low", TaskPriority::Low))
+        .await
+        .unwrap();
 
     let summary = board.summary().await;
     assert_eq!(summary.total_tasks, 4);

@@ -41,12 +41,16 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_create_team() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        let result = coordinator.create_team(
-            "backend-team".to_string(),
-            "Backend development team".to_string(),
-        ).await;
+        let result = coordinator
+            .create_team(
+                "backend-team".to_string(),
+                "Backend development team".to_string(),
+            )
+            .await;
 
         assert!(result.is_ok());
 
@@ -57,20 +61,32 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_create_duplicate_team_fails() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team-a".to_string(), "First team".to_string()).await.unwrap();
+        coordinator
+            .create_team("team-a".to_string(), "First team".to_string())
+            .await
+            .unwrap();
 
-        let result = coordinator.create_team("team-a".to_string(), "Duplicate team".to_string()).await;
+        let result = coordinator
+            .create_team("team-a".to_string(), "Duplicate team".to_string())
+            .await;
 
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn coordinator_add_teammate_to_team() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("dev-team".to_string(), "Development team".to_string()).await.unwrap();
+        coordinator
+            .create_team("dev-team".to_string(), "Development team".to_string())
+            .await
+            .unwrap();
 
         let config = TeammateConfig {
             agent_type: "developer".to_string(),
@@ -78,7 +94,9 @@ mod coordinator_tests {
             ..Default::default()
         };
 
-        let result = coordinator.add_teammate("dev-team", "alice".to_string(), config).await;
+        let result = coordinator
+            .add_teammate("dev-team", "alice".to_string(), config)
+            .await;
 
         assert!(result.is_ok());
 
@@ -89,13 +107,17 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_add_teammate_to_nonexistent_team_fails() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        let result = coordinator.add_teammate(
-            "nonexistent-team",
-            "alice".to_string(),
-            TeammateConfig::default(),
-        ).await;
+        let result = coordinator
+            .add_teammate(
+                "nonexistent-team",
+                "alice".to_string(),
+                TeammateConfig::default(),
+            )
+            .await;
 
         assert!(result.is_err());
     }
@@ -108,34 +130,67 @@ mod coordinator_tests {
         };
         let coordinator = AgentCoordinator::new(config).await.unwrap();
 
-        coordinator.create_team("small-team".to_string(), "Small team".to_string()).await.unwrap();
+        coordinator
+            .create_team("small-team".to_string(), "Small team".to_string())
+            .await
+            .unwrap();
 
-        coordinator.add_teammate("small-team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
-        coordinator.add_teammate("small-team", "bob".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .add_teammate("small-team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("small-team", "bob".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
-        let result = coordinator.add_teammate("small-team", "charlie".to_string(), TeammateConfig::default()).await;
+        let result = coordinator
+            .add_teammate(
+                "small-team",
+                "charlie".to_string(),
+                TeammateConfig::default(),
+            )
+            .await;
 
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn coordinator_add_duplicate_teammate_fails() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
-        coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
-        let result = coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await;
+        let result = coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await;
 
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn coordinator_get_agent() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
-        coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
         let agent = coordinator.get_agent("team", "alice").await;
 
@@ -146,9 +201,14 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_get_nonexistent_agent_fails() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
 
         let result = coordinator.get_agent("team", "nonexistent").await;
 
@@ -157,16 +217,23 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_add_task() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
 
-        let task_id = coordinator.add_task(
-            "team",
-            "Fix bug".to_string(),
-            "Fix the null pointer".to_string(),
-            TaskPriority::High,
-        ).await;
+        let task_id = coordinator
+            .add_task(
+                "team",
+                "Fix bug".to_string(),
+                "Fix the null pointer".to_string(),
+                TaskPriority::High,
+            )
+            .await;
 
         assert!(task_id.is_ok());
         let task_id = task_id.unwrap();
@@ -175,17 +242,28 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_assign_task() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
-        coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
-        let task_id = coordinator.add_task(
-            "team",
-            "Task".to_string(),
-            "Description".to_string(),
-            TaskPriority::Medium,
-        ).await.unwrap();
+        let task_id = coordinator
+            .add_task(
+                "team",
+                "Task".to_string(),
+                "Description".to_string(),
+                TaskPriority::Medium,
+            )
+            .await
+            .unwrap();
 
         let result = coordinator.assign_task("team", task_id).await;
 
@@ -196,13 +274,12 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_send_message() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        let message = AgentMessage::new_text(
-            "alice".to_string(),
-            "bob".to_string(),
-            "Hello".to_string(),
-        );
+        let message =
+            AgentMessage::new_text("alice".to_string(), "bob".to_string(), "Hello".to_string());
 
         let result = coordinator.send_message(message).await;
 
@@ -211,36 +288,53 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_subscribe_events() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("events-team".to_string(), "Team".to_string()).await.unwrap();
+        coordinator
+            .create_team("events-team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
 
         let mut receiver = coordinator.subscribe_events();
 
-        coordinator.add_teammate("events-team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .add_teammate(
+                "events-team",
+                "alice".to_string(),
+                TeammateConfig::default(),
+            )
+            .await
+            .unwrap();
 
         // Wait for event with timeout
-        let event_opt = tokio::time::timeout(
-            Duration::from_millis(200),
-            async {
-                loop {
-                    match receiver.try_recv() {
-                        Ok(event) => break Some(event),
-                        Err(_) => {
-                            tokio::time::sleep(Duration::from_millis(10)).await;
-                        }
+        let event_opt = tokio::time::timeout(Duration::from_millis(200), async {
+            loop {
+                match receiver.try_recv() {
+                    Ok(event) => break Some(event),
+                    Err(_) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 }
             }
-        ).await.ok().flatten();
+        })
+        .await
+        .ok()
+        .flatten();
 
         assert!(event_opt.is_some());
-        assert!(matches!(event_opt, Some(CoordinatorEvent::AgentJoined { .. })));
+        assert!(matches!(
+            event_opt,
+            Some(CoordinatorEvent::AgentJoined { .. })
+        ));
     }
 
     #[tokio::test]
     async fn coordinator_task_board_access() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
         let task_board = coordinator.task_board();
 
@@ -249,10 +343,18 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_shutdown() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
-        coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
         let result = coordinator.shutdown().await;
 
@@ -261,18 +363,29 @@ mod coordinator_tests {
 
     #[tokio::test]
     async fn coordinator_event_task_assigned() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
         let mut receiver = coordinator.subscribe_events();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
-        coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
-        let task_id = coordinator.add_task(
-            "team",
-            "Task".to_string(),
-            "Description".to_string(),
-            TaskPriority::Medium,
-        ).await.unwrap();
+        let task_id = coordinator
+            .add_task(
+                "team",
+                "Task".to_string(),
+                "Description".to_string(),
+                TaskPriority::Medium,
+            )
+            .await
+            .unwrap();
 
         coordinator.assign_task("team", task_id).await.unwrap();
 
@@ -377,8 +490,16 @@ mod task_board_tests {
     async fn task_board_list_ready_tasks() {
         let board = TaskBoard::new();
 
-        let task1 = AgentTask::new("Ready task".to_string(), "Description".to_string(), TaskPriority::Medium);
-        let mut task2 = AgentTask::new("Blocked task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task1 = AgentTask::new(
+            "Ready task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
+        let mut task2 = AgentTask::new(
+            "Blocked task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
 
         task2.blocked_by.push(Uuid::new_v4());
 
@@ -395,8 +516,16 @@ mod task_board_tests {
     async fn task_board_list_tasks_by_status() {
         let board = TaskBoard::new();
 
-        let task1 = AgentTask::new("Pending task".to_string(), "Description".to_string(), TaskPriority::Medium);
-        let mut task2 = AgentTask::new("In progress task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task1 = AgentTask::new(
+            "Pending task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
+        let mut task2 = AgentTask::new(
+            "In progress task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
 
         task2.status = TaskStatus::InProgress;
 
@@ -414,9 +543,30 @@ mod task_board_tests {
     async fn task_board_list_tasks_by_priority() {
         let board = TaskBoard::new();
 
-        board.add_task(AgentTask::new("Low".to_string(), "Description".to_string(), TaskPriority::Low)).await.unwrap();
-        board.add_task(AgentTask::new("High".to_string(), "Description".to_string(), TaskPriority::High)).await.unwrap();
-        board.add_task(AgentTask::new("High2".to_string(), "Description".to_string(), TaskPriority::High)).await.unwrap();
+        board
+            .add_task(AgentTask::new(
+                "Low".to_string(),
+                "Description".to_string(),
+                TaskPriority::Low,
+            ))
+            .await
+            .unwrap();
+        board
+            .add_task(AgentTask::new(
+                "High".to_string(),
+                "Description".to_string(),
+                TaskPriority::High,
+            ))
+            .await
+            .unwrap();
+        board
+            .add_task(AgentTask::new(
+                "High2".to_string(),
+                "Description".to_string(),
+                TaskPriority::High,
+            ))
+            .await
+            .unwrap();
 
         let high_priority_tasks = board.list_tasks_by_priority(TaskPriority::High).await;
 
@@ -427,9 +577,20 @@ mod task_board_tests {
     async fn task_board_summary() {
         let board = TaskBoard::new();
 
-        board.add_task(AgentTask::new("Pending".to_string(), "Description".to_string(), TaskPriority::Medium)).await.unwrap();
+        board
+            .add_task(AgentTask::new(
+                "Pending".to_string(),
+                "Description".to_string(),
+                TaskPriority::Medium,
+            ))
+            .await
+            .unwrap();
 
-        let mut in_progress = AgentTask::new("In Progress".to_string(), "Description".to_string(), TaskPriority::High);
+        let mut in_progress = AgentTask::new(
+            "In Progress".to_string(),
+            "Description".to_string(),
+            TaskPriority::High,
+        );
         in_progress.status = TaskStatus::InProgress;
         board.add_task(in_progress).await.unwrap();
 
@@ -444,7 +605,11 @@ mod task_board_tests {
     async fn task_board_assign_task() {
         let board = TaskBoard::new();
 
-        let task = AgentTask::new("Task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         let task_id = task.id;
 
         board.add_task(task).await.unwrap();
@@ -462,7 +627,11 @@ mod task_board_tests {
     async fn task_board_assign_blocked_task_fails() {
         let board = TaskBoard::new();
 
-        let mut task = AgentTask::new("Blocked".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let mut task = AgentTask::new(
+            "Blocked".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         task.blocked_by.push(Uuid::new_v4());
         let task_id = task.id;
 
@@ -477,12 +646,18 @@ mod task_board_tests {
     async fn task_board_update_task_status() {
         let board = TaskBoard::new();
 
-        let task = AgentTask::new("Task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         let task_id = task.id;
 
         board.add_task(task).await.unwrap();
 
-        let result = board.update_task_status(task_id, TaskStatus::Completed).await;
+        let result = board
+            .update_task_status(task_id, TaskStatus::Completed)
+            .await;
 
         assert!(result.is_ok());
 
@@ -494,7 +669,11 @@ mod task_board_tests {
     async fn task_board_complete_task() {
         let board = TaskBoard::new();
 
-        let task = AgentTask::new("Task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         let task_id = task.id;
 
         board.add_task(task).await.unwrap();
@@ -511,12 +690,18 @@ mod task_board_tests {
     async fn task_board_fail_task() {
         let board = TaskBoard::new();
 
-        let task = AgentTask::new("Task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         let task_id = task.id;
 
         board.add_task(task).await.unwrap();
 
-        let result = board.fail_task(task_id, "Something went wrong".to_string()).await;
+        let result = board
+            .fail_task(task_id, "Something went wrong".to_string())
+            .await;
 
         assert!(result.is_ok());
 
@@ -528,8 +713,16 @@ mod task_board_tests {
     async fn task_board_add_dependency() {
         let board = TaskBoard::new();
 
-        let task1 = AgentTask::new("Task 1".to_string(), "Description".to_string(), TaskPriority::Medium);
-        let task2 = AgentTask::new("Task 2".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task1 = AgentTask::new(
+            "Task 1".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
+        let task2 = AgentTask::new(
+            "Task 2".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
 
         let task1_id = task1.id;
         let task2_id = task2.id;
@@ -554,8 +747,16 @@ mod task_board_tests {
     async fn task_board_add_circular_dependency_fails() {
         let board = TaskBoard::new();
 
-        let task1 = AgentTask::new("Task 1".to_string(), "Description".to_string(), TaskPriority::Medium);
-        let task2 = AgentTask::new("Task 2".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task1 = AgentTask::new(
+            "Task 1".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
+        let task2 = AgentTask::new(
+            "Task 2".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
 
         let task1_id = task1.id;
         let task2_id = task2.id;
@@ -574,8 +775,16 @@ mod task_board_tests {
     async fn task_board_remove_dependency() {
         let board = TaskBoard::new();
 
-        let task1 = AgentTask::new("Task 1".to_string(), "Description".to_string(), TaskPriority::Medium);
-        let task2 = AgentTask::new("Task 2".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task1 = AgentTask::new(
+            "Task 1".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
+        let task2 = AgentTask::new(
+            "Task 2".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
 
         let task1_id = task1.id;
         let task2_id = task2.id;
@@ -597,7 +806,11 @@ mod task_board_tests {
     async fn task_board_get_next_task_for_agent() {
         let board = TaskBoard::new();
 
-        let task = AgentTask::new("Ready task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Ready task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
 
         board.add_task(task).await.unwrap();
 
@@ -613,13 +826,21 @@ mod task_board_tests {
 
         // Assign 3 tasks to alice (the capacity limit in get_next_task)
         for i in 0..3 {
-            let task = AgentTask::new(format!("Task {i}"), "Description".to_string(), TaskPriority::Medium);
+            let task = AgentTask::new(
+                format!("Task {i}"),
+                "Description".to_string(),
+                TaskPriority::Medium,
+            );
             let id = task.id;
             board.add_task(task).await.unwrap();
             board.assign_task(id, "alice".to_string()).await.unwrap();
         }
 
-        let ready_task = AgentTask::new("Ready".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let ready_task = AgentTask::new(
+            "Ready".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         board.add_task(ready_task).await.unwrap();
 
         let next_task = board.get_next_task("alice").await;
@@ -631,15 +852,29 @@ mod task_board_tests {
     async fn task_board_get_agent_tasks() {
         let board = TaskBoard::new();
 
-        let task1 = AgentTask::new("Task 1".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task1 = AgentTask::new(
+            "Task 1".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         let task1_id = task1.id;
         board.add_task(task1).await.unwrap();
-        board.assign_task(task1_id, "alice".to_string()).await.unwrap();
+        board
+            .assign_task(task1_id, "alice".to_string())
+            .await
+            .unwrap();
 
-        let task2 = AgentTask::new("Task 2".to_string(), "Description".to_string(), TaskPriority::High);
+        let task2 = AgentTask::new(
+            "Task 2".to_string(),
+            "Description".to_string(),
+            TaskPriority::High,
+        );
         let task2_id = task2.id;
         board.add_task(task2).await.unwrap();
-        board.assign_task(task2_id, "bob".to_string()).await.unwrap();
+        board
+            .assign_task(task2_id, "bob".to_string())
+            .await
+            .unwrap();
 
         let alice_tasks = board.get_agent_tasks("alice").await;
         let bob_tasks = board.get_agent_tasks("bob").await;
@@ -653,7 +888,11 @@ mod task_board_tests {
         let board = TaskBoard::new();
 
         for i in 0..3 {
-            let task = AgentTask::new(format!("Task {i}"), "Description".to_string(), TaskPriority::Medium);
+            let task = AgentTask::new(
+                format!("Task {i}"),
+                "Description".to_string(),
+                TaskPriority::Medium,
+            );
             let id = task.id;
             board.add_task(task).await.unwrap();
             board.assign_task(id, "alice".to_string()).await.unwrap();
@@ -668,7 +907,11 @@ mod task_board_tests {
     async fn task_board_list_active_agents() {
         let board = TaskBoard::new();
 
-        let task = AgentTask::new("Task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         let id = task.id;
         board.add_task(task).await.unwrap();
         board.assign_task(id, "alice".to_string()).await.unwrap();
@@ -683,7 +926,11 @@ mod task_board_tests {
     async fn task_board_remove_task() {
         let board = TaskBoard::new();
 
-        let task = AgentTask::new("Task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         let task_id = task.id;
 
         board.add_task(task).await.unwrap();
@@ -707,8 +954,22 @@ mod task_board_tests {
     async fn task_board_clear() {
         let board = TaskBoard::new();
 
-        board.add_task(AgentTask::new("Task 1".to_string(), "Description".to_string(), TaskPriority::Medium)).await.unwrap();
-        board.add_task(AgentTask::new("Task 2".to_string(), "Description".to_string(), TaskPriority::High)).await.unwrap();
+        board
+            .add_task(AgentTask::new(
+                "Task 1".to_string(),
+                "Description".to_string(),
+                TaskPriority::Medium,
+            ))
+            .await
+            .unwrap();
+        board
+            .add_task(AgentTask::new(
+                "Task 2".to_string(),
+                "Description".to_string(),
+                TaskPriority::High,
+            ))
+            .await
+            .unwrap();
 
         board.clear().await;
 
@@ -720,7 +981,11 @@ mod task_board_tests {
         let board = TaskBoard::new();
         let mut receiver = board.subscribe_events();
 
-        let task = AgentTask::new("Task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         board.add_task(task).await.unwrap();
 
         let event = receiver.try_recv();
@@ -738,11 +1003,18 @@ mod task_board_tests {
         let board = TaskBoard::new();
         let mut receiver = board.subscribe_events();
 
-        let task = AgentTask::new("Task".to_string(), "Description".to_string(), TaskPriority::Medium);
+        let task = AgentTask::new(
+            "Task".to_string(),
+            "Description".to_string(),
+            TaskPriority::Medium,
+        );
         let task_id = task.id;
 
         board.add_task(task).await.unwrap();
-        board.assign_task(task_id, "alice".to_string()).await.unwrap();
+        board
+            .assign_task(task_id, "alice".to_string())
+            .await
+            .unwrap();
 
         let event = receiver.try_recv();
         assert!(event.is_ok());
@@ -879,7 +1151,9 @@ mod teammate_extended_tests {
         assert_eq!(teammate.status().await, TeammateStatus::ShuttingDown);
 
         let response = response.unwrap();
-        if let MessageContent::Protocol(ProtocolMessage::ShutdownResponse { approve, .. }) = response.content {
+        if let MessageContent::Protocol(ProtocolMessage::ShutdownResponse { approve, .. }) =
+            response.content
+        {
             assert!(approve);
         } else {
             panic!("Expected ShutdownResponse");
@@ -903,7 +1177,9 @@ mod teammate_extended_tests {
 
         assert!(response.is_ok());
         let response = response.unwrap();
-        if let MessageContent::Protocol(ProtocolMessage::PlanApprovalResponse { approve, .. }) = response.content {
+        if let MessageContent::Protocol(ProtocolMessage::PlanApprovalResponse { approve, .. }) =
+            response.content
+        {
             assert!(approve);
         } else {
             panic!("Expected PlanApprovalResponse");
@@ -939,11 +1215,8 @@ mod teammate_extended_tests {
     async fn teammate_send_and_recv_message() {
         let teammate = Teammate::new("alice".to_string(), TeammateConfig::default());
 
-        let message = AgentMessage::new_text(
-            "bob".to_string(),
-            "alice".to_string(),
-            "Hello".to_string(),
-        );
+        let message =
+            AgentMessage::new_text("bob".to_string(), "alice".to_string(), "Hello".to_string());
 
         teammate.send(message).await.unwrap();
 
@@ -975,7 +1248,9 @@ mod teammate_extended_tests {
 
         teammate.assign_task(task_id).await.unwrap();
 
-        teammate.fail_task(task_id, "Network error".to_string()).await;
+        teammate
+            .fail_task(task_id, "Network error".to_string())
+            .await;
 
         assert_eq!(teammate.status().await, TeammateStatus::Idle);
     }
@@ -984,11 +1259,21 @@ mod teammate_extended_tests {
     async fn teammate_metadata_operations() {
         let teammate = Teammate::new("agent".to_string(), TeammateConfig::default());
 
-        teammate.set_metadata("key1".to_string(), serde_json::json!("value1")).await;
-        teammate.set_metadata("key2".to_string(), serde_json::json!(42)).await;
+        teammate
+            .set_metadata("key1".to_string(), serde_json::json!("value1"))
+            .await;
+        teammate
+            .set_metadata("key2".to_string(), serde_json::json!(42))
+            .await;
 
-        assert_eq!(teammate.get_metadata("key1").await, Some(serde_json::json!("value1")));
-        assert_eq!(teammate.get_metadata("key2").await, Some(serde_json::json!(42)));
+        assert_eq!(
+            teammate.get_metadata("key1").await,
+            Some(serde_json::json!("value1"))
+        );
+        assert_eq!(
+            teammate.get_metadata("key2").await,
+            Some(serde_json::json!(42))
+        );
         assert!(teammate.get_metadata("nonexistent").await.is_none());
     }
 
@@ -1053,7 +1338,12 @@ mod teammate_extended_tests {
 
         assert!(teammate.state().await.current_worktree.is_none());
 
-        teammate.set_metadata("current_worktree".to_string(), serde_json::json!("feature-branch")).await;
+        teammate
+            .set_metadata(
+                "current_worktree".to_string(),
+                serde_json::json!("feature-branch"),
+            )
+            .await;
 
         let state = teammate.state().await;
         assert_eq!(state.current_worktree.as_deref(), Some("feature-branch"));
@@ -1096,17 +1386,28 @@ mod integration_tests {
 
     #[tokio::test]
     async fn coordinator_task_board_integration() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
-        coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
-        let task_id = coordinator.add_task(
-            "team",
-            "Task".to_string(),
-            "Description".to_string(),
-            TaskPriority::Medium,
-        ).await.unwrap();
+        let task_id = coordinator
+            .add_task(
+                "team",
+                "Task".to_string(),
+                "Description".to_string(),
+                TaskPriority::Medium,
+            )
+            .await
+            .unwrap();
 
         let assigned = coordinator.assign_task("team", task_id).await.unwrap();
 
@@ -1118,10 +1419,18 @@ mod integration_tests {
 
     #[tokio::test]
     async fn coordinator_message_to_teammate() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
-        coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
+        coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
         let message = AgentMessage::new_text(
             "coordinator".to_string(),
@@ -1142,9 +1451,21 @@ mod integration_tests {
     async fn task_board_dependency_workflow() {
         let board = TaskBoard::new();
 
-        let task1 = AgentTask::new("Build".to_string(), "Build project".to_string(), TaskPriority::High);
-        let task2 = AgentTask::new("Test".to_string(), "Run tests".to_string(), TaskPriority::High);
-        let task3 = AgentTask::new("Deploy".to_string(), "Deploy to prod".to_string(), TaskPriority::Critical);
+        let task1 = AgentTask::new(
+            "Build".to_string(),
+            "Build project".to_string(),
+            TaskPriority::High,
+        );
+        let task2 = AgentTask::new(
+            "Test".to_string(),
+            "Run tests".to_string(),
+            TaskPriority::High,
+        );
+        let task3 = AgentTask::new(
+            "Deploy".to_string(),
+            "Deploy to prod".to_string(),
+            TaskPriority::Critical,
+        );
 
         let task1_id = task1.id;
         let task2_id = task2.id;
@@ -1176,10 +1497,15 @@ mod integration_tests {
 
     #[tokio::test]
     async fn teammate_coordinator_event_integration() {
-        let coordinator = AgentCoordinator::new(CoordinatorConfig::default()).await.unwrap();
+        let coordinator = AgentCoordinator::new(CoordinatorConfig::default())
+            .await
+            .unwrap();
         let mut receiver = coordinator.subscribe_events();
 
-        coordinator.create_team("team".to_string(), "Team".to_string()).await.unwrap();
+        coordinator
+            .create_team("team".to_string(), "Team".to_string())
+            .await
+            .unwrap();
 
         // Give time for the create_team event to propagate
         sleep(Duration::from_millis(50)).await;
@@ -1187,7 +1513,10 @@ mod integration_tests {
         // Drain any pending events
         while receiver.try_recv().is_ok() {}
 
-        coordinator.add_teammate("team", "alice".to_string(), TeammateConfig::default()).await.unwrap();
+        coordinator
+            .add_teammate("team", "alice".to_string(), TeammateConfig::default())
+            .await
+            .unwrap();
 
         // Give time for the add_teammate event to propagate
         sleep(Duration::from_millis(50)).await;
@@ -1214,13 +1543,18 @@ mod self_claim_tests {
             ..Default::default()
         };
         let coordinator = AgentCoordinator::new(config).await.unwrap();
-        coordinator.create_team("dev".to_string(), "Development team".to_string()).await.unwrap();
+        coordinator
+            .create_team("dev".to_string(), "Development team".to_string())
+            .await
+            .unwrap();
         coordinator
             .add_teammate("dev", "alice".to_string(), TeammateConfig::default())
-            .await.unwrap();
+            .await
+            .unwrap();
         coordinator
             .add_teammate("dev", "bob".to_string(), TeammateConfig::default())
-            .await.unwrap();
+            .await
+            .unwrap();
         coordinator
     }
 
@@ -1232,7 +1566,12 @@ mod self_claim_tests {
         priority: TaskPriority,
     ) -> Uuid {
         coordinator
-            .add_task("dev", subject.to_string(), description.to_string(), priority)
+            .add_task(
+                "dev",
+                subject.to_string(),
+                description.to_string(),
+                priority,
+            )
             .await
             .unwrap()
     }
@@ -1240,7 +1579,8 @@ mod self_claim_tests {
     #[tokio::test]
     async fn self_claim_task_assigns_to_agent() {
         let coordinator = setup_team_with_tasks().await;
-        let task_id = create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
+        let task_id =
+            create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
 
         let task = coordinator
             .self_claim_task("dev", "alice", task_id)
@@ -1254,7 +1594,8 @@ mod self_claim_tests {
     #[tokio::test]
     async fn self_claim_rejects_already_owned_task() {
         let coordinator = setup_team_with_tasks().await;
-        let task_id = create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
+        let task_id =
+            create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
 
         // Alice claims first
         coordinator
@@ -1263,16 +1604,15 @@ mod self_claim_tests {
             .unwrap();
 
         // Bob tries to claim the same task
-        let result = coordinator
-            .self_claim_task("dev", "bob", task_id)
-            .await;
+        let result = coordinator.self_claim_task("dev", "bob", task_id).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn self_claim_rejects_non_member() {
         let coordinator = setup_team_with_tasks().await;
-        let task_id = create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
+        let task_id =
+            create_task(&coordinator, "Task 1", "Do something", TaskPriority::Medium).await;
 
         let result = coordinator
             .self_claim_task("dev", "unknown_agent", task_id)
@@ -1283,8 +1623,15 @@ mod self_claim_tests {
     #[tokio::test]
     async fn self_claim_rejects_blocked_task() {
         let coordinator = setup_team_with_tasks().await;
-        let blocker_id = create_task(&coordinator, "Blocker", "Must finish first", TaskPriority::High).await;
-        let blocked_id = create_task(&coordinator, "Blocked", "Waiting", TaskPriority::Medium).await;
+        let blocker_id = create_task(
+            &coordinator,
+            "Blocker",
+            "Must finish first",
+            TaskPriority::High,
+        )
+        .await;
+        let blocked_id =
+            create_task(&coordinator, "Blocked", "Waiting", TaskPriority::Medium).await;
 
         // Add dependency: blocked_task depends on blocker
         coordinator
@@ -1304,10 +1651,22 @@ mod self_claim_tests {
         let coordinator = setup_team_with_tasks().await;
 
         // Create tasks in order (earlier = lower ID)
-        let task1 = create_task(&coordinator, "First task", "Created first", TaskPriority::Low).await;
+        let task1 = create_task(
+            &coordinator,
+            "First task",
+            "Created first",
+            TaskPriority::Low,
+        )
+        .await;
         // Small sleep to ensure different timestamps (10ms for reliable resolution)
         sleep(Duration::from_millis(10)).await;
-        let _task2 = create_task(&coordinator, "Second task", "Created second", TaskPriority::High).await;
+        let _task2 = create_task(
+            &coordinator,
+            "Second task",
+            "Created second",
+            TaskPriority::High,
+        )
+        .await;
 
         // claim_next should pick the earliest-created task
         let claimed = coordinator
@@ -1324,10 +1683,7 @@ mod self_claim_tests {
     async fn claim_next_returns_none_when_no_tasks() {
         let coordinator = setup_team_with_tasks().await;
 
-        let result = coordinator
-            .claim_next_task("dev", "alice")
-            .await
-            .unwrap();
+        let result = coordinator.claim_next_task("dev", "alice").await.unwrap();
 
         assert!(result.is_none());
     }
@@ -1336,8 +1692,20 @@ mod self_claim_tests {
     async fn claim_next_skips_owned_tasks() {
         let coordinator = setup_team_with_tasks().await;
 
-        let task1 = create_task(&coordinator, "First task", "Created first", TaskPriority::Medium).await;
-        let task2 = create_task(&coordinator, "Second task", "Created second", TaskPriority::Medium).await;
+        let task1 = create_task(
+            &coordinator,
+            "First task",
+            "Created first",
+            TaskPriority::Medium,
+        )
+        .await;
+        let task2 = create_task(
+            &coordinator,
+            "Second task",
+            "Created second",
+            TaskPriority::Medium,
+        )
+        .await;
 
         // Alice claims task1
         coordinator
@@ -1382,10 +1750,7 @@ mod self_claim_tests {
         create_task(&coordinator, "Task 1", "Available", TaskPriority::Medium).await;
         create_task(&coordinator, "Task 2", "Also available", TaskPriority::High).await;
 
-        let available = coordinator
-            .notify_idle("dev", "alice")
-            .await
-            .unwrap();
+        let available = coordinator.notify_idle("dev", "alice").await.unwrap();
 
         assert_eq!(available.len(), 2);
     }
@@ -1394,10 +1759,7 @@ mod self_claim_tests {
     async fn notify_idle_returns_empty_when_no_tasks() {
         let coordinator = setup_team_with_tasks().await;
 
-        let available = coordinator
-            .notify_idle("dev", "alice")
-            .await
-            .unwrap();
+        let available = coordinator.notify_idle("dev", "alice").await.unwrap();
 
         assert!(available.is_empty());
     }
@@ -1415,10 +1777,7 @@ mod self_claim_tests {
             .unwrap();
 
         // Bob goes idle — should see no unowned tasks
-        let available = coordinator
-            .notify_idle("dev", "bob")
-            .await
-            .unwrap();
+        let available = coordinator.notify_idle("dev", "bob").await.unwrap();
 
         assert!(available.is_empty());
     }

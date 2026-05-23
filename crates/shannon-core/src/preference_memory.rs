@@ -248,9 +248,9 @@ impl PreferenceMemoryManager {
             .map_err(|e| PreferenceMemoryError::Io(std::io::Error::other(e.to_string())))?;
 
         // Look for a similar existing preference to merge with.
-        let similar_idx = prefs.iter().position(|existing| {
-            rule_similarity(&existing.rule, &entry.rule) > 0.5
-        });
+        let similar_idx = prefs
+            .iter()
+            .position(|existing| rule_similarity(&existing.rule, &entry.rule) > 0.5);
 
         if let Some(idx) = similar_idx {
             let existing = &mut prefs[idx];
@@ -296,10 +296,8 @@ impl PreferenceMemoryManager {
             PreferenceCategory::Project,
             PreferenceCategory::General,
         ] {
-            let mut entries: Vec<&PreferenceEntry> = prefs
-                .iter()
-                .filter(|e| e.category == *cat)
-                .collect();
+            let mut entries: Vec<&PreferenceEntry> =
+                prefs.iter().filter(|e| e.category == *cat).collect();
 
             if entries.is_empty() {
                 continue;
@@ -320,10 +318,7 @@ impl PreferenceMemoryManager {
 
     /// Increment the reinforcement count for any preference whose rule
     /// contains the given substring.
-    pub fn reinforce_preference(
-        &self,
-        rule_substring: &str,
-    ) -> Result<(), PreferenceMemoryError> {
+    pub fn reinforce_preference(&self, rule_substring: &str) -> Result<(), PreferenceMemoryError> {
         let mut prefs = self
             .preferences
             .write()
@@ -547,11 +542,7 @@ fn extract_rule_from_preference(msg: &str) -> String {
 /// assistant message.
 fn extract_rule_from_confirmation(user_msg: &str, assistant_msg: &str) -> String {
     // Take the first line of the assistant message as the behavior context.
-    let assistant_summary = assistant_msg
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim();
+    let assistant_summary = assistant_msg.lines().next().unwrap_or("").trim();
 
     // If the assistant line is too long, truncate.
     let summary = if assistant_summary.len() > 100 {
@@ -591,9 +582,17 @@ fn capitalize_first(s: &str) -> String {
 
 /// Classify a preference into a category based on keyword content.
 fn classify_preference_category(lower: &str) -> PreferenceCategory {
-    if lower.contains("test") || lower.contains("build") || lower.contains("deploy") || lower.contains("commit") {
+    if lower.contains("test")
+        || lower.contains("build")
+        || lower.contains("deploy")
+        || lower.contains("commit")
+    {
         PreferenceCategory::Workflow
-    } else if lower.contains("response") || lower.contains("explain") || lower.contains("summar") || lower.contains("concise") {
+    } else if lower.contains("response")
+        || lower.contains("explain")
+        || lower.contains("summar")
+        || lower.contains("concise")
+    {
         PreferenceCategory::Communication
     } else if lower.contains("project") || lower.contains("our ") || lower.contains("we ") {
         PreferenceCategory::Project
@@ -807,10 +806,7 @@ mod tests {
     #[test]
     fn test_detect_explicit_preference_always() {
         let mgr = PreferenceMemoryManager::new(std::env::temp_dir());
-        let result = mgr.detect_from_message(
-            "Always use TypeScript strict mode",
-            "",
-        );
+        let result = mgr.detect_from_message("Always use TypeScript strict mode", "");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert!(entry.rule.contains("TypeScript strict mode"));
@@ -820,10 +816,7 @@ mod tests {
     #[test]
     fn test_detect_explicit_preference_never() {
         let mgr = PreferenceMemoryManager::new(std::env::temp_dir().to_path_buf());
-        let result = mgr.detect_from_message(
-            "Never use any in TypeScript",
-            "",
-        );
+        let result = mgr.detect_from_message("Never use any in TypeScript", "");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert!(entry.rule.contains("any"));
@@ -833,10 +826,7 @@ mod tests {
     #[test]
     fn test_detect_explicit_preference_prefer() {
         let mgr = PreferenceMemoryManager::new(std::env::temp_dir());
-        let result = mgr.detect_from_message(
-            "I prefer 2 space indentation",
-            "",
-        );
+        let result = mgr.detect_from_message("I prefer 2 space indentation", "");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.priority, PreferencePriority::Normal);
@@ -845,10 +835,7 @@ mod tests {
     #[test]
     fn test_detect_style_directive() {
         let mgr = PreferenceMemoryManager::new(std::env::temp_dir());
-        let result = mgr.detect_from_message(
-            "Use snake_case for all variables",
-            "",
-        );
+        let result = mgr.detect_from_message("Use snake_case for all variables", "");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.category, PreferenceCategory::Style);
@@ -858,10 +845,7 @@ mod tests {
     #[test]
     fn test_detect_style_no_comments() {
         let mgr = PreferenceMemoryManager::new(std::env::temp_dir());
-        let result = mgr.detect_from_message(
-            "No comments needed for this code",
-            "",
-        );
+        let result = mgr.detect_from_message("No comments needed for this code", "");
         assert!(result.is_some());
         let entry = result.unwrap();
         assert_eq!(entry.category, PreferenceCategory::Style);
@@ -882,20 +866,14 @@ mod tests {
     #[test]
     fn test_detect_confirmation_without_code_ignored() {
         let mgr = PreferenceMemoryManager::new(std::env::temp_dir());
-        let result = mgr.detect_from_message(
-            "Perfect",
-            "OK",
-        );
+        let result = mgr.detect_from_message("Perfect", "OK");
         assert!(result.is_none());
     }
 
     #[test]
     fn test_detect_no_preference() {
         let mgr = PreferenceMemoryManager::new(std::env::temp_dir());
-        let result = mgr.detect_from_message(
-            "What is the weather today?",
-            "The weather is sunny.",
-        );
+        let result = mgr.detect_from_message("What is the weather today?", "The weather is sunny.");
         assert!(result.is_none());
     }
 
@@ -1066,7 +1044,8 @@ mod tests {
         // Small sleep to ensure timestamp would change if file were written.
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        mgr.reinforce_preference("something completely unrelated").unwrap();
+        mgr.reinforce_preference("something completely unrelated")
+            .unwrap();
 
         let metadata_after = fs::metadata(&path).unwrap().modified().unwrap();
 

@@ -1,8 +1,8 @@
 //! Skill execution engine
 
+use crate::definition::SkillResult as SkillExecutionResult;
 use crate::definition::{Skill, SkillContext};
 use crate::error::{SkillError, SkillResult};
-use crate::definition::SkillResult as SkillExecutionResult;
 use regex::Regex;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -41,7 +41,11 @@ impl SkillExecutor {
     }
 
     /// Execute a skill with the given context
-    pub fn execute(&self, skill: &Skill, context: &SkillContext) -> SkillResult<SkillExecutionResult> {
+    pub fn execute(
+        &self,
+        skill: &Skill,
+        context: &SkillContext,
+    ) -> SkillResult<SkillExecutionResult> {
         let start = std::time::Instant::now();
 
         // Start with the skill content
@@ -49,7 +53,10 @@ impl SkillExecutor {
 
         // Add base directory prefix if applicable
         if let Some(skill_root) = &skill.skill_root {
-            let prefix = format!("Base directory for this skill: {}\n\n", skill_root.display());
+            let prefix = format!(
+                "Base directory for this skill: {}\n\n",
+                skill_root.display()
+            );
             content = prefix + &content;
         }
 
@@ -121,7 +128,8 @@ impl SkillExecutor {
         // replaced to avoid ambiguity with shell variable syntax.
 
         // ${args:quote} - all arguments shell-quoted
-        let quoted_args = args.iter()
+        let quoted_args = args
+            .iter()
             .map(|a| shell_words::quote(a))
             .collect::<Vec<_>>()
             .join(" ");
@@ -179,7 +187,11 @@ impl SkillExecutor {
     }
 
     /// Execute shell commands in the content
-    fn execute_shell_commands(&self, content: &mut String, context: &SkillContext) -> SkillResult<bool> {
+    fn execute_shell_commands(
+        &self,
+        content: &mut String,
+        context: &SkillContext,
+    ) -> SkillResult<bool> {
         let Some(executor) = &self.shell_executor else {
             return Ok(false);
         };
@@ -193,25 +205,29 @@ impl SkillExecutor {
         // Execute inline commands
         while inline_pattern.is_match(content) {
             had_commands = true;
-            *content = inline_pattern.replace_all(content, |caps: &regex::Captures| {
-                let cmd = &caps[1];
-                match executor.execute(cmd, &context.cwd) {
-                    Ok(output) => output,
-                    Err(e) => format!("[Command failed: {e}]"),
-                }
-            }).to_string();
+            *content = inline_pattern
+                .replace_all(content, |caps: &regex::Captures| {
+                    let cmd = &caps[1];
+                    match executor.execute(cmd, &context.cwd) {
+                        Ok(output) => output,
+                        Err(e) => format!("[Command failed: {e}]"),
+                    }
+                })
+                .to_string();
         }
 
         // Execute block commands
         while block_pattern.is_match(content) {
             had_commands = true;
-            *content = block_pattern.replace_all(content, |caps: &regex::Captures| {
-                let cmd = &caps[1];
-                match executor.execute(cmd, &context.cwd) {
-                    Ok(output) => output,
-                    Err(e) => format!("[Command failed: {e}]"),
-                }
-            }).to_string();
+            *content = block_pattern
+                .replace_all(content, |caps: &regex::Captures| {
+                    let cmd = &caps[1];
+                    match executor.execute(cmd, &context.cwd) {
+                        Ok(output) => output,
+                        Err(e) => format!("[Command failed: {e}]"),
+                    }
+                })
+                .to_string();
         }
 
         Ok(had_commands)
@@ -233,7 +249,8 @@ fn validate_shell_command(command: &str) -> SkillResult<()> {
     if command.contains('\n') {
         return Err(SkillError::ExecutionFailed {
             name: "shell".to_string(),
-            message: "Command rejected: contains newline. Only single basic commands are allowed.".to_string(),
+            message: "Command rejected: contains newline. Only single basic commands are allowed."
+                .to_string(),
         });
     }
     if command.contains('$') && (command.contains('(') || command.contains('{')) {
@@ -245,7 +262,9 @@ fn validate_shell_command(command: &str) -> SkillResult<()> {
     if command.contains('`') {
         return Err(SkillError::ExecutionFailed {
             name: "shell".to_string(),
-            message: "Command rejected: contains command substitution. Only basic commands are allowed.".to_string(),
+            message:
+                "Command rejected: contains command substitution. Only basic commands are allowed."
+                    .to_string(),
         });
     }
 
@@ -305,11 +324,10 @@ impl ShellExecutor {
 
         validate_shell_command(command)?;
 
-        let parts = shell_words::split(command)
-            .map_err(|e| SkillError::ExecutionFailed {
-                name: "shell".to_string(),
-                message: format!("Failed to parse command: {e}"),
-            })?;
+        let parts = shell_words::split(command).map_err(|e| SkillError::ExecutionFailed {
+            name: "shell".to_string(),
+            message: format!("Failed to parse command: {e}"),
+        })?;
 
         if parts.is_empty() {
             return Err(SkillError::ExecutionFailed {

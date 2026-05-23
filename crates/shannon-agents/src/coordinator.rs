@@ -1,23 +1,23 @@
 //! Agent coordinator for managing multi-agent teams
 
 use crate::{
-    custom_agent::{CustomAgentDef, CustomAgentLoader, CustomAgentError},
+    TaskBoard,
+    custom_agent::{CustomAgentDef, CustomAgentError, CustomAgentLoader},
     error::{AgentError, CoordinationError},
     message::{AgentMessage, MessageContent, MessageType, ProtocolMessage},
     persistence::{FilePersistence, InboxMessage, TeamConfigFile},
-    process_manager::{AgentProcessConfig, AgentProcessManager, AgentEvent},
+    process_manager::{AgentEvent, AgentProcessConfig, AgentProcessManager},
     task::{AgentTask, TaskPriority, TaskStatus},
     teammate::{Teammate, TeammateConfig, TeammateStatus},
     worktree::{WorktreeConfig, WorktreeManager},
-    TaskBoard,
 };
-use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use shannon_core::hooks::{HookEvent, HookManager};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock, broadcast, watch};
+use std::time::Duration;
+use tokio::sync::{RwLock, broadcast, mpsc, watch};
 use uuid::Uuid;
 
 /// Information about a team member for agent discovery
@@ -128,21 +128,45 @@ pub enum CoordinatorEvent {
     /// Message sent between agents
     MessageSent(AgentMessage),
     /// Task assigned to agent
-    TaskAssigned { task_id: Uuid, agent: String, subject: String },
+    TaskAssigned {
+        task_id: Uuid,
+        agent: String,
+        subject: String,
+    },
     /// Task completed
     TaskCompleted { task_id: Uuid, agent: String },
     /// Task failed
-    TaskFailed { task_id: Uuid, agent: String, reason: String },
+    TaskFailed {
+        task_id: Uuid,
+        agent: String,
+        reason: String,
+    },
     /// Agent status changed
-    StatusChanged { agent: String, status: TeammateStatus },
+    StatusChanged {
+        agent: String,
+        status: TeammateStatus,
+    },
     /// Team was disbanded/deleted
     TeamDeleted { team: String },
     /// Background agent task produced output (streaming chunk)
-    AgentOutput { team: String, agent: String, chunk: String },
+    AgentOutput {
+        team: String,
+        agent: String,
+        chunk: String,
+    },
     /// Background agent task completed
-    AgentCompleted { team: String, agent: String, success: bool, output: String },
+    AgentCompleted {
+        team: String,
+        agent: String,
+        success: bool,
+        output: String,
+    },
     /// An idle agent was auto-assigned a task
-    TaskAutoClaimed { task_id: Uuid, team: String, agent: String },
+    TaskAutoClaimed {
+        task_id: Uuid,
+        team: String,
+        agent: String,
+    },
     /// A peer-to-peer direct message was sent between agents
     PeerDirectMessage {
         team: String,
@@ -214,12 +238,7 @@ impl AgentCoordinator {
     /// Create a new agent coordinator
     pub async fn new(config: CoordinatorConfig) -> Result<Self, AgentError> {
         let worktree_manager = if config.enable_worktree_isolation {
-            Some(
-                WorktreeManager::new(
-                    config.worktree_config.clone().unwrap_or_default(),
-                )
-                .await?,
-            )
+            Some(WorktreeManager::new(config.worktree_config.clone().unwrap_or_default()).await?)
         } else {
             None
         };
@@ -242,7 +261,9 @@ impl AgentCoordinator {
                     &teams_clone,
                     &task_board_clone,
                     &event_sender_clone,
-                ).await {
+                )
+                .await
+                {
                     tracing::error!("Error handling message: {}", e);
                 }
             }
@@ -255,7 +276,8 @@ impl AgentCoordinator {
         let heartbeat_interval = config.heartbeat_interval_secs;
         let assignment_strategy = config.assignment_strategy;
         let heartbeat_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(heartbeat_interval));
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(heartbeat_interval));
             // Consume the first immediate tick so heartbeat waits a full interval
             // before firing. This avoids racing with test setup and initial task creation.
             interval.tick().await;
@@ -264,8 +286,11 @@ impl AgentCoordinator {
                 Self::send_heartbeats(&teams_heartbeat, &event_heartbeat).await;
                 if matches!(assignment_strategy, AssignmentStrategy::SelfClaim) {
                     Self::auto_claim_idle_agents(
-                        &teams_heartbeat, &task_board_heartbeat, &event_heartbeat,
-                    ).await;
+                        &teams_heartbeat,
+                        &task_board_heartbeat,
+                        &event_heartbeat,
+                    )
+                    .await;
                 }
             }
         });
@@ -316,46 +341,60 @@ impl AgentCoordinator {
                 let mut rx = event_rx;
                 while let Some(agent_event) = rx.recv().await {
                     let coord_event = match agent_event {
-                        AgentEvent::Ready { agent_name, capabilities: _ } => {
+                        AgentEvent::Ready {
+                            agent_name,
+                            capabilities: _,
+                        } => {
                             tracing::info!(agent = %agent_name, "Process agent ready");
                             None
                         }
-                        AgentEvent::Progress { agent_name, task_id, chunk } => {
+                        AgentEvent::Progress {
+                            agent_name,
+                            task_id,
+                            chunk,
+                        } => {
                             Some(CoordinatorEvent::AgentOutput {
                                 team: String::new(), // filled by subscriber
                                 agent: agent_name,
                                 chunk: format!("[{task_id}] {chunk}"),
                             })
                         }
-                        AgentEvent::TaskComplete { agent_name, task_id, success, output } => {
-                            match Uuid::parse_str(&task_id) {
-                                Ok(parsed_id) => {
-                                    if success {
-                                        Some(CoordinatorEvent::TaskCompleted {
-                                            task_id: parsed_id,
-                                            agent: agent_name,
-                                        })
-                                    } else {
-                                        Some(CoordinatorEvent::TaskFailed {
-                                            task_id: parsed_id,
-                                            agent: agent_name,
-                                            reason: output,
-                                        })
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(agent = %agent_name, task_id = %task_id, error = %e, "Invalid task ID in TaskComplete event");
-                                    None
+                        AgentEvent::TaskComplete {
+                            agent_name,
+                            task_id,
+                            success,
+                            output,
+                        } => match Uuid::parse_str(&task_id) {
+                            Ok(parsed_id) => {
+                                if success {
+                                    Some(CoordinatorEvent::TaskCompleted {
+                                        task_id: parsed_id,
+                                        agent: agent_name,
+                                    })
+                                } else {
+                                    Some(CoordinatorEvent::TaskFailed {
+                                        task_id: parsed_id,
+                                        agent: agent_name,
+                                        reason: output,
+                                    })
                                 }
                             }
-                        }
-                        AgentEvent::Idle { agent_name, available_tasks_count: _ } => {
-                            Some(CoordinatorEvent::StatusChanged {
-                                agent: agent_name,
-                                status: TeammateStatus::Idle,
-                            })
-                        }
-                        AgentEvent::ProcessExited { agent_name, exit_code } => {
+                            Err(e) => {
+                                tracing::warn!(agent = %agent_name, task_id = %task_id, error = %e, "Invalid task ID in TaskComplete event");
+                                None
+                            }
+                        },
+                        AgentEvent::Idle {
+                            agent_name,
+                            available_tasks_count: _,
+                        } => Some(CoordinatorEvent::StatusChanged {
+                            agent: agent_name,
+                            status: TeammateStatus::Idle,
+                        }),
+                        AgentEvent::ProcessExited {
+                            agent_name,
+                            exit_code,
+                        } => {
                             tracing::warn!(
                                 agent = %agent_name,
                                 exit_code = ?exit_code,
@@ -366,7 +405,10 @@ impl AgentCoordinator {
                                 status: TeammateStatus::Stopped,
                             })
                         }
-                        AgentEvent::HealthCheckFailed { agent_name, consecutive_failures } => {
+                        AgentEvent::HealthCheckFailed {
+                            agent_name,
+                            consecutive_failures,
+                        } => {
                             tracing::warn!(
                                 agent = %agent_name,
                                 failures = consecutive_failures,
@@ -374,7 +416,10 @@ impl AgentCoordinator {
                             );
                             None
                         }
-                        AgentEvent::AgentRestarted { agent_name, restart_count } => {
+                        AgentEvent::AgentRestarted {
+                            agent_name,
+                            restart_count,
+                        } => {
                             tracing::info!(
                                 agent = %agent_name,
                                 restart_count,
@@ -385,14 +430,21 @@ impl AgentCoordinator {
                                 status: TeammateStatus::Idle,
                             })
                         }
-                        AgentEvent::RpcRequest { agent_name, request_id, method, params } => {
+                        AgentEvent::RpcRequest {
+                            agent_name,
+                            request_id,
+                            method,
+                            params,
+                        } => {
                             tracing::debug!(
                                 agent = %agent_name,
                                 method = %method,
                                 request_id,
                                 "Forwarding RPC request from agent"
                             );
-                            if let Err(e) = rpc_tx.send((agent_name, request_id, method, params)).await {
+                            if let Err(e) =
+                                rpc_tx.send((agent_name, request_id, method, params)).await
+                            {
                                 tracing::warn!("Failed to forward RPC request: {e}");
                             }
                             None
@@ -413,16 +465,12 @@ impl AgentCoordinator {
     }
 
     /// Create a new agent team
-    pub async fn create_team(
-        &self,
-        name: String,
-        description: String,
-    ) -> Result<(), AgentError> {
+    pub async fn create_team(&self, name: String, description: String) -> Result<(), AgentError> {
         let mut teams = self.teams.write().await;
 
         if teams.contains_key(&name) {
             return Err(AgentError::Coordination(
-                CoordinationError::InvalidConfiguration(format!("team '{name}' already exists"))
+                CoordinationError::InvalidConfiguration(format!("team '{name}' already exists")),
             ));
         }
 
@@ -455,20 +503,19 @@ impl AgentCoordinator {
     ) -> Result<(), AgentError> {
         let mut teams = self.teams.write().await;
 
-        let team = teams.get_mut(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get_mut(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
         if team.members.len() >= self.config.max_team_size {
             return Err(AgentError::Coordination(
-                CoordinationError::MaxTeamSizeExceeded(self.config.max_team_size)
+                CoordinationError::MaxTeamSizeExceeded(self.config.max_team_size),
             ));
         }
 
         if team.members.contains_key(&agent_name) {
             return Err(AgentError::Coordination(
-                CoordinationError::AgentAlreadyMember(agent_name, team_name.to_string())
+                CoordinationError::AgentAlreadyMember(agent_name, team_name.to_string()),
             ));
         }
 
@@ -478,9 +525,16 @@ impl AgentCoordinator {
         let manifest_suffix = format!(
             "\n\n## Your Team: {}\n{}",
             manifest.name,
-            manifest.members.iter()
+            manifest
+                .members
+                .iter()
                 .filter(|m| m.name != agent_name)
-                .map(|m| format!("- {} ({}): {}", m.name, m.agent_type, m.capabilities.join(", ")))
+                .map(|m| format!(
+                    "- {} ({}): {}",
+                    m.name,
+                    m.agent_type,
+                    m.capabilities.join(", ")
+                ))
                 .collect::<Vec<_>>()
                 .join("\n")
         );
@@ -520,10 +574,18 @@ impl AgentCoordinator {
                         );
                         // Store worktree path in teammate metadata
                         if let Some(agent) = team.members.get(&agent_name) {
-                            agent.set_metadata("worktree_path".to_string(),
-                                serde_json::json!(session.path.to_string_lossy().to_string())).await;
-                            agent.set_metadata("worktree_branch".to_string(),
-                                serde_json::json!(session.branch_name)).await;
+                            agent
+                                .set_metadata(
+                                    "worktree_path".to_string(),
+                                    serde_json::json!(session.path.to_string_lossy().to_string()),
+                                )
+                                .await;
+                            agent
+                                .set_metadata(
+                                    "worktree_branch".to_string(),
+                                    serde_json::json!(session.branch_name),
+                                )
+                                .await;
                         } else {
                             tracing::warn!(
                                 team = %team_name,
@@ -550,14 +612,19 @@ impl AgentCoordinator {
         if self.config.agent_mode == AgentMode::Process {
             if let Some(ref pm) = self.process_manager {
                 // Determine binary path: prefer the current executable (shannon CLI)
-                let binary_path = std::env::current_exe()
-                    .unwrap_or_else(|_| PathBuf::from("shannon"));
+                let binary_path =
+                    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("shannon"));
 
                 // Get worktree path if isolation is enabled
                 let worktree_path = {
                     let teams = self.teams.read().await;
-                    match teams.get(team_name).and_then(|t| t.members.get(&agent_name)) {
-                        Some(agent) => agent.get_metadata("worktree_path").await
+                    match teams
+                        .get(team_name)
+                        .and_then(|t| t.members.get(&agent_name))
+                    {
+                        Some(agent) => agent
+                            .get_metadata("worktree_path")
+                            .await
                             .and_then(|v| v.as_str().map(|s| s.to_string()))
                             .map(PathBuf::from),
                         None => None,
@@ -623,7 +690,9 @@ impl AgentCoordinator {
 
     /// Send a message to an agent or broadcast to all
     pub async fn send_message(&self, message: AgentMessage) -> Result<(), AgentError> {
-        self.message_sender.send(message).await
+        self.message_sender
+            .send(message)
+            .await
             .map_err(|e| AgentError::Communication(format!("Failed to send message: {e}")))?;
 
         Ok(())
@@ -654,15 +723,13 @@ impl AgentCoordinator {
 
         // Deliver to the recipient agent within the team
         let teams = self.teams.read().await;
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
-        let agent = team.members.get(to)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::AgentNotFound(to.to_string())
-            ))?;
+        let agent = team.members.get(to).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::AgentNotFound(to.to_string()))
+        })?;
 
         let response = agent.handle_message(message.clone()).await?;
 
@@ -680,7 +747,10 @@ impl AgentCoordinator {
             }
         }
 
-        if let Err(e) = self.event_sender.send(CoordinatorEvent::MessageSent(message.clone())) {
+        if let Err(e) = self
+            .event_sender
+            .send(CoordinatorEvent::MessageSent(message.clone()))
+        {
             tracing::warn!(error = %e, "Failed to send MessageSent event");
         }
 
@@ -698,10 +768,9 @@ impl AgentCoordinator {
         content: String,
     ) -> Result<Vec<AgentMessage>, AgentError> {
         let teams = self.teams.read().await;
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
         let mut responses = Vec::new();
 
@@ -736,7 +805,10 @@ impl AgentCoordinator {
                         }
                     }
 
-                    if let Err(e) = self.event_sender.send(CoordinatorEvent::MessageSent(message)) {
+                    if let Err(e) = self
+                        .event_sender
+                        .send(CoordinatorEvent::MessageSent(message))
+                    {
                         tracing::warn!(error = %e, "Failed to send MessageSent event");
                     }
 
@@ -821,28 +893,28 @@ impl AgentCoordinator {
     pub async fn get_team_members(&self, team_name: &str) -> Result<Vec<String>, AgentError> {
         let teams = self.teams.read().await;
 
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
         Ok(team.members.keys().cloned().collect())
     }
 
     /// Get agent by name
-    pub async fn get_agent(&self, team_name: &str, agent_name: &str) -> Result<Teammate, AgentError> {
+    pub async fn get_agent(
+        &self,
+        team_name: &str,
+        agent_name: &str,
+    ) -> Result<Teammate, AgentError> {
         let teams = self.teams.read().await;
 
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
-        team.members.get(agent_name)
-            .cloned()
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::AgentNotFound(agent_name.to_string())
-            ))
+        team.members.get(agent_name).cloned().ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::AgentNotFound(agent_name.to_string()))
+        })
     }
 
     /// Add a task to the team
@@ -949,11 +1021,7 @@ impl AgentCoordinator {
     /// **Note**: For decentralized coordination, prefer `self_claim_task` or
     /// `self_claim_task_for_agent` instead. This method is retained for backward
     /// compatibility with centrally-assigned workflows.
-    pub async fn assign_task(
-        &self,
-        team_name: &str,
-        task_id: Uuid,
-    ) -> Result<String, AgentError> {
+    pub async fn assign_task(&self, team_name: &str, task_id: Uuid) -> Result<String, AgentError> {
         tracing::warn!(
             task_id = %task_id,
             "assign_task() is deprecated for decentralized coordination; \
@@ -961,31 +1029,29 @@ impl AgentCoordinator {
         );
 
         // Fetch the task's required capabilities first (if it exists on the board).
-        let required_capabilities = self.task_board.get_task(task_id).await
+        let required_capabilities = self
+            .task_board
+            .get_task(task_id)
+            .await
             .map(|t| t.required_capabilities.clone())
             .unwrap_or_default();
 
         let agent_name = match self.config.assignment_strategy {
-            AssignmentStrategy::RoundRobin => {
-                self.assign_round_robin(team_name).await?
-            }
-            AssignmentStrategy::LeastLoaded => {
-                self.assign_least_loaded(team_name).await?
-            }
+            AssignmentStrategy::RoundRobin => self.assign_round_robin(team_name).await?,
+            AssignmentStrategy::LeastLoaded => self.assign_least_loaded(team_name).await?,
             AssignmentStrategy::CapabilityBased => {
-                self.assign_capability_based(team_name, &required_capabilities).await?
+                self.assign_capability_based(team_name, &required_capabilities)
+                    .await?
             }
-            AssignmentStrategy::FirstAvailable => {
-                self.assign_first_available(team_name).await?
-            }
+            AssignmentStrategy::FirstAvailable => self.assign_first_available(team_name).await?,
             // SelfClaim is normally invoked via self_claim_task() directly,
             // but when used through assign_task we find the next available task.
-            AssignmentStrategy::SelfClaim => {
-                self.assign_first_available(team_name).await?
-            }
+            AssignmentStrategy::SelfClaim => self.assign_first_available(team_name).await?,
         };
 
-        self.task_board.assign_task(task_id, agent_name.clone()).await?;
+        self.task_board
+            .assign_task(task_id, agent_name.clone())
+            .await?;
         let assigned_task = self.task_board.get_task(task_id).await?;
 
         if let Err(e) = self.event_sender.send(CoordinatorEvent::TaskAssigned {
@@ -1005,16 +1071,12 @@ impl AgentCoordinator {
     }
 
     /// Round-robin assignment: cycles through agents using assignment_index.
-    async fn assign_round_robin(
-        &self,
-        team_name: &str,
-    ) -> Result<String, AgentError> {
+    async fn assign_round_robin(&self, team_name: &str) -> Result<String, AgentError> {
         let mut teams = self.teams.write().await;
 
-        let team = teams.get_mut(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get_mut(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
         let member_names: Vec<_> = team.members.keys().cloned().collect();
 
@@ -1030,16 +1092,12 @@ impl AgentCoordinator {
     }
 
     /// Least-loaded assignment: pick the agent with the fewest assigned tasks.
-    async fn assign_least_loaded(
-        &self,
-        team_name: &str,
-    ) -> Result<String, AgentError> {
+    async fn assign_least_loaded(&self, team_name: &str) -> Result<String, AgentError> {
         let teams = self.teams.read().await;
 
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
         let member_names: Vec<_> = team.members.keys().cloned().collect();
 
@@ -1072,10 +1130,9 @@ impl AgentCoordinator {
     ) -> Result<String, AgentError> {
         let teams = self.teams.read().await;
 
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
         let member_names: Vec<_> = team.members.keys().cloned().collect();
 
@@ -1085,7 +1142,9 @@ impl AgentCoordinator {
 
         // If no capabilities are required, fall back to first available.
         if required_capabilities.is_empty() {
-            return member_names.first().cloned()
+            return member_names
+                .first()
+                .cloned()
                 .ok_or_else(|| AgentError::Communication("No available agents".to_string()));
         }
 
@@ -1093,7 +1152,8 @@ impl AgentCoordinator {
         let mut matching_agents: Vec<String> = Vec::new();
         for name in &member_names {
             if let Some(teammate) = team.members.get(name) {
-                let has_all = required_capabilities.iter()
+                let has_all = required_capabilities
+                    .iter()
                     .all(|cap| teammate.has_capability(cap));
                 if has_all {
                     matching_agents.push(name.clone());
@@ -1115,7 +1175,8 @@ impl AgentCoordinator {
                 }
             }
 
-            return best_agent.ok_or_else(|| AgentError::Communication("No available agents".to_string()));
+            return best_agent
+                .ok_or_else(|| AgentError::Communication("No available agents".to_string()));
         }
 
         // Fallback: no agent matches all capabilities, use first available.
@@ -1125,23 +1186,24 @@ impl AgentCoordinator {
             "No agent matches required capabilities, falling back to FirstAvailable"
         );
 
-        member_names.first().cloned()
+        member_names
+            .first()
+            .cloned()
             .ok_or_else(|| AgentError::Communication("No available agents".to_string()))
     }
 
     /// First-available assignment: pick the first member in the team.
-    async fn assign_first_available(
-        &self,
-        team_name: &str,
-    ) -> Result<String, AgentError> {
+    async fn assign_first_available(&self, team_name: &str) -> Result<String, AgentError> {
         let teams = self.teams.read().await;
 
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
-        team.members.keys().next().cloned()
+        team.members
+            .keys()
+            .next()
+            .cloned()
             .ok_or_else(|| AgentError::Communication("No available agents".to_string()))
     }
 
@@ -1164,14 +1226,13 @@ impl AgentCoordinator {
         // Verify the agent is a member of the team
         {
             let teams = self.teams.read().await;
-            let team = teams.get(team_name)
-                .ok_or_else(|| AgentError::Coordination(
-                    CoordinationError::TeamNotFound(team_name.to_string())
-                ))?;
+            let team = teams.get(team_name).ok_or_else(|| {
+                AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+            })?;
             if !team.members.contains_key(agent_name) {
-                return Err(AgentError::Communication(
-                    format!("Agent '{agent_name}' is not a member of team '{team_name}'")
-                ));
+                return Err(AgentError::Communication(format!(
+                    "Agent '{agent_name}' is not a member of team '{team_name}'"
+                )));
             }
         }
 
@@ -1179,8 +1240,12 @@ impl AgentCoordinator {
         if let Some(ref persist) = self.persistence {
             let claimed = persist.claim_task(team_name, &task_id.to_string(), agent_name)?;
             // Sync the in-memory task board with the persisted state
-            self.task_board.assign_task(task_id, agent_name.to_string()).await?;
-            self.task_board.update_task_status(task_id, TaskStatus::InProgress).await?;
+            self.task_board
+                .assign_task(task_id, agent_name.to_string())
+                .await?;
+            self.task_board
+                .update_task_status(task_id, TaskStatus::InProgress)
+                .await?;
             let updated_task = self.task_board.get_task(task_id).await?;
 
             // Update the agent's assigned tasks
@@ -1232,30 +1297,37 @@ impl AgentCoordinator {
         // Use assign_task as an atomic claim — it will fail if already owned.
         let task = self.task_board.get_task(task_id).await?;
         if task.status != TaskStatus::Pending {
-            return Err(AgentError::Task(
-                crate::error::TaskError::InvalidTaskState(task_id)
-            ));
+            return Err(AgentError::Task(crate::error::TaskError::InvalidTaskState(
+                task_id,
+            )));
         }
         if task.owner.is_some() {
-            return Err(AgentError::Communication(
-                format!("Task {} already claimed by {:?}", task_id, task.owner)
-            ));
+            return Err(AgentError::Communication(format!(
+                "Task {} already claimed by {:?}",
+                task_id, task.owner
+            )));
         }
         if !task.blocked_by.is_empty() {
-            return Err(AgentError::Communication(
-                format!("Task {} is blocked by {:?}", task_id, task.blocked_by)
-            ));
+            return Err(AgentError::Communication(format!(
+                "Task {} is blocked by {:?}",
+                task_id, task.blocked_by
+            )));
         }
 
         // Assign and transition to InProgress — re-verify after assign to catch races
-        self.task_board.assign_task(task_id, agent_name.to_string()).await?;
+        self.task_board
+            .assign_task(task_id, agent_name.to_string())
+            .await?;
         let claimed = self.task_board.get_task(task_id).await?;
         if claimed.owner.as_deref() != Some(agent_name) {
-            return Err(AgentError::Communication(
-                format!("Task {} was claimed by another agent ({:?})", task_id, claimed.owner)
-            ));
+            return Err(AgentError::Communication(format!(
+                "Task {} was claimed by another agent ({:?})",
+                task_id, claimed.owner
+            )));
         }
-        self.task_board.update_task_status(task_id, TaskStatus::InProgress).await?;
+        self.task_board
+            .update_task_status(task_id, TaskStatus::InProgress)
+            .await?;
 
         // Update the agent's assigned tasks
         {
@@ -1402,7 +1474,10 @@ impl AgentCoordinator {
             "Agent is now idle, checking for available tasks"
         );
 
-        let claimable = self.task_board.list_ready_tasks().await
+        let claimable = self
+            .task_board
+            .list_ready_tasks()
+            .await
             .into_iter()
             .filter(|t| t.owner.is_none())
             .collect::<Vec<_>>();
@@ -1440,11 +1515,7 @@ impl AgentCoordinator {
     ///
     /// Scans the recent CoordinatorEvent stream for PeerDirectMessage events
     /// involving this agent (as sender or recipient) and returns their summaries.
-    fn collect_peer_dm_summaries(
-        &self,
-        team_name: &str,
-        agent_name: &str,
-    ) -> Vec<String> {
+    fn collect_peer_dm_summaries(&self, team_name: &str, agent_name: &str) -> Vec<String> {
         // Try to receive recent events without blocking the subscriber
         let mut rx = self.event_sender.subscribe();
         let mut summaries = Vec::new();
@@ -1488,7 +1559,10 @@ impl AgentCoordinator {
         agent_name: &str,
     ) -> Result<(), AgentError> {
         // Fetch task details before completing (for hook subject)
-        let subject = self.task_board.get_task(task_id).await
+        let subject = self
+            .task_board
+            .get_task(task_id)
+            .await
             .map(|t| t.subject.clone())
             .unwrap_or_else(|_| task_id.to_string());
 
@@ -1522,23 +1596,18 @@ impl AgentCoordinator {
         plan: String,
     ) -> Result<Uuid, AgentError> {
         let teams = self.teams.read().await;
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
-        let teammate = team.members.get(to_agent)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::AgentNotFound(to_agent.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
+        let teammate = team.members.get(to_agent).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::AgentNotFound(to_agent.to_string()))
+        })?;
 
         let request_id = Uuid::new_v4();
         let message = AgentMessage::protocol(
             from_agent.to_string(),
             to_agent.to_string(),
-            ProtocolMessage::PlanApprovalRequest {
-                request_id,
-                plan,
-            },
+            ProtocolMessage::PlanApprovalRequest { request_id, plan },
         );
 
         teammate.send(message).await?;
@@ -1568,14 +1637,12 @@ impl AgentCoordinator {
         requester: &str,
     ) -> Result<(), AgentError> {
         let teams = self.teams.read().await;
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
-        let requester_agent = team.members.get(requester)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::AgentNotFound(requester.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
+        let requester_agent = team.members.get(requester).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::AgentNotFound(requester.to_string()))
+        })?;
 
         if approved {
             // Exit plan mode on the requesting agent
@@ -1602,7 +1669,8 @@ impl AgentCoordinator {
             );
         } else {
             // Send feedback back to the requesting agent
-            let feedback_text = feedback.unwrap_or_else(|| "No specific feedback provided".to_string());
+            let feedback_text =
+                feedback.unwrap_or_else(|| "No specific feedback provided".to_string());
             let message = AgentMessage::new_text(
                 responder.to_string(),
                 requester.to_string(),
@@ -1642,23 +1710,26 @@ impl AgentCoordinator {
     /// This can be injected into spawned agents' system prompts so they know their teammates.
     pub async fn team_manifest(&self, team_name: &str) -> Result<TeamManifest, AgentError> {
         let teams = self.teams.read().await;
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
         Ok(self.team_manifest_internal(team).await)
     }
 
     /// Build manifest from a direct team reference (avoids re-locking).
     async fn team_manifest_internal(&self, team: &AgentTeam) -> TeamManifest {
-        let members: Vec<AgentInfo> = team.members.iter().map(|(name, m)| {
-            let cfg = m.config();
-            AgentInfo {
-                name: name.clone(),
-                agent_type: cfg.agent_type.clone(),
-                capabilities: cfg.capabilities.clone(),
-            }
-        }).collect();
+        let members: Vec<AgentInfo> = team
+            .members
+            .iter()
+            .map(|(name, m)| {
+                let cfg = m.config();
+                AgentInfo {
+                    name: name.clone(),
+                    agent_type: cfg.agent_type.clone(),
+                    capabilities: cfg.capabilities.clone(),
+                }
+            })
+            .collect();
         TeamManifest {
             name: team.name.clone(),
             description: team.description.clone(),
@@ -1670,7 +1741,8 @@ impl AgentCoordinator {
     /// In delegate mode, the lead agent only coordinates (creates tasks, messages
     /// teammates) and should not directly implement code changes.
     pub fn delegate_mode(&self) -> bool {
-        self.delegate_mode_flag.load(std::sync::atomic::Ordering::Relaxed)
+        self.delegate_mode_flag
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Toggle delegate mode on or off.
@@ -1678,7 +1750,8 @@ impl AgentCoordinator {
         // Config is behind Arc<RwLock> in some paths, but here we access
         // the config field directly since it's on self.
         // Use interior mutability via a separate flag.
-        self.delegate_mode_flag.store(enabled, std::sync::atomic::Ordering::Relaxed);
+        self.delegate_mode_flag
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Set the hook manager for firing team-related hooks.
@@ -1759,10 +1832,9 @@ impl AgentCoordinator {
     /// Get a human-readable status summary for a team.
     pub async fn team_status(&self, team_name: &str) -> Result<String, AgentError> {
         let teams = self.teams.read().await;
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
         Ok(team.summary())
     }
 
@@ -1824,8 +1896,7 @@ impl AgentCoordinator {
                 description: config_file.description.clone(),
                 members,
                 task_list,
-                created_at: config_file.created_at.parse()
-                    .unwrap_or(chrono::Utc::now()),
+                created_at: config_file.created_at.parse().unwrap_or(chrono::Utc::now()),
                 assignment_index: config_file.assignment_index,
             };
 
@@ -1863,7 +1934,9 @@ impl AgentCoordinator {
             return;
         };
 
-        let members: HashMap<String, TeammateConfig> = team.members.iter()
+        let members: HashMap<String, TeammateConfig> = team
+            .members
+            .iter()
             .map(|(name, m)| (name.clone(), m.config().clone()))
             .collect();
 
@@ -1945,9 +2018,9 @@ impl AgentCoordinator {
                     return Ok(());
                 }
             }
-            return Err(AgentError::Coordination(
-                CoordinationError::AgentNotFound(message.to)
-            ));
+            return Err(AgentError::Coordination(CoordinationError::AgentNotFound(
+                message.to,
+            )));
         }
 
         Ok(())
@@ -1994,8 +2067,7 @@ impl AgentCoordinator {
 
                 // Find the first ready, unowned task this agent could claim
                 let ready_tasks = task_board.list_ready_tasks().await;
-                let claimable = ready_tasks.into_iter()
-                    .find(|t| t.owner.is_none());
+                let claimable = ready_tasks.into_iter().find(|t| t.owner.is_none());
 
                 if let Some(task) = claimable {
                     match task_board.assign_task(task.id, agent_name.clone()).await {
@@ -2114,9 +2186,9 @@ impl AgentCoordinator {
     /// be looked up by name via [`get_custom_agent`].
     pub async fn discover_custom_agents(&mut self) -> Result<(), AgentError> {
         let loader = CustomAgentLoader::new();
-        let agents = loader.discover().map_err(|e| {
-            AgentError::Worktree(format!("Failed to discover agents: {e}"))
-        })?;
+        let agents = loader
+            .discover()
+            .map_err(|e| AgentError::Worktree(format!("Failed to discover agents: {e}")))?;
 
         let count = agents.len();
         self.custom_agents.extend(agents);
@@ -2130,10 +2202,9 @@ impl AgentCoordinator {
         tracing::info!(team = %team_name, "Disbanding team");
 
         let mut teams = self.teams.write().await;
-        let team = teams.get_mut(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get_mut(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
         // Send shutdown to all teammates
         for (agent_name, teammate) in team.members.iter() {
@@ -2171,7 +2242,11 @@ impl AgentCoordinator {
         for member in &member_names {
             let agent_tasks = self.task_board.get_agent_tasks(member).await;
             for task in agent_tasks {
-                if let Err(e) = self.task_board.fail_task(task.id, "Team disbanded".to_string()).await {
+                if let Err(e) = self
+                    .task_board
+                    .fail_task(task.id, "Team disbanded".to_string())
+                    .await
+                {
                     tracing::warn!(
                         task_id = %task.id,
                         agent = %member,
@@ -2185,7 +2260,10 @@ impl AgentCoordinator {
         // Clean up process agents for this team
         if let Some(ref pm) = self.process_manager {
             for member in &member_names {
-                if let Err(e) = pm.graceful_shutdown_agent(member, Duration::from_secs(5)).await {
+                if let Err(e) = pm
+                    .graceful_shutdown_agent(member, Duration::from_secs(5))
+                    .await
+                {
                     tracing::warn!(
                         agent = %member,
                         error = %e,
@@ -2281,7 +2359,15 @@ impl AgentCoordinator {
                     let team_name = team_name.clone();
                     drop(teams);
 
-                    match self.add_task(&team_name, subject.to_string(), description.to_string(), priority).await {
+                    match self
+                        .add_task(
+                            &team_name,
+                            subject.to_string(),
+                            description.to_string(),
+                            priority,
+                        )
+                        .await
+                    {
                         Ok(task_id) => serde_json::json!({
                             "task_id": task_id.to_string(),
                             "status": "created"
@@ -2310,7 +2396,11 @@ impl AgentCoordinator {
                                 "cancelled" => TaskStatus::Cancelled,
                                 _ => TaskStatus::Pending,
                             };
-                            match self.task_board.update_task_status(task_id, new_status).await {
+                            match self
+                                .task_board
+                                .update_task_status(task_id, new_status)
+                                .await
+                            {
                                 Ok(()) => serde_json::json!({"status": "updated"}),
                                 Err(e) => serde_json::json!({"error": e.to_string()}),
                             }
@@ -2324,19 +2414,17 @@ impl AgentCoordinator {
             "get_task" => {
                 let task_id_str = params["task_id"].as_str().unwrap_or_default();
                 match Uuid::parse_str(task_id_str) {
-                    Ok(task_id) => {
-                        match self.task_board.get_task(task_id).await {
-                            Ok(task) => serde_json::json!({
-                                "id": task.id.to_string(),
-                                "subject": task.subject,
-                                "description": task.description,
-                                "status": format!("{:?}", task.status),
-                                "priority": format!("{:?}", task.priority),
-                                "owner": task.owner,
-                            }),
-                            Err(e) => serde_json::json!({"error": e.to_string()}),
-                        }
-                    }
+                    Ok(task_id) => match self.task_board.get_task(task_id).await {
+                        Ok(task) => serde_json::json!({
+                            "id": task.id.to_string(),
+                            "subject": task.subject,
+                            "description": task.description,
+                            "status": format!("{:?}", task.status),
+                            "priority": format!("{:?}", task.priority),
+                            "owner": task.owner,
+                        }),
+                        Err(e) => serde_json::json!({"error": e.to_string()}),
+                    },
                     Err(e) => serde_json::json!({"error": format!("invalid task_id: {e}")}),
                 }
             }
@@ -2370,15 +2458,18 @@ impl AgentCoordinator {
                     };
                     self.task_board.list_tasks_by_status(status).await
                 };
-                let task_list: Vec<serde_json::Value> = tasks.iter().map(|t| {
-                    serde_json::json!({
-                        "id": t.id.to_string(),
-                        "subject": t.subject,
-                        "status": format!("{:?}", t.status),
-                        "priority": format!("{:?}", t.priority),
-                        "owner": t.owner,
+                let task_list: Vec<serde_json::Value> = tasks
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "id": t.id.to_string(),
+                            "subject": t.subject,
+                            "status": format!("{:?}", t.status),
+                            "priority": format!("{:?}", t.priority),
+                            "owner": t.owner,
+                        })
                     })
-                }).collect();
+                    .collect();
                 serde_json::json!({"tasks": task_list})
             }
             "claim_task" => {
@@ -2388,7 +2479,9 @@ impl AgentCoordinator {
                 // Validate agent is a team member
                 {
                     let teams = self.teams.read().await;
-                    let is_member = teams.values().any(|team| team.members.contains_key(agent_name));
+                    let is_member = teams
+                        .values()
+                        .any(|team| team.members.contains_key(agent_name));
                     if !is_member {
                         drop(teams);
                         return serde_json::json!({"error": format!("agent '{}' is not a team member", agent_name)});
@@ -2460,7 +2553,10 @@ impl AgentCoordinator {
                             agent_type: agent_type.to_string(),
                             ..Default::default()
                         };
-                        match self.add_teammate(team_name, new_agent_name.to_string(), config).await {
+                        match self
+                            .add_teammate(team_name, new_agent_name.to_string(), config)
+                            .await
+                        {
                             Ok(()) => serde_json::json!({"status": "added"}),
                             Err(e) => serde_json::json!({"error": e.to_string()}),
                         }
@@ -2494,7 +2590,11 @@ impl AgentCoordinator {
             tracing::debug!("Shutting down team '{}'", team_name);
 
             for (agent_name, teammate) in team.members.iter() {
-                tracing::debug!("Shutting down agent '{}' in team '{}'", agent_name, team_name);
+                tracing::debug!(
+                    "Shutting down agent '{}' in team '{}'",
+                    agent_name,
+                    team_name
+                );
 
                 // Send shutdown protocol message
                 let shutdown_msg = AgentMessage::protocol(
@@ -2566,19 +2666,18 @@ impl AgentCoordinator {
         content: String,
         timeout_secs: Option<u64>,
     ) -> Result<tokio::task::JoinHandle<()>, AgentError> {
-        let teams = self.teams.try_read()
+        let teams = self
+            .teams
+            .try_read()
             .map_err(|_| AgentError::Communication("Teams lock poisoned".to_string()))?;
 
-        let team = teams.get(team_name)
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::TeamNotFound(team_name.to_string())
-            ))?;
+        let team = teams.get(team_name).ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::TeamNotFound(team_name.to_string()))
+        })?;
 
-        let teammate = team.members.get(agent_name)
-            .cloned()
-            .ok_or_else(|| AgentError::Coordination(
-                CoordinationError::AgentNotFound(agent_name.to_string())
-            ))?;
+        let teammate = team.members.get(agent_name).cloned().ok_or_else(|| {
+            AgentError::Coordination(CoordinationError::AgentNotFound(agent_name.to_string()))
+        })?;
 
         let from = reply_to.to_string();
         let agent_name_owned = agent_name.to_string();
@@ -2607,7 +2706,9 @@ impl AgentCoordinator {
                 match tokio::time::timeout(
                     std::time::Duration::from_secs(secs),
                     teammate.handle_chat_message(message),
-                ).await {
+                )
+                .await
+                {
                     Ok(inner) => inner,
                     Err(_) => {
                         tracing::warn!(

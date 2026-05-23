@@ -6,20 +6,15 @@
 use crate::repl::state::AgentDisplay;
 use crate::theme::Theme;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem},
-    Frame,
 };
 
 /// Renders an agents dropdown panel overlay.
-pub fn render_agents_panel(
-    frame: &mut Frame,
-    area: Rect,
-    agents: &[AgentDisplay],
-    theme: &Theme,
-) {
+pub fn render_agents_panel(frame: &mut Frame, area: Rect, agents: &[AgentDisplay], theme: &Theme) {
     if agents.is_empty() {
         let popup = centered_rect(area, 40, 5);
         frame.render_widget(Clear, popup);
@@ -27,7 +22,11 @@ pub fn render_agents_panel(
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.border_dim))
             .title(" Agents ")
-            .title_style(Style::default().fg(theme.primary).add_modifier(Modifier::BOLD));
+            .title_style(
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            );
         let line = Line::from(Span::styled(
             "  No active agents",
             Style::default().fg(theme.text_dim),
@@ -107,21 +106,29 @@ pub fn render_agents_panel(
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border_dim))
         .title(title)
-        .title_style(Style::default().fg(theme.primary).add_modifier(Modifier::BOLD));
+        .title_style(
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD),
+        );
 
     let list = List::new(items).block(block);
     frame.render_widget(list, popup);
 }
 
-fn agent_status_style(status: &str, active: bool, theme: &Theme) -> (&'static str, ratatui::style::Color) {
+fn agent_status_style(
+    status: &str,
+    active: bool,
+    theme: &Theme,
+) -> (&'static str, ratatui::style::Color) {
     match status {
-        "spawning" => ("\u{25CB}", theme.text_dim),        // ○
-        "running" => ("\u{25CF}", theme.primary),          // ●
-        "idle" => ("\u{25D0}", theme.warning),             // ◐
-        "completed" => ("\u{2713}", theme.success),        // ✓
+        "spawning" => ("\u{25CB}", theme.text_dim), // ○
+        "running" => ("\u{25CF}", theme.primary),   // ●
+        "idle" => ("\u{25D0}", theme.warning),      // ◐
+        "completed" => ("\u{2713}", theme.success), // ✓
         s if s.starts_with("failed") => ("\u{2717}", theme.error), // ✗
-        _ if active => ("\u{25CF}", theme.primary),        // ●
-        _ => ("\u{25CB}", theme.text_dim),                 // ○
+        _ if active => ("\u{25CF}", theme.primary), // ●
+        _ => ("\u{25CB}", theme.text_dim),          // ○
     }
 }
 

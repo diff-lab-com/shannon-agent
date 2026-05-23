@@ -7,7 +7,7 @@
 //! Designed for the /loop dynamic mode where the LLM self-paces iterations.
 //! Calling without a prompt (or omitting the call entirely) ends the loop.
 
-use crate::{Tool, ToolError, ToolResult, ToolOutput};
+use crate::{Tool, ToolError, ToolOutput, ToolResult};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -207,8 +207,8 @@ impl Tool for ScheduleWakeupTool {
 
         match operation {
             "Schedule" => {
-                let sched_input: ScheduleWakeupInput = serde_json::from_value(input)
-                    .map_err(|e| {
+                let sched_input: ScheduleWakeupInput =
+                    serde_json::from_value(input).map_err(|e| {
                         ToolError::InvalidInput(format!("Invalid ScheduleWakeup input: {e}"))
                     })?;
 
@@ -245,8 +245,8 @@ impl Tool for ScheduleWakeupTool {
                 })
             }
             "Cancel" => {
-                let cancel_input: CancelWakeupInput = serde_json::from_value(input)
-                    .map_err(|e| {
+                let cancel_input: CancelWakeupInput =
+                    serde_json::from_value(input).map_err(|e| {
                         ToolError::InvalidInput(format!("Invalid CancelWakeup input: {e}"))
                     })?;
                 self.cancel(&cancel_input.id).await?;
@@ -350,12 +350,17 @@ mod tests {
 
         assert!(!result.is_error);
         assert!(result.content.contains("Cache:"));
-        let delay = result.metadata.get("delay_seconds").unwrap().as_u64().unwrap();
-        assert!((120..=132).contains(&delay), "delay {delay} should be ~120 + jitter");
-        assert_eq!(
-            result.metadata.get("is_autonomous").unwrap(),
-            &json!(false)
+        let delay = result
+            .metadata
+            .get("delay_seconds")
+            .unwrap()
+            .as_u64()
+            .unwrap();
+        assert!(
+            (120..=132).contains(&delay),
+            "delay {delay} should be ~120 + jitter"
         );
+        assert_eq!(result.metadata.get("is_autonomous").unwrap(), &json!(false));
         assert!(result.metadata.get("id").is_some());
         assert!(result.metadata.get("fire_at").is_some());
         assert!(result.metadata.get("cache_ttl_hint").is_some());
@@ -374,8 +379,16 @@ mod tests {
             }))
             .await
             .unwrap();
-        let delay = result.metadata.get("delay_seconds").unwrap().as_u64().unwrap();
-        assert!((60..=66).contains(&delay), "delay {delay} should be ~60 + jitter");
+        let delay = result
+            .metadata
+            .get("delay_seconds")
+            .unwrap()
+            .as_u64()
+            .unwrap();
+        assert!(
+            (60..=66).contains(&delay),
+            "delay {delay} should be ~60 + jitter"
+        );
 
         // Above maximum → clamped to 3600 + jitter
         let result = tool
@@ -386,8 +399,16 @@ mod tests {
             }))
             .await
             .unwrap();
-        let delay = result.metadata.get("delay_seconds").unwrap().as_u64().unwrap();
-        assert!((3600..=3600 + 360).contains(&delay), "delay {delay} should be ~3600 + jitter");
+        let delay = result
+            .metadata
+            .get("delay_seconds")
+            .unwrap()
+            .as_u64()
+            .unwrap();
+        assert!(
+            (3600..=3600 + 360).contains(&delay),
+            "delay {delay} should be ~3600 + jitter"
+        );
     }
 
     #[tokio::test]
@@ -403,10 +424,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            result.metadata.get("is_autonomous").unwrap(),
-            &json!(true)
-        );
+        assert_eq!(result.metadata.get("is_autonomous").unwrap(), &json!(true));
     }
 
     #[tokio::test]
@@ -429,10 +447,7 @@ mod tests {
         .await
         .unwrap();
 
-        let list = tool
-            .execute(json!({"operation": "List"}))
-            .await
-            .unwrap();
+        let list = tool.execute(json!({"operation": "List"})).await.unwrap();
 
         assert!(!list.is_error);
         let wakeups = list.metadata.get("wakeups").unwrap().as_array().unwrap();
@@ -465,10 +480,7 @@ mod tests {
         assert!(!cancelled.is_error);
 
         // List should be empty now
-        let list = tool
-            .execute(json!({"operation": "List"}))
-            .await
-            .unwrap();
+        let list = tool.execute(json!({"operation": "List"})).await.unwrap();
         let wakeups = list.metadata.get("wakeups").unwrap().as_array().unwrap();
         assert_eq!(wakeups.len(), 0);
     }
@@ -491,9 +503,7 @@ mod tests {
     async fn test_unknown_operation() {
         let tool = ScheduleWakeupTool::new();
 
-        let result = tool
-            .execute(json!({"operation": "Bogus"}))
-            .await;
+        let result = tool.execute(json!({"operation": "Bogus"})).await;
 
         assert!(result.is_err());
     }

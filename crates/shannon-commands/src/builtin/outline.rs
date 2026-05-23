@@ -1,6 +1,8 @@
 //! /outline command - Show symbol outline for a file
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// File outline prompt template
 const OUTLINE_PROMPT: &str = r##"
@@ -34,7 +36,8 @@ pub fn command() -> Command {
             is_hidden: false,
             argument_hint: Some("[file-path]".to_string()),
             when_to_use: Some(
-                "To see the structure of a file - functions, classes, and their locations".to_string(),
+                "To see the structure of a file - functions, classes, and their locations"
+                    .to_string(),
             ),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
@@ -47,10 +50,7 @@ pub fn command() -> Command {
         progress_message: "Analyzing file structure...".to_string(),
         content_length: 1000,
         arg_names: vec!["file-path".to_string()],
-        allowed_tools: vec![
-            "Bash(cat*)".to_string(),
-            "Bash(head*)".to_string(),
-        ],
+        allowed_tools: vec!["Bash(cat*)".to_string(), "Bash(head*)".to_string()],
         model: None,
         hooks: std::collections::HashMap::new(),
         context: ExecutionContext::Inline,

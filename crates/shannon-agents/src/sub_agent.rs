@@ -7,14 +7,14 @@
 //! - `SendMessageTool`: Tool to route messages between agents
 //! - `TeamCreateTool`: Tool to create agent teams with shared task boards
 
+use crate::TaskBoard;
 use crate::coordinator::{AgentCoordinator, CoordinatorEvent};
 use crate::error::{AgentError, CoordinationError};
 use crate::message::{AgentMessage, MessageContent, MessageType};
 use crate::teammate::TeammateConfig;
-use crate::TaskBoard;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -216,11 +216,13 @@ impl SubAgentRegistry {
             let teams = self.teams.read().await;
             if !teams.contains_key(&team_name) {
                 drop(teams);
-                self.coordinator.create_team(
-                    team_name.clone(),
-                    "Default agent team".to_string(),
-                ).await?;
-                self.teams.write().await.insert(team_name.clone(), "Default agent team".to_string());
+                self.coordinator
+                    .create_team(team_name.clone(), "Default agent team".to_string())
+                    .await?;
+                self.teams
+                    .write()
+                    .await
+                    .insert(team_name.clone(), "Default agent team".to_string());
             }
         }
 
@@ -248,7 +250,10 @@ impl SubAgentRegistry {
         agent.team = Some(team_name.clone());
         agent.mark_idle();
 
-        self.agents.write().await.insert(name.clone(), agent.clone());
+        self.agents
+            .write()
+            .await
+            .insert(name.clone(), agent.clone());
 
         tracing::info!(
             agent_id = %agent.id,
@@ -299,9 +304,9 @@ impl SubAgentRegistry {
             // Direct message
             let agents = self.agents.read().await;
             if !agents.contains_key(to) {
-                return Err(AgentError::Coordination(
-                    CoordinationError::AgentNotFound(to.to_string()),
-                ));
+                return Err(AgentError::Coordination(CoordinationError::AgentNotFound(
+                    to.to_string(),
+                )));
             }
 
             let msg = AgentMessage {
@@ -327,7 +332,11 @@ impl SubAgentRegistry {
     }
 
     /// Create a new team.
-    pub async fn create_team(&self, team_name: String, description: String) -> Result<String, AgentError> {
+    pub async fn create_team(
+        &self,
+        team_name: String,
+        description: String,
+    ) -> Result<String, AgentError> {
         {
             let teams = self.teams.read().await;
             if teams.contains_key(&team_name) {
@@ -343,7 +352,10 @@ impl SubAgentRegistry {
             .create_team(team_name.clone(), description.clone())
             .await?;
 
-        self.teams.write().await.insert(team_name.clone(), description);
+        self.teams
+            .write()
+            .await
+            .insert(team_name.clone(), description);
 
         tracing::info!(team = %team_name, "Team created via tool");
 
@@ -461,7 +473,9 @@ impl Tool for AgentSpawnTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid agent_spawn input: {e}")))?;
 
         if parsed.name.is_empty() {
-            return Err(ToolError::InvalidInput("Agent name must not be empty".into()));
+            return Err(ToolError::InvalidInput(
+                "Agent name must not be empty".into(),
+            ));
         }
         if parsed.name.len() > 64 {
             return Err(ToolError::InvalidInput(
@@ -479,9 +493,11 @@ impl Tool for AgentSpawnTool {
             team: parsed.team,
         };
 
-        let agent = self.registry.spawn(config).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to spawn agent: {e}"))
-        })?;
+        let agent = self
+            .registry
+            .spawn(config)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to spawn agent: {e}")))?;
 
         let content = json!({
             "agent_id": agent.id,
@@ -528,7 +544,10 @@ pub struct SendMessageTool {
 
 impl SendMessageTool {
     pub fn new(registry: Arc<SubAgentRegistry>, sender_name: String) -> Self {
-        Self { registry, sender_name }
+        Self {
+            registry,
+            sender_name,
+        }
     }
 }
 
@@ -567,15 +586,16 @@ impl Tool for SendMessageTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid send_message input: {e}")))?;
 
         if parsed.to.is_empty() {
-            return Err(ToolError::InvalidInput("Recipient 'to' must not be empty".into()));
+            return Err(ToolError::InvalidInput(
+                "Recipient 'to' must not be empty".into(),
+            ));
         }
 
-        let responses = self.registry
+        let responses = self
+            .registry
             .send_message(&self.sender_name, &parsed.to, parsed.message)
             .await
-            .map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to send message: {e}"))
-            })?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to send message: {e}")))?;
 
         let content = json!({
             "sent_to": parsed.to,
@@ -662,7 +682,9 @@ impl Tool for TeamCreateTool {
             .map_err(|e| ToolError::InvalidInput(format!("Invalid team_create input: {e}")))?;
 
         if parsed.team_name.is_empty() {
-            return Err(ToolError::InvalidInput("Team name must not be empty".into()));
+            return Err(ToolError::InvalidInput(
+                "Team name must not be empty".into(),
+            ));
         }
         if parsed.team_name.len() > 64 {
             return Err(ToolError::InvalidInput(
@@ -670,7 +692,10 @@ impl Tool for TeamCreateTool {
             ));
         }
 
-        let team_name = self.registry.create_team(parsed.team_name, parsed.description).await
+        let team_name = self
+            .registry
+            .create_team(parsed.team_name, parsed.description)
+            .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create team: {e}")))?;
 
         let content = json!({
@@ -718,9 +743,7 @@ mod tests {
     // Helper to build a test coordinator + registry
     async fn setup() -> (Arc<SubAgentRegistry>, Arc<AgentCoordinator>) {
         let config = CoordinatorConfig::default();
-        let coordinator = Arc::new(
-            AgentCoordinator::new(config).await.unwrap()
-        );
+        let coordinator = Arc::new(AgentCoordinator::new(config).await.unwrap());
         let registry = Arc::new(SubAgentRegistry::new(coordinator.clone()));
         (registry, coordinator)
     }
@@ -907,13 +930,16 @@ mod tests {
         let (registry, _) = setup().await;
         let tool = AgentSpawnTool::new(registry);
 
-        let result = tool.execute(json!({
-            "name": "worker-1",
-            "system_prompt": "You are a worker agent",
-            "model": "claude-sonnet-4-6",
-            "tools": ["read", "write"],
-            "max_turns": 100
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "name": "worker-1",
+                "system_prompt": "You are a worker agent",
+                "model": "claude-sonnet-4-6",
+                "tools": ["read", "write"],
+                "max_turns": 100
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         let output: Value = serde_json::from_str(&result.content).unwrap();
@@ -928,10 +954,12 @@ mod tests {
         let (registry, _) = setup().await;
         let tool = AgentSpawnTool::new(registry);
 
-        let result = tool.execute(json!({
-            "name": "",
-            "system_prompt": "prompt"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "name": "",
+                "system_prompt": "prompt"
+            }))
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -946,12 +974,16 @@ mod tests {
         tool.execute(json!({
             "name": "dup",
             "system_prompt": "prompt"
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
 
-        let result = tool.execute(json!({
-            "name": "dup",
-            "system_prompt": "prompt"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "name": "dup",
+                "system_prompt": "prompt"
+            }))
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -995,16 +1027,22 @@ mod tests {
 
         // Spawn a target agent first
         let spawn_tool = AgentSpawnTool::new(registry.clone());
-        spawn_tool.execute(json!({
-            "name": "target",
-            "system_prompt": "target"
-        })).await.unwrap();
+        spawn_tool
+            .execute(json!({
+                "name": "target",
+                "system_prompt": "target"
+            }))
+            .await
+            .unwrap();
 
         let send_tool = SendMessageTool::new(registry, "sender".into());
-        let result = send_tool.execute(json!({
-            "to": "target",
-            "message": "Hello from sender"
-        })).await.unwrap();
+        let result = send_tool
+            .execute(json!({
+                "to": "target",
+                "message": "Hello from sender"
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         let output: Value = serde_json::from_str(&result.content).unwrap();
@@ -1017,20 +1055,29 @@ mod tests {
         let (registry, _) = setup().await;
 
         let spawn_tool = AgentSpawnTool::new(registry.clone());
-        spawn_tool.execute(json!({
-            "name": "agent-a",
-            "system_prompt": "a"
-        })).await.unwrap();
-        spawn_tool.execute(json!({
-            "name": "agent-b",
-            "system_prompt": "b"
-        })).await.unwrap();
+        spawn_tool
+            .execute(json!({
+                "name": "agent-a",
+                "system_prompt": "a"
+            }))
+            .await
+            .unwrap();
+        spawn_tool
+            .execute(json!({
+                "name": "agent-b",
+                "system_prompt": "b"
+            }))
+            .await
+            .unwrap();
 
         let send_tool = SendMessageTool::new(registry, "orchestrator".into());
-        let result = send_tool.execute(json!({
-            "to": "*",
-            "message": "Broadcast hello"
-        })).await.unwrap();
+        let result = send_tool
+            .execute(json!({
+                "to": "*",
+                "message": "Broadcast hello"
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         let output: Value = serde_json::from_str(&result.content).unwrap();
@@ -1043,10 +1090,12 @@ mod tests {
         let (registry, _) = setup().await;
         let send_tool = SendMessageTool::new(registry, "sender".into());
 
-        let result = send_tool.execute(json!({
-            "to": "nonexistent",
-            "message": "hello"
-        })).await;
+        let result = send_tool
+            .execute(json!({
+                "to": "nonexistent",
+                "message": "hello"
+            }))
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -1058,10 +1107,12 @@ mod tests {
         let (registry, _) = setup().await;
         let send_tool = SendMessageTool::new(registry, "sender".into());
 
-        let result = send_tool.execute(json!({
-            "to": "",
-            "message": "hello"
-        })).await;
+        let result = send_tool
+            .execute(json!({
+                "to": "",
+                "message": "hello"
+            }))
+            .await;
 
         assert!(result.is_err());
     }
@@ -1071,16 +1122,22 @@ mod tests {
         let (registry, _) = setup().await;
 
         let spawn_tool = AgentSpawnTool::new(registry.clone());
-        spawn_tool.execute(json!({
-            "name": "json-target",
-            "system_prompt": "target"
-        })).await.unwrap();
+        spawn_tool
+            .execute(json!({
+                "name": "json-target",
+                "system_prompt": "target"
+            }))
+            .await
+            .unwrap();
 
         let send_tool = SendMessageTool::new(registry, "sender".into());
-        let result = send_tool.execute(json!({
-            "to": "json-target",
-            "message": {"action": "do_something", "value": 42}
-        })).await.unwrap();
+        let result = send_tool
+            .execute(json!({
+                "to": "json-target",
+                "message": {"action": "do_something", "value": 42}
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
     }
@@ -1109,10 +1166,13 @@ mod tests {
         let (registry, _) = setup().await;
         let tool = TeamCreateTool::new(registry);
 
-        let result = tool.execute(json!({
-            "team_name": "backend-team",
-            "description": "Backend development team"
-        })).await.unwrap();
+        let result = tool
+            .execute(json!({
+                "team_name": "backend-team",
+                "description": "Backend development team"
+            }))
+            .await
+            .unwrap();
 
         assert!(!result.is_error);
         let output: Value = serde_json::from_str(&result.content).unwrap();
@@ -1125,10 +1185,12 @@ mod tests {
         let (registry, _) = setup().await;
         let tool = TeamCreateTool::new(registry);
 
-        let result = tool.execute(json!({
-            "team_name": "",
-            "description": "desc"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "team_name": "",
+                "description": "desc"
+            }))
+            .await;
 
         assert!(result.is_err());
     }
@@ -1141,12 +1203,16 @@ mod tests {
         tool.execute(json!({
             "team_name": "dup-team",
             "description": "desc"
-        })).await.unwrap();
+        }))
+        .await
+        .unwrap();
 
-        let result = tool.execute(json!({
-            "team_name": "dup-team",
-            "description": "desc"
-        })).await;
+        let result = tool
+            .execute(json!({
+                "team_name": "dup-team",
+                "description": "desc"
+            }))
+            .await;
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -1168,17 +1234,23 @@ mod tests {
     async fn test_registry_list_agents() {
         let (registry, _) = setup().await;
 
-        registry.spawn(AgentConfig {
-            name: "a".into(),
-            system_prompt: "p".into(),
-            ..Default::default()
-        }).await.unwrap();
+        registry
+            .spawn(AgentConfig {
+                name: "a".into(),
+                system_prompt: "p".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
-        registry.spawn(AgentConfig {
-            name: "b".into(),
-            system_prompt: "p".into(),
-            ..Default::default()
-        }).await.unwrap();
+        registry
+            .spawn(AgentConfig {
+                name: "b".into(),
+                system_prompt: "p".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let agents = registry.list_agents().await;
         assert_eq!(agents.len(), 2);
@@ -1188,11 +1260,14 @@ mod tests {
     async fn test_registry_get_agent() {
         let (registry, _) = setup().await;
 
-        registry.spawn(AgentConfig {
-            name: "findme".into(),
-            system_prompt: "p".into(),
-            ..Default::default()
-        }).await.unwrap();
+        registry
+            .spawn(AgentConfig {
+                name: "findme".into(),
+                system_prompt: "p".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         let agent = registry.get_agent("findme").await;
         assert!(agent.is_some());
@@ -1206,13 +1281,19 @@ mod tests {
     async fn test_spawn_agent_on_explicit_team() {
         let (registry, _) = setup().await;
 
-        registry.create_team("my-team".into(), "desc".into()).await.unwrap();
+        registry
+            .create_team("my-team".into(), "desc".into())
+            .await
+            .unwrap();
 
-        registry.spawn(AgentConfig {
-            name: "team-agent".into(),
-            system_prompt: "p".into(),
-            ..Default::default()
-        }).await.unwrap();
+        registry
+            .spawn(AgentConfig {
+                name: "team-agent".into(),
+                system_prompt: "p".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
 
         // Spawn onto the explicit team
         let config = AgentConfig {
@@ -1308,7 +1389,10 @@ mod tests {
         let task_id = task.id;
         board.add_task(task).await.unwrap();
 
-        board.fail_task(task_id, "something broke".into()).await.unwrap();
+        board
+            .fail_task(task_id, "something broke".into())
+            .await
+            .unwrap();
         let task = board.get_task(task_id).await.unwrap();
         assert!(matches!(task.status, TaskStatus::Failed(_)));
 
@@ -1321,9 +1405,26 @@ mod tests {
         let (registry, _) = setup().await;
         let board = registry.task_board();
 
-        board.add_task(AgentTask::new("low".into(), "".into(), TaskPriority::Low)).await.unwrap();
-        board.add_task(AgentTask::new("crit".into(), "".into(), TaskPriority::Critical)).await.unwrap();
-        board.add_task(AgentTask::new("med".into(), "".into(), TaskPriority::Medium)).await.unwrap();
+        board
+            .add_task(AgentTask::new("low".into(), "".into(), TaskPriority::Low))
+            .await
+            .unwrap();
+        board
+            .add_task(AgentTask::new(
+                "crit".into(),
+                "".into(),
+                TaskPriority::Critical,
+            ))
+            .await
+            .unwrap();
+        board
+            .add_task(AgentTask::new(
+                "med".into(),
+                "".into(),
+                TaskPriority::Medium,
+            ))
+            .await
+            .unwrap();
 
         let summary = board.summary().await;
         assert_eq!(summary.total_tasks, 3);

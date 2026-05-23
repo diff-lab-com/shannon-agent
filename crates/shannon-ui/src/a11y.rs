@@ -30,21 +30,33 @@ pub fn bar_empty() -> &'static str {
 pub fn expand_icon(expanded: bool) -> &'static str {
     if is_enabled() {
         if expanded { "[-]" } else { "[+]" }
-    } else if expanded { "▼" } else { "▶" }
+    } else if expanded {
+        "▼"
+    } else {
+        "▶"
+    }
 }
 
 /// Return a status dot icon.
 pub fn status_dot(active: bool) -> &'static str {
     if is_enabled() {
         if active { "*" } else { "o" }
-    } else if active { "●" } else { "○" }
+    } else if active {
+        "●"
+    } else {
+        "○"
+    }
 }
 
 /// Return the check mark or X mark.
 pub fn check(ok: bool) -> &'static str {
     if is_enabled() {
         if ok { "[ok]" } else { "[x]" }
-    } else if ok { "✓" } else { "✗" }
+    } else if ok {
+        "✓"
+    } else {
+        "✗"
+    }
 }
 
 /// Return separator character for panels.
@@ -66,7 +78,11 @@ pub fn cursor() -> &'static str {
 pub fn title_icon(streaming: bool) -> &'static str {
     if is_enabled() {
         if streaming { "*" } else { "-" }
-    } else if streaming { "✦" } else { "◇" }
+    } else if streaming {
+        "✦"
+    } else {
+        "◇"
+    }
 }
 
 /// Return the git branch icon.

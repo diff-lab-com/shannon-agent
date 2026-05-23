@@ -69,7 +69,10 @@ async fn test_validate_file_within_allowed_root() {
     });
 
     let result = sandbox.validate(&file_path).await;
-    assert!(result.is_ok(), "File within allowed root should be valid: {result:?}");
+    assert!(
+        result.is_ok(),
+        "File within allowed root should be valid: {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -109,7 +112,10 @@ async fn test_validate_nested_subdirectory_allowed() {
     });
 
     let result = sandbox.validate(&nested).await;
-    assert!(result.is_ok(), "Deeply nested file should be allowed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "Deeply nested file should be allowed: {result:?}"
+    );
 }
 
 // ============================================================================
@@ -180,7 +186,12 @@ fn test_add_allowed_root_deduplicates() {
     let root = PathBuf::from("/tmp/sandbox_test_dedup");
     sandbox.add_allowed_root(root.clone());
     sandbox.add_allowed_root(root.clone());
-    let count = sandbox.config().allowed_roots.iter().filter(|r| **r == root).count();
+    let count = sandbox
+        .config()
+        .allowed_roots
+        .iter()
+        .filter(|r| **r == root)
+        .count();
     assert_eq!(count, 1, "add_allowed_root should deduplicate");
 }
 
@@ -190,7 +201,12 @@ fn test_add_denied_pattern_deduplicates() {
     let pattern = "/custom/denied/".to_string();
     sandbox.add_denied_pattern(pattern.clone());
     sandbox.add_denied_pattern(pattern.clone());
-    let count = sandbox.config().denied_patterns.iter().filter(|p| *p == &pattern).count();
+    let count = sandbox
+        .config()
+        .denied_patterns
+        .iter()
+        .filter(|p| *p == &pattern)
+        .count();
     assert_eq!(count, 1, "add_denied_pattern should deduplicate");
 }
 
@@ -244,7 +260,10 @@ async fn test_symlink_inside_root_resolves_correctly() {
     });
 
     let result = sandbox.validate(&link).await;
-    assert!(result.is_ok(), "Symlink inside root should resolve fine: {result:?}");
+    assert!(
+        result.is_ok(),
+        "Symlink inside root should resolve fine: {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -303,7 +322,10 @@ async fn test_dot_components_within_root_are_allowed() {
     });
 
     let result = sandbox.validate(&dotted).await;
-    assert!(result.is_ok(), "Path with . components should resolve: {result:?}");
+    assert!(
+        result.is_ok(),
+        "Path with . components should resolve: {result:?}"
+    );
 }
 
 #[tokio::test]
@@ -324,7 +346,10 @@ async fn test_relative_path_back_and_forth_within_root() {
     });
 
     let result = sandbox.validate(&relative).await;
-    assert!(result.is_ok(), "Relative back-and-forth should be allowed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "Relative back-and-forth should be allowed: {result:?}"
+    );
 }
 
 // ============================================================================
@@ -352,7 +377,10 @@ fn test_sync_validate_allowed_root_file() {
     });
 
     let result = sandbox.validate_sync(&file);
-    assert!(result.is_ok(), "Sync validate should allow file in root: {result:?}");
+    assert!(
+        result.is_ok(),
+        "Sync validate should allow file in root: {result:?}"
+    );
 }
 
 #[test]

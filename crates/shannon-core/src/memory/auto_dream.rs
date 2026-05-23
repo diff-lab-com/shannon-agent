@@ -1,6 +1,6 @@
-use std::sync::{Arc, RwLock};
-use crate::api::{Message, MessageContent, ContentBlock};
+use crate::api::{ContentBlock, Message, MessageContent};
 use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
 
 use super::error::MemoryError;
 use super::store::MemoryStore;
@@ -247,9 +247,9 @@ fn deduplicate_memories(memories: Vec<MemoryEntry>) -> Vec<MemoryEntry> {
     let mut unique: Vec<MemoryEntry> = Vec::new();
 
     for memory in memories {
-        let is_dup = unique.iter().any(|existing| {
-            content_similarity(&existing.content, &memory.content) > 0.8
-        });
+        let is_dup = unique
+            .iter()
+            .any(|existing| content_similarity(&existing.content, &memory.content) > 0.8);
 
         if !is_dup {
             unique.push(memory);
@@ -281,10 +281,7 @@ fn content_similarity(a: &str, b: &str) -> f64 {
 /// Create a tag from a keyword phrase.
 fn tag_from_keyword(keyword: &str) -> &str {
     // Take the last word of multi-word keywords as a tag
-    keyword
-        .split_whitespace()
-        .last()
-        .unwrap_or(keyword)
+    keyword.split_whitespace().last().unwrap_or(keyword)
 }
 
 /// Remove duplicate tags from a vector.
@@ -526,7 +523,8 @@ mod tests {
     #[test]
     fn test_extract_error_the_issue_was() {
         let (svc, _dir) = make_service();
-        let memories = svc.extract_memories("The issue was a race condition in the worker.", "proj");
+        let memories =
+            svc.extract_memories("The issue was a race condition in the worker.", "proj");
         assert!(!memories.is_empty(), "should detect error");
         assert_eq!(memories[0].category, MemoryCategory::Error);
         assert!(memories[0].content.to_lowercase().contains("race"));
@@ -543,7 +541,8 @@ mod tests {
     #[test]
     fn test_extract_error_the_fix_was() {
         let (svc, _dir) = make_service();
-        let memories = svc.extract_memories("The fix was adding a mutex around the counter.", "proj");
+        let memories =
+            svc.extract_memories("The fix was adding a mutex around the counter.", "proj");
         assert!(!memories.is_empty(), "should detect error");
         assert_eq!(memories[0].category, MemoryCategory::Error);
     }
@@ -555,7 +554,8 @@ mod tests {
     #[test]
     fn test_extract_pattern_in_this_project() {
         let (svc, _dir) = make_service();
-        let memories = svc.extract_memories("In this project we use snake_case for variables.", "proj");
+        let memories =
+            svc.extract_memories("In this project we use snake_case for variables.", "proj");
         assert!(!memories.is_empty(), "should detect pattern");
         assert_eq!(memories[0].category, MemoryCategory::Pattern);
         assert!(memories[0].content.to_lowercase().contains("snake_case"));
@@ -564,7 +564,8 @@ mod tests {
     #[test]
     fn test_extract_pattern_naming_convention() {
         let (svc, _dir) = make_service();
-        let memories = svc.extract_memories("Our naming convention is PascalCase for types.", "proj");
+        let memories =
+            svc.extract_memories("Our naming convention is PascalCase for types.", "proj");
         assert!(!memories.is_empty(), "should detect pattern");
         assert_eq!(memories[0].category, MemoryCategory::Pattern);
     }
@@ -572,7 +573,10 @@ mod tests {
     #[test]
     fn test_extract_pattern_our_convention() {
         let (svc, _dir) = make_service();
-        let memories = svc.extract_memories("Our convention is to keep functions under 20 lines.", "proj");
+        let memories = svc.extract_memories(
+            "Our convention is to keep functions under 20 lines.",
+            "proj",
+        );
         assert!(!memories.is_empty(), "should detect pattern");
         assert_eq!(memories[0].category, MemoryCategory::Pattern);
     }
@@ -599,7 +603,10 @@ mod tests {
         let text = "I always use tabs. I always use tabs for indentation.";
         let memories = svc.extract_memories(text, "proj");
         // Both sentences match preference, but dedup should collapse them
-        assert!(memories.len() <= 2, "should deduplicate similar preferences");
+        assert!(
+            memories.len() <= 2,
+            "should deduplicate similar preferences"
+        );
     }
 
     // ========================================================================
@@ -781,7 +788,10 @@ mod tests {
         }];
         let result = svc.process_conversation(&messages, "proj");
         assert!(result.is_ok());
-        assert!(result.unwrap().is_empty(), "should not extract neutral text");
+        assert!(
+            result.unwrap().is_empty(),
+            "should not extract neutral text"
+        );
     }
 
     #[test]
@@ -794,7 +804,9 @@ mod tests {
             },
             Message {
                 role: "assistant".to_string(),
-                content: MessageContent::Text("We decided to use PostgreSQL for the database.".to_string()),
+                content: MessageContent::Text(
+                    "We decided to use PostgreSQL for the database.".to_string(),
+                ),
             },
         ];
         let result = svc.process_conversation(&messages, "proj");
@@ -829,7 +841,10 @@ mod tests {
         }];
         svc.process_conversation(&messages, "proj_a").unwrap();
         let results = svc.search("dark", Some("proj_b"));
-        assert!(results.is_empty(), "should not find memories from other project");
+        assert!(
+            results.is_empty(),
+            "should not find memories from other project"
+        );
     }
 
     #[test]
@@ -895,10 +910,7 @@ mod tests {
 
     #[test]
     fn test_deduplicate_tags_no_dups() {
-        let tags = deduplicate_tags(vec![
-            "preference".to_string(),
-            "decision".to_string(),
-        ]);
+        let tags = deduplicate_tags(vec!["preference".to_string(), "decision".to_string()]);
         assert_eq!(tags.len(), 2);
     }
 
@@ -909,8 +921,16 @@ mod tests {
     #[test]
     fn test_deduplicate_memories_removes_similar() {
         let mems = vec![
-            MemoryEntry::new("p", MemoryCategory::Preference, "always use tabs for indentation"),
-            MemoryEntry::new("p", MemoryCategory::Preference, "always use tabs for indentation"),
+            MemoryEntry::new(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+            ),
+            MemoryEntry::new(
+                "p",
+                MemoryCategory::Preference,
+                "always use tabs for indentation",
+            ),
         ];
         let deduped = deduplicate_memories(mems);
         assert_eq!(deduped.len(), 1, "identical memories should be deduped");
@@ -974,7 +994,10 @@ mod tests {
             "This is a moderately long sentence with always in the middle of it.",
             "always",
         );
-        assert!(c >= 0.6, "long sentence with keyword should have decent confidence");
+        assert!(
+            c >= 0.6,
+            "long sentence with keyword should have decent confidence"
+        );
     }
 
     #[test]

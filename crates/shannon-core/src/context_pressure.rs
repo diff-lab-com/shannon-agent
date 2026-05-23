@@ -299,10 +299,7 @@ impl ContextPressureMonitor {
     /// | High     | GroupCompress           |
     /// | Critical | SummarizeOld (aggressive)|
     /// | Emergency| TruncateOld             |
-    pub fn recommended_compaction_strategy(
-        &self,
-        metrics: &PressureMetrics,
-    ) -> CompactStrategy {
+    pub fn recommended_compaction_strategy(&self, metrics: &PressureMetrics) -> CompactStrategy {
         match metrics.level {
             PressureLevel::Low | PressureLevel::Normal => CompactStrategy::SummarizeOld,
             PressureLevel::High => CompactStrategy::GroupCompress,
@@ -668,13 +665,25 @@ mod tests {
         let metrics = m.assess(160_000, 42);
         let summary = m.format_pressure_summary(&metrics);
 
-        assert!(summary.contains("160,000"), "should contain formatted current tokens");
-        assert!(summary.contains("200,000"), "should contain formatted max tokens");
+        assert!(
+            summary.contains("160,000"),
+            "should contain formatted current tokens"
+        );
+        assert!(
+            summary.contains("200,000"),
+            "should contain formatted max tokens"
+        );
         assert!(summary.contains("80.0%"), "should contain percentage");
         assert!(summary.contains("HIGH"), "should contain level name");
         assert!(summary.contains("42"), "should contain message count");
-        assert!(summary.contains("12,500"), "should contain last compaction savings");
-        assert!(summary.contains("consider compacting"), "should contain recommendation text");
+        assert!(
+            summary.contains("12,500"),
+            "should contain last compaction savings"
+        );
+        assert!(
+            summary.contains("consider compacting"),
+            "should contain recommendation text"
+        );
     }
 
     #[test]

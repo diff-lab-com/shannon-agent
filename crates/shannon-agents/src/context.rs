@@ -4,11 +4,11 @@
 //! and agent tools, giving all team operations access to the coordinator,
 //! agent registry, and LLM client configuration.
 
+use crate::agent_defs::AgentDefinitionRegistry;
 use crate::coordinator::{AgentCoordinator, CoordinatorConfig};
-use crate::sub_agent::SubAgentRegistry;
 use crate::executor::AgentExecutor;
 use crate::persistence::FilePersistence;
-use crate::agent_defs::AgentDefinitionRegistry;
+use crate::sub_agent::SubAgentRegistry;
 use shannon_core::api::LlmClientConfig;
 use std::sync::Arc;
 
@@ -55,7 +55,10 @@ impl std::fmt::Debug for TeamContext {
         f.debug_struct("TeamContext")
             .field("permission_mode", &self.permission_mode)
             .field("has_executor", &self.executor.is_some())
-            .field("agent_definition_count", &self.agent_definitions.list_names().len())
+            .field(
+                "agent_definition_count",
+                &self.agent_definitions.list_names().len(),
+            )
             .finish()
     }
 }
@@ -67,9 +70,9 @@ impl TeamContext {
     /// Falls back to a default CoordinatorConfig if none provided.
     pub async fn new(client_config: LlmClientConfig) -> Result<Self, crate::error::AgentError> {
         if !teams_enabled() {
-            return Err(crate::error::AgentError::Configuration(
-                format!("Agent teams disabled. Set {TEAMS_ENV_VAR}=1 to enable.")
-            ));
+            return Err(crate::error::AgentError::Configuration(format!(
+                "Agent teams disabled. Set {TEAMS_ENV_VAR}=1 to enable."
+            )));
         }
 
         let coordinator_config = CoordinatorConfig::default();
@@ -92,7 +95,10 @@ impl TeamContext {
         // Load custom agent definitions from .shannon/agents/ and ~/.shannon/agents/
         let agent_definitions = AgentDefinitionRegistry::load_from_dirs();
         if !agent_definitions.is_empty() {
-            tracing::info!(count = agent_definitions.list_names().len(), "Loaded custom agent definitions");
+            tracing::info!(
+                count = agent_definitions.list_names().len(),
+                "Loaded custom agent definitions"
+            );
         }
 
         Ok(Self {
@@ -111,9 +117,9 @@ impl TeamContext {
         coordinator_config: CoordinatorConfig,
     ) -> Result<Self, crate::error::AgentError> {
         if !teams_enabled() {
-            return Err(crate::error::AgentError::Configuration(
-                format!("Agent teams disabled. Set {TEAMS_ENV_VAR}=1 to enable.")
-            ));
+            return Err(crate::error::AgentError::Configuration(format!(
+                "Agent teams disabled. Set {TEAMS_ENV_VAR}=1 to enable."
+            )));
         }
 
         let mut coordinator = Arc::new(AgentCoordinator::new(coordinator_config).await?);
@@ -169,52 +175,77 @@ mod tests {
 
     #[test]
     fn teams_enabled_defaults_to_false() {
-        unsafe { std::env::remove_var(TEAMS_ENV_VAR); }
+        unsafe {
+            std::env::remove_var(TEAMS_ENV_VAR);
+        }
         assert!(!teams_enabled());
     }
 
     #[test]
     fn teams_enabled_with_value_1() {
-        unsafe { std::env::set_var(TEAMS_ENV_VAR, "1"); }
+        unsafe {
+            std::env::set_var(TEAMS_ENV_VAR, "1");
+        }
         assert!(teams_enabled());
-        unsafe { std::env::remove_var(TEAMS_ENV_VAR); }
+        unsafe {
+            std::env::remove_var(TEAMS_ENV_VAR);
+        }
     }
 
     #[test]
     fn teams_enabled_with_value_true() {
-        unsafe { std::env::set_var(TEAMS_ENV_VAR, "true"); }
+        unsafe {
+            std::env::set_var(TEAMS_ENV_VAR, "true");
+        }
         assert!(teams_enabled());
-        unsafe { std::env::remove_var(TEAMS_ENV_VAR); }
+        unsafe {
+            std::env::remove_var(TEAMS_ENV_VAR);
+        }
     }
 
     #[test]
     fn teams_enabled_case_insensitive() {
-        unsafe { std::env::set_var(TEAMS_ENV_VAR, "YES"); }
+        unsafe {
+            std::env::set_var(TEAMS_ENV_VAR, "YES");
+        }
         assert!(teams_enabled());
-        unsafe { std::env::remove_var(TEAMS_ENV_VAR); }
+        unsafe {
+            std::env::remove_var(TEAMS_ENV_VAR);
+        }
     }
 
     #[test]
     fn teams_enabled_rejects_random_values() {
-        unsafe { std::env::set_var(TEAMS_ENV_VAR, "maybe"); }
+        unsafe {
+            std::env::set_var(TEAMS_ENV_VAR, "maybe");
+        }
         assert!(!teams_enabled());
-        unsafe { std::env::remove_var(TEAMS_ENV_VAR); }
+        unsafe {
+            std::env::remove_var(TEAMS_ENV_VAR);
+        }
     }
 
     #[test]
     fn new_returns_error_when_disabled() {
-        unsafe { std::env::remove_var(TEAMS_ENV_VAR); }
+        unsafe {
+            std::env::remove_var(TEAMS_ENV_VAR);
+        }
         let rt = tokio::runtime::Runtime::new().unwrap();
         let config = shannon_core::api::LlmClientConfig::default();
         let result = rt.block_on(TeamContext::new(config));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("SHANNON_AGENT_TEAMS"), "Error should mention env var: {err}");
+        assert!(
+            err.contains("SHANNON_AGENT_TEAMS"),
+            "Error should mention env var: {err}"
+        );
     }
 
     #[test]
     fn permission_mode_builder() {
-        unsafe { std::env::set_var(TEAMS_ENV_VAR, "1"); }
+        unsafe {
+            std::env::set_var(TEAMS_ENV_VAR, "1");
+        }
         let rt = tokio::runtime::Runtime::new().unwrap();
         let config = shannon_core::api::LlmClientConfig::default();
         let ctx = rt.block_on(TeamContext::new(config)).unwrap();
@@ -223,6 +254,8 @@ mod tests {
         let ctx = ctx.with_permission_mode("auto");
         assert_eq!(ctx.permission_mode, "auto");
 
-        unsafe { std::env::remove_var(TEAMS_ENV_VAR); }
+        unsafe {
+            std::env::remove_var(TEAMS_ENV_VAR);
+        }
     }
 }

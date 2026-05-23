@@ -300,8 +300,14 @@ mod tests {
         };
         let mut ctx = IsolatedContext::new(config);
 
-        ctx.add_message(ContextMessage::new(ContextRole::System, "You are a helper.".into()));
-        ctx.add_message(ContextMessage::new(ContextRole::User, "Do the thing.".into()));
+        ctx.add_message(ContextMessage::new(
+            ContextRole::System,
+            "You are a helper.".into(),
+        ));
+        ctx.add_message(ContextMessage::new(
+            ContextRole::User,
+            "Do the thing.".into(),
+        ));
         ctx.add_message(ContextMessage::new(ContextRole::Assistant, "Done!".into()));
 
         assert_eq!(ctx.messages().len(), 3);
@@ -328,7 +334,10 @@ mod tests {
         ctx.deactivate();
         assert!(!ctx.is_active());
 
-        ctx.add_message(ContextMessage::new(ContextRole::User, "should be dropped".into()));
+        ctx.add_message(ContextMessage::new(
+            ContextRole::User,
+            "should be dropped".into(),
+        ));
         assert_eq!(ctx.messages().len(), 1);
     }
 
@@ -346,7 +355,10 @@ mod tests {
         assert_eq!(IsolatedContext::estimate_tokens_for_str("abcde"), 2);
 
         // 100 chars -> 25 tokens
-        assert_eq!(IsolatedContext::estimate_tokens_for_str(&"x".repeat(100)), 25);
+        assert_eq!(
+            IsolatedContext::estimate_tokens_for_str(&"x".repeat(100)),
+            25
+        );
 
         // 1 char -> 1 token
         assert_eq!(IsolatedContext::estimate_tokens_for_str("a"), 1);
@@ -365,7 +377,10 @@ mod tests {
         assert_eq!(ctx.estimate_tokens(), 1);
 
         // "abcdefgh" = 2 tokens, total = 3
-        ctx.add_message(ContextMessage::new(ContextRole::Assistant, "abcdefgh".into()));
+        ctx.add_message(ContextMessage::new(
+            ContextRole::Assistant,
+            "abcdefgh".into(),
+        ));
         assert_eq!(ctx.estimate_tokens(), 3);
     }
 
@@ -381,12 +396,12 @@ mod tests {
 
         // Add messages until just under 75 tokens
         // Each char adds 0.25 tokens, so 296 chars = 74 tokens (296/4 = 74)
-        ctx.add_message(ContextMessage::new(
-            ContextRole::User,
-            "a".repeat(296),
-        ));
+        ctx.add_message(ContextMessage::new(ContextRole::User, "a".repeat(296)));
         assert_eq!(ctx.estimate_tokens(), 74);
-        assert!(!ctx.is_pressure_high(), "74/100 should not be high pressure");
+        assert!(
+            !ctx.is_pressure_high(),
+            "74/100 should not be high pressure"
+        );
 
         // Add one more token to cross 75
         ctx.add_message(ContextMessage::new(
@@ -416,9 +431,18 @@ mod tests {
         let mut ctx_a = IsolatedContext::new(config.clone());
         let mut ctx_b = IsolatedContext::new(config);
 
-        ctx_a.add_message(ContextMessage::new(ContextRole::User, "secret for A".into()));
-        ctx_b.add_message(ContextMessage::new(ContextRole::User, "secret for B".into()));
-        ctx_a.add_message(ContextMessage::new(ContextRole::Assistant, "A response".into()));
+        ctx_a.add_message(ContextMessage::new(
+            ContextRole::User,
+            "secret for A".into(),
+        ));
+        ctx_b.add_message(ContextMessage::new(
+            ContextRole::User,
+            "secret for B".into(),
+        ));
+        ctx_a.add_message(ContextMessage::new(
+            ContextRole::Assistant,
+            "A response".into(),
+        ));
 
         // Each context only sees its own messages
         assert_eq!(ctx_a.messages().len(), 2);
@@ -483,12 +507,7 @@ mod tests {
         let files = vec!["src/main.rs".into(), "src/lib.rs".into()];
         let findings = vec!["X is related to Y".into(), "Z needs attention".into()];
 
-        let summary = ctx.to_summary_with(
-            "Researched X",
-            true,
-            files.clone(),
-            findings.clone(),
-        );
+        let summary = ctx.to_summary_with("Researched X", true, files.clone(), findings.clone());
 
         assert_eq!(summary.context_id, ctx.id());
         assert!(summary.success);

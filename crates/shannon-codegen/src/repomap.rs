@@ -2,8 +2,8 @@
 //!
 //! Walks directories and generates a summary of code symbols across the project.
 
-use crate::outline::{file_outline, Symbol};
 use crate::languages::language_for_path;
+use crate::outline::{Symbol, file_outline};
 use crate::{CodegenError, Result};
 use ignore::WalkBuilder;
 use serde::Serialize;
@@ -86,9 +86,7 @@ pub fn generate_repomap_filtered(
 
     // Process files
     for entry in walker {
-        let entry = entry.map_err(|e| CodegenError::Io(std::io::Error::other(
-            e.to_string(),
-        )))?;
+        let entry = entry.map_err(|e| CodegenError::Io(std::io::Error::other(e.to_string())))?;
 
         let path = entry.path();
 
@@ -130,7 +128,8 @@ pub fn generate_repomap_filtered(
         };
 
         // Get relative path
-        let relative_path = path.strip_prefix(root)
+        let relative_path = path
+            .strip_prefix(root)
             .ok()
             .and_then(|p| p.to_str())
             .unwrap_or_else(|| path.to_str().unwrap_or("unknown"))
@@ -157,7 +156,6 @@ pub fn generate_repomap_filtered(
     })
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,7 +172,8 @@ mod tests {
 pub fn hello() {}
 pub struct Foo;
 "#,
-        ).unwrap();
+        )
+        .unwrap();
 
         std::fs::write(
             root.join("test.py"),
@@ -182,7 +181,8 @@ pub struct Foo;
 def hello():
     pass
 "#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let repo_map = generate_repomap(root, 10).unwrap();
         assert_eq!(repo_map.files.len(), 2);

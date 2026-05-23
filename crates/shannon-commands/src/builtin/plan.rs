@@ -4,7 +4,9 @@
 //! exploration and analysis without making any changes. Similar to
 //! OpenCode's Plan/Build mode switching.
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 const PLAN_PROMPT: &str = r##"
 You are now in **Plan Mode** — a read-only exploration and planning mode.
@@ -69,9 +71,7 @@ pub fn command() -> Command {
             is_enabled: true,
             is_hidden: false,
             argument_hint: Some("[what to analyze]".to_string()),
-            when_to_use: Some(
-                "Explore code and create plans without making changes".to_string(),
-            ),
+            when_to_use: Some("Explore code and create plans without making changes".to_string()),
             version: Some("0.1.0".to_string()),
             disable_model_invocation: false,
             user_invocable: true,

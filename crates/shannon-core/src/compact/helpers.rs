@@ -16,13 +16,12 @@ pub fn extract_text_content(msg: &Message) -> String {
                         parts.push(format!(
                             "[Tool: {}({})]",
                             name,
-                            truncate_text(
-                                &serde_json::to_string(input).unwrap_or_default(),
-                                100
-                            )
+                            truncate_text(&serde_json::to_string(input).unwrap_or_default(), 100)
                         ));
                     }
-                    ContentBlock::ToolResult { content, is_error, .. } => {
+                    ContentBlock::ToolResult {
+                        content, is_error, ..
+                    } => {
                         let prefix = if is_error.unwrap_or(false) {
                             "[Tool Error]"
                         } else {
@@ -124,8 +123,8 @@ pub fn estimate_message_tokens(msg: &Message) -> usize {
                     ContentBlock::Text { text } => total += estimate_text_tokens(text),
                     ContentBlock::ToolUse { name, input, .. } => {
                         total += estimate_text_tokens(name);
-                        total += serde_json::to_string(input)
-                            .map_or(0, |s| estimate_text_tokens(&s));
+                        total +=
+                            serde_json::to_string(input).map_or(0, |s| estimate_text_tokens(&s));
                     }
                     ContentBlock::ToolResult { content, .. } => {
                         if let Some(c) = content {
@@ -252,7 +251,10 @@ mod tests {
     use super::*;
 
     fn text_msg(role: &str, text: &str) -> Message {
-        Message { role: role.into(), content: MessageContent::Text(text.into()) }
+        Message {
+            role: role.into(),
+            content: MessageContent::Text(text.into()),
+        }
     }
 
     // ── extract_text_content ─────────────────────────────────────────────
@@ -268,8 +270,12 @@ mod tests {
         let msg = Message {
             role: "assistant".into(),
             content: MessageContent::Blocks(vec![
-                ContentBlock::Text { text: "Hello".into() },
-                ContentBlock::Text { text: "World".into() },
+                ContentBlock::Text {
+                    text: "Hello".into(),
+                },
+                ContentBlock::Text {
+                    text: "World".into(),
+                },
             ]),
         };
         let text = extract_text_content(&msg);
@@ -351,9 +357,9 @@ mod tests {
     fn test_estimate_blocks_message() {
         let msg = Message {
             role: "assistant".into(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::Text { text: "Here's the code:".into() },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "Here's the code:".into(),
+            }]),
         };
         let tokens = estimate_message_tokens(&msg);
         assert!(tokens > 0);
@@ -363,15 +369,13 @@ mod tests {
     fn test_estimate_image_message() {
         let msg = Message {
             role: "assistant".into(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::Image {
-                    source: crate::api::ImageSource {
-                        source_type: "base64".into(),
-                        media_type: "image/png".into(),
-                        data: "abc".into(),
-                    },
+            content: MessageContent::Blocks(vec![ContentBlock::Image {
+                source: crate::api::ImageSource {
+                    source_type: "base64".into(),
+                    media_type: "image/png".into(),
+                    data: "abc".into(),
                 },
-            ]),
+            }]),
         };
         let tokens = estimate_message_tokens(&msg);
         assert_eq!(tokens, 100); // Fixed cost for images
@@ -386,10 +390,7 @@ mod tests {
 
     #[test]
     fn test_estimate_tokens_multiple() {
-        let msgs = [
-            text_msg("user", "Hello"),
-            text_msg("assistant", "Hi there"),
-        ];
+        let msgs = [text_msg("user", "Hello"), text_msg("assistant", "Hi there")];
         let total = estimate_tokens(&msgs);
         let sum = estimate_message_tokens(&msgs[0]) + estimate_message_tokens(&msgs[1]);
         assert_eq!(total, sum);
@@ -425,13 +426,11 @@ mod tests {
     fn test_looks_like_code_tool_use() {
         let msg = Message {
             role: "assistant".into(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::ToolUse {
-                    id: "t1".into(),
-                    name: "bash".into(),
-                    input: serde_json::json!({"command": "ls"}),
-                },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "bash".into(),
+                input: serde_json::json!({"command": "ls"}),
+            }]),
         };
         assert!(looks_like_code(&msg));
     }
@@ -492,7 +491,9 @@ mod tests {
                 ContentBlock::Thinking {
                     thinking: "Let me analyze this step by step carefully.".into(),
                 },
-                ContentBlock::Text { text: "Here is the answer.".into() },
+                ContentBlock::Text {
+                    text: "Here is the answer.".into(),
+                },
             ]),
         };
         let tokens = estimate_message_tokens(&msg);
@@ -500,9 +501,9 @@ mod tests {
         // Verify thinking adds tokens beyond just the text block
         let text_only = Message {
             role: "assistant".into(),
-            content: MessageContent::Blocks(vec![
-                ContentBlock::Text { text: "Here is the answer.".into() },
-            ]),
+            content: MessageContent::Blocks(vec![ContentBlock::Text {
+                text: "Here is the answer.".into(),
+            }]),
         };
         assert!(
             tokens > estimate_message_tokens(&text_only),
@@ -518,7 +519,9 @@ mod tests {
                 ContentBlock::Thinking {
                     thinking: "Deep analysis of the code.".into(),
                 },
-                ContentBlock::Text { text: "Result text".into() },
+                ContentBlock::Text {
+                    text: "Result text".into(),
+                },
             ]),
         };
         let extracted = extract_text_content(&msg);
@@ -549,10 +552,7 @@ mod tests {
         let total = estimate_tokens(&msgs);
         assert!(total > 0);
         // The thinking block with 1000 chars should add significant tokens
-        let without_thinking = [
-            text_msg("user", "Hello"),
-            text_msg("assistant", "Hi"),
-        ];
+        let without_thinking = [text_msg("user", "Hello"), text_msg("assistant", "Hi")];
         assert!(
             total > estimate_tokens(&without_thinking),
             "Batch with thinking should estimate more tokens"

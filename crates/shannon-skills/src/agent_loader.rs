@@ -187,9 +187,7 @@ fn split_tool_string(s: &str) -> Vec<String> {
             .filter(|part| !part.is_empty())
             .collect()
     } else {
-        s.split_whitespace()
-            .map(|part| part.to_string())
-            .collect()
+        s.split_whitespace().map(|part| part.to_string()).collect()
     }
 }
 
@@ -502,7 +500,10 @@ Body.
         let err = parse_agent_definition(content, Path::new("bad.md")).unwrap_err();
         match err {
             SkillError::InvalidMetadata { reason, .. } => {
-                assert!(reason.contains("name"), "expected 'name' in error, got: {reason}");
+                assert!(
+                    reason.contains("name"),
+                    "expected 'name' in error, got: {reason}"
+                );
             }
             other => panic!("expected InvalidMetadata, got: {other}"),
         }
@@ -541,7 +542,10 @@ This is just body with no closing ---.
         let err = parse_agent_definition(content, Path::new("broken.md")).unwrap_err();
         match err {
             SkillError::InvalidFormat(msg) => {
-                assert!(msg.contains("closing"), "expected 'closing' in error, got: {msg}");
+                assert!(
+                    msg.contains("closing"),
+                    "expected 'closing' in error, got: {msg}"
+                );
             }
             other => panic!("expected InvalidFormat, got: {other}"),
         }
@@ -683,9 +687,7 @@ Bad body.
             ("xhigh", AgentEffort::Xhigh),
             ("max", AgentEffort::Max),
         ] {
-            let content = format!(
-                "---\nname: e\ndescription: d\neffort: {yaml}\n\n---\nbody\n"
-            );
+            let content = format!("---\nname: e\ndescription: d\neffort: {yaml}\n\n---\nbody\n");
             let def = parse_agent_definition(&content, Path::new("e.md")).unwrap();
             assert_eq!(def.effort, expected, "failed for effort={yaml}");
         }
@@ -699,9 +701,7 @@ Bad body.
             ("opus", AgentModel::Opus),
             ("inherit", AgentModel::Inherit),
         ] {
-            let content = format!(
-                "---\nname: m\ndescription: d\nmodel: {yaml}\n\n---\nbody\n"
-            );
+            let content = format!("---\nname: m\ndescription: d\nmodel: {yaml}\n\n---\nbody\n");
             let def = parse_agent_definition(&content, Path::new("m.md")).unwrap();
             assert_eq!(def.model, expected, "failed for model={yaml}");
         }
@@ -717,11 +717,13 @@ Bad body.
             ("bypassPermissions", AgentPermissionMode::BypassPermissions),
             ("plan", AgentPermissionMode::Plan),
         ] {
-            let content = format!(
-                "---\nname: p\ndescription: d\npermissionMode: {yaml}\n\n---\nbody\n"
-            );
+            let content =
+                format!("---\nname: p\ndescription: d\npermissionMode: {yaml}\n\n---\nbody\n");
             let def = parse_agent_definition(&content, Path::new("p.md")).unwrap();
-            assert_eq!(def.permission_mode, expected, "failed for permissionMode={yaml}");
+            assert_eq!(
+                def.permission_mode, expected,
+                "failed for permissionMode={yaml}"
+            );
         }
     }
 
@@ -738,9 +740,7 @@ Bad body.
             ("pink", AgentColor::Pink),
             ("cyan", AgentColor::Cyan),
         ] {
-            let content = format!(
-                "---\nname: c\ndescription: d\ncolor: {yaml}\n\n---\nbody\n"
-            );
+            let content = format!("---\nname: c\ndescription: d\ncolor: {yaml}\n\n---\nbody\n");
             let def = parse_agent_definition(&content, Path::new("c.md")).unwrap();
             assert_eq!(def.color, expected, "failed for color={yaml}");
         }
@@ -759,7 +759,10 @@ Bad body.
         fs::create_dir_all(&shannon_agents).unwrap();
 
         let dirs = discover_agent_directories(tmp.path());
-        assert!(dirs.len() >= 2, "expected at least 2 directories, got {dirs:?}");
+        assert!(
+            dirs.len() >= 2,
+            "expected at least 2 directories, got {dirs:?}"
+        );
 
         let paths: Vec<String> = dirs.iter().map(|p| p.display().to_string()).collect();
         assert!(
@@ -779,10 +782,7 @@ Bad body.
         let dirs = discover_agent_directories(tmp.path());
         // May still find home-level dirs, so just ensure no panic.
         // Filter to only paths under tmp for assertion.
-        let local: Vec<_> = dirs
-            .iter()
-            .filter(|p| p.starts_with(tmp.path()))
-            .collect();
+        let local: Vec<_> = dirs.iter().filter(|p| p.starts_with(tmp.path())).collect();
         assert!(local.is_empty());
     }
 
@@ -796,10 +796,7 @@ Bad body.
             split_tool_string("Read Glob Grep"),
             vec!["Read", "Glob", "Grep"]
         );
-        assert_eq!(
-            split_tool_string("  Read ,  Glob  "),
-            vec!["Read", "Glob"]
-        );
+        assert_eq!(split_tool_string("  Read ,  Glob  "), vec!["Read", "Glob"]);
         assert!(split_tool_string("").is_empty());
     }
 }

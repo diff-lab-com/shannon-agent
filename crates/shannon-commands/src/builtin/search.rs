@@ -1,6 +1,8 @@
 //! /search command - Search command history with regex support
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Search prompt template
@@ -133,26 +135,28 @@ pub fn search_history(entries: &[String], options: &SearchOptions) -> Vec<Histor
             if options.pattern.len() > 512 {
                 false
             } else {
-            match regex::Regex::new(&options.pattern) {
-                Ok(re) => {
-                    if options.case_sensitive {
-                        re.is_match(entry)
-                    } else {
-                        re.is_match(&entry.to_lowercase())
-                            || regex::Regex::new(&format!("(?i){}", options.pattern))
-                                .map(|ci_re| ci_re.is_match(entry))
-                                .unwrap_or(false)
+                match regex::Regex::new(&options.pattern) {
+                    Ok(re) => {
+                        if options.case_sensitive {
+                            re.is_match(entry)
+                        } else {
+                            re.is_match(&entry.to_lowercase())
+                                || regex::Regex::new(&format!("(?i){}", options.pattern))
+                                    .map(|ci_re| ci_re.is_match(entry))
+                                    .unwrap_or(false)
+                        }
+                    }
+                    Err(_) => {
+                        // Fallback to substring match on invalid regex
+                        if options.case_sensitive {
+                            entry.contains(&options.pattern)
+                        } else {
+                            entry
+                                .to_lowercase()
+                                .contains(&options.pattern.to_lowercase())
+                        }
                     }
                 }
-                Err(_) => {
-                    // Fallback to substring match on invalid regex
-                    if options.case_sensitive {
-                        entry.contains(&options.pattern)
-                    } else {
-                        entry.to_lowercase().contains(&options.pattern.to_lowercase())
-                    }
-                }
-            }
             }
         } else {
             let search_entry = if options.case_sensitive {
@@ -240,8 +244,7 @@ pub fn format_results(matches: &[HistoryMatch], options: &SearchOptions) -> Stri
 fn format_timestamp(secs: u64) -> String {
     use chrono::{DateTime, Local, Utc};
 
-    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0)
-        .unwrap_or_default();
+    let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0).unwrap_or_default();
     let local: DateTime<Local> = dt.into();
 
     local.format("%Y-%m-%d %H:%M:%S").to_string()
@@ -334,10 +337,7 @@ mod tests {
 
     #[test]
     fn test_search_history_case_sensitive() {
-        let entries = vec![
-            "GIT STATUS".to_string(),
-            "git commit".to_string(),
-        ];
+        let entries = vec!["GIT STATUS".to_string(), "git commit".to_string()];
 
         let options = SearchOptions {
             pattern: "git".to_string(),
@@ -372,10 +372,7 @@ mod tests {
 
     #[test]
     fn test_search_history_no_matches() {
-        let entries = vec![
-            "git status".to_string(),
-            "cargo build".to_string(),
-        ];
+        let entries = vec!["git status".to_string(), "cargo build".to_string()];
 
         let options = SearchOptions {
             pattern: "npm".to_string(),
@@ -424,13 +421,11 @@ mod tests {
 
     #[test]
     fn test_format_results_no_timestamps() {
-        let matches = vec![
-            HistoryMatch {
-                index: 0,
-                command: "git status".to_string(),
-                timestamp: None,
-            },
-        ];
+        let matches = vec![HistoryMatch {
+            index: 0,
+            command: "git status".to_string(),
+            timestamp: None,
+        }];
 
         let options = SearchOptions {
             pattern: "test".to_string(),

@@ -6,7 +6,7 @@
 use crate::coordinator::AgentCoordinator;
 use crate::task::{AgentTask, TaskPriority, TaskStatus};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolResult};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -86,7 +86,10 @@ impl Tool for TeamTaskCreateTool {
 
     async fn execute(&self, input: Value) -> ToolResult<ToolOutput> {
         let subject = input["subject"].as_str().unwrap_or_default().to_string();
-        let description = input["description"].as_str().unwrap_or_default().to_string();
+        let description = input["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
 
         if subject.is_empty() {
             return Err(ToolError::InvalidInput("subject is required".into()));
@@ -130,7 +133,8 @@ impl Tool for TeamTaskCreateTool {
 
         // If owner specified, assign the task
         if let Some(ref agent_name) = owner {
-            if let Err(e) = self.coordinator
+            if let Err(e) = self
+                .coordinator
                 .task_board()
                 .assign_task(task_id, agent_name.clone())
                 .await
@@ -204,30 +208,40 @@ impl Tool for TeamTaskUpdateTool {
 
         match status_str {
             "in_progress" => {
-                board.update_task_status(task_id, TaskStatus::InProgress)
+                board
+                    .update_task_status(task_id, TaskStatus::InProgress)
                     .await
-                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to update task: {e}")))?;
+                    .map_err(|e| {
+                        ToolError::ExecutionFailed(format!("Failed to update task: {e}"))
+                    })?;
             }
             "completed" => {
-                board.complete_task(task_id)
-                    .await
-                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to complete task: {e}")))?;
+                board.complete_task(task_id).await.map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Failed to complete task: {e}"))
+                })?;
             }
             "failed" => {
-                let reason = input["reason"].as_str().unwrap_or("No reason provided").to_string();
-                board.fail_task(task_id, reason)
+                let reason = input["reason"]
+                    .as_str()
+                    .unwrap_or("No reason provided")
+                    .to_string();
+                board
+                    .fail_task(task_id, reason)
                     .await
                     .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fail task: {e}")))?;
             }
             "cancelled" => {
-                board.update_task_status(task_id, TaskStatus::Cancelled)
+                board
+                    .update_task_status(task_id, TaskStatus::Cancelled)
                     .await
-                    .map_err(|e| ToolError::ExecutionFailed(format!("Failed to cancel task: {e}")))?;
+                    .map_err(|e| {
+                        ToolError::ExecutionFailed(format!("Failed to cancel task: {e}"))
+                    })?;
             }
             _ => {
-                return Err(ToolError::InvalidInput(
-                    format!("Invalid status '{status_str}'. Use: in_progress, completed, failed, or cancelled")
-                ));
+                return Err(ToolError::InvalidInput(format!(
+                    "Invalid status '{status_str}'. Use: in_progress, completed, failed, or cancelled"
+                )));
             }
         }
 
@@ -292,7 +306,11 @@ impl Tool for TeamTaskListTool {
                 "failed" => TaskStatus::Failed(String::new()),
                 "blocked" => TaskStatus::Blocked,
                 "cancelled" => TaskStatus::Cancelled,
-                _ => return Err(ToolError::InvalidInput(format!("Invalid status: {status_str}"))),
+                _ => {
+                    return Err(ToolError::InvalidInput(format!(
+                        "Invalid status: {status_str}"
+                    )));
+                }
             };
             board.list_tasks_by_status(status).await
         } else {
@@ -301,24 +319,27 @@ impl Tool for TeamTaskListTool {
 
         let summary = board.summary().await;
 
-        let task_list: Vec<Value> = tasks.iter().map(|t| {
-            let status_str = match &t.status {
-                TaskStatus::Pending => "pending".to_string(),
-                TaskStatus::InProgress => "in_progress".to_string(),
-                TaskStatus::Completed => "completed".to_string(),
-                TaskStatus::Failed(r) => format!("failed: {r}"),
-                TaskStatus::Blocked => "blocked".to_string(),
-                TaskStatus::Cancelled => "cancelled".to_string(),
-            };
-            json!({
-                "id": t.id.to_string(),
-                "subject": t.subject,
-                "status": status_str,
-                "owner": t.owner,
-                "priority": format!("{:?}", t.priority).to_lowercase(),
-                "blocked_by": t.blocked_by.iter().map(|u| u.to_string()).collect::<Vec<_>>(),
+        let task_list: Vec<Value> = tasks
+            .iter()
+            .map(|t| {
+                let status_str = match &t.status {
+                    TaskStatus::Pending => "pending".to_string(),
+                    TaskStatus::InProgress => "in_progress".to_string(),
+                    TaskStatus::Completed => "completed".to_string(),
+                    TaskStatus::Failed(r) => format!("failed: {r}"),
+                    TaskStatus::Blocked => "blocked".to_string(),
+                    TaskStatus::Cancelled => "cancelled".to_string(),
+                };
+                json!({
+                    "id": t.id.to_string(),
+                    "subject": t.subject,
+                    "status": status_str,
+                    "owner": t.owner,
+                    "priority": format!("{:?}", t.priority).to_lowercase(),
+                    "blocked_by": t.blocked_by.iter().map(|u| u.to_string()).collect::<Vec<_>>(),
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(success_output(json!({
             "summary": {
@@ -348,12 +369,12 @@ pub struct TeamTaskClaimTool {
 }
 
 impl TeamTaskClaimTool {
-    pub fn new(
-        coordinator: Arc<AgentCoordinator>,
-        team_name: String,
-        agent_name: String,
-    ) -> Self {
-        Self { coordinator, team_name, agent_name }
+    pub fn new(coordinator: Arc<AgentCoordinator>, team_name: String, agent_name: String) -> Self {
+        Self {
+            coordinator,
+            team_name,
+            agent_name,
+        }
     }
 }
 
@@ -433,12 +454,12 @@ pub struct TeamNotifyIdleTool {
 }
 
 impl TeamNotifyIdleTool {
-    pub fn new(
-        coordinator: Arc<AgentCoordinator>,
-        team_name: String,
-        agent_name: String,
-    ) -> Self {
-        Self { coordinator, team_name, agent_name }
+    pub fn new(coordinator: Arc<AgentCoordinator>, team_name: String, agent_name: String) -> Self {
+        Self {
+            coordinator,
+            team_name,
+            agent_name,
+        }
     }
 }
 
@@ -458,18 +479,22 @@ impl Tool for TeamNotifyIdleTool {
     }
 
     async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
-        let available = self.coordinator
+        let available = self
+            .coordinator
             .notify_idle(&self.team_name, &self.agent_name)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to notify idle: {e}")))?;
 
-        let task_list: Vec<Value> = available.iter().map(|t| {
-            json!({
-                "id": t.id.to_string(),
-                "subject": t.subject,
-                "priority": format!("{:?}", t.priority).to_lowercase(),
+        let task_list: Vec<Value> = available
+            .iter()
+            .map(|t| {
+                json!({
+                    "id": t.id.to_string(),
+                    "subject": t.subject,
+                    "priority": format!("{:?}", t.priority).to_lowercase(),
+                })
             })
-        }).collect();
+            .collect();
 
         Ok(success_output(json!({
             "agent": self.agent_name,

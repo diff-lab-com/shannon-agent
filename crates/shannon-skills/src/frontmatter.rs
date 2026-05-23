@@ -90,7 +90,6 @@ pub struct HooksConfig {
     pub post_sampling: Option<Vec<String>>,
 }
 
-
 /// Argument configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
@@ -129,11 +128,10 @@ pub fn parse_skill_frontmatter(content: &str, source: &str) -> SkillResult<Parse
     let frontmatter: SkillFrontmatter = if frontmatter_str.trim().is_empty() {
         SkillFrontmatter::default()
     } else {
-        serde_yaml::from_str(frontmatter_str)
-            .map_err(|e| SkillError::FrontmatterParse {
-                name: source.to_string(),
-                message: e.to_string(),
-            })?
+        serde_yaml::from_str(frontmatter_str).map_err(|e| SkillError::FrontmatterParse {
+            name: source.to_string(),
+            message: e.to_string(),
+        })?
     };
 
     Ok(ParsedSkill {
@@ -221,7 +219,10 @@ This is the body."#;
 
         let parsed = parse_skill_frontmatter(content, "test").unwrap();
         assert_eq!(parsed.frontmatter.name, Some("test-skill".to_string()));
-        assert_eq!(parsed.frontmatter.description, Some("A test skill".to_string()));
+        assert_eq!(
+            parsed.frontmatter.description,
+            Some("A test skill".to_string())
+        );
         assert_eq!(parsed.body, "This is the body.");
     }
 

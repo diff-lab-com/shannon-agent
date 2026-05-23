@@ -3,16 +3,16 @@
 use serde_json::Value;
 use shannon_tool_interface::{ToolError, ToolOutput, ToolResult};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
+use super::SamplingProvider;
+use super::types::*;
 use crate::auth::AuthProvider;
 use crate::transport::Transport;
-use super::types::*;
-use super::SamplingProvider;
 
 // ---------------------------------------------------------------------------
 // Remote Server Handle (HTTP/SSE transports)
@@ -92,10 +92,7 @@ impl RemoteMcpServerHandle {
             if let Some(ws) = &self.ws_transport {
                 let mut ws_guard = ws.lock().await;
                 ws_guard.connect().await.map_err(|e| {
-                    format!(
-                        "WebSocket reconnection failed for '{}': {e}",
-                        self.name
-                    )
+                    format!("WebSocket reconnection failed for '{}': {e}", self.name)
                 })?;
             }
         }
@@ -118,7 +115,10 @@ impl RemoteMcpServerHandle {
         // Parse capabilities from init response.
         if let Some(result) = init_response.get("result") {
             if let Ok(caps) = serde_json::from_value::<crate::ServerCapabilities>(
-                result.get("capabilities").cloned().unwrap_or(serde_json::json!({})),
+                result
+                    .get("capabilities")
+                    .cloned()
+                    .unwrap_or(serde_json::json!({})),
             ) {
                 debug!(
                     server = %self.name,
@@ -276,8 +276,7 @@ impl RemoteMcpServerHandle {
         timeout: Duration,
     ) -> Result<Value, String> {
         let request_id = request.get("id").cloned();
-        let request_str =
-            serde_json::to_string(request).unwrap_or_default();
+        let request_str = serde_json::to_string(request).unwrap_or_default();
 
         let mut ws_guard = ws.lock().await;
 
@@ -298,32 +297,26 @@ impl RemoteMcpServerHandle {
 
             let response_str = tokio::time::timeout(remaining, ws_guard.receive())
                 .await
-                .map_err(|_| {
-                    format!("WebSocket request timed out for '{}'", self.name)
-                })?
-                .map_err(|e| {
-                    format!("WebSocket receive failed for '{}': {e}", self.name)
-                })?
-                .ok_or_else(|| {
-                    format!("WebSocket connection closed for '{}'", self.name)
-                })?;
+                .map_err(|_| format!("WebSocket request timed out for '{}'", self.name))?
+                .map_err(|e| format!("WebSocket receive failed for '{}': {e}", self.name))?
+                .ok_or_else(|| format!("WebSocket connection closed for '{}'", self.name))?;
 
             let value: Value = serde_json::from_str(&response_str).map_err(|e| {
-                format!("Invalid JSON-RPC response from WebSocket '{name}': {e}", name = self.name)
+                format!(
+                    "Invalid JSON-RPC response from WebSocket '{name}': {e}",
+                    name = self.name
+                )
             })?;
 
             // Check if this is the response to our request.
-            let matches_our_id = request_id.as_ref().is_some_and(|rid| {
-                value.get("id") == Some(rid)
-            });
+            let matches_our_id = request_id
+                .as_ref()
+                .is_some_and(|rid| value.get("id") == Some(rid));
 
             if matches_our_id {
                 // Check for JSON-RPC error.
                 if let Some(error) = value.get("error") {
-                    return Err(format!(
-                        "WebSocket MCP error from '{}': {error}",
-                        self.name
-                    ));
+                    return Err(format!("WebSocket MCP error from '{}': {error}", self.name));
                 }
                 return Ok(value);
             }
@@ -334,12 +327,8 @@ impl RemoteMcpServerHandle {
             // Server→client request (has both method and id).
             if value.get("id").is_some() {
                 let response_value = match method {
-                    "sampling/createMessage" => {
-                        self.handle_remote_sampling(&value).await
-                    }
-                    "elicitation/create" => {
-                        self.handle_remote_elicitation(&value).await
-                    }
+                    "sampling/createMessage" => self.handle_remote_sampling(&value).await,
+                    "elicitation/create" => self.handle_remote_elicitation(&value).await,
                     _ => {
                         let req_id = value.get("id").cloned();
                         serde_json::json!({
@@ -365,7 +354,10 @@ impl RemoteMcpServerHandle {
         let req_id = value.get("id").cloned();
         let provider = self.sampling_provider.lock().await;
         if let Some(ref handler) = *provider {
-            let params = value.get("params").cloned().unwrap_or(serde_json::json!({}));
+            let params = value
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
             match serde_json::from_value::<crate::CreateMessageRequest>(params) {
                 Ok(req) => match handler(req).await {
                     Ok(result) => serde_json::json!({
@@ -421,8 +413,9 @@ impl RemoteMcpServerHandle {
         // Only allow simple alphanumeric commands without shell metacharacters.
         for (name, command) in &self.header_commands {
             // Reject commands containing shell metacharacters or path traversal
-            if command.contains([';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '\\', '\n', '\r'])
-               || command.contains("..")
+            if command.contains([
+                ';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '\\', '\n', '\r',
+            ]) || command.contains("..")
             {
                 warn!(server = %self.name, header = %name, "Skipping header command with unsafe characters: {command}");
                 continue;
@@ -476,17 +469,24 @@ impl RemoteMcpServerHandle {
                 .send(),
         )
         .await
-        .map_err(|_| format!("Remote MCP server '{}' request timed out after {:?}", self.name, timeout))?
-        .map_err(|e| format!("Remote MCP server '{}' HTTP request failed: {}", self.name, e))
+        .map_err(|_| {
+            format!(
+                "Remote MCP server '{}' request timed out after {:?}",
+                self.name, timeout
+            )
+        })?
+        .map_err(|e| {
+            format!(
+                "Remote MCP server '{}' HTTP request failed: {}",
+                self.name, e
+            )
+        })
     }
 
     /// Parse a successful HTTP response as JSON-RPC.
     ///
     /// Also captures the `Mcp-Session-Id` header if present (Streamable HTTP spec).
-    async fn parse_jsonrpc_response(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<Value, String> {
+    async fn parse_jsonrpc_response(&self, response: reqwest::Response) -> Result<Value, String> {
         // Capture MCP session ID from response headers.
         if let Some(sid) = response.headers().get("Mcp-Session-Id") {
             if let Ok(s) = sid.to_str() {
@@ -495,10 +495,12 @@ impl RemoteMcpServerHandle {
             }
         }
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|e| format!("Remote MCP server '{}' response parse error: {}", self.name, e))?;
+        let body: Value = response.json().await.map_err(|e| {
+            format!(
+                "Remote MCP server '{}' response parse error: {}",
+                self.name, e
+            )
+        })?;
 
         // Check for JSON-RPC error.
         if let Some(error) = body.get("error") {
@@ -517,10 +519,7 @@ impl RemoteMcpServerHandle {
     /// Reads the SSE stream and extracts the first JSON-RPC response payload
     /// from `data:` events. Used for Streamable HTTP where the server responds
     /// with SSE instead of a single JSON body.
-    async fn parse_sse_response(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<Value, String> {
+    async fn parse_sse_response(&self, response: reqwest::Response) -> Result<Value, String> {
         use futures_util::StreamExt;
 
         // Capture MCP session ID from response headers.
@@ -583,10 +582,7 @@ impl RemoteMcpServerHandle {
                         .get("message")
                         .and_then(|m| m.as_str())
                         .unwrap_or("Unknown error");
-                    return Err(format!(
-                        "Remote MCP server '{}' error: {}",
-                        self.name, msg
-                    ));
+                    return Err(format!("Remote MCP server '{}' error: {}", self.name, msg));
                 }
                 return Ok(value);
             }
@@ -599,7 +595,11 @@ impl RemoteMcpServerHandle {
     }
 
     /// Send a JSON-RPC notification (no id, no response expected).
-    pub(crate) async fn send_notification(&self, method: &str, params: Value) -> Result<(), String> {
+    pub(crate) async fn send_notification(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(), String> {
         let notification = serde_json::json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -608,15 +608,12 @@ impl RemoteMcpServerHandle {
 
         // Use WebSocket transport when available.
         if let Some(ws) = &self.ws_transport {
-            let notif_str =
-                serde_json::to_string(&notification).unwrap_or_default();
+            let notif_str = serde_json::to_string(&notification).unwrap_or_default();
             let mut ws_guard = ws.lock().await;
-            ws_guard.send(&notif_str).await.map_err(|e| {
-                format!(
-                    "WebSocket notification failed for '{}': {e}",
-                    self.name
-                )
-            })?;
+            ws_guard
+                .send(&notif_str)
+                .await
+                .map_err(|e| format!("WebSocket notification failed for '{}': {e}", self.name))?;
             return Ok(());
         }
 
@@ -733,15 +730,12 @@ impl RemoteMcpServerHandle {
             }
         }
 
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|e| {
-                format!(
-                    "Remote MCP server '{}' batch response parse error: {}",
-                    self.name, e
-                )
-            })?;
+        let body: Value = response.json().await.map_err(|e| {
+            format!(
+                "Remote MCP server '{}' batch response parse error: {}",
+                self.name, e
+            )
+        })?;
 
         // Build result map from response array.
         let mut results: HashMap<u64, Result<Value, String>> = HashMap::new();
@@ -755,10 +749,7 @@ impl RemoteMcpServerHandle {
         };
 
         for item in items {
-            let id = item
-                .get("id")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let id = item.get("id").and_then(|v| v.as_u64()).unwrap_or(0);
 
             if let Some(error) = item.get("error") {
                 let msg = error
@@ -777,14 +768,20 @@ impl RemoteMcpServerHandle {
             .map(|&id| {
                 (
                     id,
-                    results.remove(&id).unwrap_or(Err("No response for request".to_string())),
+                    results
+                        .remove(&id)
+                        .unwrap_or(Err("No response for request".to_string())),
                 )
             })
             .collect())
     }
 
     /// Call a tool on this remote server via `tools/call`.
-    pub(crate) async fn call_tool(&self, tool_name: &str, arguments: Value) -> ToolResult<ToolOutput> {
+    pub(crate) async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> ToolResult<ToolOutput> {
         // Check state.
         {
             let state = self.state.read().await;
@@ -832,7 +829,10 @@ impl RemoteMcpServerHandle {
                         .iter()
                         .filter_map(|block| {
                             if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                                block
+                                    .get("text")
+                                    .and_then(|t| t.as_str())
+                                    .map(|s| s.to_string())
                             } else {
                                 None
                             }
@@ -840,15 +840,22 @@ impl RemoteMcpServerHandle {
                         .collect();
 
                     if !texts.is_empty() {
-                        let content = truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
+                        let content =
+                            truncate_tool_result(&texts.join("\n"), MAX_TOOL_RESULT_CHARS);
                         return Ok(ToolOutput::success(content));
                     }
                 }
             }
-            return Ok(ToolOutput::success(truncate_tool_result(&result.to_string(), MAX_TOOL_RESULT_CHARS)));
+            return Ok(ToolOutput::success(truncate_tool_result(
+                &result.to_string(),
+                MAX_TOOL_RESULT_CHARS,
+            )));
         }
 
-        Ok(ToolOutput::success(truncate_tool_result(&response.to_string(), MAX_TOOL_RESULT_CHARS)))
+        Ok(ToolOutput::success(truncate_tool_result(
+            &response.to_string(),
+            MAX_TOOL_RESULT_CHARS,
+        )))
     }
 
     /// Get the current state.

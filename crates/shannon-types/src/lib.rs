@@ -99,7 +99,8 @@ mod tests {
 
     #[test]
     fn test_shannon_error_from_serde() {
-        let result: Result<serde_json::Value, serde_json::Error> = serde_json::from_str("invalid json");
+        let result: Result<serde_json::Value, serde_json::Error> =
+            serde_json::from_str("invalid json");
         let err: ShannonError = result.unwrap_err().into();
         assert!(matches!(err, ShannonError::Serialization(_)));
     }
@@ -133,7 +134,9 @@ mod tests {
     #[test]
     fn test_timestamp_rfc3339_format() {
         let ts_str = "2024-01-15T12:00:00Z";
-        let ts: Timestamp = chrono::DateTime::parse_from_rfc3339(ts_str).unwrap().with_timezone(&chrono::Utc);
+        let ts: Timestamp = chrono::DateTime::parse_from_rfc3339(ts_str)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
         let json = serde_json::to_string(&ts).unwrap();
         let parsed: Timestamp = serde_json::from_str(&json).unwrap();
         assert_eq!(ts, parsed);

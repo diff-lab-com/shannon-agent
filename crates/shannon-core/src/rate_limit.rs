@@ -160,8 +160,12 @@ impl RateLimiter {
 
         if bucket.tokens >= 1.0 {
             let remaining = bucket.tokens as usize;
-            let reset_at = bucket.last_refill + Duration::from_secs(self.config.window_seconds as u64);
-            RateLimitResult::Allowed { remaining, reset_at }
+            let reset_at =
+                bucket.last_refill + Duration::from_secs(self.config.window_seconds as u64);
+            RateLimitResult::Allowed {
+                remaining,
+                reset_at,
+            }
         } else {
             let retry_after = bucket.retry_after();
             RateLimitResult::Rejected {
@@ -179,8 +183,12 @@ impl RateLimiter {
 
         if bucket.try_consume() {
             let remaining = bucket.tokens as usize;
-            let reset_at = bucket.last_refill + Duration::from_secs(self.config.window_seconds as u64);
-            RateLimitResult::Allowed { remaining, reset_at }
+            let reset_at =
+                bucket.last_refill + Duration::from_secs(self.config.window_seconds as u64);
+            RateLimitResult::Allowed {
+                remaining,
+                reset_at,
+            }
         } else {
             let retry_after = bucket.retry_after();
             RateLimitResult::Rejected {
@@ -246,7 +254,12 @@ impl Default for ExponentialBackoff {
 
 impl ExponentialBackoff {
     /// Create a new exponential backoff strategy.
-    pub fn new(base_delay: Duration, max_delay: Duration, max_retries: usize, jitter: bool) -> Self {
+    pub fn new(
+        base_delay: Duration,
+        max_delay: Duration,
+        max_retries: usize,
+        jitter: bool,
+    ) -> Self {
         Self {
             base_delay,
             max_delay,
@@ -299,7 +312,10 @@ impl ExponentialBackoff {
 /// This ensures reproducible test behavior while still providing jitter variety.
 fn pseudo_random(seed: usize) -> f64 {
     // LCG parameters (Numerical Recipes)
-    let mut state = (seed as u64).wrapping_add(1).wrapping_mul(1664525).wrapping_add(1013904223);
+    let mut state = (seed as u64)
+        .wrapping_add(1)
+        .wrapping_mul(1664525)
+        .wrapping_add(1013904223);
     state = state.wrapping_mul(1664525).wrapping_add(1013904223);
     state = state.wrapping_mul(1664525).wrapping_add(1013904223);
     // Normalize to [0, 1)
@@ -425,8 +441,14 @@ mod tests {
     #[test]
     fn test_rate_limiter_record_rejects_when_exhausted() {
         let mut limiter = RateLimiter::with_config(RateLimitConfig::new(60, 60, 2));
-        assert!(matches!(limiter.record("key1"), RateLimitResult::Allowed { .. }));
-        assert!(matches!(limiter.record("key1"), RateLimitResult::Allowed { .. }));
+        assert!(matches!(
+            limiter.record("key1"),
+            RateLimitResult::Allowed { .. }
+        ));
+        assert!(matches!(
+            limiter.record("key1"),
+            RateLimitResult::Allowed { .. }
+        ));
         match limiter.record("key1") {
             RateLimitResult::Rejected { retry_after, limit } => {
                 assert!(retry_after > Duration::ZERO);
@@ -442,9 +464,15 @@ mod tests {
         // Exhaust key_a
         limiter.record("key_a");
         limiter.record("key_a");
-        assert!(matches!(limiter.record("key_a"), RateLimitResult::Rejected { .. }));
+        assert!(matches!(
+            limiter.record("key_a"),
+            RateLimitResult::Rejected { .. }
+        ));
         // key_b should still have tokens
-        assert!(matches!(limiter.record("key_b"), RateLimitResult::Allowed { .. }));
+        assert!(matches!(
+            limiter.record("key_b"),
+            RateLimitResult::Allowed { .. }
+        ));
         assert_eq!(limiter.key_count(), 2);
     }
 
@@ -453,7 +481,10 @@ mod tests {
         let mut limiter = RateLimiter::with_config(RateLimitConfig::new(60, 60, 2));
         limiter.record("key1");
         limiter.record("key1");
-        assert!(matches!(limiter.record("key1"), RateLimitResult::Rejected { .. }));
+        assert!(matches!(
+            limiter.record("key1"),
+            RateLimitResult::Rejected { .. }
+        ));
 
         limiter.reset("key1");
         // After reset, should have full capacity again
@@ -478,11 +509,23 @@ mod tests {
     fn test_rate_limiter_burst_handling() {
         // burst_size = 3 allows 3 rapid requests, then refill kicks in
         let mut limiter = RateLimiter::with_config(RateLimitConfig::new(10, 10, 3));
-        assert!(matches!(limiter.record("burst"), RateLimitResult::Allowed { .. }));
-        assert!(matches!(limiter.record("burst"), RateLimitResult::Allowed { .. }));
-        assert!(matches!(limiter.record("burst"), RateLimitResult::Allowed { .. }));
+        assert!(matches!(
+            limiter.record("burst"),
+            RateLimitResult::Allowed { .. }
+        ));
+        assert!(matches!(
+            limiter.record("burst"),
+            RateLimitResult::Allowed { .. }
+        ));
+        assert!(matches!(
+            limiter.record("burst"),
+            RateLimitResult::Allowed { .. }
+        ));
         // 4th should be rejected (burst exhausted, refill rate too slow for instant)
-        assert!(matches!(limiter.record("burst"), RateLimitResult::Rejected { .. }));
+        assert!(matches!(
+            limiter.record("burst"),
+            RateLimitResult::Rejected { .. }
+        ));
     }
 
     #[test]
@@ -512,12 +555,8 @@ mod tests {
 
     #[test]
     fn test_backoff_next_delay_no_jitter() {
-        let backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            5,
-            false,
-        );
+        let backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 5, false);
 
         // 2^0 = 1s
         assert_eq!(backoff.next_delay(0), Duration::from_secs(1));
@@ -533,12 +572,8 @@ mod tests {
 
     #[test]
     fn test_backoff_next_delay_with_jitter() {
-        let backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            5,
-            true,
-        );
+        let backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 5, true);
 
         // With jitter, delay should be between 50% and 100% of base
         let delay0 = backoff.next_delay(0);
@@ -565,12 +600,8 @@ mod tests {
 
     #[test]
     fn test_backoff_should_retry() {
-        let backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            3,
-            false,
-        );
+        let backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 3, false);
 
         assert!(backoff.should_retry(0));
         assert!(backoff.should_retry(1));
@@ -581,12 +612,8 @@ mod tests {
 
     #[test]
     fn test_backoff_next_delay_beyond_max_retries() {
-        let backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            3,
-            false,
-        );
+        let backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 3, false);
         // Beyond max_retries returns ZERO
         assert_eq!(backoff.next_delay(3), Duration::ZERO);
         assert_eq!(backoff.next_delay(100), Duration::ZERO);
@@ -595,12 +622,8 @@ mod tests {
     #[test]
     fn test_backoff_deterministic_jitter() {
         // Same attempt should produce same jitter (deterministic pseudo-random)
-        let backoff = ExponentialBackoff::new(
-            Duration::from_secs(1),
-            Duration::from_secs(60),
-            5,
-            true,
-        );
+        let backoff =
+            ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60), 5, true);
 
         let delay_a = backoff.next_delay(0);
         let delay_b = backoff.next_delay(0);
@@ -672,6 +695,9 @@ mod tests {
             }
         }
         // 101st should be rejected
-        assert!(matches!(limiter.record("big_burst"), RateLimitResult::Rejected { .. }));
+        assert!(matches!(
+            limiter.record("big_burst"),
+            RateLimitResult::Rejected { .. }
+        ));
     }
 }

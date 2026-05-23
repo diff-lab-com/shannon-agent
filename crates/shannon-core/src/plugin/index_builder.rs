@@ -131,8 +131,7 @@ impl IndexBuilder {
             plugins: entries.to_vec(),
         };
 
-        let json = serde_json::to_string_pretty(&index_file)
-            .map_err(PluginError::Serialization)?;
+        let json = serde_json::to_string_pretty(&index_file).map_err(PluginError::Serialization)?;
 
         // Ensure parent directory exists
         if let Some(parent) = output_path.parent() {
@@ -156,8 +155,8 @@ impl IndexBuilder {
     /// Read an existing index file.
     pub async fn read_index(path: &Path) -> PluginResult<IndexFile> {
         let content = fs::read_to_string(path).await?;
-        let index: IndexFile = serde_json::from_str(&content)
-            .map_err(PluginError::Serialization)?;
+        let index: IndexFile =
+            serde_json::from_str(&content).map_err(PluginError::Serialization)?;
         Ok(index)
     }
 
@@ -279,7 +278,9 @@ args = ["index.js"]
             },
         ];
 
-        IndexBuilder::write_index(&entries, &output_path).await.unwrap();
+        IndexBuilder::write_index(&entries, &output_path)
+            .await
+            .unwrap();
         assert!(output_path.exists());
 
         let index_file = IndexBuilder::read_index(&output_path).await.unwrap();

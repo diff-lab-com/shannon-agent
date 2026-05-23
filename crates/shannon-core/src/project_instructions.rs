@@ -108,7 +108,10 @@ pub fn load_from_directory(dir: &Path) -> Option<ProjectInstructions> {
 ///
 /// This allows the caller to specify the scope level for the starting directory,
 /// enabling proper hierarchical scoping.
-fn load_from_directory_with_scope(dir: &Path, base_scope: InstructionScope) -> Option<ProjectInstructions> {
+fn load_from_directory_with_scope(
+    dir: &Path,
+    base_scope: InstructionScope,
+) -> Option<ProjectInstructions> {
     let mut found: Vec<(PathBuf, String, InstructionScope)> = Vec::new();
 
     // Walk up from dir to root, collecting instruction files
@@ -161,10 +164,7 @@ fn load_from_directory_with_scope(dir: &Path, base_scope: InstructionScope) -> O
     let mut instruction_files: Vec<InstructionFile> = Vec::new();
 
     for (path, file_content, scope) in &found {
-        let display_name = path
-            .strip_prefix(dir)
-            .unwrap_or(path)
-            .to_string_lossy();
+        let display_name = path.strip_prefix(dir).unwrap_or(path).to_string_lossy();
         let source_dir = path.parent().unwrap_or(dir);
         let (resolved, imported) = resolve_content_imports(
             file_content,
@@ -176,7 +176,11 @@ fn load_from_directory_with_scope(dir: &Path, base_scope: InstructionScope) -> O
         all_imported_files.extend(imported);
 
         // Add scope header
-        content.push_str(&format!("## {} Scope: {} ---\n\n", scope.name(), display_name));
+        content.push_str(&format!(
+            "## {} Scope: {} ---\n\n",
+            scope.name(),
+            display_name
+        ));
         content.push_str(&resolved);
         content.push_str("\n\n");
 
@@ -331,9 +335,7 @@ fn process_import_line_inner(
 
                 // Check remaining depth
                 if remaining_depth == 0 {
-                    eprintln!(
-                        "warning: @import max depth exceeded for '{path_str}', skipping"
-                    );
+                    eprintln!("warning: @import max depth exceeded for '{path_str}', skipping");
                     result.push('@');
                     i += 1;
                     continue;
@@ -478,7 +480,9 @@ pub fn git_context(dir: &Path) -> Option<String> {
         .output()
     {
         if branch_out.status.success() {
-            let branch = String::from_utf8_lossy(&branch_out.stdout).trim().to_string();
+            let branch = String::from_utf8_lossy(&branch_out.stdout)
+                .trim()
+                .to_string();
             if !branch.is_empty() {
                 ctx.push_str(&format!("Branch: {branch}\n"));
             }
@@ -506,7 +510,9 @@ pub fn git_context(dir: &Path) -> Option<String> {
         .output()
     {
         if status_out.status.success() {
-            let status = String::from_utf8_lossy(&status_out.stdout).trim().to_string();
+            let status = String::from_utf8_lossy(&status_out.stdout)
+                .trim()
+                .to_string();
             if !status.is_empty() {
                 let count = status.lines().count();
                 ctx.push_str(&format!("Working tree: {count} changed file(s)\n"));
@@ -613,7 +619,9 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
             if local_file.is_file() {
                 if let Ok(content) = std::fs::read_to_string(&local_file) {
                     if !content.trim().is_empty() {
-                        let canonical = local_file.canonicalize().unwrap_or_else(|_| local_file.clone());
+                        let canonical = local_file
+                            .canonicalize()
+                            .unwrap_or_else(|_| local_file.clone());
                         if seen_local_paths.contains(&canonical) {
                             continue;
                         }
@@ -653,7 +661,9 @@ fn load_full_context_with_scopes(dir: &Path) -> Option<ProjectInstructions> {
         if local_file.is_file() {
             if let Ok(content) = std::fs::read_to_string(&local_file) {
                 if !content.trim().is_empty() {
-                    let canonical = local_file.canonicalize().unwrap_or_else(|_| local_file.clone());
+                    let canonical = local_file
+                        .canonicalize()
+                        .unwrap_or_else(|_| local_file.clone());
                     if seen_local_paths.contains(&canonical) {
                         continue;
                     }
@@ -796,16 +806,23 @@ pub fn get_instruction_info(dir: &Path) -> String {
     if let Some(instructions) = load_full_context_with_scopes(dir) {
         for file in &instructions.instruction_files {
             let display_path = if let Some(home) = dirs::home_dir() {
-                file.path.strip_prefix(&home).ok().and_then(|p| {
-                    if p.starts_with(".claude") {
-                        Some(format!("~/{}", p.to_string_lossy()))
-                    } else {
-                        None
-                    }
-                }).unwrap_or_else(|| {
-                    file.path.strip_prefix(dir).ok().map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_else(|| file.path.to_string_lossy().to_string())
-                })
+                file.path
+                    .strip_prefix(&home)
+                    .ok()
+                    .and_then(|p| {
+                        if p.starts_with(".claude") {
+                            Some(format!("~/{}", p.to_string_lossy()))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        file.path
+                            .strip_prefix(dir)
+                            .ok()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .unwrap_or_else(|| file.path.to_string_lossy().to_string())
+                    })
             } else {
                 file.path.to_string_lossy().to_string()
             };
@@ -933,9 +950,9 @@ impl InstructionWatcher {
 
         // Check if mtimes changed or files added/removed
         let changed = new_mtimes.len() != self.mtimes.len()
-            || new_mtimes.iter().any(|(path, mtime)| {
-                self.mtimes.get(path) != Some(mtime)
-            });
+            || new_mtimes
+                .iter()
+                .any(|(path, mtime)| self.mtimes.get(path) != Some(mtime));
 
         if !changed {
             return None;
@@ -945,9 +962,9 @@ impl InstructionWatcher {
         let changed_paths: Vec<String> = new_mtimes
             .keys()
             .filter(|p| {
-                self.mtimes.get(&**p).is_none_or(|old| {
-                    new_mtimes.get(&**p).is_some_and(|cur| cur != old)
-                })
+                self.mtimes
+                    .get(&**p)
+                    .is_none_or(|old| new_mtimes.get(&**p).is_some_and(|cur| cur != old))
             })
             .map(|p| p.to_string_lossy().to_string())
             .collect();
@@ -1053,7 +1070,10 @@ mod tests {
         assert!(ctx.is_some(), "Should get git context in a git repo");
         let ctx = ctx.unwrap();
         assert!(ctx.contains("Branch"), "Should contain branch info");
-        assert!(ctx.contains("Recent commits"), "Should contain recent commits");
+        assert!(
+            ctx.contains("Recent commits"),
+            "Should contain recent commits"
+        );
     }
 
     #[test]
@@ -1070,7 +1090,10 @@ mod tests {
         // Running in shannon-code repo: both instructions and git context should load
         let cwd = std::env::current_dir().unwrap();
         let result = load_full_context(&cwd);
-        assert!(result.is_some(), "Should load full context in shannon-code repo");
+        assert!(
+            result.is_some(),
+            "Should load full context in shannon-code repo"
+        );
         let instr = result.unwrap();
         // Should have either CLAUDE.md or git context (or both)
         assert!(
@@ -1100,7 +1123,10 @@ mod tests {
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("CLAUDE.md"), "# Test instructions").unwrap();
         let result = load_full_context(&tmp);
-        assert!(result.is_some(), "Should load instructions even without git");
+        assert!(
+            result.is_some(),
+            "Should load instructions even without git"
+        );
         let instr = result.unwrap();
         assert!(instr.content.contains("Test instructions"));
         assert!(instr.loaded_files.contains(&"CLAUDE.md".to_string()));
@@ -1188,7 +1214,10 @@ mod tests {
             .iter()
             .filter(|f| f.contains("a.md"))
             .count();
-        assert_eq!(a_count, 1, "a.md should appear exactly once in imported_files");
+        assert_eq!(
+            a_count, 1,
+            "a.md should appear exactly once in imported_files"
+        );
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -1222,11 +1251,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&tmp).unwrap();
         fs::write(tmp.join("rules.md"), "Secret rules.").unwrap();
-        fs::write(
-            tmp.join("CLAUDE.md"),
-            "# Project\n\n```\n@rules.md\n```\n",
-        )
-        .unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n```\n@rules.md\n```\n").unwrap();
 
         let result = load_from_directory(&tmp).unwrap();
         // The @rules.md inside code block should NOT be resolved
@@ -1257,13 +1282,8 @@ mod tests {
         fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@big.md\n").unwrap();
 
         // Resolve with a very small size limit (50 bytes)
-        let (resolved, imported) = resolve_content_imports(
-            "@big.md\n",
-            &tmp,
-            &tmp,
-            DEFAULT_MAX_IMPORT_DEPTH,
-            50,
-        );
+        let (resolved, imported) =
+            resolve_content_imports("@big.md\n", &tmp, &tmp, DEFAULT_MAX_IMPORT_DEPTH, 50);
         // The file is too large to import under the 50-byte limit
         assert!(
             !resolved.contains("XXX"),
@@ -1280,11 +1300,7 @@ mod tests {
         fs::create_dir_all(&subdir).unwrap();
         // Write a file outside the project dir
         fs::write(tmp.join("secret.txt"), "secret data").unwrap();
-        fs::write(
-            subdir.join("CLAUDE.md"),
-            "# Project\n\n@../secret.txt\n",
-        )
-        .unwrap();
+        fs::write(subdir.join("CLAUDE.md"), "# Project\n\n@../secret.txt\n").unwrap();
 
         let result = load_from_directory(&subdir).unwrap();
         // Path traversal should be rejected
@@ -1342,11 +1358,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("shannon-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(tmp.join("docs")).unwrap();
         fs::write(tmp.join("docs/guide.md"), "Guide content.").unwrap();
-        fs::write(
-            tmp.join("CLAUDE.md"),
-            "# Project\n\n@docs/guide.md\n",
-        )
-        .unwrap();
+        fs::write(tmp.join("CLAUDE.md"), "# Project\n\n@docs/guide.md\n").unwrap();
 
         let result = load_from_directory(&tmp).unwrap();
         assert!(
@@ -1355,9 +1367,7 @@ mod tests {
             result.content
         );
         assert!(
-            result.imported_files
-                .iter()
-                .any(|f| f.contains("guide.md")),
+            result.imported_files.iter().any(|f| f.contains("guide.md")),
             "guide.md in imported_files"
         );
         let _ = fs::remove_dir_all(&tmp);
@@ -1410,10 +1420,7 @@ mod tests {
 
         // With max depth 5, should get several levels deep but not infinite loop
         let result = load_from_directory(&tmp).unwrap();
-        assert!(
-            result.content.contains("Level A"),
-            "Should contain A"
-        );
+        assert!(result.content.contains("Level A"), "Should contain A");
         // The key is that we don't infinite loop and don't panic
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -1434,7 +1441,11 @@ mod tests {
 
         // Write local .shannon/CLAUDE.md
         fs::create_dir_all(tmp.join(".shannon")).unwrap();
-        fs::write(tmp.join(".shannon/CLAUDE.md"), "# Local shannon instructions").unwrap();
+        fs::write(
+            tmp.join(".shannon/CLAUDE.md"),
+            "# Local shannon instructions",
+        )
+        .unwrap();
 
         // Write CLAUDE.local.md at project root
         fs::write(tmp.join("CLAUDE.local.md"), "# Local file instructions").unwrap();
@@ -1444,7 +1455,8 @@ mod tests {
         let instr = result.unwrap();
 
         // Collect scopes of all instruction files
-        let scopes: Vec<InstructionScope> = instr.instruction_files.iter().map(|f| f.scope).collect();
+        let scopes: Vec<InstructionScope> =
+            instr.instruction_files.iter().map(|f| f.scope).collect();
 
         // Verify that Project scope exists (from CLAUDE.md at root)
         assert!(
@@ -1453,7 +1465,10 @@ mod tests {
         );
 
         // Verify that Local scope exists (from .claude/, .shannon/, and CLAUDE.local.md)
-        let local_count = scopes.iter().filter(|s| **s == InstructionScope::Local).count();
+        let local_count = scopes
+            .iter()
+            .filter(|s| **s == InstructionScope::Local)
+            .count();
         assert!(
             local_count >= 1,
             "Should have at least one Local scope entry: {scopes:?}"

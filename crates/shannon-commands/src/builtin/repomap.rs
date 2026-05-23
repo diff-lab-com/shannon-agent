@@ -1,6 +1,8 @@
 //! /repomap command - Generate repository map with code symbols
 
-use crate::command::{Command, CommandBase, CommandSource, PromptCommand, ExecutionContext, CommandAvailability};
+use crate::command::{
+    Command, CommandAvailability, CommandBase, CommandSource, ExecutionContext, PromptCommand,
+};
 
 /// Repository map prompt template
 const REPOMAP_PROMPT: &str = r##"

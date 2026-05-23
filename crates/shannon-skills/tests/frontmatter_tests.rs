@@ -11,7 +11,7 @@
 //! - Shell field parsing
 
 use shannon_skills::frontmatter::{
-    parse_skill_frontmatter, ArgumentConfig, EffortLevel, ExecutionContext,
+    ArgumentConfig, EffortLevel, ExecutionContext, parse_skill_frontmatter,
 };
 use std::str::FromStr;
 
@@ -51,11 +51,24 @@ Generate a conventional commit message."#;
     let fm = &parsed.frontmatter;
 
     assert_eq!(fm.name, Some("commit".to_string()));
-    assert_eq!(fm.description, Some("Generate conventional commits".to_string()));
+    assert_eq!(
+        fm.description,
+        Some("Generate conventional commits".to_string())
+    );
     assert_eq!(fm.aliases, Some(vec!["ci".to_string(), "c".to_string()]));
-    assert_eq!(fm.when_to_use, Some("when you need to commit changes".to_string()));
+    assert_eq!(
+        fm.when_to_use,
+        Some("when you need to commit changes".to_string())
+    );
     assert_eq!(fm.argument_hint, Some("<message>".to_string()));
-    assert_eq!(fm.allowed_tools, Some(vec!["bash".to_string(), "read".to_string(), "write".to_string()]));
+    assert_eq!(
+        fm.allowed_tools,
+        Some(vec![
+            "bash".to_string(),
+            "read".to_string(),
+            "write".to_string()
+        ])
+    );
     assert_eq!(fm.model, Some("sonnet".to_string()));
     assert_eq!(fm.disable_model_invocation, Some(false));
     assert_eq!(fm.user_invocable, Some(true));
@@ -139,7 +152,10 @@ Body content."#;
 
     assert_eq!(
         hooks.pre_sampling,
-        Some(vec!["check-prerequisites".to_string(), "validate-args".to_string()])
+        Some(vec![
+            "check-prerequisites".to_string(),
+            "validate-args".to_string()
+        ])
     );
     assert_eq!(
         hooks.post_sampling,
@@ -244,11 +260,20 @@ Body here."#;
 
 #[test]
 fn test_effort_level_from_str() {
-    assert_eq!(EffortLevel::from_str("minimal").unwrap(), EffortLevel::Minimal);
+    assert_eq!(
+        EffortLevel::from_str("minimal").unwrap(),
+        EffortLevel::Minimal
+    );
     assert_eq!(EffortLevel::from_str("low").unwrap(), EffortLevel::Low);
-    assert_eq!(EffortLevel::from_str("medium").unwrap(), EffortLevel::Medium);
+    assert_eq!(
+        EffortLevel::from_str("medium").unwrap(),
+        EffortLevel::Medium
+    );
     assert_eq!(EffortLevel::from_str("high").unwrap(), EffortLevel::High);
-    assert_eq!(EffortLevel::from_str("maximum").unwrap(), EffortLevel::Maximum);
+    assert_eq!(
+        EffortLevel::from_str("maximum").unwrap(),
+        EffortLevel::Maximum
+    );
     assert!(EffortLevel::from_str("invalid").is_err());
 }
 
@@ -256,7 +281,10 @@ fn test_effort_level_from_str() {
 fn test_effort_level_case_insensitive() {
     assert_eq!(EffortLevel::from_str("High").unwrap(), EffortLevel::High);
     assert_eq!(EffortLevel::from_str("LOW").unwrap(), EffortLevel::Low);
-    assert_eq!(EffortLevel::from_str("Medium").unwrap(), EffortLevel::Medium);
+    assert_eq!(
+        EffortLevel::from_str("Medium").unwrap(),
+        EffortLevel::Medium
+    );
 }
 
 #[test]

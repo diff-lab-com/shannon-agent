@@ -114,7 +114,12 @@ pub struct SettingOverride {
 
 impl SettingOverride {
     /// Create a new setting override.
-    pub fn new(key: &str, value: &str, source: SettingSource, priority: i32) -> Result<Self, RemoteSettingsError> {
+    pub fn new(
+        key: &str,
+        value: &str,
+        source: SettingSource,
+        priority: i32,
+    ) -> Result<Self, RemoteSettingsError> {
         if !(0..=100).contains(&priority) {
             return Err(RemoteSettingsError::InvalidPriority(priority));
         }
@@ -216,17 +221,29 @@ impl RemoteManagedSettings {
 
     /// Set a local setting override.
     pub fn set_local(&mut self, key: &str, value: &str) {
-        self.insert_override(SettingOverride::with_defaults(key, value, SettingSource::Local));
+        self.insert_override(SettingOverride::with_defaults(
+            key,
+            value,
+            SettingSource::Local,
+        ));
     }
 
     /// Set an organization-level setting override.
     pub fn set_org(&mut self, key: &str, value: &str) {
-        self.insert_override(SettingOverride::with_defaults(key, value, SettingSource::Org));
+        self.insert_override(SettingOverride::with_defaults(
+            key,
+            value,
+            SettingSource::Org,
+        ));
     }
 
     /// Set a remote setting override.
     pub fn set_remote(&mut self, key: &str, value: &str) {
-        self.insert_override(SettingOverride::with_defaults(key, value, SettingSource::Remote));
+        self.insert_override(SettingOverride::with_defaults(
+            key,
+            value,
+            SettingSource::Remote,
+        ));
     }
 
     /// Set a setting override with explicit priority and optional expiry.
@@ -275,7 +292,8 @@ impl RemoteManagedSettings {
     pub fn active_overrides(&self, key: &str) -> Vec<&SettingOverride> {
         match self.overrides.get(key) {
             Some(all) => {
-                let mut active: Vec<&SettingOverride> = all.iter().filter(|o| !o.is_expired()).collect();
+                let mut active: Vec<&SettingOverride> =
+                    all.iter().filter(|o| !o.is_expired()).collect();
                 active.sort_by(|a, b| b.priority.cmp(&a.priority));
                 active
             }
@@ -366,8 +384,7 @@ impl RemoteManagedSettings {
     /// Export all overrides as a JSON string.
     pub fn export(&self) -> Result<String, RemoteSettingsError> {
         let all: Vec<&SettingOverride> = self.overrides.values().flatten().collect();
-        serde_json::to_string(&all)
-            .map_err(|e| RemoteSettingsError::Serialization(e.to_string()))
+        serde_json::to_string(&all).map_err(|e| RemoteSettingsError::Serialization(e.to_string()))
     }
 
     /// Import overrides from a JSON string.
@@ -422,7 +439,9 @@ impl RemoteSettingsProvider for MockRemoteSettingsProvider {
         self.fetch_count
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if !self.available {
-            return Err(RemoteSettingsError::FetchError("Provider unavailable".to_string()));
+            return Err(RemoteSettingsError::FetchError(
+                "Provider unavailable".to_string(),
+            ));
         }
         Ok(self.settings.clone())
     }
@@ -508,7 +527,8 @@ mod tests {
         let mut settings = RemoteManagedSettings::new();
 
         // Local with high custom priority should beat org default
-        let high_local = SettingOverride::new("key", "high_local", SettingSource::Local, 80).unwrap();
+        let high_local =
+            SettingOverride::new("key", "high_local", SettingSource::Local, 80).unwrap();
         settings.set_override(high_local);
         settings.set_org("key", "org_val");
 

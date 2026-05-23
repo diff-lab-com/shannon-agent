@@ -177,7 +177,12 @@ pub struct TranscriptionResult {
 
 impl TranscriptionResult {
     /// Create a new transcription result.
-    pub fn new(text: impl Into<String>, confidence: f32, language: impl Into<String>, duration_ms: u64) -> Self {
+    pub fn new(
+        text: impl Into<String>,
+        confidence: f32,
+        language: impl Into<String>,
+        duration_ms: u64,
+    ) -> Self {
         Self {
             text: text.into(),
             confidence: confidence.clamp(0.0, 1.0),
@@ -498,7 +503,10 @@ impl VoiceModeService {
     // -- Command processing --------------------------------------------------
 
     /// Process a voice command.
-    pub fn process_command(&mut self, command: VoiceCommand) -> Result<VoiceCommandResult, VoiceError> {
+    pub fn process_command(
+        &mut self,
+        command: VoiceCommand,
+    ) -> Result<VoiceCommandResult, VoiceError> {
         if !self.active && !matches!(command, VoiceCommand::GetStatus) {
             return Err(VoiceError::NotEnabled);
         }
@@ -528,7 +536,9 @@ impl VoiceModeService {
             }
         }
 
-        let session = self.session.get_or_insert_with(|| VoiceSession::new(self.config.clone()));
+        let session = self
+            .session
+            .get_or_insert_with(|| VoiceSession::new(self.config.clone()));
         session.status = VoiceStatus::Listening;
 
         Ok(VoiceCommandResult::Started {
@@ -605,7 +615,11 @@ impl VoiceModeService {
         let action = self.keyword_spotter.detect_command(&result.text);
 
         // If a wake word is present, strip it before storing
-        let text = if self.keyword_spotter.detect_wake_word(&result.text).is_some() {
+        let text = if self
+            .keyword_spotter
+            .detect_wake_word(&result.text)
+            .is_some()
+        {
             let stripped = self.keyword_spotter.strip_wake_words(&result.text);
             if stripped.is_empty() {
                 // Text was only a wake word, skip storing
@@ -832,10 +846,7 @@ mod tests {
             spotter.strip_wake_words("shannon, hello world"),
             "hello world"
         );
-        assert_eq!(
-            spotter.strip_wake_words("just some text"),
-            "just some text"
-        );
+        assert_eq!(spotter.strip_wake_words("just some text"), "just some text");
     }
 
     #[test]
@@ -860,7 +871,9 @@ mod tests {
         let mut service = VoiceModeService::new(cfg);
 
         // Start listening
-        let result = service.process_command(VoiceCommand::StartListening).unwrap();
+        let result = service
+            .process_command(VoiceCommand::StartListening)
+            .unwrap();
         match result {
             VoiceCommandResult::Started { session_id } => {
                 assert!(service.current_session().is_some());
@@ -875,7 +888,9 @@ mod tests {
             .unwrap();
 
         // Stop listening
-        let result = service.process_command(VoiceCommand::StopListening).unwrap();
+        let result = service
+            .process_command(VoiceCommand::StopListening)
+            .unwrap();
         match result {
             VoiceCommandResult::Stopped { text, .. } => {
                 assert_eq!(text, "hello");
@@ -889,7 +904,9 @@ mod tests {
         let cfg = VoiceConfig::default().enabled();
         let mut service = VoiceModeService::new(cfg);
 
-        service.process_command(VoiceCommand::StartListening).unwrap();
+        service
+            .process_command(VoiceCommand::StartListening)
+            .unwrap();
         assert!(service.current_session().is_some());
 
         service.process_command(VoiceCommand::Cancel).unwrap();
@@ -940,7 +957,9 @@ mod tests {
         let cfg = VoiceConfig::default().enabled();
         let mut service = VoiceModeService::new(cfg);
 
-        service.process_command(VoiceCommand::StartListening).unwrap();
+        service
+            .process_command(VoiceCommand::StartListening)
+            .unwrap();
         let err = service
             .process_command(VoiceCommand::StartListening)
             .unwrap_err();
@@ -977,7 +996,9 @@ mod tests {
             ..VoiceConfig::default()
         };
         let mut service = VoiceModeService::new(cfg);
-        service.process_command(VoiceCommand::StartListening).unwrap();
+        service
+            .process_command(VoiceCommand::StartListening)
+            .unwrap();
 
         // Low confidence should fail
         let err = service
@@ -996,7 +1017,9 @@ mod tests {
     fn test_voice_service_command_detection() {
         let cfg = VoiceConfig::default().enabled();
         let mut service = VoiceModeService::new(cfg);
-        service.process_command(VoiceCommand::StartListening).unwrap();
+        service
+            .process_command(VoiceCommand::StartListening)
+            .unwrap();
 
         // Feed text with a command keyword
         let action = service
@@ -1009,11 +1032,18 @@ mod tests {
     fn test_voice_service_wake_word_stripped() {
         let cfg = VoiceConfig::default().enabled();
         let mut service = VoiceModeService::new(cfg);
-        service.process_command(VoiceCommand::StartListening).unwrap();
+        service
+            .process_command(VoiceCommand::StartListening)
+            .unwrap();
 
         // Feed text with wake word -- it should be stripped
         service
-            .feed_transcription(TranscriptionResult::new("Hey Shannon, run tests", 0.9, "en", 500))
+            .feed_transcription(TranscriptionResult::new(
+                "Hey Shannon, run tests",
+                0.9,
+                "en",
+                500,
+            ))
             .unwrap();
         assert_eq!(service.combined_text().unwrap(), "run tests");
     }
@@ -1027,7 +1057,9 @@ mod tests {
         assert!(service.is_enabled());
         assert!(!service.is_listening());
 
-        service.process_command(VoiceCommand::StartListening).unwrap();
+        service
+            .process_command(VoiceCommand::StartListening)
+            .unwrap();
         assert_eq!(service.status(), VoiceStatus::Listening);
         assert!(service.is_listening());
 
@@ -1080,7 +1112,8 @@ mod tests {
 
         session.add_transcription(TranscriptionResult::new("hel", 0.5, "en", 100).interim());
         session.add_transcription(TranscriptionResult::new("hello", 0.9, "en", 200));
-        session.add_transcription(TranscriptionResult::new("hello world", 0.92, "en", 400).interim());
+        session
+            .add_transcription(TranscriptionResult::new("hello world", 0.92, "en", 400).interim());
 
         // Only final transcriptions should be in combined text
         assert_eq!(session.combined_text, "hello");
