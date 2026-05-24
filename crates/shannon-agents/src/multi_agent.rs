@@ -1453,8 +1453,9 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_executor_receives_system_prompt() {
         let executor = Arc::new(RecordingMockExecutor::new());
-        let config = MultiAgentConfig::new(vec![AgentConfig::new("a", "do stuff")
-            .with_system_prompt("custom system prompt")]);
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "do stuff").with_system_prompt("custom system prompt"),
+        ]);
 
         let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
         assert!(result.all_succeeded());
@@ -1480,9 +1481,10 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_agent_system_prompt_overrides_default() {
         let executor = Arc::new(RecordingMockExecutor::new());
-        let config = MultiAgentConfig::new(vec![AgentConfig::new("a", "task")
-            .with_system_prompt("agent-specific prompt")])
-            .with_default_system_prompt("default prompt");
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task").with_system_prompt("agent-specific prompt"),
+        ])
+        .with_default_system_prompt("default prompt");
 
         let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
         assert!(result.all_succeeded());
@@ -1502,10 +1504,7 @@ mod tests {
         let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
         assert_eq!(result.failure_count, 1);
         assert_eq!(result.success_count, 0);
-        assert_eq!(
-            result.agent_results[0].status,
-            AgentResultStatus::Failed
-        );
+        assert_eq!(result.agent_results[0].status, AgentResultStatus::Failed);
         assert_eq!(
             result.agent_results[0].error.as_deref(),
             Some("something went wrong")
@@ -1532,19 +1531,21 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_slow_agent_times_out() {
         // Executor that sleeps for 500ms, but timeout is 50ms
-        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_millis(500)));
+        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_millis(
+            500,
+        )));
         let config = MultiAgentConfig::new(vec![AgentConfig::new("slow", "slow task")])
             .with_timeout(Duration::from_millis(50));
 
         let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
         assert_eq!(result.failure_count, 1);
         assert_eq!(result.success_count, 0);
-        assert_eq!(
-            result.agent_results[0].status,
-            AgentResultStatus::Timeout
-        );
+        assert_eq!(result.agent_results[0].status, AgentResultStatus::Timeout);
         let err = result.agent_results[0].error.as_deref().unwrap();
-        assert!(err.contains("timeout"), "expected timeout in error, got: {err}");
+        assert!(
+            err.contains("timeout"),
+            "expected timeout in error, got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -1609,8 +1610,10 @@ mod tests {
         let statuses: Vec<&AgentResultStatus> =
             result.agent_results.iter().map(|r| &r.status).collect();
         assert!(statuses.contains(&&AgentResultStatus::Failed));
-        assert!(statuses.contains(&&AgentResultStatus::Skipped)
-            || statuses.contains(&&AgentResultStatus::Failed));
+        assert!(
+            statuses.contains(&&AgentResultStatus::Skipped)
+                || statuses.contains(&&AgentResultStatus::Failed)
+        );
     }
 
     #[tokio::test]
@@ -1629,7 +1632,10 @@ mod tests {
         // 'a' fails, 'b' and 'c' should be skipped or failed
         assert_eq!(result.success_count, 0);
         assert!(
-            result.agent_results.iter().any(|r| r.status == AgentResultStatus::Skipped),
+            result
+                .agent_results
+                .iter()
+                .any(|r| r.status == AgentResultStatus::Skipped),
             "at least one agent should be skipped in fail-fast chain"
         );
     }
@@ -1647,10 +1653,12 @@ mod tests {
         // Both should be attempted (both fail because of the executor)
         assert_eq!(result.failure_count, 2);
         // None should be skipped since there are no deps and fail_fast is off
-        assert!(result
-            .agent_results
-            .iter()
-            .all(|r| r.status == AgentResultStatus::Failed));
+        assert!(
+            result
+                .agent_results
+                .iter()
+                .all(|r| r.status == AgentResultStatus::Failed)
+        );
     }
 
     // ---- Dependency propagation tests ----
@@ -1667,15 +1675,9 @@ mod tests {
         let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
         assert_eq!(result.agent_results.len(), 2);
         // root fails
-        assert_eq!(
-            result.agent_results[0].status,
-            AgentResultStatus::Failed
-        );
+        assert_eq!(result.agent_results[0].status, AgentResultStatus::Failed);
         // child should be skipped because its dependency failed
-        assert_eq!(
-            result.agent_results[1].status,
-            AgentResultStatus::Skipped
-        );
+        assert_eq!(result.agent_results[1].status, AgentResultStatus::Skipped);
     }
 
     #[tokio::test]
@@ -1725,10 +1727,26 @@ mod tests {
         let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
         assert_eq!(result.agent_results.len(), 4);
 
-        let root_result = result.agent_results.iter().find(|r| r.agent_name == "root").unwrap();
-        let left_result = result.agent_results.iter().find(|r| r.agent_name == "left").unwrap();
-        let right_result = result.agent_results.iter().find(|r| r.agent_name == "right").unwrap();
-        let join_result = result.agent_results.iter().find(|r| r.agent_name == "join").unwrap();
+        let root_result = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "root")
+            .unwrap();
+        let left_result = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "left")
+            .unwrap();
+        let right_result = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "right")
+            .unwrap();
+        let join_result = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "join")
+            .unwrap();
 
         assert_eq!(root_result.status, AgentResultStatus::Completed);
         assert_eq!(left_result.status, AgentResultStatus::Completed);
@@ -1795,7 +1813,9 @@ mod tests {
     async fn test_spawn_parallel_agents_in_same_wave_execute_concurrently() {
         // Two independent agents with a small delay -- verify they overlap
         // by checking total time is less than sum of individual delays.
-        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_millis(100)));
+        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_millis(
+            100,
+        )));
         let config = MultiAgentConfig::new(vec![
             AgentConfig::new("a", "task a"),
             AgentConfig::new("b", "task b"),
@@ -1904,14 +1924,18 @@ mod tests {
             AgentConfig::new("c", "tc").depends_on("b"),
         ];
         let result = topological_sort(&agents);
-        assert!(matches!(result, Err(DependencyError::CircularDependency(cycle)) if cycle.len() == 3));
+        assert!(
+            matches!(result, Err(DependencyError::CircularDependency(cycle)) if cycle.len() == 3)
+        );
     }
 
     #[test]
     fn test_topological_sort_multiple_unknown_deps() {
-        let agents = vec![AgentConfig::new("a", "ta")
-            .depends_on("ghost1")
-            .depends_on("ghost2")];
+        let agents = vec![
+            AgentConfig::new("a", "ta")
+                .depends_on("ghost1")
+                .depends_on("ghost2"),
+        ];
         let result = topological_sort(&agents);
         // Should fail on the first unknown dep encountered
         assert!(matches!(result, Err(DependencyError::UnknownDependency(_))));
@@ -1978,7 +2002,13 @@ mod tests {
         let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
         let failed = &result.agent_results[0];
         assert_eq!(failed.status, AgentResultStatus::Failed);
-        assert!(failed.error.as_deref().unwrap().contains("specific error XYZ"));
+        assert!(
+            failed
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("specific error XYZ")
+        );
         assert!(failed.output.is_none());
     }
 
@@ -1991,7 +2021,11 @@ mod tests {
         ]);
 
         let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
-        let child = result.agent_results.iter().find(|r| r.agent_name == "child").unwrap();
+        let child = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "child")
+            .unwrap();
         assert_eq!(child.status, AgentResultStatus::Skipped);
         assert!(child.error.as_deref().unwrap().contains("skipped"));
         assert!(child.output.is_none());

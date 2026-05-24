@@ -2131,7 +2131,12 @@ mod tests {
     fn test_validate_git_arg_rejects_dash_prefix() {
         let result = validate_git_arg("--flag");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must not start with"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must not start with")
+        );
     }
 
     #[test]
@@ -2287,7 +2292,13 @@ mod tests {
 
         let result = current_branch(Some(cwd.to_str().unwrap()));
         // Fresh repo without commits may return error or a branch name depending on git version
-        assert!(result.is_ok() || result.unwrap_err().to_string().contains("Failed to determine"));
+        assert!(
+            result.is_ok()
+                || result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to determine")
+        );
     }
 
     #[test]
@@ -2295,7 +2306,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2307,7 +2322,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("README.md"), "hello").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2326,7 +2345,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2338,7 +2361,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2353,7 +2380,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2365,7 +2396,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2381,7 +2416,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2393,7 +2432,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2408,8 +2451,7 @@ mod tests {
 
     #[test]
     fn test_run_git_invalid_subcommand() {
-        let (stdout, stderr, success) =
-            run_git(&["nonexistent-command-xyz"], None).unwrap();
+        let (stdout, stderr, success) = run_git(&["nonexistent-command-xyz"], None).unwrap();
         assert!(!success);
         assert!(!stderr.is_empty() || !stdout.is_empty());
     }
@@ -2431,7 +2473,11 @@ mod tests {
         // Set up a git repo so find_git_root succeeds, then create without name
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2443,7 +2489,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2455,14 +2505,23 @@ mod tests {
         let tool = GitBranchTool::new();
         let result = tool.execute(json!({"action": "create"})).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Branch name is required"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Branch name is required")
+        );
     }
 
     #[tokio::test]
     async fn test_git_branch_switch_without_name() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2474,7 +2533,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2486,14 +2549,23 @@ mod tests {
         let tool = GitBranchTool::new();
         let result = tool.execute(json!({"action": "switch"})).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Branch name is required"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Branch name is required")
+        );
     }
 
     #[tokio::test]
     async fn test_git_branch_delete_without_name() {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2505,7 +2577,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2517,7 +2593,12 @@ mod tests {
         let tool = GitBranchTool::new();
         let result = tool.execute(json!({"action": "delete"})).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Branch name is required"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Branch name is required")
+        );
     }
 
     #[tokio::test]
@@ -2543,7 +2624,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2555,7 +2640,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2570,7 +2659,12 @@ mod tests {
             .execute(json!({"action": "delete", "name": branch}))
             .await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Cannot delete the current branch"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot delete the current branch")
+        );
     }
 
     #[tokio::test]
@@ -2578,7 +2672,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2590,7 +2688,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2610,7 +2712,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2622,7 +2728,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2659,7 +2769,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2671,7 +2785,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2694,7 +2812,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2706,7 +2828,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2830,7 +2956,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2842,7 +2972,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2863,7 +2997,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -2875,7 +3013,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -2991,7 +3133,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
 
         std::env::set_current_dir(cwd).unwrap();
 
@@ -3006,7 +3152,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3018,7 +3168,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial commit"])
             .current_dir(cwd)
@@ -3041,7 +3195,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3053,7 +3211,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "日本語コミットメッセージ"])
             .current_dir(cwd)
@@ -3076,7 +3238,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "unique@author.com"])
             .current_dir(cwd)
@@ -3088,7 +3254,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "commit by unique"])
             .current_dir(cwd)
@@ -3123,7 +3293,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3135,7 +3309,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3156,7 +3334,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3168,7 +3350,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3188,7 +3374,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3200,7 +3390,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3230,7 +3424,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3242,7 +3440,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3252,7 +3454,10 @@ mod tests {
         std::env::set_current_dir(cwd).unwrap();
 
         let tool = GitStashTool::new();
-        let result = tool.execute(json!({"action": "pop", "index": 99})).await.unwrap();
+        let result = tool
+            .execute(json!({"action": "pop", "index": 99}))
+            .await
+            .unwrap();
         assert!(result.is_error);
         assert!(result.content.contains("Failed to pop stash"));
     }
@@ -3262,7 +3467,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3274,7 +3483,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3284,7 +3497,10 @@ mod tests {
         std::env::set_current_dir(cwd).unwrap();
 
         let tool = GitStashTool::new();
-        let result = tool.execute(json!({"action": "drop", "index": 5})).await.unwrap();
+        let result = tool
+            .execute(json!({"action": "drop", "index": 5}))
+            .await
+            .unwrap();
         assert!(result.is_error);
     }
 
@@ -3293,7 +3509,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3305,7 +3525,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3315,7 +3539,10 @@ mod tests {
         std::env::set_current_dir(cwd).unwrap();
 
         let tool = GitStashTool::new();
-        let result = tool.execute(json!({"action": "apply", "index": 42})).await.unwrap();
+        let result = tool
+            .execute(json!({"action": "apply", "index": 42}))
+            .await
+            .unwrap();
         assert!(result.is_error);
     }
 
@@ -3324,7 +3551,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3336,7 +3567,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3498,14 +3733,8 @@ mod tests {
             AutoCommitTool::detect_commit_type(&["test/helper.js"]),
             "test"
         );
-        assert_eq!(
-            AutoCommitTool::detect_commit_type(&["foo.test.ts"]),
-            "test"
-        );
-        assert_eq!(
-            AutoCommitTool::detect_commit_type(&["bar_test.py"]),
-            "test"
-        );
+        assert_eq!(AutoCommitTool::detect_commit_type(&["foo.test.ts"]), "test");
+        assert_eq!(AutoCommitTool::detect_commit_type(&["bar_test.py"]), "test");
     }
 
     #[test]
@@ -3523,10 +3752,7 @@ mod tests {
             AutoCommitTool::detect_commit_type(&["styles/main.css"]),
             "style"
         );
-        assert_eq!(
-            AutoCommitTool::detect_commit_type(&["theme.scss"]),
-            "style"
-        );
+        assert_eq!(AutoCommitTool::detect_commit_type(&["theme.scss"]), "style");
     }
 
     #[test]
@@ -3599,7 +3825,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3611,7 +3841,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3631,7 +3865,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3643,7 +3881,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3674,7 +3916,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3686,7 +3932,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3718,7 +3968,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3731,7 +3985,11 @@ mod tests {
             .expect("git config");
         std::fs::write(cwd.join("a.txt"), "a").unwrap();
         std::fs::write(cwd.join("b.txt"), "b").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)
@@ -3797,7 +4055,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cwd = tmp.path();
 
-        Command::new("git").args(["init"]).current_dir(cwd).output().expect("git init");
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
         Command::new("git")
             .args(["config", "user.email", "test@test.com"])
             .current_dir(cwd)
@@ -3809,7 +4071,11 @@ mod tests {
             .output()
             .expect("git config");
         std::fs::write(cwd.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(cwd).output().expect("git add");
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
         Command::new("git")
             .args(["commit", "-m", "initial"])
             .current_dir(cwd)

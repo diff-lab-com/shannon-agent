@@ -1795,7 +1795,10 @@ mod tests {
 
     #[test]
     fn test_endpoint_remaining_providers() {
-        assert_eq!(LlmProvider::OpenRouter.endpoint(), "/api/v1/chat/completions");
+        assert_eq!(
+            LlmProvider::OpenRouter.endpoint(),
+            "/api/v1/chat/completions"
+        );
         assert_eq!(LlmProvider::Cohere.endpoint(), "/v2/chat");
         assert_eq!(LlmProvider::Fireworks.endpoint(), "/v1/chat/completions");
         assert_eq!(LlmProvider::Perplexity.endpoint(), "/chat/completions");
@@ -1804,14 +1807,23 @@ mod tests {
         assert_eq!(LlmProvider::Cloudflare.endpoint(), "/client/v4/accounts/");
         assert_eq!(LlmProvider::Replicate.endpoint(), "/v1/predictions");
         assert_eq!(LlmProvider::SiliconFlow.endpoint(), "/v1/chat/completions");
-        assert_eq!(LlmProvider::Zhipu.endpoint(), "/api/paas/v4/chat/completions");
+        assert_eq!(
+            LlmProvider::Zhipu.endpoint(),
+            "/api/paas/v4/chat/completions"
+        );
         assert_eq!(
             LlmProvider::ZhipuInternational.endpoint(),
             "/api/paas/v4/chat/completions"
         );
         assert_eq!(LlmProvider::Moonshot.endpoint(), "/v1/chat/completions");
-        assert_eq!(LlmProvider::Minimax.endpoint(), "/v1/text/chatcompletion_v2");
-        assert_eq!(LlmProvider::DashScope.endpoint(), "/compatible-mode/v1/chat/completions");
+        assert_eq!(
+            LlmProvider::Minimax.endpoint(),
+            "/v1/text/chatcompletion_v2"
+        );
+        assert_eq!(
+            LlmProvider::DashScope.endpoint(),
+            "/compatible-mode/v1/chat/completions"
+        );
     }
 
     #[test]
@@ -2044,7 +2056,10 @@ mod tests {
             reasoning_effort: None,
         };
         let err = cfg.validate().unwrap_err();
-        assert!(err.contains("base_url"), "error should mention base_url: {err}");
+        assert!(
+            err.contains("base_url"),
+            "error should mention base_url: {err}"
+        );
         assert!(!cfg.is_configured());
     }
 

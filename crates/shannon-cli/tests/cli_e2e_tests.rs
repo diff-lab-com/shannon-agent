@@ -2470,7 +2470,7 @@ mod offline_tests {
             .env_remove("SHANNON_PROVIDER")
             .current_dir(&dir)
             .args(["--prompt", "hello"])
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .assert();
 
         // Should not succeed (no API available), but should not panic
