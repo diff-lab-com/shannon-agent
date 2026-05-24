@@ -98,10 +98,18 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Performance benchmarks**: `criterion` benchmarks for compact engine, file edit, repomap generation, and context budget calculation across relevant crate sizes.
 - **Tool result cache**: `ToolResultCache` with TTL-based expiration (5 min default), DashMap-backed concurrent access, file-path invalidation on SourceWatcher changes. Caches read-only tool results (Read/Glob/Grep) in the query engine. 33 tests.
 - **Conversation presets**: `/preset` command with 5 built-in templates (code-review, refactor, debug, explain, test). Custom presets via `.shannon.toml` `[presets.*]` sections. Model/temperature/tools/system_prompt overrides. 16 tests.
+- **Extended context window**: `ConversationPhase` enum (Initialization/Active/Extended/Critical) with phase-based budget reallocation. `model_context_window()` maps model names to context sizes. `ContextBudget::for_model()`, `current_phase()`, `adapt_for_phase()`, `compaction_threshold()`. 18 tests.
+- **Tool orchestration optimization**: `ToolOrchestrationTracker` with DashMap call cache, TTL expiration. `ToolCallOptimizer` analyzing pending calls for dedup/parallel/sequential execution. `OptimizedCallPlan` with intelligent grouping. 22 tests.
+- **Session template snapshots**: `/session` command (alias `/snap`) for save/load/list/delete of conversation state as TOML templates. `SessionSnapshot` with model config, messages, enabled tools, system prompt additions. 11 tests.
+- **Tool permission profiles**: `PermissionProfile` enum (Strict/Balanced/Permissive/Custom). `ProfileRules` with per-category auto-approve flags. `PermissionManager.apply_profile()` integration. 7 tests.
+- **Progressive context loading**: `ProgressiveLoaderConfig` with head/tail preservation, auto-summarize. Read tool enhanced with `truncate_large_files` field for automatic truncation of large files. Metadata includes `total_lines` and `truncated` flag. 15 tests.
+- **MCP resource subscription**: `ResourceSubscriptionManager` with DashMap-backed concurrent tracking. `subscribe`/`unsubscribe` per server/URI. `handle_notification()` for `notifications/resources/updated`. Callback dispatch on update. 18 tests.
+- **LLM output formatting**: `markdown_table` renderer with box-drawing borders, auto-detected numeric alignment, width optimization. `streaming_diff` tracker with content hash comparison and configurable threshold. 44 tests.
+- **Error recovery auto-retry**: `RetryPolicy` with configurable max retries, exponential backoff + jitter, `Retry-After` header support. `ToolError::Timeout` variant. Tool execution wrapped with `tokio::time::timeout`. 23 tests.
 
 ### Test Coverage
 
-8326 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
+8516 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
 
 ## Competitor Feature Tiers
 

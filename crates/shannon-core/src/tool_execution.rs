@@ -98,6 +98,10 @@ impl From<ToolError> for ToolExecutionError {
             },
             ToolError::ExecutionFailed(msg) => ToolExecutionError::ExecutionFailed(msg),
             ToolError::RegistryError(msg) => ToolExecutionError::Internal(msg),
+            ToolError::Timeout { name, duration } => ToolExecutionError::Timeout {
+                tool_name: name,
+                timeout_secs: duration.as_secs(),
+            },
         }
     }
 }

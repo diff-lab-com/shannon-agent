@@ -48,6 +48,8 @@ mod outline;
 mod plugin;
 mod repl;
 mod repomap;
+#[allow(dead_code)]
+mod session;
 
 /// Register all built-in commands
 pub fn register_all(registry: &CommandRegistry) {
@@ -90,6 +92,7 @@ pub fn all_commands() -> Vec<Command> {
         outline::command(),
         context::command(),
         preset::command(),
+        session::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds

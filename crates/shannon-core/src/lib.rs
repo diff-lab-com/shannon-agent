@@ -54,6 +54,7 @@ pub mod output_format;
 pub mod permissions;
 pub mod policy_limits;
 pub mod prevent_sleep;
+pub mod progressive_loader;
 pub mod project_instructions;
 pub mod project_memory;
 pub mod query_engine;
@@ -71,6 +72,7 @@ pub mod tips;
 pub mod token_estimation;
 pub mod tool_cache;
 pub mod tool_execution;
+pub mod tool_orchestration;
 pub mod tool_use_summary;
 pub mod tools;
 pub mod unified_config;
@@ -91,6 +93,7 @@ pub mod llm_classifier;
 pub mod lsp;
 pub mod mcp_server_approval;
 pub mod permission_classifier;
+pub mod permission_profile;
 pub mod plugin;
 pub mod preference_memory;
 pub mod recording;
@@ -130,6 +133,7 @@ pub use api::{
     MessageResponse,
     MessageStream,
     RetryConfig,
+    RetryPolicy,
     StreamEvent,
     ToolDefinition,
     Usage,
@@ -257,6 +261,8 @@ pub use permission_classifier::{
     PermissionClassifierError, PermissionRule, PermissionRuleParser, RiskLevel, RuleDecision,
     RuleSource,
 };
+pub use permission_profile::{PermissionProfile, ProfileRules};
+pub use progressive_loader::{ProgressiveLoaderConfig, lines_for_token_budget, truncate_content};
 pub use session_transcript::{
     GlobalTranscriptStats, SessionTranscriptStats, ToolCallRecord, TranscriptEntry,
     TranscriptError, TranscriptQuery, TranscriptRole, TranscriptStore,

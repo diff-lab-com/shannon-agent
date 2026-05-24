@@ -17,6 +17,7 @@
 //!
 //! Budget adjusts dynamically under pressure (see [`adjust_for_pressure`]).
 
+use crate::api::LlmProvider;
 use crate::context_pressure::PressureLevel;
 
 /// Default fraction of context reserved for the system prompt.
@@ -25,6 +26,55 @@ pub const SYSTEM_PROMPT_FRACTION: f32 = 0.15;
 pub const TOOL_SCHEMA_FRACTION: f32 = 0.25;
 /// Default fraction of context reserved for conversation messages.
 pub const CONVERSATION_FRACTION: f32 = 0.60;
+
+/// Conversation phase affects budget allocation.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ConversationPhase {
+    /// Early turns: more budget for system/tools
+    Initialization,
+    /// Active tool use: balanced allocation
+    Active,
+    /// Long conversation: maximize conversation budget
+    Extended,
+    /// Near limit: aggressive compaction
+    Critical,
+}
+
+impl std::fmt::Display for ConversationPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConversationPhase::Initialization => write!(f, "INITIALIZATION"),
+            ConversationPhase::Active => write!(f, "ACTIVE"),
+            ConversationPhase::Extended => write!(f, "EXTENDED"),
+            ConversationPhase::Critical => write!(f, "CRITICAL"),
+        }
+    }
+}
+
+/// Model context window registry.
+///
+/// Returns the maximum context window size in tokens for known models.
+/// Falls back to a safe default of 32K for unknown models.
+pub fn model_context_window(model: &str) -> usize {
+    let model_lower = model.to_lowercase();
+    if model_lower.contains("claude") {
+        200_000
+    } else if model_lower.contains("gpt-4") {
+        128_000
+    } else if model_lower.contains("o1") {
+        200_000
+    } else if model_lower.contains("gemini") {
+        1_000_000
+    } else if model_lower.contains("deepseek") {
+        128_000
+    } else if model_lower.contains("mistral") || model_lower.contains("codestral") {
+        32_000
+    } else if model_lower.contains("llama-3") || model_lower.contains("llama3") {
+        128_000
+    } else {
+        32_000
+    }
+}
 
 /// Message priority for budget allocation and compaction decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -135,6 +185,84 @@ impl ContextBudget {
             tool_schema_budget: (total_tokens as f32 * tool_frac) as usize,
             conversation_budget: (total_tokens as f32 * conversation_frac) as usize,
             priority_budget: PriorityBudget::default(),
+        }
+    }
+
+    /// Create budget adapted to model's context window size.
+    ///
+    /// Looks up the model's maximum context window and creates a proportionally
+    /// scaled budget allocation.
+    pub fn for_model(model: &str, provider: &LlmProvider) -> Self {
+        let window = match provider {
+            LlmProvider::Ollama => {
+                // Ollama models often have smaller context windows;
+                // the model name may contain hints, but default to 8K
+                let m = model.to_lowercase();
+                if m.contains("llama-3") || m.contains("llama3") {
+                    128_000
+                } else if m.contains("mistral") || m.contains("codestral") || m.contains("qwen") {
+                    32_000
+                } else {
+                    8_000
+                }
+            }
+            _ => model_context_window(model),
+        };
+        Self::new(window)
+    }
+
+    /// Determine current phase from message count and usage ratio.
+    ///
+    /// - `message_count`: total messages in the conversation so far
+    /// - `usage_ratio`: fraction of context window already consumed (0.0–1.0)
+    pub fn current_phase(&self, message_count: usize, usage_ratio: f64) -> ConversationPhase {
+        if message_count <= 3 {
+            ConversationPhase::Initialization
+        } else if usage_ratio >= 0.8 {
+            ConversationPhase::Critical
+        } else if usage_ratio >= 0.5 {
+            ConversationPhase::Extended
+        } else {
+            ConversationPhase::Active
+        }
+    }
+
+    /// Adjust allocations based on conversation phase.
+    ///
+    /// | Phase          | System/Tools | Conversation | Response |
+    /// |----------------|-------------|-------------|----------|
+    /// | Initialization | 60%         | 30%         | 10%      |
+    /// | Active         | 40%         | 45%         | 15%      |
+    /// | Extended       | 25%         | 60%         | 15%      |
+    /// | Critical       | 15%         | 75%         | 10%      |
+    ///
+    /// "Response" tokens are carved out of conversation budget internally;
+    /// the `system_prompt_budget` and `tool_schema_budget` together form the
+    /// "system/tools" share, and the remainder goes to conversation.
+    pub fn adapt_for_phase(&mut self, phase: ConversationPhase) {
+        let (sys_tool_frac, conv_frac) = match phase {
+            ConversationPhase::Initialization => (0.60, 0.30),
+            ConversationPhase::Active => (0.40, 0.45),
+            ConversationPhase::Extended => (0.25, 0.60),
+            ConversationPhase::Critical => (0.15, 0.75),
+        };
+        // Split sys_tool_frac evenly between system prompt and tool schemas
+        let sys_frac = sys_tool_frac / 2.0;
+        let tool_frac = sys_tool_frac / 2.0;
+        self.system_prompt_budget = (self.total_tokens as f64 * sys_frac) as usize;
+        self.tool_schema_budget = (self.total_tokens as f64 * tool_frac) as usize;
+        self.conversation_budget = (self.total_tokens as f64 * conv_frac) as usize;
+    }
+
+    /// Get recommended compaction threshold for the given phase.
+    ///
+    /// Returns the usage ratio at which compaction should be triggered.
+    pub fn compaction_threshold(phase: ConversationPhase) -> f64 {
+        match phase {
+            ConversationPhase::Initialization => 0.70,
+            ConversationPhase::Active => 0.75,
+            ConversationPhase::Extended => 0.80,
+            ConversationPhase::Critical => 0.85,
         }
     }
 
@@ -478,7 +606,7 @@ mod tests {
         let schema = serde_json::json!({});
         let tokens = ContextBudget::estimate_schema_tokens(&schema);
         // Empty object is "{}" = 2 chars, rounds to 0 tokens
-        assert!(tokens >= 0);
+        assert_eq!(tokens, 0);
     }
 
     #[test]
@@ -503,5 +631,172 @@ mod tests {
             (SYSTEM_PROMPT_FRACTION + TOOL_SCHEMA_FRACTION + CONVERSATION_FRACTION - 1.0).abs()
                 < f32::EPSILON
         );
+    }
+
+    // ── Model-aware budget tests ──────────────────────────────────────
+
+    #[test]
+    fn test_for_model_claude() {
+        let budget = ContextBudget::for_model("claude-sonnet-4", &LlmProvider::Anthropic);
+        assert_eq!(budget.total_tokens, 200_000);
+        // Default allocation: 15% system, 25% tools, 60% conversation
+        assert_eq!(budget.system_prompt_budget, 30_000);
+        assert_eq!(budget.tool_schema_budget, 50_000);
+        assert_eq!(budget.conversation_budget, 120_000);
+    }
+
+    #[test]
+    fn test_for_model_gpt4() {
+        let budget = ContextBudget::for_model("gpt-4o", &LlmProvider::OpenAI);
+        assert_eq!(budget.total_tokens, 128_000);
+        assert_eq!(
+            budget.system_prompt_budget,
+            (128_000_f32 * 0.15) as usize
+        );
+        assert_eq!(budget.tool_schema_budget, (128_000_f32 * 0.25) as usize);
+        assert_eq!(budget.conversation_budget, (128_000_f32 * 0.60) as usize);
+    }
+
+    #[test]
+    fn test_for_model_unknown() {
+        let budget = ContextBudget::for_model("some-unknown-model", &LlmProvider::Custom);
+        assert_eq!(budget.total_tokens, 32_000);
+        assert_eq!(budget.system_prompt_budget, (32_000_f32 * 0.15) as usize);
+    }
+
+    #[test]
+    fn test_for_model_ollama_default() {
+        let budget = ContextBudget::for_model("my-model", &LlmProvider::Ollama);
+        assert_eq!(budget.total_tokens, 8_000);
+    }
+
+    #[test]
+    fn test_for_model_ollama_llama3() {
+        let budget = ContextBudget::for_model("llama-3-70b", &LlmProvider::Ollama);
+        assert_eq!(budget.total_tokens, 128_000);
+    }
+
+    // ── Conversation phase tests ──────────────────────────────────────
+
+    #[test]
+    fn test_phase_initialization() {
+        let budget = ContextBudget::new(200_000);
+        assert_eq!(budget.current_phase(1, 0.1), ConversationPhase::Initialization);
+        assert_eq!(budget.current_phase(3, 0.1), ConversationPhase::Initialization);
+    }
+
+    #[test]
+    fn test_phase_active() {
+        let budget = ContextBudget::new(200_000);
+        assert_eq!(budget.current_phase(10, 0.3), ConversationPhase::Active);
+        assert_eq!(budget.current_phase(5, 0.49), ConversationPhase::Active);
+    }
+
+    #[test]
+    fn test_phase_extended() {
+        let budget = ContextBudget::new(200_000);
+        assert_eq!(budget.current_phase(20, 0.5), ConversationPhase::Extended);
+        assert_eq!(budget.current_phase(50, 0.79), ConversationPhase::Extended);
+    }
+
+    #[test]
+    fn test_phase_critical() {
+        let budget = ContextBudget::new(200_000);
+        assert_eq!(budget.current_phase(100, 0.8), ConversationPhase::Critical);
+        assert_eq!(budget.current_phase(200, 0.95), ConversationPhase::Critical);
+    }
+
+    #[test]
+    fn test_phase_initialization_overrides_usage() {
+        // Even with high usage, few messages means Initialization
+        let budget = ContextBudget::new(200_000);
+        assert_eq!(budget.current_phase(2, 0.9), ConversationPhase::Initialization);
+    }
+
+    // ── Phase adaptation tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_adapt_for_phase_shifts_allocation() {
+        let mut budget = ContextBudget::new(200_000);
+
+        // Initialization: 60% system+tools (30% each), 30% conversation
+        budget.adapt_for_phase(ConversationPhase::Initialization);
+        assert_eq!(budget.system_prompt_budget, 60_000); // 30% of 200K
+        assert_eq!(budget.tool_schema_budget, 60_000); // 30% of 200K
+        assert_eq!(budget.conversation_budget, 60_000); // 30% of 200K
+
+        // Active: 40% system+tools (20% each), 45% conversation
+        budget.adapt_for_phase(ConversationPhase::Active);
+        assert_eq!(budget.system_prompt_budget, 40_000);
+        assert_eq!(budget.tool_schema_budget, 40_000);
+        assert_eq!(budget.conversation_budget, 90_000);
+
+        // Extended: 25% system+tools (12.5% each), 60% conversation
+        budget.adapt_for_phase(ConversationPhase::Extended);
+        assert_eq!(budget.system_prompt_budget, 25_000);
+        assert_eq!(budget.tool_schema_budget, 25_000);
+        assert_eq!(budget.conversation_budget, 120_000);
+
+        // Critical: 15% system+tools (7.5% each), 75% conversation
+        budget.adapt_for_phase(ConversationPhase::Critical);
+        assert_eq!(budget.system_prompt_budget, 15_000);
+        assert_eq!(budget.tool_schema_budget, 15_000);
+        assert_eq!(budget.conversation_budget, 150_000);
+    }
+
+    // ── Compaction threshold tests ──────────────────────────────────────
+
+    #[test]
+    fn test_compaction_threshold_varies_by_phase() {
+        assert_eq!(ContextBudget::compaction_threshold(ConversationPhase::Initialization), 0.70);
+        assert_eq!(ContextBudget::compaction_threshold(ConversationPhase::Active), 0.75);
+        assert_eq!(ContextBudget::compaction_threshold(ConversationPhase::Extended), 0.80);
+        assert_eq!(ContextBudget::compaction_threshold(ConversationPhase::Critical), 0.85);
+    }
+
+    #[test]
+    fn test_compaction_threshold_increases_with_phase() {
+        let init = ContextBudget::compaction_threshold(ConversationPhase::Initialization);
+        let active = ContextBudget::compaction_threshold(ConversationPhase::Active);
+        let extended = ContextBudget::compaction_threshold(ConversationPhase::Extended);
+        let critical = ContextBudget::compaction_threshold(ConversationPhase::Critical);
+        assert!(init < active);
+        assert!(active < extended);
+        assert!(extended < critical);
+    }
+
+    // ── model_context_window tests ──────────────────────────────────────
+
+    #[test]
+    fn test_model_context_window_claude() {
+        assert_eq!(model_context_window("claude-sonnet-4"), 200_000);
+        assert_eq!(model_context_window("claude-opus-4"), 200_000);
+        assert_eq!(model_context_window("Claude-3.5-Haiku"), 200_000);
+    }
+
+    #[test]
+    fn test_model_context_window_gpt4() {
+        assert_eq!(model_context_window("gpt-4o"), 128_000);
+        assert_eq!(model_context_window("gpt-4-turbo"), 128_000);
+    }
+
+    #[test]
+    fn test_model_context_window_o1() {
+        assert_eq!(model_context_window("o1-preview"), 200_000);
+        assert_eq!(model_context_window("o1-mini"), 200_000);
+    }
+
+    #[test]
+    fn test_model_context_window_unknown() {
+        assert_eq!(model_context_window("my-custom-model"), 32_000);
+        assert_eq!(model_context_window("unknown"), 32_000);
+    }
+
+    #[test]
+    fn test_conversation_phase_display() {
+        assert_eq!(ConversationPhase::Initialization.to_string(), "INITIALIZATION");
+        assert_eq!(ConversationPhase::Active.to_string(), "ACTIVE");
+        assert_eq!(ConversationPhase::Extended.to_string(), "EXTENDED");
+        assert_eq!(ConversationPhase::Critical.to_string(), "CRITICAL");
     }
 }

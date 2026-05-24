@@ -3,6 +3,7 @@
 use crate::{ToolError, ToolOutput};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use shannon_core::progressive_loader::{ProgressiveLoaderConfig, truncate_content};
 use std::collections::HashMap;
 
 /// Image file extensions we support
@@ -81,6 +82,29 @@ pub struct ReadInput {
 
     /// Optional line limit
     pub limit: Option<usize>,
+
+    /// Whether to truncate large files automatically.
+    ///
+    /// When `true` (default), files exceeding [`ProgressiveLoaderConfig::max_read_lines`]
+    /// are summarised to a head/tail preview with an omission notice.
+    /// When `false`, the full content is returned (subject to the file-size limit).
+    #[serde(default = "default_true")]
+    pub truncate_large_files: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ReadInput {
+    fn default() -> Self {
+        Self {
+            file_path: String::new(),
+            offset: None,
+            limit: None,
+            truncate_large_files: true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -163,29 +187,56 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
         .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {e}")))?;
 
     let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
 
     let (start, end) = match (input.offset, input.limit) {
         (Some(offset), Some(limit)) => {
-            let start = offset.min(lines.len());
-            let end = (offset + limit).min(lines.len());
+            let start = offset.min(total_lines);
+            let end = (offset + limit).min(total_lines);
             (start, end)
         }
-        (Some(offset), None) => (offset.min(lines.len()), lines.len()),
-        (None, Some(limit)) => (0, limit.min(lines.len())),
-        (None, None) => (0, lines.len()),
+        (Some(offset), None) => (offset.min(total_lines), total_lines),
+        (None, Some(limit)) => (0, limit.min(total_lines)),
+        (None, None) => (0, total_lines),
     };
 
     let selected_lines = lines[start..end].join("\n");
 
+    // Apply progressive truncation when no explicit offset/limit was given
+    // and truncation is enabled (the default).
+    let (output_content, was_truncated) = if input.truncate_large_files
+        && input.offset.is_none()
+        && input.limit.is_none()
+    {
+        let config = ProgressiveLoaderConfig::default();
+        let truncated = truncate_content(&selected_lines, &config);
+        let did_truncate = truncated.len() < selected_lines.len();
+        (truncated, did_truncate)
+    } else {
+        (selected_lines.clone(), false)
+    };
+
+    // Count actual lines in the output (may differ from total after truncation)
+    let output_lines = output_content.lines().count();
+
+    let mut metadata = HashMap::new();
+    metadata.insert("lines".to_string(), json!(output_lines));
+    metadata.insert("total_lines".to_string(), json!(total_lines));
+    metadata.insert("file_path".to_string(), json!(input.file_path));
+
+    // Flag when progressive truncation actually happened so callers can tell.
+    if was_truncated {
+        metadata.insert("truncated".to_string(), json!(true));
+        metadata.insert(
+            "truncation_note".to_string(),
+            json!("Use offset/limit parameters to read specific sections"),
+        );
+    }
+
     Ok(ToolOutput {
-        content: selected_lines.clone(),
+        content: output_content,
         is_error: false,
-        metadata: {
-            let mut map = HashMap::new();
-            map.insert("lines".to_string(), json!(end - start));
-            map.insert("file_path".to_string(), json!(input.file_path));
-            map
-        },
+        metadata,
     })
 }
 
@@ -294,5 +345,132 @@ mod tests {
 
         let text_data = b"Hello, world!";
         assert!(!is_image_by_magic_bytes(text_data));
+    }
+
+    #[tokio::test]
+    async fn test_read_large_file_truncated() {
+        // Create a temp file with 3000 lines (exceeds default max_read_lines of 2000).
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("large.txt");
+        let lines: Vec<String> = (1..=3000).map(|i| format!("line {i}")).collect();
+        let content = lines.join("\n");
+        std::fs::write(&path, &content).expect("write temp file");
+
+        let input = ReadInput {
+            file_path: path.to_string_lossy().to_string(),
+            offset: None,
+            limit: None,
+            truncate_large_files: true,
+        };
+
+        let result = execute(input).await.expect("execute should succeed");
+        assert!(!result.is_error, "should not be an error");
+
+        // Verify metadata
+        assert_eq!(result.metadata["total_lines"], 3000);
+        assert_eq!(result.metadata["truncated"], true);
+
+        // Verify content contains head and tail
+        assert!(
+            result.content.contains("line 1"),
+            "should contain first head line"
+        );
+        assert!(
+            result.content.contains("line 50"),
+            "should contain last head line (line 50)"
+        );
+        assert!(
+            result.content.contains("line 3000"),
+            "should contain last tail line"
+        );
+
+        // Verify middle lines are omitted
+        assert!(
+            !result.content.contains("line 1000"),
+            "should omit middle lines"
+        );
+
+        // Verify truncation notice
+        assert!(
+            result.content.contains("lines omitted"),
+            "should contain omission notice"
+        );
+        assert!(
+            result.content.contains("Total: 3000 lines"),
+            "should contain total line count"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_small_file_not_truncated() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("small.txt");
+        let content = "line 1\nline 2\nline 3";
+        std::fs::write(&path, content).expect("write temp file");
+
+        let input = ReadInput {
+            file_path: path.to_string_lossy().to_string(),
+            offset: None,
+            limit: None,
+            truncate_large_files: true,
+        };
+
+        let result = execute(input).await.expect("execute should succeed");
+        assert_eq!(result.content, content);
+        assert!(
+            !result.metadata.contains_key("truncated"),
+            "small files should not be truncated"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_with_offset_limit_bypasses_truncation() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("large2.txt");
+        let lines: Vec<String> = (1..=3000).map(|i| format!("line {i}")).collect();
+        let content = lines.join("\n");
+        std::fs::write(&path, &content).expect("write temp file");
+
+        let input = ReadInput {
+            file_path: path.to_string_lossy().to_string(),
+            offset: Some(100),
+            limit: Some(50),
+            truncate_large_files: true,
+        };
+
+        let result = execute(input).await.expect("execute should succeed");
+        // With explicit offset/limit, truncation is skipped
+        assert!(
+            !result.metadata.contains_key("truncated"),
+            "explicit offset/limit should bypass truncation"
+        );
+        assert!(result.content.contains("line 101"));
+        assert!(result.content.contains("line 150"));
+    }
+
+    #[tokio::test]
+    async fn test_read_truncation_disabled() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("large3.txt");
+        let lines: Vec<String> = (1..=2500).map(|i| format!("line {i}")).collect();
+        let content = lines.join("\n");
+        std::fs::write(&path, &content).expect("write temp file");
+
+        let input = ReadInput {
+            file_path: path.to_string_lossy().to_string(),
+            offset: None,
+            limit: None,
+            truncate_large_files: false,
+        };
+
+        let result = execute(input).await.expect("execute should succeed");
+        assert!(
+            !result.metadata.contains_key("truncated"),
+            "truncation disabled should return full content"
+        );
+        assert!(
+            result.content.contains("line 1250"),
+            "full content should be present"
+        );
     }
 }

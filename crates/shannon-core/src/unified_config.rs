@@ -64,6 +64,9 @@ pub struct ShannonConfig {
     /// User-defined conversation presets from config files.
     #[serde(default)]
     pub presets: Option<HashMap<String, PresetEntry>>,
+    /// Permission profile name: "strict", "balanced", "permissive", or "custom:<name>".
+    #[serde(default)]
+    pub permission_profile: Option<String>,
 }
 
 impl ShannonConfig {
@@ -116,11 +119,27 @@ impl ShannonConfig {
             max_context_tokens: other.max_context_tokens.or(self.max_context_tokens),
             providers,
             presets,
+            permission_profile: other
+                .permission_profile
+                .clone()
+                .or_else(|| self.permission_profile.clone()),
         }
+    }
+
+    /// Parse the `permission_profile` field into a [`PermissionProfile`].
+    ///
+    /// Returns `None` if the field is unset or contains an unrecognised value.
+    pub fn resolve_permission_profile(
+        &self,
+    ) -> Option<crate::permission_profile::PermissionProfile> {
+        self.permission_profile
+            .as_deref()
+            .and_then(crate::permission_profile::PermissionProfile::from_str_lossy)
     }
 
     /// Resolve the API key for a given provider from config + env.
     pub fn resolve_api_key_for_provider(&self, provider: &LlmProvider) -> String {
+
         let display = provider.to_string();
 
         // 1. Top-level api_key in config (if provider matches)
@@ -209,6 +228,7 @@ impl ConfigBuilder {
             max_context_tokens: std::env::var("SHANNON_MAX_CONTEXT_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok()),
+            permission_profile: std::env::var("SHANNON_PERMISSION_PROFILE").ok(),
             ..Default::default()
         };
         self
@@ -313,6 +333,9 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
                     } else {
                         tracing::warn!("Invalid max_context_tokens value in config: {value}");
                     }
+                }
+                "permission_profile" => {
+                    config.permission_profile = Some(value.to_string());
                 }
                 _ => {}
             }

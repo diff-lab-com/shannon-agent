@@ -25,7 +25,7 @@ pub use types::{
     SystemContentBlock, ToolDefinition, ToolResultContent, Usage,
 };
 
-pub use retry::RetryConfig;
+pub use retry::{RetryConfig, RetryPolicy};
 pub use streaming::MessageStream;
 
 pub use client::{ClaudeClient, LlmClient};

@@ -158,6 +158,10 @@ pub struct ToolRegistry {
     /// Concurrent TTL-based cache for streaming tool results.
     /// Used by `execute_streaming` to avoid re-executing identical read-only calls.
     streaming_cache: Option<std::sync::Arc<crate::tool_cache::ToolResultCache>>,
+    /// Optional per-tool execution timeout. When set, `execute()` wraps the
+    /// tool call with `tokio::time::timeout` and returns `ToolError::Timeout`
+    /// on expiry.
+    execution_timeout: Option<std::time::Duration>,
 }
 
 impl ToolRegistry {
@@ -181,6 +185,7 @@ impl ToolRegistry {
             defs_cache: std::sync::RwLock::new(None),
             version: std::sync::atomic::AtomicU64::new(0),
             streaming_cache: None,
+            execution_timeout: None,
         }
     }
 
@@ -200,6 +205,20 @@ impl ToolRegistry {
     /// read-only tools and store successful results in the cache.
     pub fn set_streaming_cache(&mut self, cache: std::sync::Arc<crate::tool_cache::ToolResultCache>) {
         self.streaming_cache = Some(cache);
+    }
+
+    /// Set a per-tool execution timeout.
+    ///
+    /// When set, every call to [`execute`](Self::execute) is wrapped with
+    /// `tokio::time::timeout`. If the tool does not finish within the
+    /// specified duration, `ToolError::Timeout` is returned.
+    pub fn set_execution_timeout(&mut self, timeout: std::time::Duration) {
+        self.execution_timeout = Some(timeout);
+    }
+
+    /// Get the configured execution timeout, if any.
+    pub fn execution_timeout(&self) -> Option<std::time::Duration> {
+        self.execution_timeout
     }
 
     /// Get the streaming cache, if configured.
@@ -425,7 +444,17 @@ impl ToolRegistry {
             }
         }
 
-        let result = tool.execute(input).await;
+        let result = if let Some(timeout) = self.execution_timeout {
+            match tokio::time::timeout(timeout, tool.execute(input)).await {
+                Ok(output) => output,
+                Err(_) => Err(ToolError::Timeout {
+                    name: name.to_string(),
+                    duration: timeout,
+                }),
+            }
+        } else {
+            tool.execute(input).await
+        };
 
         // Cache successful results from read-only tools
         if let Some(hash) = input_hash {
@@ -1425,5 +1454,77 @@ mod tests {
             .execute_streaming("nonexistent", json!({}), std::sync::Arc::new(NopSender))
             .await;
         assert!(matches!(result, Err(ToolError::NotFound(_))));
+    }
+
+    // ── Execution timeout tests ──────────────────────────────────────────
+
+    /// A tool that sleeps for a long time, used to test timeout enforcement.
+    struct SlowTool;
+
+    #[async_trait]
+    impl Tool for SlowTool {
+        fn name(&self) -> &str {
+            "slow_tool"
+        }
+        fn description(&self) -> &str {
+            "A tool that takes a long time"
+        }
+        fn input_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        async fn execute(&self, _input: Value) -> ToolResult<ToolOutput> {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            Ok(ToolOutput::success("done".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_timeout_returns_error() {
+        let mut registry = ToolRegistry::new();
+        registry
+            .register(Box::new(SlowTool))
+            .unwrap();
+        registry.set_execution_timeout(std::time::Duration::from_millis(50));
+
+        let result = registry
+            .execute("slow_tool", json!({}))
+            .await;
+
+        assert!(result.is_err(), "Should have timed out");
+        match result.unwrap_err() {
+            ToolError::Timeout { name, duration } => {
+                assert_eq!(name, "slow_tool");
+                assert_eq!(duration, std::time::Duration::from_millis(50));
+            }
+            other => panic!("Expected Timeout error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_no_timeout_when_not_configured() {
+        let registry = ToolRegistry::new();
+        // Use a fast tool — no timeout configured, so it should succeed
+        registry
+            .register(Box::new(DummyTool {
+                name: "fast_tool".to_string(),
+            }))
+            .unwrap();
+
+        let result = registry
+            .execute("fast_tool", json!({"input": "test"}))
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_set_execution_timeout() {
+        let mut registry = ToolRegistry::new();
+        assert!(registry.execution_timeout().is_none());
+
+        registry.set_execution_timeout(std::time::Duration::from_secs(30));
+        assert_eq!(
+            registry.execution_timeout(),
+            Some(std::time::Duration::from_secs(30))
+        );
     }
 }

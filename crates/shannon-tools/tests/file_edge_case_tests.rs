@@ -189,8 +189,7 @@ async fn test_read_binary_file_detection() {
     // with a null byte in the middle
     let input = ReadInput {
         file_path: path.to_string_lossy().to_string(),
-        offset: None,
-        limit: None,
+        ..Default::default()
     };
 
     let result = read::execute(input).await;
@@ -318,8 +317,7 @@ async fn test_filename_with_spaces_unicode_emoji() {
     // Read back the spaced file
     let read_input = ReadInput {
         file_path: spaced_path.to_string_lossy().to_string(),
-        offset: None,
-        limit: None,
+        ..Default::default()
     };
     let result = read::execute(read_input).await;
     assert!(result.is_ok(), "Read from spaced filename should succeed");
@@ -328,8 +326,7 @@ async fn test_filename_with_spaces_unicode_emoji() {
     // Read back the unicode file
     let read_input = ReadInput {
         file_path: unicode_path.to_string_lossy().to_string(),
-        offset: None,
-        limit: None,
+        ..Default::default()
     };
     let result = read::execute(read_input).await;
     assert!(result.is_ok(), "Read from unicode filename should succeed");
@@ -338,8 +335,7 @@ async fn test_filename_with_spaces_unicode_emoji() {
     // Read back the emoji file
     let read_input = ReadInput {
         file_path: emoji_path.to_string_lossy().to_string(),
-        offset: None,
-        limit: None,
+        ..Default::default()
     };
     let result = read::execute(read_input).await;
     assert!(result.is_ok(), "Read from emoji filename should succeed");
@@ -379,8 +375,8 @@ async fn test_large_file_read_performance() {
 
     let input = ReadInput {
         file_path: path.to_string_lossy().to_string(),
-        offset: None,
-        limit: None,
+        truncate_large_files: false,
+        ..Default::default()
     };
     let result = read::execute(input).await;
     let elapsed = start.elapsed();
@@ -559,8 +555,7 @@ async fn test_symlink_read_follows() {
     // Read through the symlink using the raw execute (bypasses sandbox)
     let input = ReadInput {
         file_path: link_path.to_string_lossy().to_string(),
-        offset: None,
-        limit: None,
+        ..Default::default()
     };
     let result = read::execute(input).await;
     assert!(
@@ -678,8 +673,7 @@ async fn test_empty_file_operations() {
     // --- Read an empty file ---
     let read_input = ReadInput {
         file_path: path.to_string_lossy().to_string(),
-        offset: None,
-        limit: None,
+        ..Default::default()
     };
     let result = read::execute(read_input).await;
     assert!(

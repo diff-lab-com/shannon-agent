@@ -40,6 +40,14 @@ pub enum ToolError {
 
     #[error("Tool registry error: {0}")]
     RegistryError(String),
+
+    #[error("Tool '{name}' timed out after {duration:?}")]
+    Timeout {
+        /// Name of the tool that timed out.
+        name: String,
+        /// Duration that elapsed before the timeout.
+        duration: std::time::Duration,
+    },
 }
 
 /// Result type for tool execution
@@ -311,6 +319,13 @@ mod tests {
             (
                 ToolError::RegistryError("w".into()),
                 "Tool registry error: w",
+            ),
+            (
+                ToolError::Timeout {
+                    name: "bash".into(),
+                    duration: std::time::Duration::from_secs(30),
+                },
+                "Tool 'bash' timed out after 30s",
             ),
         ];
         for (err, expected) in cases {

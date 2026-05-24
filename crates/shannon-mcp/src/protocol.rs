@@ -170,6 +170,8 @@ pub enum RequestMethod {
     ToolsCall,
     ResourcesList,
     ResourcesRead,
+    ResourcesSubscribe,
+    ResourcesUnsubscribe,
     ResourcesTemplatesList,
     PromptsList,
     PromptsGet,
@@ -185,6 +187,8 @@ pub enum ResponseMethod {
     ToolsCall,
     ResourcesList,
     ResourcesRead,
+    ResourcesSubscribe,
+    ResourcesUnsubscribe,
     ResourcesTemplatesList,
     PromptsList,
     PromptsGet,
@@ -661,6 +665,19 @@ pub struct UnsubscribeRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscribeResult {
     pub subscribed: bool,
+}
+
+/// Notification sent by the server when a subscribed resource changes.
+///
+/// Spec: <https://spec.modelcontextprotocol.io/specification/2024-11-05/server/resources/#notificationsresourcesupdated>
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourcesUpdatedNotification {
+    /// URI of the resource that was updated.
+    pub uri: String,
+    /// Optional updated content or metadata about the change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated: Option<serde_json::Value>,
 }
 
 /// Progress token used to correlate progress notifications with requests.

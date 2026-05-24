@@ -1,19 +1,24 @@
 ---
 source: crates/shannon-ui/tests/ui_snapshot_tests.rs
+assertion_line: 106
 expression: "format!(\"{:#?}\", msg)"
 ---
 ChatMessage {
-    role: User,
-    content: "Hello, can you help me with Rust?",
-    timestamp: 2026-05-24T05:45:27.803977764Z,
+    role: Tool,
+    content: "running...",
+    timestamp: 2026-05-24T05:20:59.191317803Z,
     image_lines: None,
     is_error: false,
-    tool_name: None,
+    tool_name: Some(
+        "bash",
+    ),
     start_time: None,
     duration_secs: None,
-    spinner_frame: 0,
+    spinner_frame: 3,
     folded: true,
-    exit_code: None,
+    exit_code: Some(
+        0,
+    ),
     thinking_content: None,
     thinking_expanded: false,
     thinking_duration_secs: None,

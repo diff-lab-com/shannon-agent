@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use thiserror::Error;
 
+use crate::permission_profile::{PermissionProfile, ProfileRules};
+
 /// Errors that can occur during permission validation
 #[derive(Error, Debug)]
 pub enum PermissionError {
@@ -944,6 +946,9 @@ pub struct PermissionManager {
 
     /// Rule checker for deny > ask > allow priority from settings.
     rule_checker: PermissionRuleChecker,
+
+    /// Active permission profile (strict / balanced / permissive / custom).
+    active_profile: Option<PermissionProfile>,
 }
 
 impl PermissionManager {
@@ -961,6 +966,7 @@ impl PermissionManager {
             plan_approved_sessions: HashSet::new(),
             destructive_tools: HashSet::new(),
             rule_checker: PermissionRuleChecker::default(),
+            active_profile: None,
         };
 
         // Register default tool policies for common tools
@@ -1204,6 +1210,64 @@ impl PermissionManager {
     /// Get a reference to the permission rule checker.
     pub fn rule_checker(&self) -> &PermissionRuleChecker {
         &self.rule_checker
+    }
+
+    /// Return the active permission profile, if one is set.
+    pub fn active_profile(&self) -> Option<&PermissionProfile> {
+        self.active_profile.as_ref()
+    }
+
+    /// Return the effective profile rules.
+    ///
+    /// If no profile is active, returns `None`.
+    pub fn profile_rules(&self) -> Option<ProfileRules> {
+        self.active_profile.as_ref().map(|p| p.rules())
+    }
+
+    /// Apply a permission profile, updating approval mode and destructive tool list.
+    ///
+    /// The profile rules map to an appropriate `ApprovalMode` and register
+    /// any always-denied tools.
+    pub fn apply_profile(&mut self, profile: PermissionProfile) {
+        let rules = profile.rules();
+
+        // Pick the closest ApprovalMode for the profile.
+        let mode = if rules.auto_approve_read
+            && rules.auto_approve_write
+            && rules.auto_approve_bash
+            && !rules.auto_approve_delete
+        {
+            ApprovalMode::AutoEdit
+        } else if rules.auto_approve_read
+            && rules.auto_approve_write
+            && rules.auto_approve_bash
+            && rules.auto_approve_delete
+        {
+            ApprovalMode::FullAuto
+        } else if rules.auto_approve_read
+            && !rules.auto_approve_write
+            && !rules.auto_approve_bash
+        {
+            ApprovalMode::Suggest
+        } else {
+            // Fallback: treat as Suggest
+            ApprovalMode::Suggest
+        };
+
+        // Register denied tools from the profile.
+        for tool_name in &rules.deny_destructive {
+            self.destructive_tools.insert(tool_name.clone());
+        }
+
+        tracing::info!(
+            ?profile,
+            ?mode,
+            denied_tools = ?rules.deny_destructive,
+            "Applied permission profile"
+        );
+
+        self.approval_mode = mode;
+        self.active_profile = Some(profile);
     }
 
     /// Approve the plan for a session (enables auto-approve in Plan mode).

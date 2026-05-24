@@ -41,6 +41,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::auth::OAuth2Provider;
 use crate::config::{HeaderSource, McpAuthConfig};
+use crate::resource_subscription::ResourceSubscriptionManager;
 use crate::webhook::{EventPublisher, McpEvent, McpEventType};
 use handle::McpServerHandle;
 use remote_handle::RemoteMcpServerHandle;
@@ -152,6 +153,8 @@ pub struct McpProcessPool {
     on_config_reloaded: Arc<Mutex<Option<Arc<dyn Fn(&[String]) + Send + Sync>>>>,
     /// Optional event publisher for webhook notifications.
     event_publisher: Option<Arc<EventPublisher>>,
+    /// Resource subscription manager tracking active subscriptions.
+    subscriptions: Arc<ResourceSubscriptionManager>,
 }
 
 impl McpProcessPool {
@@ -186,6 +189,7 @@ impl McpProcessPool {
             config_watcher_task: Arc::new(Mutex::new(None)),
             on_config_reloaded: Arc::new(Mutex::new(None)),
             event_publisher: None,
+            subscriptions: Arc::new(ResourceSubscriptionManager::new()),
         }
     }
 
@@ -1841,6 +1845,7 @@ impl McpProcessPool {
         let on_tools_changed = self.on_tools_changed.clone();
         let tool_cache = self.tool_cache.clone();
         let event_publisher = self.event_publisher.clone();
+        let subscriptions = self.subscriptions.clone();
         let pool = self.clone();
 
         tokio::spawn(async move {
@@ -1892,6 +1897,13 @@ impl McpProcessPool {
                                     server = %server_name,
                                     "Received resources/list_changed notification"
                                 );
+                            }
+                            "notifications/resources/updated" => {
+                                debug!(
+                                    server = %server_name,
+                                    "Received resources/updated notification"
+                                );
+                                subscriptions.handle_notification(&server_name, &notification);
                             }
                             "notifications/prompts/list_changed" => {
                                 info!(
@@ -1954,6 +1966,76 @@ impl McpProcessPool {
         });
     }
 
+    /// Get a reference to the resource subscription manager.
+    pub fn subscriptions(&self) -> &ResourceSubscriptionManager {
+        &self.subscriptions
+    }
+
+    /// Subscribe to updates for a resource URI on a specific server.
+    ///
+    /// Sends `resources/subscribe` to the MCP server and records the
+    /// subscription locally. Returns an error if the server is not connected
+    /// or does not support resource subscriptions.
+    pub async fn subscribe_resource(
+        &self,
+        server_name: &str,
+        resource_uri: &str,
+    ) -> Result<(), String> {
+        // Check that the server supports subscriptions.
+        let caps = self.get_capabilities(server_name).await;
+        let supports = caps
+            .as_ref()
+            .and_then(|c| c.resources.as_ref())
+            .is_some_and(|r| r.subscribe);
+
+        if !supports {
+            return Err(format!(
+                "Server '{server_name}' does not support resource subscriptions"
+            ));
+        }
+
+        // Send the subscribe request.
+        let params = serde_json::json!({ "uri": resource_uri });
+        self.send_server_request(server_name, "resources/subscribe", params)
+            .await?;
+
+        // Record the subscription locally.
+        self.subscriptions.subscribe(server_name, resource_uri);
+        info!(
+            server = %server_name,
+            uri = %resource_uri,
+            "Subscribed to resource"
+        );
+        Ok(())
+    }
+
+    /// Unsubscribe from updates for a resource URI.
+    ///
+    /// Sends `resources/unsubscribe` to the MCP server and removes the
+    /// subscription from local tracking.
+    pub async fn unsubscribe_resource(&self, resource_uri: &str) -> Result<(), String> {
+        // Look up which server owns this subscription.
+        let server_name = self
+            .subscriptions
+            .get_subscription(resource_uri)
+            .map(|info| info.server_name.clone())
+            .ok_or_else(|| format!("No active subscription for resource '{resource_uri}'"))?;
+
+        // Send the unsubscribe request.
+        let params = serde_json::json!({ "uri": resource_uri });
+        self.send_server_request(&server_name, "resources/unsubscribe", params)
+            .await?;
+
+        // Remove the subscription locally.
+        self.subscriptions.unsubscribe(resource_uri);
+        info!(
+            server = %server_name,
+            uri = %resource_uri,
+            "Unsubscribed from resource"
+        );
+        Ok(())
+    }
+
     /// Gracefully shut down all servers (stdio + remote).
     ///
     /// For each stdio server this closes stdin, waits up to 2 s for the child
@@ -1984,10 +2066,18 @@ impl McpProcessPool {
         }
         self.handles.clear();
         self.remote_handles.clear();
+
+        // Clear all resource subscriptions.
+        for sub in self.subscriptions.list_subscriptions() {
+            self.subscriptions.unsubscribe(&sub.resource_uri);
+        }
     }
 
     /// Stop a specific server by name.
     pub async fn stop_server(&self, name: &str) -> Result<(), String> {
+        // Remove subscriptions for this server regardless of transport type.
+        self.subscriptions.unsubscribe_all_for_server(name);
+
         if let Some((_, handle)) = self.handles.remove(name) {
             handle.shutdown().await;
             info!(server = %name, "Stopped MCP server");
