@@ -1,3 +1,10 @@
+// Suppress lints that conflict with rustfmt or are style preferences from newer clippy.
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::derivable_impls,
+)]
+
 //! # Shannon Tool Interface
 //!
 //! This crate provides the core trait definitions and types for the Shannon tool system.
