@@ -34,7 +34,6 @@ tokio-stream = "0.1"
 
 # HTTP server
 axum = { workspace = true }
-tower = "0.4"
 tower-http = { workspace = true }
 
 # State management
