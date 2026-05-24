@@ -6,7 +6,7 @@
 #![allow(
     clippy::collapsible_if,
     clippy::collapsible_match,
-    clippy::derivable_impls,
+    clippy::derivable_impls
 )]
 //!
 //! Core engine for Shannon Code - query processing, tool orchestration, and state management.

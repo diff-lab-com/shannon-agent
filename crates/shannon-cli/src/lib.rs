@@ -2,7 +2,5 @@
 #![allow(
     clippy::collapsible_if,
     clippy::collapsible_match,
-    clippy::derivable_impls,
+    clippy::derivable_impls
 )]
-
-
