@@ -69,7 +69,8 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
                 writeln!(output, "system: [hash:{hash}]").expect("snapshot render");
             }
             RenderMode::FullText => {
-                writeln!(output, "system: {}", truncate(&system.to_string(), 500)).expect("snapshot render");
+                writeln!(output, "system: {}", truncate(&system.to_string(), 500))
+                    .expect("snapshot render");
             }
         }
     }
@@ -96,7 +97,8 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
                         .get("description")
                         .and_then(|d| d.as_str())
                         .unwrap_or("");
-                    writeln!(output, "  tool[{i}]: {name} - {}", truncate(desc, 80)).expect("snapshot render");
+                    writeln!(output, "  tool[{i}]: {name} - {}", truncate(desc, 80))
+                        .expect("snapshot render");
                 }
             }
         }
