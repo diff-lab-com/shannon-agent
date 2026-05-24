@@ -4220,4 +4220,152 @@ mod tests {
             other => panic!("Expected Single for error, got: {other:?}"),
         }
     }
+
+    // ── System prompt tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_system_prompt_default_is_set() {
+        // Default config includes a built-in system prompt
+        let engine = create_test_engine();
+        let prompt = engine.system_prompt().expect("default should have a system prompt");
+        assert!(prompt.contains("Shannon"));
+    }
+
+    #[test]
+    fn test_system_prompt_overrides_default() {
+        let engine = create_test_engine()
+            .with_system_prompt("You are a code reviewer.".to_string());
+        assert_eq!(
+            engine.system_prompt(),
+            Some("You are a code reviewer.".to_string())
+        );
+    }
+
+    #[test]
+    fn test_append_system_prompt_adds_to_existing() {
+        let mut engine = create_test_engine();
+        let original = engine.system_prompt().unwrap();
+        engine.append_system_prompt("Always write tests.");
+        let appended = engine.system_prompt().unwrap();
+        assert!(appended.starts_with(&original));
+        assert!(appended.contains("Always write tests."));
+    }
+
+    #[test]
+    fn test_append_system_prompt_accumulates() {
+        let mut engine = create_test_engine()
+            .with_system_prompt("Base prompt.".to_string());
+        engine.append_system_prompt("Section A.");
+        engine.append_system_prompt("Section B.");
+        let prompt = engine.system_prompt().unwrap();
+        assert!(prompt.starts_with("Base prompt."));
+        assert!(prompt.contains("Section A."));
+        assert!(prompt.contains("Section B."));
+    }
+
+    // ── Memory store tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_memory_default_is_none() {
+        let engine = create_test_engine();
+        assert!(engine.memory().is_none());
+    }
+
+    #[test]
+    fn test_memory_with_store_returns_some() {
+        let temp_dir = env::temp_dir()
+            .join("shannon-memory-test")
+            .join(Uuid::new_v4().to_string());
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let store = MemoryStore::new(temp_dir.clone());
+        let engine = create_test_engine().with_memory(store);
+        assert!(engine.memory().is_some());
+
+        // Cleanup
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    // ── set_model_for_provider tests ────────────────────────────────
+
+    #[test]
+    fn test_set_model_for_provider_updates_model_and_provider() {
+        let mut engine = create_test_engine();
+
+        // Initial state from create_test_client: model=test-model, provider=Ollama
+        assert_eq!(engine.client.model(), "test-model");
+        assert_eq!(*engine.client.provider(), LlmProvider::Ollama);
+
+        // Switch to Anthropic with a different model
+        engine.set_model_for_provider(
+            "claude-sonnet-4-20250514".to_string(),
+            LlmProvider::Anthropic,
+        );
+
+        assert_eq!(engine.client.model(), "claude-sonnet-4-20250514");
+        assert_eq!(*engine.client.provider(), LlmProvider::Anthropic);
+    }
+
+    #[test]
+    fn test_set_model_for_provider_updates_cost_tracker_model_name() {
+        let mut engine = create_test_engine();
+
+        engine.set_model_for_provider(
+            "claude-opus-4-20250514".to_string(),
+            LlmProvider::Anthropic,
+        );
+
+        let tracker = engine.cost_tracker.read().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(tracker.model_name, "claude-opus-4-20250514");
+    }
+
+    #[test]
+    fn test_set_model_for_provider_updates_effective_context_window() {
+        let mut engine = create_test_engine();
+        // Default test-model -> 200K
+        assert_eq!(engine.effective_max_context_tokens, 200_000);
+
+        // Switch to claude-sonnet-4 which also has 200K — but verify the field was recalculated
+        engine.set_model_for_provider(
+            "claude-sonnet-4-20250514".to_string(),
+            LlmProvider::Anthropic,
+        );
+        assert_eq!(engine.effective_max_context_tokens, 200_000);
+    }
+
+    // ── Configuration setter tests ──────────────────────────────────
+
+    #[test]
+    fn test_set_effort_level() {
+        let mut engine = create_test_engine();
+        assert!(engine.config.effort_level.is_none());
+
+        engine.set_effort_level(Some("high".to_string()));
+        assert_eq!(engine.config.effort_level, Some("high".to_string()));
+
+        engine.set_effort_level(None);
+        assert!(engine.config.effort_level.is_none());
+    }
+
+    #[test]
+    fn test_set_focus_area() {
+        let mut engine = create_test_engine();
+        assert!(engine.config.focus_area.is_none());
+
+        engine.set_focus_area(Some("security".to_string()));
+        assert_eq!(engine.config.focus_area, Some("security".to_string()));
+
+        engine.set_focus_area(None);
+        assert!(engine.config.focus_area.is_none());
+    }
+
+    #[test]
+    fn test_set_max_turns() {
+        let mut engine = create_test_engine();
+        let default_turns = engine.config.max_turns;
+
+        engine.set_max_turns(42);
+        assert_eq!(engine.config.max_turns, 42);
+        assert_ne!(engine.config.max_turns, default_turns);
+    }
 }

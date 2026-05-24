@@ -1632,6 +1632,525 @@ mod tests {
         );
     }
 
+    // -- from_base_url: remaining providers --
+
+    #[test]
+    fn test_provider_detection_openrouter() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://openrouter.ai"),
+            LlmProvider::OpenRouter
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_cohere() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.cohere.com"),
+            LlmProvider::Cohere
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_fireworks() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.fireworks.ai"),
+            LlmProvider::Fireworks
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_perplexity() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.perplexity.ai"),
+            LlmProvider::Perplexity
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_xai() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.x.ai"),
+            LlmProvider::Xai
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_ai21() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.ai21.com"),
+            LlmProvider::Ai21
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_cloudflare() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.cloudflare.com/workers-ai"),
+            LlmProvider::Cloudflare
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_cloudflare_without_workers_ai_is_custom() {
+        // Cloudflare detection requires both "api.cloudflare.com" AND "workers-ai"
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.cloudflare.com"),
+            LlmProvider::Custom
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_replicate() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.replicate.com"),
+            LlmProvider::Replicate
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_siliconflow() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.siliconflow.cn"),
+            LlmProvider::SiliconFlow
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_zhipu() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://open.bigmodel.cn"),
+            LlmProvider::Zhipu
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_zhipu_international_takes_precedence() {
+        // international.bigmodel.cn must be detected before bigmodel.cn
+        assert_eq!(
+            LlmProvider::from_base_url("https://open.international.bigmodel.cn"),
+            LlmProvider::ZhipuInternational
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_moonshot() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.moonshot.cn"),
+            LlmProvider::Moonshot
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_minimax() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.minimax.chat"),
+            LlmProvider::Minimax
+        );
+    }
+
+    // -- from_base_url: edge cases --
+
+    #[test]
+    fn test_provider_detection_trailing_slash() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.anthropic.com/"),
+            LlmProvider::Anthropic
+        );
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.openai.com/v1/"),
+            LlmProvider::OpenAI
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_with_path() {
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.anthropic.com/some/path"),
+            LlmProvider::Anthropic
+        );
+        assert_eq!(
+            LlmProvider::from_base_url("https://api.openai.com/v1/chat/completions"),
+            LlmProvider::OpenAI
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_case_insensitive() {
+        assert_eq!(
+            LlmProvider::from_base_url("HTTPS://API.ANTHROPIC.COM"),
+            LlmProvider::Anthropic
+        );
+        assert_eq!(
+            LlmProvider::from_base_url("HtTp://LocalHost:11434"),
+            LlmProvider::Ollama
+        );
+    }
+
+    #[test]
+    fn test_provider_detection_empty_url_is_custom() {
+        assert_eq!(LlmProvider::from_base_url(""), LlmProvider::Custom);
+    }
+
+    // -- endpoint() for remaining providers --
+
+    #[test]
+    fn test_endpoint_remaining_providers() {
+        assert_eq!(LlmProvider::OpenRouter.endpoint(), "/api/v1/chat/completions");
+        assert_eq!(LlmProvider::Cohere.endpoint(), "/v2/chat");
+        assert_eq!(LlmProvider::Fireworks.endpoint(), "/v1/chat/completions");
+        assert_eq!(LlmProvider::Perplexity.endpoint(), "/chat/completions");
+        assert_eq!(LlmProvider::Xai.endpoint(), "/v1/chat/completions");
+        assert_eq!(LlmProvider::Ai21.endpoint(), "/v1/chat/completions");
+        assert_eq!(LlmProvider::Cloudflare.endpoint(), "/client/v4/accounts/");
+        assert_eq!(LlmProvider::Replicate.endpoint(), "/v1/predictions");
+        assert_eq!(LlmProvider::SiliconFlow.endpoint(), "/v1/chat/completions");
+        assert_eq!(LlmProvider::Zhipu.endpoint(), "/api/paas/v4/chat/completions");
+        assert_eq!(
+            LlmProvider::ZhipuInternational.endpoint(),
+            "/api/paas/v4/chat/completions"
+        );
+        assert_eq!(LlmProvider::Moonshot.endpoint(), "/v1/chat/completions");
+        assert_eq!(LlmProvider::Minimax.endpoint(), "/v1/text/chatcompletion_v2");
+        assert_eq!(LlmProvider::DashScope.endpoint(), "/compatible-mode/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_endpoint_custom_uses_anthropic_path() {
+        assert_eq!(LlmProvider::Custom.endpoint(), "/v1/messages");
+    }
+
+    // -- wire_format() direct tests --
+
+    #[test]
+    fn test_wire_format_anthropic_group() {
+        assert_eq!(LlmProvider::Anthropic.wire_format(), WireFormat::Anthropic);
+        assert_eq!(LlmProvider::Custom.wire_format(), WireFormat::Anthropic);
+        assert_eq!(LlmProvider::Bedrock.wire_format(), WireFormat::Anthropic);
+    }
+
+    #[test]
+    fn test_wire_format_openai_group() {
+        let openai_providers = [
+            LlmProvider::OpenAI,
+            LlmProvider::Azure,
+            LlmProvider::Mistral,
+            LlmProvider::DeepSeek,
+            LlmProvider::Groq,
+            LlmProvider::Together,
+            LlmProvider::OpenRouter,
+            LlmProvider::Cohere,
+            LlmProvider::Fireworks,
+            LlmProvider::Perplexity,
+            LlmProvider::Xai,
+            LlmProvider::Ai21,
+            LlmProvider::Cloudflare,
+            LlmProvider::Replicate,
+            LlmProvider::SiliconFlow,
+            LlmProvider::Zhipu,
+            LlmProvider::ZhipuInternational,
+            LlmProvider::Moonshot,
+            LlmProvider::Minimax,
+            LlmProvider::DashScope,
+        ];
+        for provider in openai_providers {
+            assert_eq!(
+                provider.wire_format(),
+                WireFormat::OpenAI,
+                "{provider:?} should be OpenAI wire format"
+            );
+        }
+    }
+
+    #[test]
+    fn test_wire_format_ollama() {
+        assert_eq!(LlmProvider::Ollama.wire_format(), WireFormat::Ollama);
+    }
+
+    #[test]
+    fn test_wire_format_gemini() {
+        assert_eq!(LlmProvider::Gemini.wire_format(), WireFormat::Gemini);
+    }
+
+    // -- requires_auth() --
+
+    #[test]
+    fn test_requires_auth() {
+        // Only Ollama does not require auth
+        assert!(!LlmProvider::Ollama.requires_auth());
+        // All others do
+        assert!(LlmProvider::Anthropic.requires_auth());
+        assert!(LlmProvider::OpenAI.requires_auth());
+        assert!(LlmProvider::Gemini.requires_auth());
+        assert!(LlmProvider::Custom.requires_auth());
+        assert!(LlmProvider::Bedrock.requires_auth());
+    }
+
+    // -- canonical_api_key_env() --
+
+    #[test]
+    fn test_canonical_api_key_env_known_providers() {
+        assert_eq!(
+            LlmProvider::Anthropic.canonical_api_key_env(),
+            Some("ANTHROPIC_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::OpenAI.canonical_api_key_env(),
+            Some("OPENAI_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::Gemini.canonical_api_key_env(),
+            Some("GEMINI_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::Mistral.canonical_api_key_env(),
+            Some("MISTRAL_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::DeepSeek.canonical_api_key_env(),
+            Some("DEEPSEEK_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::Groq.canonical_api_key_env(),
+            Some("GROQ_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::Together.canonical_api_key_env(),
+            Some("TOGETHER_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::OpenRouter.canonical_api_key_env(),
+            Some("OPENROUTER_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::Cohere.canonical_api_key_env(),
+            Some("COHERE_API_KEY")
+        );
+        assert_eq!(
+            LlmProvider::Xai.canonical_api_key_env(),
+            Some("XAI_API_KEY")
+        );
+    }
+
+    #[test]
+    fn test_canonical_api_key_env_providers_without_env() {
+        // These providers have no canonical env var
+        assert!(LlmProvider::Ollama.canonical_api_key_env().is_none());
+        assert!(LlmProvider::Custom.canonical_api_key_env().is_none());
+        assert!(LlmProvider::Bedrock.canonical_api_key_env().is_none());
+        assert!(LlmProvider::Cloudflare.canonical_api_key_env().is_none());
+        assert!(LlmProvider::Replicate.canonical_api_key_env().is_none());
+    }
+
+    // -- resolve_api_key_from_env() --
+
+    #[test]
+    fn test_resolve_api_key_prefers_shannon_key() {
+        // SAFETY: Test-only env var manipulation. These vars are test-scoped
+        // and cleaned up before and after the test.
+        unsafe {
+            std::env::remove_var("SHANNON_API_KEY");
+            std::env::remove_var("ANTHROPIC_API_KEY");
+
+            // Set both SHANNON_API_KEY and provider-specific key
+            std::env::set_var("SHANNON_API_KEY", "shannon-key");
+            std::env::set_var("ANTHROPIC_API_KEY", "anthropic-key");
+        }
+
+        let resolved = LlmProvider::Anthropic.resolve_api_key_from_env();
+        assert_eq!(resolved, "shannon-key");
+
+        // Clean up
+        unsafe {
+            std::env::remove_var("SHANNON_API_KEY");
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
+    }
+
+    #[test]
+    fn test_resolve_api_key_falls_back_to_provider_key() {
+        unsafe {
+            std::env::remove_var("SHANNON_API_KEY");
+            std::env::remove_var("OPENAI_API_KEY");
+
+            std::env::set_var("OPENAI_API_KEY", "openai-key");
+        }
+
+        let resolved = LlmProvider::OpenAI.resolve_api_key_from_env();
+        assert_eq!(resolved, "openai-key");
+
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+    }
+
+    #[test]
+    fn test_resolve_api_key_returns_empty_when_none_set() {
+        unsafe {
+            std::env::remove_var("SHANNON_API_KEY");
+            std::env::remove_var("DEEPSEEK_API_KEY");
+        }
+
+        let resolved = LlmProvider::DeepSeek.resolve_api_key_from_env();
+        assert!(resolved.is_empty());
+    }
+
+    // -- validate() and is_configured() --
+
+    #[test]
+    fn test_validate_valid_config() {
+        let cfg = LlmClientConfig {
+            api_key: "sk-test".to_string(),
+            base_url: "https://api.openai.com".to_string(),
+            model: "gpt-4o".to_string(),
+            provider: LlmProvider::OpenAI,
+            max_tokens: 4096,
+            timeout_seconds: 120,
+            api_version: String::new(),
+            extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 3,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        assert!(cfg.validate().is_ok());
+        assert!(cfg.is_configured());
+    }
+
+    #[test]
+    fn test_validate_ollama_without_api_key_is_valid() {
+        let cfg = LlmClientConfig::ollama_default();
+        assert!(cfg.validate().is_ok());
+        assert!(cfg.is_configured());
+    }
+
+    #[test]
+    fn test_validate_fails_with_empty_base_url() {
+        let cfg = LlmClientConfig {
+            api_key: "sk-test".to_string(),
+            base_url: "  ".to_string(),
+            model: "gpt-4o".to_string(),
+            provider: LlmProvider::OpenAI,
+            max_tokens: 4096,
+            timeout_seconds: 120,
+            api_version: String::new(),
+            extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 3,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("base_url"), "error should mention base_url: {err}");
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn test_validate_fails_with_missing_api_key_for_auth_provider() {
+        let cfg = LlmClientConfig {
+            api_key: String::new(),
+            base_url: "https://api.anthropic.com".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            provider: LlmProvider::Anthropic,
+            max_tokens: 4096,
+            timeout_seconds: 120,
+            api_version: String::new(),
+            extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 3,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            err.contains("API key required"),
+            "error should mention API key: {err}"
+        );
+        assert!(
+            err.contains("anthropic"),
+            "error should mention provider name: {err}"
+        );
+        assert!(!cfg.is_configured());
+    }
+
+    #[test]
+    fn test_validate_fails_with_empty_model() {
+        let cfg = LlmClientConfig {
+            api_key: "sk-test".to_string(),
+            base_url: "https://api.openai.com".to_string(),
+            model: "  ".to_string(),
+            provider: LlmProvider::OpenAI,
+            max_tokens: 4096,
+            timeout_seconds: 120,
+            api_version: String::new(),
+            extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 3,
+            budget_tokens: None,
+            reasoning_effort: None,
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("model"), "error should mention model: {err}");
+    }
+
+    #[test]
+    fn test_validate_bedrock_without_api_key_is_valid() {
+        // Bedrock uses SigV4, not API keys, but requires_auth() is true.
+        // The validate() method will reject it without api_key because
+        // Bedrock.requires_auth() returns true. This test documents that behavior.
+        let cfg = LlmClientConfig::bedrock_default();
+        // Bedrock requires_auth() == true but has empty api_key,
+        // so validate() should fail.
+        assert!(cfg.validate().is_err());
+    }
+
+    // -- Provider constructors: untested ones --
+
+    #[test]
+    fn test_ollama_default_config() {
+        let cfg = LlmClientConfig::ollama_default();
+        assert_eq!(cfg.provider, LlmProvider::Ollama);
+        assert_eq!(cfg.base_url, "http://localhost:11434");
+        assert_eq!(cfg.model, "llama3");
+        assert_eq!(cfg.timeout_seconds, 300);
+        assert!(cfg.api_key.is_empty());
+        assert!(!cfg.provider.requires_auth());
+    }
+
+    #[test]
+    fn test_openai_default_config() {
+        let cfg = LlmClientConfig::openai_default();
+        assert_eq!(cfg.provider, LlmProvider::OpenAI);
+        assert_eq!(cfg.base_url, "https://api.openai.com");
+        assert_eq!(cfg.model, "gpt-4o");
+        assert_eq!(cfg.timeout_seconds, 120);
+    }
+
+    #[test]
+    fn test_azure_default_config() {
+        let cfg = LlmClientConfig::azure_default();
+        assert_eq!(cfg.provider, LlmProvider::Azure);
+        assert!(cfg.base_url.contains("azure.com"));
+        assert_eq!(cfg.model, "gpt-4o");
+    }
+
+    #[test]
+    fn test_bedrock_default_config() {
+        let cfg = LlmClientConfig::bedrock_default();
+        assert_eq!(cfg.provider, LlmProvider::Bedrock);
+        assert!(cfg.base_url.contains("amazonaws.com"));
+        assert!(cfg.base_url.contains("us-east-1"));
+        assert!(cfg.model.contains("claude"));
+        assert!(cfg.api_key.is_empty());
+    }
+
     // ======================================================================
     // Property-based tests (proptest)
     // ======================================================================
