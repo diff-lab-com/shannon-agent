@@ -62,26 +62,26 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
     if let Some(system) = request.get("system") {
         match mode {
             RenderMode::KindOnly => {
-                writeln!(output, "system: present").unwrap();
+                writeln!(output, "system: present").expect("snapshot render");
             }
             RenderMode::RedactedText => {
                 let hash = simple_hash(&system.to_string());
-                writeln!(output, "system: [hash:{hash}]").unwrap();
+                writeln!(output, "system: [hash:{hash}]").expect("snapshot render");
             }
             RenderMode::FullText => {
-                writeln!(output, "system: {}", truncate(&system.to_string(), 500)).unwrap();
+                writeln!(output, "system: {}", truncate(&system.to_string(), 500)).expect("snapshot render");
             }
         }
     }
 
     // Model
     if let Some(model) = request.get("model").and_then(|m| m.as_str()) {
-        writeln!(output, "model: {model}").unwrap();
+        writeln!(output, "model: {model}").expect("snapshot render");
     }
 
     // Tools
     if let Some(tools) = request.get("tools").and_then(|t| t.as_array()) {
-        writeln!(output, "tools: {}", tools.len()).unwrap();
+        writeln!(output, "tools: {}", tools.len()).expect("snapshot render");
         for (i, tool) in tools.iter().enumerate() {
             let name = tool
                 .get("name")
@@ -89,14 +89,14 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
                 .unwrap_or("unknown");
             match mode {
                 RenderMode::KindOnly => {
-                    writeln!(output, "  tool[{i}]: {name}").unwrap();
+                    writeln!(output, "  tool[{i}]: {name}").expect("snapshot render");
                 }
                 RenderMode::RedactedText | RenderMode::FullText => {
                     let desc = tool
                         .get("description")
                         .and_then(|d| d.as_str())
                         .unwrap_or("");
-                    writeln!(output, "  tool[{i}]: {name} - {}", truncate(desc, 80)).unwrap();
+                    writeln!(output, "  tool[{i}]: {name} - {}", truncate(desc, 80)).expect("snapshot render");
                 }
             }
         }
@@ -104,7 +104,7 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
 
     // Messages
     if let Some(messages) = request.get("messages").and_then(|m| m.as_array()) {
-        writeln!(output, "messages: {}", messages.len()).unwrap();
+        writeln!(output, "messages: {}", messages.len()).expect("snapshot render");
         for (i, msg) in messages.iter().enumerate() {
             let role = msg
                 .get("role")
@@ -115,17 +115,17 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
             match mode {
                 RenderMode::KindOnly => {
                     let kind = classify_content_kind(content);
-                    writeln!(output, "  {i:03}: {role}/{kind}").unwrap();
+                    writeln!(output, "  {i:03}: {role}/{kind}").expect("snapshot render");
                 }
                 RenderMode::RedactedText => {
                     let kind = classify_content_kind(content);
                     let preview = content_preview(content, 100);
-                    writeln!(output, "  {i:03}: {role}/{kind} {preview}").unwrap();
+                    writeln!(output, "  {i:03}: {role}/{kind} {preview}").expect("snapshot render");
                 }
                 RenderMode::FullText => {
                     let kind = classify_content_kind(content);
                     let preview = content_preview(content, 300);
-                    writeln!(output, "  {i:03}: {role}/{kind} {preview}").unwrap();
+                    writeln!(output, "  {i:03}: {role}/{kind} {preview}").expect("snapshot render");
                 }
             }
         }
@@ -137,11 +137,11 @@ pub fn render_request_snapshot(request: &Value, mode: RenderMode) -> String {
 /// Render a tool call sequence as a deterministic string for snapshot comparison.
 pub fn snapshot_tool_chain(calls: &[(String, Value, String, bool)]) -> String {
     let mut output = String::new();
-    writeln!(output, "tool_chain: {} steps", calls.len()).unwrap();
+    writeln!(output, "tool_chain: {} steps", calls.len()).expect("snapshot render");
     for (i, (name, input, _result, is_error)) in calls.iter().enumerate() {
         let status = if *is_error { "ERROR" } else { "OK" };
         let input_preview = truncate(&input.to_string(), 120);
-        writeln!(output, "  {i}: {name}({input_preview}) [{status}]").unwrap();
+        writeln!(output, "  {i}: {name}({input_preview}) [{status}]").expect("snapshot render");
     }
     output
 }

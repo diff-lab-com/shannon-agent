@@ -167,7 +167,7 @@ fn sha256_hex(s: &str) -> String {
     let hash = sha256_compact(s);
     let mut hex = String::with_capacity(hash.len() * 2);
     for byte in hash {
-        write!(&mut hex, "{byte:02x}").unwrap();
+        write!(&mut hex, "{byte:02x}").expect("hex encoding");
     }
     hex
 }
