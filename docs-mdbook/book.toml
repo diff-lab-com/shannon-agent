@@ -1,0 +1,18 @@
+[book]
+title = "Shannon Code Documentation"
+authors = ["Shannon Code Contributors"]
+description = "Rust-based AI code assistant with multi-provider LLM support, MCP extensions, and terminal UI"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "navy"
+git-repository-url = "https://github.com/ericdong/shannon-code"
+edit-url-template = "https://github.com/ericdong/shannon-code/edit/main/docs-mdbook/src/{path}"
+
+[output.html.search]
+enable = true
+limit-results = 30

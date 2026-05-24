@@ -114,3 +114,4 @@ lcov.info
 vendor/
 .serena/
 claudedocs/
+docs-mdbook/book/
