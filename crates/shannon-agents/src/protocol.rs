@@ -243,9 +243,6 @@ pub mod methods {
     // Coordinator → Agent
     pub const EXECUTE_TASK: &str = "execute_task";
     pub const SHUTDOWN: &str = "shutdown";
-    #[allow(dead_code)]
-    pub const PING: &str = "ping";
-
     // Agent → Coordinator
     pub const AGENT_READY: &str = "agent_ready";
     pub const TASK_PROGRESS: &str = "task_progress";

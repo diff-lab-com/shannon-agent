@@ -159,12 +159,21 @@ fn bench_compute_diff_hunks_many_changes(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_perform_edit_single,
-    bench_perform_edit_replace_all,
-    bench_perform_edit_not_found,
-    bench_compute_diff_hunks,
-    bench_compute_diff_hunks_many_changes,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_perform_edit_single,
+        bench_perform_edit_replace_all,
+        bench_perform_edit_not_found,
+        bench_compute_diff_hunks,
+        bench_compute_diff_hunks_many_changes
+}
 criterion_main!(benches);

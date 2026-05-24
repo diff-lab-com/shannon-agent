@@ -230,9 +230,17 @@ Edge cases and error handling.
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_load_skills_from_directory,
-    bench_frontmatter_parsing
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_load_skills_from_directory, bench_frontmatter_parsing
+}
 criterion_main!(benches);

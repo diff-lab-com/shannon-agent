@@ -168,15 +168,24 @@ fn bench_priority_budget_allocate(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_budget_creation,
-    bench_budget_with_fractions,
-    bench_priority_allocation,
-    bench_pressure_adjustment,
-    bench_estimate_schema_tokens,
-    bench_check_schema_budget,
-    bench_tools_to_defer,
-    bench_priority_budget_allocate,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_budget_creation,
+        bench_budget_with_fractions,
+        bench_priority_allocation,
+        bench_pressure_adjustment,
+        bench_estimate_schema_tokens,
+        bench_check_schema_budget,
+        bench_tools_to_defer,
+        bench_priority_budget_allocate
+}
 criterion_main!(benches);

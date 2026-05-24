@@ -330,12 +330,21 @@ fn bench_file_traversal(c: &mut Criterion) {
     });
 }
 
-criterion_group!(
-    benches,
-    bench_file_read,
-    bench_file_edit,
-    bench_grep_search,
-    bench_glob_pattern,
-    bench_file_traversal,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_file_read,
+        bench_file_edit,
+        bench_grep_search,
+        bench_glob_pattern,
+        bench_file_traversal
+}
 criterion_main!(benches);

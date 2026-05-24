@@ -224,11 +224,20 @@ fn bench_vcr_lookup(c: &mut Criterion) {
     c.bench_function("vcr_list_recordings", |b| b.iter(|| vcr.list_recordings()));
 }
 
-criterion_group!(
-    benches,
-    bench_recording_write,
-    bench_recording_read,
-    bench_recording_serialize,
-    bench_vcr_lookup,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_recording_write,
+        bench_recording_read,
+        bench_recording_serialize,
+        bench_vcr_lookup
+}
 criterion_main!(benches);

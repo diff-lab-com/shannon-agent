@@ -707,18 +707,6 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
-    fn make_manager() -> Arc<McpResourceManager> {
-        let manager = Arc::new(McpResourceManager::new());
-        let client = MockClient::new("test-server", true, true)
-            .with_resource("file:///readme", "Readme", "Project readme")
-            .with_resource("file:///config", "Config", "Configuration file");
-        // We need to register in an async context, so we return the manager
-        // and register in the test body.
-        drop(client); // Don't need it here
-        manager
-    }
-
     #[tokio::test]
     async fn test_list_tool_name_and_schema() {
         let manager = Arc::new(McpResourceManager::new());

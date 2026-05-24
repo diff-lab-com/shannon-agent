@@ -13,7 +13,7 @@ use shannon_tool_interface::{Tool, ToolOutput};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 
 #[test]
@@ -713,7 +713,6 @@ async fn test_progress_callback_routing() {
         42,
         PendingRequest {
             tx: oneshot_tx,
-            created_at: Instant::now(),
             progress_token: Some(serde_json::json!("pg-test")),
             on_progress: Some(Arc::new(move |progress, total| {
                 reports_clone

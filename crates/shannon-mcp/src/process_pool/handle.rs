@@ -613,7 +613,6 @@ impl McpServerHandle {
             id,
             PendingRequest {
                 tx,
-                created_at: Instant::now(),
                 progress_token: progress_token.clone(),
                 on_progress,
             },
@@ -1209,7 +1208,6 @@ mod tests {
             1,
             PendingRequest {
                 tx,
-                created_at: Instant::now(),
                 progress_token: None,
                 on_progress: None,
             },

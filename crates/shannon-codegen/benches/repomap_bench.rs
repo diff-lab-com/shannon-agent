@@ -137,10 +137,19 @@ fn bench_generate_repomap_filtered(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_generate_repomap_rust,
-    bench_generate_repomap_mixed,
-    bench_generate_repomap_filtered,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_generate_repomap_rust,
+        bench_generate_repomap_mixed,
+        bench_generate_repomap_filtered
+}
 criterion_main!(benches);

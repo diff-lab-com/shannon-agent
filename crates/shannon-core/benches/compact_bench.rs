@@ -224,13 +224,22 @@ fn bench_post_compact_cleanup(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_analyze_context,
-    bench_group_messages,
-    bench_prune_stale_tool_results,
-    bench_compact,
-    bench_micro_compact,
-    bench_post_compact_cleanup,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_analyze_context,
+        bench_group_messages,
+        bench_prune_stale_tool_results,
+        bench_compact,
+        bench_micro_compact,
+        bench_post_compact_cleanup
+}
 criterion_main!(benches);

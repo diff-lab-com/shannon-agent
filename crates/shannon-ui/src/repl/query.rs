@@ -1731,65 +1731,6 @@ fn escape_html_simple(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Format thinking content for display in the streaming message area.
-///
-/// Shows a collapsible-style header with character count, then the last
-/// few lines of thinking content. Kept brief to avoid flooding the chat
-/// area during extended thinking.
-#[allow(dead_code)]
-fn format_thinking_for_streaming(content: &str) -> String {
-    let char_count = content.chars().count();
-    let header = if char_count >= 1000 {
-        t!("ui.thinking_header_k", count => char_count / 1000).to_string()
-    } else {
-        t!("ui.thinking_header", count => char_count).to_string()
-    };
-
-    // Show the tail of thinking content (last ~500 chars, ~10 lines)
-    // so the user sees what the model is currently reasoning about.
-    let tail = if char_count > 500 {
-        let mut start = content
-            .char_indices()
-            .nth(char_count - 500)
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        // Align to a line boundary for clean display
-        if start > 0 {
-            if let Some(pos) = content[start..].find('\n') {
-                start += pos + 1;
-            }
-        }
-        &content[start..]
-    } else {
-        content
-    };
-
-    // Keep only last 12 lines to avoid flooding the chat area
-    let lines: Vec<&str> = tail.lines().collect();
-    let display_lines = if lines.len() > 12 {
-        &lines[lines.len() - 12..]
-    } else {
-        &lines
-    };
-
-    let mut result = format!("╭ {header} ╮\n");
-    for line in display_lines {
-        // Truncate very long lines for display
-        let truncated = if line.chars().count() > 120 {
-            let mut end = 117;
-            while end > 0 && !line.is_char_boundary(end) {
-                end -= 1;
-            }
-            format!("{}...", &line[..end])
-        } else {
-            line.to_string()
-        };
-        result.push_str(&format!("│ {truncated}\n"));
-    }
-    result.push_str("╰───────────╯");
-    result
-}
-
 #[cfg(test)]
 mod tests {
     //! Tests for query engine recovery after errors.
