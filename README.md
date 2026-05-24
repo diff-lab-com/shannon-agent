@@ -4,9 +4,9 @@
 
 **A high-performance, open-source AI-assisted coding tool, written in Rust**
 
-[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-8162-brightgreen.svg)
+[![Tests](https://img.shields.io/badge/tests-8516-brightgreen.svg)
 [![Lines](https://img.shields.io/badge/code-300K-blue.svg)
 
 [English](#what-is-shannon-code) | [中文文档](#中文文档)
@@ -84,7 +84,7 @@ The leaked source code contained **510,000 lines of TypeScript** with **zero tes
 | Problem | Closed-Source Tool | Shannon Code |
 |---------|--------------------|--------------|
 | Cache destruction | Dynamic billing headers break cache | No hidden injections; cache-friendly prompts |
-| Cost transparency | Bugs inflate costs 10-20x | 8,162 tests verify behavior; every line auditable |
+| Cost transparency | Bugs inflate costs 10-20x | 8,516 tests verify behavior; every line auditable |
 | User lock-in | Third-party APIs degraded | Multi-provider: Anthropic, OpenAI, Ollama, any OpenAI-compatible endpoint |
 | Quality assurance | 0 tests for 64K+ lines | Every source file has `#[test]`; test-to-code ratio verified |
 | Silent degradation | Cache TTL downgraded without notice | All behavior visible in source code |
@@ -179,7 +179,7 @@ Shannon Code ships two binaries:
 
 ### Prerequisites
 
-- **Rust** 1.85+ (edition 2024)
+- **Rust** 1.88+ (edition 2024)
 - **Operating System**: Linux / macOS / Windows
 - **Memory**: 4 GB+ recommended
 - **API Key**: Any OpenAI-compatible API key (Anthropic, OpenAI, Ollama, etc.)
@@ -199,17 +199,15 @@ cargo build --release
 
 ### Configure
 
-Shannon Code supports multiple LLM providers. Configuration priority: CLI args > environment variables (`SHANNON_*`) > `.shannon.toml` > `~/.shannon/config.toml`.
+Shannon Code supports multiple LLM providers. Configuration priority: CLI args > environment variables (`SHANNON_*`) > `.shannon.toml` (project-local) > `~/.shannon/config.toml` (global).
 
 #### Option 1: Anthropic (direct)
 
 ```bash
-mkdir -p ~/.config/shannon
-cat > ~/.config/shannon/config.toml << 'EOF'
-[anthropic]
+mkdir -p ~/.shannon
+cat > ~/.shannon/config.toml << 'EOF'
+provider = "anthropic"
 api_key = "sk-ant-..."
-
-[general]
 model = "claude-sonnet-4-20250514"
 max_tokens = 8192
 EOF
@@ -218,14 +216,12 @@ EOF
 #### Option 2: OpenAI-compatible endpoint (any provider)
 
 ```bash
-mkdir -p ~/.config/shannon
-cat > ~/.config/shannon/config.toml << 'EOF'
-[general]
+mkdir -p ~/.shannon
+cat > ~/.shannon/config.toml << 'EOF'
+provider = "openai"
 model = "gpt-4o"
-api_base = "https://api.openai.com/v1"
 api_key = "sk-..."
-
-[general]
+base_url = "https://api.openai.com/v1"
 max_tokens = 8192
 EOF
 ```
@@ -248,6 +244,22 @@ export SHANNON_API_KEY="sk-ant-..."
 export SHANNON_MODEL="claude-sonnet-4-20250514"
 shannon
 ```
+
+#### Available environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `SHANNON_API_KEY` | API key for the LLM provider |
+| `SHANNON_MODEL` | Model name (e.g., `claude-sonnet-4-20250514`, `gpt-4o`) |
+| `SHANNON_PROVIDER` | Provider: `anthropic`, `openai`, `ollama`, `custom` |
+| `SHANNON_BASE_URL` | Custom API endpoint URL |
+| `SHANNON_MAX_TOKENS` | Maximum output tokens |
+| `SHANNON_TEMPERATURE` | Sampling temperature (0.0–1.0) |
+| `SHANNON_TIMEOUT` | Request timeout in seconds |
+| `SHANNON_DEBUG` | Enable debug logging |
+| `SHANNON_PERMISSION_PROFILE` | Permission profile: `strict`, `balanced`, `permissive` |
+
+Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are also detected automatically.
 
 #### MCP Server Configuration
 
@@ -286,8 +298,20 @@ shannon --resume
 # Resume specific session
 shannon --resume <session-uuid>
 
+# Continue most recent session (alias for --resume)
+shannon --continue
+
 # Structured output with JSON Schema validation
 shannon --prompt "List all TODOs" --schema schema.json
+
+# Pipe mode
+echo "fix this bug" | shannon --pipe
+
+# Limit tool access in CI
+shannon --prompt "refactor" --allowed-tools Read,Edit,Bash,Grep --max-turns 10
+
+# Only output diff (for automated workflows)
+shannon --prompt "fix lint" --diff-only
 ```
 
 ### Key Commands (inside REPL)
@@ -393,7 +417,7 @@ Artifacts are placed in `target/dist/` as `.tar.gz` (Linux/macOS) or `.zip` (Win
 | Metric | Value |
 |--------|-------|
 | Total Rust code | ~300,000 lines |
-| Total tests | **8,162** |
+| Total tests | **8,516** |
 | Crates | 12 |
 | Files with zero tests | **0** (every `src/**/*.rs` has at least one `#[test]`) |
 | CI lint | `cargo clippy --workspace -- -D warnings` (zero warnings) |
@@ -420,7 +444,7 @@ Every source file in every crate has test coverage. Integration tests use `mocki
 | Metric | Value |
 |--------|-------|
 | Total lines of Rust code | ~300,000 |
-| Total tests | 8,162 |
+| Total tests | 8,516 |
 | Number of crates | 12 |
 | Supported languages (UI) | 10 (en, zh, hi, es, fr, ar, bn, pt, ru, ja) |
 | Supported platforms | Linux, macOS, Windows |
@@ -522,7 +546,7 @@ Built with Rust
 | 问题 | 闭源工具 | Shannon Code |
 |------|----------|-------------|
 | 缓存破坏 | 动态计费头破坏缓存 | 无隐藏注入；缓存友好提示 |
-| 成本透明度 | Bug 使成本膨胀 10-20 倍 | 8,162 个测试验证行为；每行代码可审计 |
+| 成本透明度 | Bug 使成本膨胀 10-20 倍 | 8,516 个测试验证行为；每行代码可审计 |
 | 用户锁定 | 第三方 API 被降级 | 多提供商：Anthropic、OpenAI、Ollama、任何 OpenAI 兼容端点 |
 | 质量保证 | 64K+ 行零测试 | 每个源文件都有 `#[test]`；测试覆盖率验证 |
 | 静默降级 | 缓存 TTL 被降级不通知 | 所有行为在源代码中可见 |
@@ -578,7 +602,7 @@ Shannon Code 是一个功能丰富、类型安全的 AI 辅助编程工具，完
 
 ### 环境要求
 
-- **Rust** 1.85+ (edition 2024)
+- **Rust** 1.88+ (edition 2024)
 - **操作系统**：Linux / macOS / Windows
 - **内存**：建议 4GB 以上
 - **API 密钥**：任何 OpenAI 兼容 API 密钥（Anthropic、OpenAI、Ollama 等）
@@ -593,17 +617,15 @@ cargo build --release
 
 ### 配置
 
-Shannon Code 支持多个 LLM 提供商。配置优先级：CLI 参数 > 环境变量（`SHANNON_*`）> `.shannon.toml` > `~/.shannon/config.toml`。
+Shannon Code 支持多个 LLM 提供商。配置优先级：CLI 参数 > 环境变量（`SHANNON_*`）> `.shannon.toml`（项目级）> `~/.shannon/config.toml`（全局）。
 
 #### 方式一：Anthropic（直连）
 
 ```bash
-mkdir -p ~/.config/shannon
-cat > ~/.config/shannon/config.toml << 'EOF'
-[anthropic]
+mkdir -p ~/.shannon
+cat > ~/.shannon/config.toml << 'EOF'
+provider = "anthropic"
 api_key = "sk-ant-..."
-
-[general]
 model = "claude-sonnet-4-20250514"
 max_tokens = 8192
 EOF
@@ -612,14 +634,12 @@ EOF
 #### 方式二：OpenAI 兼容端点（任意提供商）
 
 ```bash
-mkdir -p ~/.config/shannon
-cat > ~/.config/shannon/config.toml << 'EOF'
-[general]
+mkdir -p ~/.shannon
+cat > ~/.shannon/config.toml << 'EOF'
+provider = "openai"
 model = "gpt-4o"
-api_base = "https://api.openai.com/v1"
 api_key = "sk-..."
-
-[general]
+base_url = "https://api.openai.com/v1"
 max_tokens = 8192
 EOF
 ```
@@ -642,6 +662,22 @@ export SHANNON_API_KEY="sk-ant-..."
 export SHANNON_MODEL="claude-sonnet-4-20250514"
 shannon
 ```
+
+#### 可用环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `SHANNON_API_KEY` | LLM 提供商的 API 密钥 |
+| `SHANNON_MODEL` | 模型名称（如 `claude-sonnet-4-20250514`、`gpt-4o`） |
+| `SHANNON_PROVIDER` | 提供商：`anthropic`、`openai`、`ollama`、`custom` |
+| `SHANNON_BASE_URL` | 自定义 API 端点 URL |
+| `SHANNON_MAX_TOKENS` | 最大输出 token 数 |
+| `SHANNON_TEMPERATURE` | 采样温度（0.0–1.0） |
+| `SHANNON_TIMEOUT` | 请求超时秒数 |
+| `SHANNON_DEBUG` | 启用调试日志 |
+| `SHANNON_PERMISSION_PROFILE` | 权限配置：`strict`、`balanced`、`permissive` |
+
+自动检测：`ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY` 也可作为备用密钥。
 
 #### MCP 服务器配置
 
@@ -670,7 +706,11 @@ shannon /path/to/project         # 在指定目录启动
 shannon --prompt "解释auth模块"   # 非交互/CI 模式
 shannon --resume                  # 恢复最近的会话
 shannon --resume <session-uuid>   # 恢复指定会话
+shannon --continue                # 恢复最近的会话（--resume 别名）
 shannon --prompt "列出所有TODO" --schema schema.json  # 结构化输出
+echo "修复这个bug" | shannon --pipe  # 管道模式
+shannon --prompt "重构" --allowed-tools Read,Edit,Bash,Grep --max-turns 10  # CI 限制工具
+shannon --prompt "修复lint" --diff-only  # 仅输出 diff
 ```
 
 ### 常用命令（REPL 内）
@@ -694,7 +734,7 @@ shannon --prompt "列出所有TODO" --schema schema.json  # 结构化输出
 | 指标 | 数值 |
 |------|------|
 | Rust 代码总量 | ~300,000 行 |
-| 总测试数 | **8,162** |
+| 总测试数 | **8,516** |
 | Crate 数量 | 12 |
 | 零测试文件数 | **0**（每个 `src/**/*.rs` 至少一个 `#[test]`） |
 | CI 代码检查 | `cargo clippy --workspace -- -D warnings`（零警告） |
