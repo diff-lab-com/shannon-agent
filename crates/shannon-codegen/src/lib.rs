@@ -1,5 +1,10 @@
 //! shannon-codegen - Tree-sitter based code understanding for Shannon Code
 //!
+//! cargo fmt expands `if let A && B` into nested `if let` blocks that
+//! clippy flags as collapsible. Suppress project-wide since the formatting
+//! is intentional.
+#![allow(clippy::collapsible_if, clippy::collapsible_match)]
+//!
 //! This crate provides code analysis capabilities using tree-sitter grammars:
 //! - Language detection from file extensions
 //! - Symbol outline extraction (functions, classes, etc.)

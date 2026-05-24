@@ -1,5 +1,10 @@
 //! # Shannon Core
 //!
+//! cargo fmt expands `if let A && B` into nested `if let` blocks that
+//! clippy flags as collapsible. Suppress project-wide since the formatting
+//! is intentional.
+#![allow(clippy::collapsible_if, clippy::collapsible_match)]
+//!
 //! Core engine for Shannon Code - query processing, tool orchestration, and state management.
 //!
 //! ## Architecture

@@ -393,7 +393,7 @@ impl AnalyticsStore {
             )
             .collect();
 
-        result.sort_by(|a, b| b.total_calls.cmp(&a.total_calls));
+        result.sort_by_key(|b| std::cmp::Reverse(b.total_calls));
         result
     }
 
@@ -449,7 +449,7 @@ impl AnalyticsStore {
             })
             .collect();
 
-        result.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        result.sort_by_key(|b| std::cmp::Reverse(b.started_at));
         result
     }
 
@@ -531,7 +531,7 @@ impl AnalyticsStore {
             })
             .collect();
 
-        result.sort_by(|a, b| b.date.cmp(&a.date));
+        result.sort_by_key(|b| std::cmp::Reverse(b.date));
         result
     }
 
