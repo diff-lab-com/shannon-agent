@@ -609,10 +609,10 @@ pub fn format_diff_summary(stats: &DiffStats) -> String {
 /// A parsed hunk header with line number information.
 struct HunkHeader {
     old_start: usize,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: deserialized field
     old_count: usize,
     new_start: usize,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: deserialized field
     new_count: usize,
 }
 

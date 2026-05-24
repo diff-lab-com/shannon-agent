@@ -152,7 +152,7 @@ struct StreamingState {
     /// Optional keyword filter for streaming output — only show matching lines
     streaming_filter: Option<String>,
     /// Cancel flag — set to true to abort a running streaming tool
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: watcher lifecycle
     cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Rate limit info from API (used, total)
     rate_limit: Option<(u32, u32)>,

@@ -71,7 +71,7 @@ fn mock_ollama_streaming(server: &mut ServerGuard, text: &str) -> Mock {
         .create()
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: test helper
 fn mock_ollama_non_streaming(server: &mut ServerGuard, text: &str) -> Mock {
     server
         .mock("POST", "/api/chat")

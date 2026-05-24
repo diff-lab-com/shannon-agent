@@ -462,7 +462,7 @@ mod tests {
     struct ReceivedRequest {
         headers: Vec<(String, String)>,
         body: Vec<u8>,
-        #[allow(dead_code)]
+        #[allow(dead_code)] // KEEP: deserialized field
         response_status: u16,
     }
 

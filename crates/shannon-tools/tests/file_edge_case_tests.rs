@@ -25,7 +25,7 @@ use std::fs;
 use tempfile::TempDir;
 
 // Allow unused helpers — they are kept as utilities for future test expansion.
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: test helper
 fn _read_tool(td: &TempDir) -> ReadTool {
     use shannon_tools::file::sandbox::{PathSandbox, SandboxConfig};
     let sandbox = PathSandbox::with_config(SandboxConfig {
@@ -36,7 +36,7 @@ fn _read_tool(td: &TempDir) -> ReadTool {
     ReadTool::with_sandbox(sandbox)
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: test helper
 fn _write_tool(td: &TempDir) -> WriteTool {
     use shannon_tools::file::sandbox::{PathSandbox, SandboxConfig};
     let sandbox = PathSandbox::with_config(SandboxConfig {
@@ -47,7 +47,7 @@ fn _write_tool(td: &TempDir) -> WriteTool {
     WriteTool::with_sandbox(sandbox)
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: test helper
 fn _edit_tool(td: &TempDir) -> EditTool {
     use shannon_tools::file::sandbox::{PathSandbox, SandboxConfig};
     let sandbox = PathSandbox::with_config(SandboxConfig {
@@ -58,7 +58,7 @@ fn _edit_tool(td: &TempDir) -> EditTool {
     EditTool::with_sandbox(sandbox)
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: test helper
 fn _glob_tool(td: &TempDir) -> GlobTool {
     use shannon_tools::file::sandbox::{PathSandbox, SandboxConfig};
     let sandbox = PathSandbox::with_config(SandboxConfig {

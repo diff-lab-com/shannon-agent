@@ -1973,7 +1973,7 @@ fn test_new_destructive_patterns() {
 
 // ── BashTool streaming tests ──────────────────────────────────────────
 
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: test helper
 struct CollectSender {
     lines: std::sync::Mutex<Vec<String>>,
 }

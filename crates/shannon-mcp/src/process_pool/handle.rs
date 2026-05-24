@@ -43,7 +43,7 @@ pub(crate) struct McpServerHandle {
     /// Maximum restart attempts before giving up.
     pub(crate) max_restarts: u32,
     /// Health check interval.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: watcher lifecycle
     pub(crate) health_interval: Duration,
     /// Request timeout (for regular JSON-RPC requests like tools/list, ping).
     pub(crate) request_timeout: Duration,

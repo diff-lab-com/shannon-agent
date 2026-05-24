@@ -71,7 +71,7 @@ mod streaming_tests {
     }
 
     /// OpenAI-format SSE stream.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: test helper
     fn openai_text_stream(text: &str) -> String {
         format!(
             "data: {{\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1234567890,\"model\":\"gpt-4\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{text}\"}},\"finish_reason\":null}}]}}\n\n\
