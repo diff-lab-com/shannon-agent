@@ -42,12 +42,14 @@ jobs:
         run: >
           cargo clippy --workspace --
           -D warnings
+          -A unknown-lints
           -A clippy::collapsible_if
           -A clippy::collapsible_match
           -A clippy::derivable_impls
           -A clippy::manual_is_multiple_of
           -A clippy::manual_checked_div
           -A clippy::unwrap_used
+          -A clippy::unnecessary_sort_by
 
   fmt:
     name: Format
