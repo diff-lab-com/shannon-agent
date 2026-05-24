@@ -263,11 +263,10 @@ impl TokenEstimator {
             EstimationMethod::Precise => {
                 // Without a model name, use Claude as default family
                 let tokens = self.count_precise(content, "claude");
-                let effective_bpt = if tokens > 0 {
-                    content.len() / tokens
-                } else {
-                    DEFAULT_BYTES_PER_TOKEN
-                };
+                let effective_bpt = content
+                    .len()
+                    .checked_div(tokens)
+                    .unwrap_or(DEFAULT_BYTES_PER_TOKEN);
                 (tokens, effective_bpt.max(1))
             }
         };
@@ -281,11 +280,10 @@ impl TokenEstimator {
     /// Create a TokenEstimate result with model-specific precise counting.
     pub fn create_precise_estimate(&self, content: &str, model: &str) -> TokenEstimate {
         let tokens = self.count_precise(content, model);
-        let effective_bpt = if tokens > 0 {
-            content.len() / tokens
-        } else {
-            DEFAULT_BYTES_PER_TOKEN
-        };
+        let effective_bpt = content
+            .len()
+            .checked_div(tokens)
+            .unwrap_or(DEFAULT_BYTES_PER_TOKEN);
         TokenEstimate {
             estimated_tokens: tokens,
             bytes_per_token: effective_bpt.max(1),
