@@ -1236,4 +1236,1092 @@ mod tests {
         assert_eq!(loaded.subject, "Single task");
         assert_eq!(loaded.owner.as_deref(), Some("agent-x"));
     }
+
+    // ── sanitize_path_component tests ─────────────────────────────────
+
+    #[test]
+    fn sanitize_rejects_empty_string() {
+        let err = sanitize_path_component("", "label");
+        assert!(err.is_err());
+        match err {
+            Err(AgentError::Configuration(msg)) => {
+                assert!(msg.contains("label"));
+            }
+            other => panic!("Expected Configuration error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sanitize_rejects_dot() {
+        assert!(sanitize_path_component(".", "x").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_double_dot() {
+        assert!(sanitize_path_component("..", "x").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_all_dots() {
+        assert!(sanitize_path_component("...", "x").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_forward_slash() {
+        assert!(sanitize_path_component("foo/bar", "x").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_backslash() {
+        assert!(sanitize_path_component("foo\\bar", "x").is_err());
+    }
+
+    #[test]
+    fn sanitize_rejects_dot_dot_in_middle() {
+        assert!(sanitize_path_component("foo..bar", "x").is_err());
+    }
+
+    #[test]
+    fn sanitize_accepts_valid_name() {
+        assert!(sanitize_path_component("my-team", "x").is_ok());
+    }
+
+    #[test]
+    fn sanitize_accepts_alphanumeric() {
+        assert!(sanitize_path_component("team123", "x").is_ok());
+    }
+
+    #[test]
+    fn sanitize_accepts_underscore() {
+        assert!(sanitize_path_component("my_team", "x").is_ok());
+    }
+
+    // ── Construction tests ─────────────────────────────────────────────
+
+    #[test]
+    fn with_base_dir_sets_base() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+        assert_eq!(persist.base_dir(), dir);
+    }
+
+    #[test]
+    fn base_dir_reflects_custom_path() {
+        let custom = PathBuf::from("/tmp/shannon-test-nonexistent");
+        let persist = FilePersistence::with_base_dir(custom.clone());
+        assert_eq!(persist.base_dir(), &custom);
+    }
+
+    // ── Error recovery tests ───────────────────────────────────────────
+
+    #[test]
+    fn load_team_missing_returns_io_error() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let result = persist.load_team("no-such-team");
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Io(_)) => {}
+            other => panic!("Expected Io error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_team_corrupted_json_returns_serialization_error() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        // Manually create a team dir with bad JSON
+        let team_dir = dir.join("teams").join("corrupt");
+        std::fs::create_dir_all(&team_dir).unwrap();
+        std::fs::write(team_dir.join("config.json"), "{not valid json").unwrap();
+
+        let result = persist.load_team("corrupt");
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Serialization(_)) => {}
+            other => panic!("Expected Serialization error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_task_missing_returns_io_error() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let result = persist.load_task("no-team", "no-task");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_task_corrupted_json_returns_serialization_error() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        let tasks_dir = dir.join("tasks").join("team");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        let task_id = Uuid::new_v4().to_string();
+        std::fs::write(tasks_dir.join(format!("{task_id}.json")), "not json").unwrap();
+
+        let result = persist.load_task("team", &task_id);
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Serialization(_)) => {}
+            other => panic!("Expected Serialization error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn delete_team_nonexistent_is_ok() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        // Deleting a non-existent team should succeed (idempotent)
+        assert!(persist.delete_team("ghost-team").is_ok());
+    }
+
+    #[test]
+    fn delete_task_nonexistent_is_ok() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let fake_id = Uuid::new_v4().to_string();
+        assert!(persist.delete_task("no-team", &fake_id).is_ok());
+    }
+
+    #[test]
+    fn claim_task_nonexistent_returns_task_not_found() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let fake_id = Uuid::new_v4().to_string();
+        let result = persist.claim_task("team", &fake_id, "agent-1");
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Task(crate::error::TaskError::TaskNotFound(_))) => {}
+            other => panic!("Expected TaskNotFound, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn claim_task_already_owned_returns_communication_error() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let task_id = Uuid::new_v4().to_string();
+        let task = TaskFile {
+            id: task_id.clone(),
+            subject: "Owned".into(),
+            description: "Already has owner".into(),
+            status: "pending".into(),
+            priority: "low".into(),
+            owner: Some("agent-0".into()),
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        persist.save_task("team", &task).unwrap();
+        let result = persist.claim_task("team", &task_id, "agent-1");
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Communication(msg)) => {
+                assert!(msg.contains("already claimed"));
+            }
+            other => panic!("Expected Communication error, got: {other:?}"),
+        }
+    }
+
+    // ── Highwatermark edge cases ───────────────────────────────────────
+
+    #[test]
+    fn read_highwatermark_missing_file_returns_zero() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        assert_eq!(persist.read_highwatermark("no-team").unwrap(), 0);
+    }
+
+    #[test]
+    fn read_highwatermark_corrupted_returns_error() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        let tasks_dir = dir.join("tasks").join("team");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+        std::fs::write(tasks_dir.join(".highwatermark"), "not-a-number").unwrap();
+
+        let result = persist.read_highwatermark("team");
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Configuration(msg)) => {
+                assert!(msg.contains("Invalid highwatermark"));
+            }
+            other => panic!("Expected Configuration error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn write_highwatermark_persists_value() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        persist.write_highwatermark("team", 42).unwrap();
+        assert_eq!(persist.read_highwatermark("team").unwrap(), 42);
+    }
+
+    #[test]
+    fn write_highwatermark_overwrites_previous() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        persist.write_highwatermark("team", 10).unwrap();
+        persist.write_highwatermark("team", 99).unwrap();
+        assert_eq!(persist.read_highwatermark("team").unwrap(), 99);
+    }
+
+    // ── Empty / boundary states ────────────────────────────────────────
+
+    #[test]
+    fn list_teams_no_teams_dir_returns_empty() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let teams = persist.list_teams().unwrap();
+        assert!(teams.is_empty());
+    }
+
+    #[test]
+    fn list_teams_skips_dirs_without_config() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        // Create a team dir without config.json (should be skipped)
+        let empty_dir = dir.join("teams").join("orphan");
+        std::fs::create_dir_all(&empty_dir).unwrap();
+
+        let teams = persist.list_teams().unwrap();
+        assert!(teams.is_empty());
+    }
+
+    #[test]
+    fn load_tasks_empty_dir_returns_empty() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        let tasks_dir = dir.join("tasks").join("team");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+
+        let tasks = persist.load_tasks("team").unwrap();
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn load_tasks_no_dir_returns_empty() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let tasks = persist.load_tasks("no-team").unwrap();
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn find_claimable_task_empty_returns_none() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let result = persist.find_claimable_task("no-team").unwrap();
+        assert!(result.is_none());
+    }
+
+    // ── Path traversal protection ──────────────────────────────────────
+
+    #[test]
+    fn team_dir_rejects_traversal() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let result = persist.team_dir("../etc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tasks_dir_rejects_traversal() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let result = persist.tasks_dir("..");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn save_team_rejects_bad_name() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let team = TeamConfigFile {
+            name: "../evil".into(),
+            description: "Bad".into(),
+            members: HashMap::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            assignment_index: 0,
+        };
+        assert!(persist.save_team(&team).is_err());
+    }
+
+    #[test]
+    fn save_task_rejects_bad_team_name() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let task = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "x".into(),
+            description: "y".into(),
+            status: "pending".into(),
+            priority: "low".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+        assert!(persist.save_task("a/b", &task).is_err());
+    }
+
+    // ── Inbox: peek_inbox ──────────────────────────────────────────────
+
+    #[test]
+    fn peek_inbox_returns_messages_without_clearing() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let msg = InboxMessage {
+            id: "m1".into(),
+            from: "lead".into(),
+            content: "hello".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            read: false,
+        };
+
+        persist.deliver_message("team", "agent", &msg).unwrap();
+
+        // Peek should return messages
+        let peeked = persist.peek_inbox("team", "agent").unwrap();
+        assert_eq!(peeked.len(), 1);
+        assert_eq!(peeked[0].content, "hello");
+
+        // Peek again should still return messages (not cleared)
+        let peeked2 = persist.peek_inbox("team", "agent").unwrap();
+        assert_eq!(peeked2.len(), 1);
+
+        // Now read_inbox should clear
+        let read = persist.read_inbox("team", "agent").unwrap();
+        assert_eq!(read.len(), 1);
+
+        let empty = persist.peek_inbox("team", "agent").unwrap();
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn peek_inbox_missing_returns_empty() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let result = persist.peek_inbox("no-team", "no-agent").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn read_inbox_missing_returns_empty() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+        let result = persist.read_inbox("no-team", "no-agent").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn deliver_multiple_messages_to_different_agents() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let msg_a = InboxMessage {
+            id: "1".into(),
+            from: "lead".into(),
+            content: "for a".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            read: false,
+        };
+        let msg_b = InboxMessage {
+            id: "2".into(),
+            from: "lead".into(),
+            content: "for b".into(),
+            timestamp: "2026-01-01T00:00:01Z".into(),
+            read: false,
+        };
+
+        persist.deliver_message("team", "agent-a", &msg_a).unwrap();
+        persist.deliver_message("team", "agent-b", &msg_b).unwrap();
+
+        let inbox_a = persist.read_inbox("team", "agent-a").unwrap();
+        let inbox_b = persist.read_inbox("team", "agent-b").unwrap();
+
+        assert_eq!(inbox_a.len(), 1);
+        assert_eq!(inbox_a[0].content, "for a");
+        assert_eq!(inbox_b.len(), 1);
+        assert_eq!(inbox_b[0].content, "for b");
+    }
+
+    #[test]
+    fn inbox_handles_blank_lines_gracefully() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        // Create inbox file with blank lines mixed in
+        let inbox_dir = dir.join("teams").join("team").join("inboxes");
+        std::fs::create_dir_all(&inbox_dir).unwrap();
+        let msg = InboxMessage {
+            id: "m1".into(),
+            from: "lead".into(),
+            content: "real msg".into(),
+            timestamp: "2026-01-01T00:00:00Z".into(),
+            read: false,
+        };
+        let json_line = serde_json::to_string(&msg).unwrap();
+        // Write file with blank lines and invalid JSON lines
+        let content = format!("\n\n{json_line}\n\nnot-json\n\n");
+        std::fs::write(inbox_dir.join("agent.jsonl"), content).unwrap();
+
+        // read_inbox should skip blank and invalid lines, return valid messages
+        let messages = persist.read_inbox("team", "agent").unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].content, "real msg");
+    }
+
+    // ── Serialization roundtrip tests ──────────────────────────────────
+
+    #[test]
+    fn team_config_file_serde_roundtrip() {
+        let mut members = HashMap::new();
+        members.insert(
+            "worker-1".into(),
+            TeammateConfig {
+                agent_type: "backend".into(),
+                capabilities: vec!["rust".into()],
+                max_concurrent_tasks: 5,
+                plan_mode_required: true,
+                model: Some("gpt-4".into()),
+                system_prompt: Some("You are a backend expert".into()),
+                temperature: Some(0.7),
+                is_lead: false,
+                allowed_tools: vec!["bash".into()],
+                permission_mode: Some("auto".into()),
+                isolation: Some("worktree".into()),
+            },
+        );
+
+        let config = TeamConfigFile {
+            name: "team-serde".into(),
+            description: "Serde test team".into(),
+            members,
+            created_at: "2026-06-15T12:00:00Z".into(),
+            assignment_index: 7,
+        };
+
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        let restored: TeamConfigFile = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.name, "team-serde");
+        assert_eq!(restored.description, "Serde test team");
+        assert_eq!(restored.assignment_index, 7);
+        assert_eq!(restored.members.len(), 1);
+        let member = restored.members.get("worker-1").expect("member should exist");
+        assert_eq!(member.agent_type, "backend");
+        assert_eq!(member.capabilities, vec!["rust"]);
+        assert_eq!(member.max_concurrent_tasks, 5);
+    }
+
+    #[test]
+    fn task_file_serde_roundtrip() {
+        let task = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "Implement feature".into(),
+            description: "Add new feature to system".into(),
+            status: "in_progress".into(),
+            priority: "critical".into(),
+            owner: Some("agent-1".into()),
+            blocked_by: vec![Uuid::new_v4().to_string()],
+            blocks: vec![Uuid::new_v4().to_string()],
+            active_form: Some("Implementing feature".into()),
+            required_capabilities: vec!["rust".into(), "sql".into()],
+            metadata: serde_json::json!({"sprint": 5, "estimate": 8}),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-02T12:00:00Z".into(),
+        };
+
+        let json = serde_json::to_string_pretty(&task).unwrap();
+        let restored: TaskFile = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.id, task.id);
+        assert_eq!(restored.subject, "Implement feature");
+        assert_eq!(restored.status, "in_progress");
+        assert_eq!(restored.priority, "critical");
+        assert_eq!(restored.owner.as_deref(), Some("agent-1"));
+        assert_eq!(restored.blocked_by.len(), 1);
+        assert_eq!(restored.blocks.len(), 1);
+        assert_eq!(restored.required_capabilities, vec!["rust", "sql"]);
+        assert_eq!(restored.metadata["sprint"], 5);
+    }
+
+    #[test]
+    fn inbox_message_serde_roundtrip() {
+        let msg = InboxMessage {
+            id: "msg-uuid-123".into(),
+            from: "lead".into(),
+            content: "Please review PR #42".into(),
+            timestamp: "2026-03-15T10:30:00Z".into(),
+            read: true,
+        };
+
+        let json = serde_json::to_string(&msg).unwrap();
+        let restored: InboxMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.id, "msg-uuid-123");
+        assert_eq!(restored.from, "lead");
+        assert_eq!(restored.content, "Please review PR #42");
+        assert!(restored.read);
+    }
+
+    // ── TaskFile from/to AgentTask conversion tests ────────────────────
+
+    #[test]
+    fn from_agent_task_all_priorities() {
+        for (priority, label) in [
+            (TaskPriority::Low, "low"),
+            (TaskPriority::Medium, "medium"),
+            (TaskPriority::High, "high"),
+            (TaskPriority::Critical, "critical"),
+        ] {
+            let task = AgentTask::new("x".into(), "y".into(), priority);
+            let file = TaskFile::from_agent_task(&task);
+            assert_eq!(file.priority, label, "Failed for priority {label}");
+        }
+    }
+
+    #[test]
+    fn from_agent_task_all_statuses() {
+        let cases: Vec<(TaskStatus, &str)> = vec![
+            (TaskStatus::Pending, "pending"),
+            (TaskStatus::InProgress, "in_progress"),
+            (TaskStatus::Completed, "completed"),
+            (TaskStatus::Blocked, "blocked"),
+            (TaskStatus::Cancelled, "cancelled"),
+            (TaskStatus::Failed("OOM".into()), "failed:OOM"),
+        ];
+
+        for (status, expected) in cases {
+            let mut task = AgentTask::new("x".into(), "y".into(), TaskPriority::Medium);
+            task.status = status;
+            let file = TaskFile::from_agent_task(&task);
+            assert_eq!(file.status, expected, "Failed for status {expected}");
+        }
+    }
+
+    #[test]
+    fn from_agent_task_preserves_dependencies() {
+        let mut task = AgentTask::new("x".into(), "y".into(), TaskPriority::High);
+        let dep1 = Uuid::new_v4();
+        let dep2 = Uuid::new_v4();
+        task.blocked_by.push(dep1);
+        task.blocks.push(dep2);
+
+        let file = TaskFile::from_agent_task(&task);
+        assert_eq!(file.blocked_by, vec![dep1.to_string()]);
+        assert_eq!(file.blocks, vec![dep2.to_string()]);
+    }
+
+    #[test]
+    fn from_agent_task_preserves_capabilities_and_metadata() {
+        let mut task = AgentTask::new("x".into(), "y".into(), TaskPriority::High);
+        task.required_capabilities = vec!["rust".into(), "docker".into()];
+        task.metadata = serde_json::json!({"key": "value"});
+        task.active_form = Some("Doing things".into());
+
+        let file = TaskFile::from_agent_task(&task);
+        assert_eq!(file.required_capabilities, vec!["rust", "docker"]);
+        assert_eq!(file.metadata["key"], "value");
+        assert_eq!(file.active_form.as_deref(), Some("Doing things"));
+    }
+
+    #[test]
+    fn to_agent_task_invalid_uuid_returns_error() {
+        let file = TaskFile {
+            id: "not-a-uuid".into(),
+            subject: "x".into(),
+            description: "y".into(),
+            status: "pending".into(),
+            priority: "medium".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let result = file.to_agent_task();
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Configuration(msg)) => {
+                assert!(msg.contains("Invalid task UUID"));
+            }
+            other => panic!("Expected Configuration error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_agent_task_invalid_blocked_by_uuid_returns_error() {
+        let file = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "x".into(),
+            description: "y".into(),
+            status: "pending".into(),
+            priority: "medium".into(),
+            owner: None,
+            blocked_by: vec!["bad-uuid".into()],
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let result = file.to_agent_task();
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Configuration(msg)) => {
+                assert!(msg.contains("Invalid UUID in blocked_by"));
+            }
+            other => panic!("Expected Configuration error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_agent_task_invalid_blocks_uuid_returns_error() {
+        let file = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "x".into(),
+            description: "y".into(),
+            status: "pending".into(),
+            priority: "medium".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: vec!["bad-uuid".into()],
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let result = file.to_agent_task();
+        assert!(result.is_err());
+        match result {
+            Err(AgentError::Configuration(msg)) => {
+                assert!(msg.contains("Invalid UUID in blocks"));
+            }
+            other => panic!("Expected Configuration error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_agent_task_unknown_priority_defaults_to_medium() {
+        let file = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "x".into(),
+            description: "y".into(),
+            status: "pending".into(),
+            priority: "ultra".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let task = file.to_agent_task().unwrap();
+        assert_eq!(task.priority, TaskPriority::Medium);
+    }
+
+    #[test]
+    fn to_agent_task_unknown_status_defaults_to_pending() {
+        let file = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "x".into(),
+            description: "y".into(),
+            status: "unknown_status".into(),
+            priority: "medium".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let task = file.to_agent_task().unwrap();
+        assert_eq!(task.status, TaskStatus::Pending);
+    }
+
+    #[test]
+    fn to_agent_task_invalid_timestamp_uses_now() {
+        let file = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "x".into(),
+            description: "y".into(),
+            status: "pending".into(),
+            priority: "medium".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "not-a-date".into(),
+            updated_at: "also-not-a-date".into(),
+        };
+
+        let task = file.to_agent_task().unwrap();
+        // Should not panic; timestamps should be set to roughly now
+        assert!(task.created_at <= chrono::Utc::now());
+        assert!(task.updated_at <= chrono::Utc::now());
+    }
+
+    // ── load_tasks filters non-UUID files ──────────────────────────────
+
+    #[test]
+    fn load_tasks_skips_non_uuid_json_files() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        let tasks_dir = dir.join("tasks").join("team");
+        std::fs::create_dir_all(&tasks_dir).unwrap();
+
+        // Write a non-UUID-named JSON file (should be skipped)
+        std::fs::write(tasks_dir.join("random.json"), r#"{"id":"x"}"#).unwrap();
+
+        // Write a valid UUID-named JSON file
+        let task_id = Uuid::new_v4().to_string();
+        let task = TaskFile {
+            id: task_id.clone(),
+            subject: "Valid".into(),
+            description: "Real task".into(),
+            status: "pending".into(),
+            priority: "low".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+        std::fs::write(
+            tasks_dir.join(format!("{task_id}.json")),
+            serde_json::to_string(&task).unwrap(),
+        )
+        .unwrap();
+
+        let tasks = persist.load_tasks("team").unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].subject, "Valid");
+    }
+
+    #[test]
+    fn load_tasks_sorted_by_created_at() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let t1 = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "Third".into(),
+            description: "Created last".into(),
+            status: "pending".into(),
+            priority: "low".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-03-01T00:00:00Z".into(),
+            updated_at: "2026-03-01T00:00:00Z".into(),
+        };
+        let t2 = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "First".into(),
+            description: "Created first".into(),
+            status: "pending".into(),
+            priority: "low".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let t3 = TaskFile {
+            id: Uuid::new_v4().to_string(),
+            subject: "Second".into(),
+            description: "Created second".into(),
+            status: "pending".into(),
+            priority: "low".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-02-01T00:00:00Z".into(),
+            updated_at: "2026-02-01T00:00:00Z".into(),
+        };
+
+        // Save in non-sorted order
+        persist.save_task("team", &t1).unwrap();
+        persist.save_task("team", &t2).unwrap();
+        persist.save_task("team", &t3).unwrap();
+
+        let tasks = persist.load_tasks("team").unwrap();
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0].subject, "First");
+        assert_eq!(tasks[1].subject, "Second");
+        assert_eq!(tasks[2].subject, "Third");
+    }
+
+    // ── load_all_teams resilience ──────────────────────────────────────
+
+    #[test]
+    fn load_all_teams_skips_corrupted_team() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        // Save one valid team
+        let valid = TeamConfigFile {
+            name: "good-team".into(),
+            description: "A valid team".into(),
+            members: HashMap::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            assignment_index: 0,
+        };
+        persist.save_team(&valid).unwrap();
+
+        // Create a corrupted team dir
+        let bad_dir = dir.join("teams").join("corrupt-team");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        std::fs::write(bad_dir.join("config.json"), "not-json").unwrap();
+
+        // Should return only the valid team, skipping the corrupt one
+        let all = persist.load_all_teams().unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].0, "good-team");
+    }
+
+    // ── Large state test ───────────────────────────────────────────────
+
+    #[test]
+    fn save_and_load_team_with_many_members() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let mut members = HashMap::new();
+        for i in 0..50 {
+            members.insert(
+                format!("agent-{i}"),
+                TeammateConfig {
+                    agent_type: format!("type-{i}"),
+                    capabilities: vec![format!("cap-{i}a"), format!("cap-{i}b")],
+                    max_concurrent_tasks: (i % 10) + 1,
+                    plan_mode_required: i % 2 == 0,
+                    model: Some(format!("model-{i}")),
+                    system_prompt: Some(format!("You are agent {i}")),
+                    temperature: Some(0.5),
+                    is_lead: i == 0,
+                    allowed_tools: vec!["bash".into()],
+                    permission_mode: None,
+                    isolation: None,
+                },
+            );
+        }
+
+        let team = TeamConfigFile {
+            name: "big-team".into(),
+            description: "A large team".into(),
+            members,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            assignment_index: 42,
+        };
+
+        persist.save_team(&team).unwrap();
+        let loaded = persist.load_team("big-team").unwrap();
+
+        assert_eq!(loaded.members.len(), 50);
+        assert_eq!(loaded.assignment_index, 42);
+        let agent_0 = loaded.members.get("agent-0").expect("agent-0 should exist");
+        assert!(agent_0.is_lead);
+        let agent_49 = loaded.members.get("agent-49").expect("agent-49 should exist");
+        assert_eq!(agent_49.agent_type, "type-49");
+    }
+
+    #[test]
+    fn save_and_load_many_tasks() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let count = 30;
+        for i in 0..count {
+            let task = TaskFile {
+                id: Uuid::new_v4().to_string(),
+                subject: format!("Task {i}"),
+                description: format!("Description for task {i}"),
+                status: if i % 3 == 0 { "pending" } else { "completed" }.into(),
+                priority: if i % 4 == 0 { "high" } else { "low" }.into(),
+                owner: if i % 2 == 0 { None } else { Some(format!("agent-{i}")) },
+                blocked_by: Vec::new(),
+                blocks: Vec::new(),
+                active_form: None,
+                required_capabilities: Vec::new(),
+                metadata: serde_json::json!({"index": i}),
+                created_at: format!("2026-01-{:02}T00:00:00Z", i + 1),
+                updated_at: format!("2026-01-{:02}T00:00:00Z", i + 1),
+            };
+            persist.save_task("team", &task).unwrap();
+        }
+
+        let tasks = persist.load_tasks("team").unwrap();
+        assert_eq!(tasks.len(), count);
+    }
+
+    // ── Atomic write verification ──────────────────────────────────────
+
+    #[test]
+    fn save_team_uses_atomic_write() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir.clone());
+
+        let team = TeamConfigFile {
+            name: "atomic".into(),
+            description: "Test atomic writes".into(),
+            members: HashMap::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            assignment_index: 0,
+        };
+
+        persist.save_team(&team).unwrap();
+
+        // Verify no .tmp file remains
+        let team_dir = dir.join("teams").join("atomic");
+        let config = team_dir.join("config.json");
+        let tmp = team_dir.join("config.json.tmp");
+
+        assert!(config.exists(), "config.json should exist");
+        assert!(!tmp.exists(), "temp file should have been renamed");
+    }
+
+    #[test]
+    fn save_team_overwrites_existing() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let team_v1 = TeamConfigFile {
+            name: "versioned".into(),
+            description: "Version 1".into(),
+            members: HashMap::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            assignment_index: 0,
+        };
+        persist.save_team(&team_v1).unwrap();
+
+        let team_v2 = TeamConfigFile {
+            name: "versioned".into(),
+            description: "Version 2".into(),
+            members: HashMap::new(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            assignment_index: 5,
+        };
+        persist.save_team(&team_v2).unwrap();
+
+        let loaded = persist.load_team("versioned").unwrap();
+        assert_eq!(loaded.description, "Version 2");
+        assert_eq!(loaded.assignment_index, 5);
+    }
+
+    // ── Send + Sync bounds ─────────────────────────────────────────────
+
+    #[test]
+    fn data_structures_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TeamConfigFile>();
+        assert_send_sync::<TaskFile>();
+        assert_send_sync::<InboxMessage>();
+        assert_send_sync::<FilePersistence>();
+    }
+
+    // ── Empty TeamConfigFile ───────────────────────────────────────────
+
+    #[test]
+    fn team_config_file_empty_members() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let team = TeamConfigFile {
+            name: "empty-team".into(),
+            description: "".into(),
+            members: HashMap::new(),
+            created_at: "".into(),
+            assignment_index: 0,
+        };
+        persist.save_team(&team).unwrap();
+        let loaded = persist.load_team("empty-team").unwrap();
+        assert!(loaded.members.is_empty());
+        assert_eq!(loaded.description, "");
+    }
+
+    // ── claim_task updates timestamp ───────────────────────────────────
+
+    #[test]
+    fn claim_task_updates_updated_at() {
+        let dir = tmp_dir();
+        let persist = FilePersistence::with_base_dir(dir);
+
+        let task_id = Uuid::new_v4().to_string();
+        let task = TaskFile {
+            id: task_id.clone(),
+            subject: "Timestamp test".into(),
+            description: "Check updated_at changes".into(),
+            status: "pending".into(),
+            priority: "medium".into(),
+            owner: None,
+            blocked_by: Vec::new(),
+            blocks: Vec::new(),
+            active_form: None,
+            required_capabilities: Vec::new(),
+            metadata: serde_json::Value::Null,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        persist.save_task("team", &task).unwrap();
+        let claimed = persist.claim_task("team", &task_id, "agent-1").unwrap();
+
+        // updated_at should differ from the original
+        assert_ne!(claimed.updated_at, "2026-01-01T00:00:00Z");
+        // Should be parseable as a datetime and be recent
+        let dt: chrono::DateTime<chrono::Utc> = claimed.updated_at.parse().unwrap();
+        assert!(dt.timestamp() > 0);
+    }
 }

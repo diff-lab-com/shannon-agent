@@ -698,23 +698,41 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::{LlmProvider, MessageContent};
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    fn test_app() -> Router<()> {
-        let config = LlmClientConfig {
+    fn test_config() -> LlmClientConfig {
+        LlmClientConfig {
             api_key: "test-key".to_string(),
             base_url: "http://localhost:11434".to_string(),
             model: "test-model".to_string(),
+            provider: LlmProvider::Ollama,
             ..Default::default()
-        };
-        ShannonApiServer::new(config).build_router()
+        }
     }
 
+    fn test_app() -> Router<()> {
+        ShannonApiServer::new(test_config()).build_router()
+    }
+
+    // ── Helper: read response body as bytes ──────────────────────────────
+
+    async fn read_body(body: Body) -> Vec<u8> {
+        axum::body::to_bytes(body, usize::MAX)
+            .await
+            .expect("failed to read body")
+            .to_vec()
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Health endpoint tests
+    // ══════════════════════════════════════════════════════════════════════
+
     #[tokio::test]
-    async fn test_health_endpoint() {
+    async fn test_health_endpoint_returns_ok_status() {
         let app = test_app();
         let req = Request::builder()
             .uri("/api/health")
@@ -724,16 +742,48 @@ mod tests {
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = read_body(response.into_body()).await;
         let health: HealthResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(health.status, "ok");
         assert_eq!(health.version, VERSION);
     }
 
     #[tokio::test]
-    async fn test_models_endpoint() {
+    async fn test_health_endpoint_returns_valid_json() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed.get("status").is_some());
+        assert!(parsed.get("version").is_some());
+        assert!(parsed.get("status").unwrap().is_string());
+        assert!(parsed.get("version").unwrap().is_string());
+    }
+
+    #[tokio::test]
+    async fn test_health_endpoint_rejects_post() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/health")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Models endpoint tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_models_endpoint_returns_builtin_models() {
         let app = test_app();
         let req = Request::builder()
             .uri("/api/models")
@@ -743,17 +793,99 @@ mod tests {
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = read_body(response.into_body()).await;
         let models: ModelsResponse = serde_json::from_slice(&body).unwrap();
         assert!(!models.models.is_empty());
         assert!(models.models.iter().any(|m| m.id == "claude-sonnet-4"));
         assert!(models.models.iter().any(|m| m.id == "gpt-4o"));
+        assert!(models.models.iter().any(|m| m.id == "llama3"));
     }
 
     #[tokio::test]
-    async fn test_query_endpoint_empty_prompt() {
+    async fn test_models_endpoint_includes_configured_model() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        let body = read_body(response.into_body()).await;
+        let models: ModelsResponse = serde_json::from_slice(&body).unwrap();
+        // "test-model" is the configured model and should be present since
+        // it differs from the three built-in ones.
+        assert!(models
+            .models
+            .iter()
+            .any(|m| m.id == "test-model" && m.provider == "ollama"));
+    }
+
+    #[tokio::test]
+    async fn test_models_endpoint_deduplicates_configured_model() {
+        // When the configured model matches a built-in one, it should not
+        // appear twice.
+        let config = LlmClientConfig {
+            api_key: "test-key".to_string(),
+            base_url: "http://localhost:11434".to_string(),
+            model: "claude-sonnet-4".to_string(),
+            provider: LlmProvider::Anthropic,
+            ..Default::default()
+        };
+        let app = ShannonApiServer::new(config).build_router();
+        let req = Request::builder()
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        let body = read_body(response.into_body()).await;
+        let models: ModelsResponse = serde_json::from_slice(&body).unwrap();
+        let count = models
+            .models
+            .iter()
+            .filter(|m| m.id == "claude-sonnet-4")
+            .count();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_models_endpoint_rejects_post() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn test_models_endpoint_response_structure() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let models_array = parsed.get("models").expect("missing models field");
+        assert!(models_array.is_array());
+        for model in models_array.as_array().unwrap() {
+            assert!(model.get("id").is_some());
+            assert!(model.get("provider").is_some());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Query endpoint validation tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_query_endpoint_empty_prompt_returns_bad_request() {
         let app = test_app();
         let req = Request::builder()
             .method("POST")
@@ -767,6 +899,167 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_query_endpoint_whitespace_prompt_returns_bad_request() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt": "   "}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_query_endpoint_error_response_format() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"prompt": ""}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed.get("error").is_some());
+        assert!(parsed.get("error").unwrap().is_string());
+        let error_msg = parsed.get("error").unwrap().as_str().unwrap();
+        assert!(!error_msg.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_query_endpoint_missing_body_returns_4xx() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        // axum returns 400 for missing body when JSON is expected
+        assert!(response.status().is_client_error());
+    }
+
+    #[tokio::test]
+    async fn test_query_endpoint_malformed_json_returns_4xx() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"not valid json"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert!(response.status().is_client_error());
+    }
+
+    #[tokio::test]
+    async fn test_query_endpoint_missing_prompt_field_returns_4xx() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"model": "gpt-4o"}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert!(response.status().is_client_error());
+    }
+
+    #[tokio::test]
+    async fn test_query_endpoint_wrong_content_type_returns_4xx() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("content-type", "text/plain")
+            .body(Body::from(r#"{"prompt": "hello"}"#))
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert!(response.status().is_client_error());
+    }
+
+    #[tokio::test]
+    async fn test_query_endpoint_get_method_rejected() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/query")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // SSE streaming endpoint tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_query_stream_endpoint_empty_prompt_returns_bad_request() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/query/stream")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_endpoint_whitespace_prompt_returns_bad_request() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/query/stream?prompt=%20%20%20")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_endpoint_post_method_rejected() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/query/stream?prompt=hello")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn test_query_stream_endpoint_error_response_format() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/query/stream")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed.get("error").is_some());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Tools list endpoint tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
     async fn test_tools_list_endpoint_empty_registry() {
         let app = test_app();
         let req = Request::builder()
@@ -778,11 +1071,736 @@ mod tests {
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
+        let body = read_body(response.into_body()).await;
         let tools: ToolsListResponse = serde_json::from_slice(&body).unwrap();
-        // Default registry has no tools registered.
         assert!(tools.tools.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_tools_list_endpoint_get_method_rejected() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/tools/list")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn test_tools_list_endpoint_response_structure() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/tools/list")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        let body = read_body(response.into_body()).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(parsed.get("tools").is_some());
+        assert!(parsed.get("tools").unwrap().is_array());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WebSocket endpoint tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_ws_endpoint_returns_upgrade_required_without_upgrade_headers() {
+        let app = test_app();
+        // A plain GET without Upgrade headers should return 4xx or similar,
+        // since the ws handler requires an upgrade.
+        let req = Request::builder()
+            .uri("/api/ws")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        // axum's WebSocketUpgrade returns 400 if required headers are missing
+        assert!(response.status().is_client_error());
+    }
+
+    #[tokio::test]
+    async fn test_ws_endpoint_post_method_rejected() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/ws")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Unknown route tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_unknown_route_returns_not_found() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/nonexistent")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_root_route_returns_not_found() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Request/response type serialization tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_query_request_serialization() {
+        let req = QueryRequest {
+            prompt: "hello world".to_string(),
+            model: Some("gpt-4o".to_string()),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert!(json.contains("hello world"));
+        assert!(json.contains("gpt-4o"));
+
+        let deserialized: QueryRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.prompt, "hello world");
+        assert_eq!(deserialized.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[test]
+    fn test_query_request_model_defaults_to_none() {
+        let json = r#"{"prompt": "test"}"#;
+        let req: QueryRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.prompt, "test");
+        assert!(req.model.is_none());
+    }
+
+    #[test]
+    fn test_query_response_serialization() {
+        let resp = QueryResponse {
+            text: "response text".to_string(),
+            model: "test-model".to_string(),
+            usage: Some(UsageInfo {
+                input_tokens: 100,
+                output_tokens: 50,
+                cost_usd: 0.005,
+            }),
+            errors: vec![],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["text"], "response text");
+        assert_eq!(parsed["model"], "test-model");
+        assert_eq!(parsed["usage"]["input_tokens"], 100);
+        assert_eq!(parsed["usage"]["output_tokens"], 50);
+        assert_eq!(parsed["errors"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_query_response_with_errors() {
+        let resp = QueryResponse {
+            text: String::new(),
+            model: "test-model".to_string(),
+            usage: None,
+            errors: vec!["something went wrong".to_string()],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed["usage"].is_null());
+        assert_eq!(parsed["errors"][0], "something went wrong");
+    }
+
+    #[test]
+    fn test_health_response_serialization() {
+        let resp = HealthResponse {
+            status: "ok".to_string(),
+            version: "1.0.0".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: HealthResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.status, "ok");
+        assert_eq!(deserialized.version, "1.0.0");
+    }
+
+    #[test]
+    fn test_models_response_serialization() {
+        let resp = ModelsResponse {
+            models: vec![
+                ModelInfo {
+                    id: "gpt-4o".to_string(),
+                    provider: "openai".to_string(),
+                },
+                ModelInfo {
+                    id: "llama3".to_string(),
+                    provider: "ollama".to_string(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: ModelsResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.models.len(), 2);
+        assert_eq!(deserialized.models[0].id, "gpt-4o");
+        assert_eq!(deserialized.models[1].provider, "ollama");
+    }
+
+    #[test]
+    fn test_tools_list_response_serialization() {
+        let resp = ToolsListResponse {
+            tools: vec![ToolEntry {
+                name: "bash".to_string(),
+                description: "Execute shell commands".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let deserialized: ToolsListResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.tools.len(), 1);
+        assert_eq!(deserialized.tools[0].name, "bash");
+    }
+
+    #[test]
+    fn test_usage_info_serialization() {
+        let info = UsageInfo {
+            input_tokens: 500,
+            output_tokens: 200,
+            cost_usd: 0.0123,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: UsageInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.input_tokens, 500);
+        assert_eq!(parsed.output_tokens, 200);
+        assert!((parsed.cost_usd - 0.0123).abs() < f64::EPSILON);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WebSocket message serialization tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_ws_client_message_query_serialization() {
+        let msg = WsClientMessage::Query {
+            prompt: "hello".to_string(),
+            model: Some("gpt-4o".to_string()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "query");
+        assert_eq!(parsed["prompt"], "hello");
+        assert_eq!(parsed["model"], "gpt-4o");
+    }
+
+    #[test]
+    fn test_ws_client_message_query_without_model() {
+        let msg = WsClientMessage::Query {
+            prompt: "test".to_string(),
+            model: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "query");
+        assert!(parsed.get("model").unwrap().is_null());
+    }
+
+    #[test]
+    fn test_ws_client_message_clear() {
+        let msg = WsClientMessage::Clear;
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "clear");
+    }
+
+    #[test]
+    fn test_ws_client_message_info() {
+        let msg = WsClientMessage::Info;
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"info""#));
+    }
+
+    #[test]
+    fn test_ws_client_message_cancel() {
+        let msg = WsClientMessage::Cancel;
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"cancel""#));
+    }
+
+    #[test]
+    fn test_ws_client_message_roundtrip() {
+        let messages = vec![
+            WsClientMessage::Query {
+                prompt: "test prompt".to_string(),
+                model: Some("llama3".to_string()),
+            },
+            WsClientMessage::Clear,
+            WsClientMessage::Info,
+            WsClientMessage::Cancel,
+        ];
+        for msg in messages {
+            let json = serde_json::to_string(&msg).unwrap();
+            let roundtrip: WsClientMessage = serde_json::from_str(&json).unwrap();
+            let json2 = serde_json::to_string(&roundtrip).unwrap();
+            assert_eq!(json, json2);
+        }
+    }
+
+    #[test]
+    fn test_ws_client_message_invalid_type_returns_error() {
+        let json = r#"{"type": "unknown_type"}"#;
+        let result = serde_json::from_str::<WsClientMessage>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ws_client_message_missing_type_returns_error() {
+        let json = r#"{"prompt": "hello"}"#;
+        let result = serde_json::from_str::<WsClientMessage>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ws_server_message_text() {
+        let msg = WsServerMessage::Text {
+            content: "hello world".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "text");
+        assert_eq!(parsed["content"], "hello world");
+    }
+
+    #[test]
+    fn test_ws_server_message_tool_use() {
+        let msg = WsServerMessage::ToolUse {
+            name: "bash".to_string(),
+            input: serde_json::json!({"command": "ls"}),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "tool_use");
+        assert_eq!(parsed["name"], "bash");
+        assert_eq!(parsed["input"]["command"], "ls");
+    }
+
+    #[test]
+    fn test_ws_server_message_tool_result() {
+        let msg = WsServerMessage::ToolResult {
+            name: "bash".to_string(),
+            output: "file1.txt\nfile2.txt".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "tool_result");
+        assert_eq!(parsed["output"], "file1.txt\nfile2.txt");
+    }
+
+    #[test]
+    fn test_ws_server_message_usage() {
+        let msg = WsServerMessage::Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cost_usd: 0.003,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "usage");
+        assert_eq!(parsed["input_tokens"], 100);
+        assert_eq!(parsed["output_tokens"], 50);
+    }
+
+    #[test]
+    fn test_ws_server_message_completed() {
+        let msg = WsServerMessage::Completed {
+            model: "claude-sonnet-4".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "completed");
+        assert_eq!(parsed["model"], "claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_ws_server_message_failed() {
+        let msg = WsServerMessage::Failed {
+            error: "timeout".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "failed");
+        assert_eq!(parsed["error"], "timeout");
+    }
+
+    #[test]
+    fn test_ws_server_message_session_info() {
+        let msg = WsServerMessage::SessionInfo {
+            message_count: 5,
+            model: Some("gpt-4o".to_string()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "session_info");
+        assert_eq!(parsed["message_count"], 5);
+        assert_eq!(parsed["model"], "gpt-4o");
+    }
+
+    #[test]
+    fn test_ws_server_message_session_info_no_model() {
+        let msg = WsServerMessage::SessionInfo {
+            message_count: 0,
+            model: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "session_info");
+        assert!(parsed.get("model").unwrap().is_null());
+    }
+
+    #[test]
+    fn test_ws_server_message_error() {
+        let msg = WsServerMessage::Error {
+            message: "something failed".to_string(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "error");
+        assert_eq!(parsed["message"], "something failed");
+    }
+
+    #[test]
+    fn test_ws_server_message_roundtrip_all_variants() {
+        let messages = vec![
+            WsServerMessage::Text {
+                content: "hi".to_string(),
+            },
+            WsServerMessage::ToolUse {
+                name: "read".to_string(),
+                input: serde_json::json!({"path": "/tmp"}),
+            },
+            WsServerMessage::ToolResult {
+                name: "read".to_string(),
+                output: "contents".to_string(),
+            },
+            WsServerMessage::Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cost_usd: 0.001,
+            },
+            WsServerMessage::Completed {
+                model: "test".to_string(),
+            },
+            WsServerMessage::Failed {
+                error: "err".to_string(),
+            },
+            WsServerMessage::SessionInfo {
+                message_count: 3,
+                model: Some("m".to_string()),
+            },
+            WsServerMessage::Error {
+                message: "bad".to_string(),
+            },
+        ];
+        for msg in messages {
+            let json = serde_json::to_string(&msg).unwrap();
+            let roundtrip: WsServerMessage = serde_json::from_str(&json).unwrap();
+            let json2 = serde_json::to_string(&roundtrip).unwrap();
+            assert_eq!(json, json2);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ApiError tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_api_error_into_response() {
+        let error = ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: "resource not found".to_string(),
+        };
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let body = read_body(Body::new(response.into_body())).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "resource not found");
+    }
+
+    #[tokio::test]
+    async fn test_api_error_internal_server() {
+        let error = ApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "internal failure".to_string(),
+        };
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let body = read_body(Body::new(response.into_body())).await;
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "internal failure");
+    }
+
+    #[tokio::test]
+    async fn test_api_error_bad_request() {
+        let error = ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "prompt must not be empty".to_string(),
+        };
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ShannonApiServer builder tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_server_new_default_values() {
+        let server = ShannonApiServer::new(test_config());
+        assert_eq!(server.host, "127.0.0.1");
+        assert_eq!(server.port, 8080);
+    }
+
+    #[test]
+    fn test_server_host_builder() {
+        let server = ShannonApiServer::new(test_config()).host("0.0.0.0");
+        assert_eq!(server.host, "0.0.0.0");
+    }
+
+    #[test]
+    fn test_server_port_builder() {
+        let server = ShannonApiServer::new(test_config()).port(3000);
+        assert_eq!(server.port, 3000);
+    }
+
+    #[test]
+    fn test_server_with_tools_builder() {
+        let registry = ToolRegistry::new();
+        let server = ShannonApiServer::new(test_config()).with_tools(registry);
+        assert_eq!(Arc::strong_count(&server.tools), 1);
+    }
+
+    #[test]
+    fn test_server_builder_chaining() {
+        let server = ShannonApiServer::new(test_config())
+            .host("0.0.0.0")
+            .port(9090);
+        assert_eq!(server.host, "0.0.0.0");
+        assert_eq!(server.port, 9090);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // AppState tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_app_state_is_clone() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+        };
+        let cloned = state.clone();
+        assert!(Arc::ptr_eq(&state.tools, &cloned.tools));
+        assert!(Arc::ptr_eq(&state.ws_sessions, &cloned.ws_sessions));
+    }
+
+    #[tokio::test]
+    async fn test_app_state_ws_sessions_initially_empty() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+        };
+        let sessions = state.ws_sessions.read().await;
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_app_state_ws_sessions_insert_and_remove() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+        };
+
+        let session = Arc::new(Mutex::new(WsSession {
+            messages: vec![],
+            model: None,
+        }));
+
+        // Insert
+        {
+            let mut sessions = state.ws_sessions.write().await;
+            sessions.insert("test-session".to_string(), session.clone());
+        }
+
+        // Verify inserted
+        {
+            let sessions = state.ws_sessions.read().await;
+            assert_eq!(sessions.len(), 1);
+            assert!(sessions.contains_key("test-session"));
+        }
+
+        // Remove
+        {
+            let mut sessions = state.ws_sessions.write().await;
+            sessions.remove("test-session");
+        }
+
+        // Verify removed
+        {
+            let sessions = state.ws_sessions.read().await;
+            assert!(sessions.is_empty());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // WsSession tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_ws_session_default_state() {
+        let session = WsSession {
+            messages: vec![],
+            model: None,
+        };
+        assert!(session.messages.is_empty());
+        assert!(session.model.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_ws_session_model_update() {
+        let session = Arc::new(Mutex::new(WsSession {
+            messages: vec![],
+            model: None,
+        }));
+
+        {
+            let mut s = session.lock().await;
+            s.model = Some("gpt-4o".to_string());
+        }
+
+        let s = session.lock().await;
+        assert_eq!(s.model.as_deref(), Some("gpt-4o"));
+    }
+
+    #[tokio::test]
+    async fn test_ws_session_messages_clear() {
+        let session = Arc::new(Mutex::new(WsSession {
+            messages: vec![],
+            model: None,
+        }));
+
+        let test_msg = Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("hello".to_string()),
+        };
+        {
+            let mut s = session.lock().await;
+            s.messages.push(test_msg.clone());
+            s.messages.push(test_msg.clone());
+        }
+
+        {
+            let s = session.lock().await;
+            assert_eq!(s.messages.len(), 2);
+        }
+
+        {
+            let mut s = session.lock().await;
+            s.messages.clear();
+        }
+
+        {
+            let s = session.lock().await;
+            assert!(s.messages.is_empty());
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CORS headers tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_cors_headers_present_on_health() {
+        let app = test_app();
+        let req = Request::builder()
+            .method("OPTIONS")
+            .uri("/api/health")
+            .header("origin", "http://example.com")
+            .header("access-control-request-method", "GET")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        // CORS middleware should add access-control-allow-origin
+        let cors_header = response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("CORS header missing");
+        assert_eq!(cors_header, "*");
+    }
+
+    #[tokio::test]
+    async fn test_cors_headers_present_on_models() {
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/models")
+            .header("origin", "http://evil.com")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert!(response
+            .headers()
+            .contains_key("access-control-allow-origin"));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Router build / integration tests
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_router_with_custom_tools() {
+        let config = test_config();
+        let registry = ToolRegistry::new();
+        let app = ShannonApiServer::new(config)
+            .with_tools(registry)
+            .build_router();
+
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/tools/list")
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response.into_body()).await;
+        let tools: ToolsListResponse = serde_json::from_slice(&body).unwrap();
+        // Custom registry is also empty but the endpoint still works
+        assert!(tools.tools.is_empty());
+    }
+
+    #[test]
+    fn test_build_router_does_not_panic() {
+        let config = test_config();
+        let server = ShannonApiServer::new(config);
+        // Ensure build_router is deterministic and doesn't panic
+        let _router = server.build_router();
     }
 }

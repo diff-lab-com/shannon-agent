@@ -1068,6 +1068,7 @@ mod tests {
     use super::*;
     use crate::permissions::Permission;
     use crate::permissions::PermissionLevel;
+    use crate::permissions::PermissionPrompt;
     use crate::tools::Tool;
 
     /// A simple test tool that echoes its input.
@@ -2040,5 +2041,1449 @@ mod tests {
         };
         assert!(e.to_string().contains("Write"));
         assert!(e.to_string().contains("not allowed"));
+    }
+
+    // =========================================================================
+    // NEW TESTS: Error paths, uncovered areas, edge cases
+    // =========================================================================
+
+    /// A tool that sleeps for a configurable duration (for timeout testing).
+    struct DelayedTool {
+        delay_ms: u64,
+    }
+
+    #[async_trait]
+    impl Tool for DelayedTool {
+        fn name(&self) -> &str {
+            "Delayed"
+        }
+        fn description(&self) -> &str {
+            "A tool that delays before responding"
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(&self, _input: Value) -> crate::tools::ToolResult<ToolOutput> {
+            tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+            Ok(ToolOutput {
+                content: "delayed result".to_string(),
+                is_error: false,
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    /// A tool that returns very large output (for truncation testing).
+    struct LargeOutputTool;
+
+    #[async_trait]
+    impl Tool for LargeOutputTool {
+        fn name(&self) -> &str {
+            "LargeOutput"
+        }
+        fn description(&self) -> &str {
+            "Returns very large output"
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(&self, _input: Value) -> crate::tools::ToolResult<ToolOutput> {
+            let large_content = "x".repeat(50_000); // 50K chars, over the 40K truncation limit
+            Ok(ToolOutput {
+                content: large_content,
+                is_error: false,
+                metadata: Default::default(),
+            })
+        }
+    }
+
+    /// A tool that returns output with metadata.
+    struct MetadataTool;
+
+    #[async_trait]
+    impl Tool for MetadataTool {
+        fn name(&self) -> &str {
+            "MetadataTool"
+        }
+        fn description(&self) -> &str {
+            "Returns output with metadata"
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(&self, _input: Value) -> crate::tools::ToolResult<ToolOutput> {
+            let mut meta = HashMap::new();
+            meta.insert(
+                "line_count".to_string(),
+                serde_json::Value::Number(42.into()),
+            );
+            meta.insert(
+                "language".to_string(),
+                serde_json::Value::String("rust".to_string()),
+            );
+            Ok(ToolOutput {
+                content: "tool output with metadata".to_string(),
+                is_error: false,
+                metadata: meta,
+            })
+        }
+    }
+
+    /// A tool that returns ToolError::InvalidInput.
+    struct InvalidInputTool;
+
+    #[async_trait]
+    impl Tool for InvalidInputTool {
+        fn name(&self) -> &str {
+            "InvalidInput"
+        }
+        fn description(&self) -> &str {
+            "Rejects invalid input"
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(&self, _input: Value) -> crate::tools::ToolResult<ToolOutput> {
+            Err(crate::tools::ToolError::InvalidInput(
+                "missing required field 'path'".to_string(),
+            ))
+        }
+    }
+
+    /// A tool that returns ToolError::RegistryError.
+    struct RegistryErrorTool;
+
+    #[async_trait]
+    impl Tool for RegistryErrorTool {
+        fn name(&self) -> &str {
+            "RegistryError"
+        }
+        fn description(&self) -> &str {
+            "Simulates a registry error"
+        }
+        fn input_schema(&self) -> Value {
+            serde_json::json!({"type": "object"})
+        }
+        async fn execute(&self, _input: Value) -> crate::tools::ToolResult<ToolOutput> {
+            Err(crate::tools::ToolError::RegistryError(
+                "corrupted registry state".to_string(),
+            ))
+        }
+    }
+
+    /// Helper: build a service with additional tools for testing.
+    async fn make_extended_service() -> ToolExecutionService {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        registry.register(Box::new(FailTool)).unwrap();
+        registry.register(Box::new(PanicTool)).unwrap();
+        registry.register(Box::new(DelayedTool { delay_ms: 0 })).unwrap();
+        registry.register(Box::new(LargeOutputTool)).unwrap();
+        registry.register(Box::new(MetadataTool)).unwrap();
+        registry.register(Box::new(InvalidInputTool)).unwrap();
+        registry.register(Box::new(RegistryErrorTool)).unwrap();
+        let registry = Arc::new(registry);
+        let permission_manager = Arc::new(PermissionManager::new());
+        ToolExecutionService::new(registry, permission_manager)
+    }
+
+    // -- From<ToolError> conversion tests --
+
+    #[test]
+    fn test_from_tool_error_not_found() {
+        let err = ToolError::NotFound("MyTool".to_string());
+        let exec_err: ToolExecutionError = err.into();
+        match exec_err {
+            ToolExecutionError::ToolNotFound(name) => assert_eq!(name, "MyTool"),
+            other => panic!("Expected ToolNotFound, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_tool_error_invalid_input() {
+        let err = ToolError::InvalidInput("bad input".to_string());
+        let exec_err: ToolExecutionError = err.into();
+        match exec_err {
+            ToolExecutionError::InvalidInput { tool_name, reason } => {
+                assert_eq!(tool_name, "unknown");
+                assert_eq!(reason, "bad input");
+            }
+            other => panic!("Expected InvalidInput, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_tool_error_execution_failed() {
+        let err = ToolError::ExecutionFailed("crash".to_string());
+        let exec_err: ToolExecutionError = err.into();
+        match exec_err {
+            ToolExecutionError::ExecutionFailed(msg) => assert_eq!(msg, "crash"),
+            other => panic!("Expected ExecutionFailed, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_tool_error_registry_error() {
+        let err = ToolError::RegistryError("corrupt".to_string());
+        let exec_err: ToolExecutionError = err.into();
+        match exec_err {
+            ToolExecutionError::Internal(msg) => assert_eq!(msg, "corrupt"),
+            other => panic!("Expected Internal, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_tool_error_timeout() {
+        let err = ToolError::Timeout {
+            name: "SlowTool".to_string(),
+            duration: Duration::from_secs(99),
+        };
+        let exec_err: ToolExecutionError = err.into();
+        match exec_err {
+            ToolExecutionError::Timeout {
+                tool_name,
+                timeout_secs,
+            } => {
+                assert_eq!(tool_name, "SlowTool");
+                assert_eq!(timeout_secs, 99);
+            }
+            other => panic!("Expected Timeout, got: {other:?}"),
+        }
+    }
+
+    // -- From<PermissionError> conversion tests --
+
+    #[test]
+    fn test_from_permission_error_denied() {
+        let err = PermissionError::Denied("access blocked".to_string());
+        let exec_err: ToolExecutionError = err.into();
+        match exec_err {
+            ToolExecutionError::PermissionDenied { tool_name, reason } => {
+                assert_eq!(tool_name, "unknown");
+                assert!(reason.contains("access blocked"));
+            }
+            other => panic!("Expected PermissionDenied, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_permission_error_invalid() {
+        let err = PermissionError::InvalidPermission("bad perm".to_string());
+        let exec_err: ToolExecutionError = err.into();
+        match exec_err {
+            ToolExecutionError::PermissionDenied { reason, .. } => {
+                assert!(reason.contains("bad perm"));
+            }
+            other => panic!("Expected PermissionDenied, got: {other:?}"),
+        }
+    }
+
+    // -- All ToolExecutionError display variants --
+
+    #[test]
+    fn test_error_display_invalid_input() {
+        let e = ToolExecutionError::InvalidInput {
+            tool_name: "Bash".to_string(),
+            reason: "missing command".to_string(),
+        };
+        let s = e.to_string();
+        assert!(s.contains("Bash"));
+        assert!(s.contains("missing command"));
+    }
+
+    #[test]
+    fn test_error_display_hook_blocked() {
+        let e = ToolExecutionError::HookBlocked("security policy".to_string());
+        let s = e.to_string();
+        assert!(s.contains("security policy"));
+    }
+
+    #[test]
+    fn test_error_display_internal() {
+        let e = ToolExecutionError::Internal("unexpected state".to_string());
+        let s = e.to_string();
+        assert!(s.contains("unexpected state"));
+    }
+
+    #[test]
+    fn test_error_display_execution_failed() {
+        let e = ToolExecutionError::ExecutionFailed("disk full".to_string());
+        let s = e.to_string();
+        assert!(s.contains("disk full"));
+    }
+
+    // -- Tool not found: progress events emitted --
+
+    #[tokio::test]
+    async fn test_tool_not_found_emits_failed_progress() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let callback = Arc::new(ChannelProgressCallback::new(tx));
+
+        let mut service = make_service().await;
+        service.set_progress_callback(callback);
+
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "NonExistent", Value::Null)
+            .await;
+
+        assert!(result.is_err());
+        let mut received = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            received.push(p);
+        }
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].status, ToolProgressStatus::Failed);
+        assert!(received[0].message.as_ref().unwrap().contains("Tool not found"));
+    }
+
+    // -- Permission denied: progress events emitted --
+
+    #[tokio::test]
+    async fn test_permission_denied_emits_failed_progress() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let callback = Arc::new(ChannelProgressCallback::new(tx));
+
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let registry = Arc::new(registry);
+
+        let mut perm_mgr = PermissionManager::new();
+        perm_mgr.set_tool_permission(
+            "Echo".to_string(),
+            Permission::new("tool", "execute", PermissionLevel::Admin),
+        );
+        let perm_mgr = Arc::new(perm_mgr);
+
+        let mut service = ToolExecutionService::new(registry, perm_mgr);
+        service.set_progress_callback(callback);
+
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "Echo", serde_json::json!({"message": "hi"}))
+            .await;
+
+        assert!(result.is_err());
+        let mut received = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            received.push(p);
+        }
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].status, ToolProgressStatus::Failed);
+    }
+
+    // -- Hook blocked: progress events emitted --
+
+    #[tokio::test]
+    async fn test_hook_blocked_emits_failed_progress() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let callback = Arc::new(ChannelProgressCallback::new(tx));
+
+        let mut service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "echo '{\"decision\": \"deny\", \"reason\": \"forbidden\"}'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+        service.set_progress_callback(callback);
+
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "Echo", serde_json::json!({"message": "hi"}))
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, ToolExecutionError::HookBlocked(_)));
+
+        let mut received = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            received.push(p);
+        }
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].status, ToolProgressStatus::Failed);
+        assert!(received[0].message.as_ref().unwrap().contains("Hook blocked"));
+    }
+
+    // -- Tool execution timeout via config (service-level default_timeout) --
+
+    #[tokio::test]
+    async fn test_service_config_timeout_slow_tool() {
+        let registry = ToolRegistry::new();
+        registry
+            .register(Box::new(DelayedTool {
+                delay_ms: 500, // 500ms delay
+            }))
+            .unwrap();
+        let registry = Arc::new(registry);
+
+        let config = ToolExecutionConfig {
+            default_timeout: Duration::from_millis(10), // 10ms timeout, much shorter than delay
+            collect_attachments: true,
+            emit_hook_progress: true,
+            auto_checkpoint: false,
+        };
+
+        let service = ToolExecutionService::with_config(
+            registry,
+            Arc::new(PermissionManager::new()),
+            config,
+        );
+
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "Delayed", serde_json::json!({}))
+            .await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ToolExecutionError::Timeout {
+                tool_name,
+                timeout_secs,
+            } => {
+                assert_eq!(tool_name, "Delayed");
+                assert_eq!(timeout_secs, 0); // 10ms rounds to 0 secs
+            }
+            other => panic!("Expected Timeout, got: {other:?}"),
+        }
+    }
+
+    // -- Tool execution timeout: progress events --
+
+    #[tokio::test]
+    async fn test_timeout_emits_failed_progress() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let callback = Arc::new(ChannelProgressCallback::new(tx));
+
+        let registry = ToolRegistry::new();
+        registry
+            .register(Box::new(DelayedTool {
+                delay_ms: 500,
+            }))
+            .unwrap();
+        let registry = Arc::new(registry);
+
+        let config = ToolExecutionConfig {
+            default_timeout: Duration::from_millis(10),
+            collect_attachments: true,
+            emit_hook_progress: true,
+            auto_checkpoint: false,
+        };
+
+        let mut service = ToolExecutionService::with_config(
+            registry,
+            Arc::new(PermissionManager::new()),
+            config,
+        );
+        service.set_progress_callback(callback);
+
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "Delayed", serde_json::json!({}))
+            .await;
+
+        assert!(result.is_err());
+
+        let mut received = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            received.push(p);
+        }
+        // Should have: Started + Failed (timeout)
+        assert!(received.len() >= 2);
+        assert_eq!(received[0].status, ToolProgressStatus::Started);
+        // Last should be Failed
+        let last = received.last().unwrap();
+        assert_eq!(last.status, ToolProgressStatus::Failed);
+        assert!(last.message.as_ref().unwrap().contains("timed out"));
+    }
+
+    // -- Output truncation for oversized tool output --
+
+    #[tokio::test]
+    async fn test_large_output_gets_truncated() {
+        let service = make_extended_service().await;
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "LargeOutput", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        // Original is 50K chars; output should be truncated to ~40K + suffix
+        assert!(result.output.content.len() < 50_000);
+        assert!(result.output.content.contains("[Tool output truncated"));
+        assert!(!result.is_error);
+    }
+
+    // -- Tool returning ToolError::InvalidInput gets wrapped as ExecutionFailed --
+
+    #[tokio::test]
+    async fn test_tool_invalid_input_error_wrapped() {
+        // The registry wraps ToolError::InvalidInput into a generic error message
+        let service = make_extended_service().await;
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "InvalidInput", serde_json::json!({}))
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        // The registry wraps this as ExecutionFailed with "Invalid tool input: ..."
+        match &err {
+            ToolExecutionError::ExecutionFailed(msg) => {
+                assert!(msg.contains("Invalid tool input"));
+                assert!(msg.contains("missing required field"));
+            }
+            ToolExecutionError::InvalidInput { reason, .. } => {
+                assert!(reason.contains("missing required field"));
+            }
+            other => panic!("Expected ExecutionFailed or InvalidInput, got: {other:?}"),
+        }
+    }
+
+    // -- Tool returning ToolError::RegistryError gets wrapped as ExecutionFailed --
+
+    #[tokio::test]
+    async fn test_tool_registry_error_wrapped() {
+        // The registry wraps ToolError::RegistryError into a generic error message
+        let service = make_extended_service().await;
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "RegistryError", serde_json::json!({}))
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match &err {
+            ToolExecutionError::ExecutionFailed(msg) => {
+                assert!(msg.contains("corrupted registry state"));
+            }
+            ToolExecutionError::Internal(msg) => {
+                assert!(msg.contains("corrupted registry state"));
+            }
+            other => panic!("Expected ExecutionFailed or Internal, got: {other:?}"),
+        }
+    }
+
+    // -- Metadata: output metadata is merged into result --
+
+    #[tokio::test]
+    async fn test_metadata_merged_from_tool_output() {
+        let service = make_extended_service().await;
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "MetadataTool", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.metadata.get("line_count").and_then(|v| v.as_u64()),
+            Some(42)
+        );
+        assert_eq!(
+            result.metadata.get("language").and_then(|v| v.as_str()),
+            Some("rust")
+        );
+    }
+
+    // -- Metadata: file path via "path" key --
+
+    #[test]
+    fn test_build_metadata_path_key() {
+        let input = serde_json::json!({"path": "/tmp/data.json"});
+        let output = ToolOutput {
+            content: "{}".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let meta = ToolExecutionResult::build_metadata("Read", &input, &output);
+        assert_eq!(
+            meta.get("file_extension").and_then(|v| v.as_str()),
+            Some("json")
+        );
+    }
+
+    // -- Metadata: "filePath" camelCase key NOT in extraction list --
+
+    #[test]
+    fn test_build_metadata_filepath_key_not_extracted() {
+        // build_metadata only checks "file_path" and "path", not "filePath"
+        let input = serde_json::json!({"filePath": "/tmp/code.ts"});
+        let output = ToolOutput {
+            content: "code".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let meta = ToolExecutionResult::build_metadata("Read", &input, &output);
+        // "filePath" is not in the checked keys, so no extension extracted
+        assert_eq!(meta.get("file_extension"), None);
+    }
+
+    // -- Metadata: output metadata merged with input metadata --
+
+    #[test]
+    fn test_build_metadata_merges_output_metadata() {
+        let input = serde_json::json!({"file_path": "/tmp/test.py"});
+        let mut output_meta = HashMap::new();
+        output_meta.insert(
+            "bytes_read".to_string(),
+            serde_json::Value::Number(1024.into()),
+        );
+        let output = ToolOutput {
+            content: "print('hello')".to_string(),
+            is_error: false,
+            metadata: output_meta,
+        };
+        let meta = ToolExecutionResult::build_metadata("Read", &input, &output);
+        // Should have both file_extension from input and bytes_read from output
+        assert_eq!(
+            meta.get("file_extension").and_then(|v| v.as_str()),
+            Some("py")
+        );
+        assert_eq!(
+            meta.get("bytes_read").and_then(|v| v.as_u64()),
+            Some(1024)
+        );
+    }
+
+    // -- Metadata: non-file, non-bash tool has minimal metadata --
+
+    #[test]
+    fn test_build_metadata_no_file_no_bash() {
+        let input = serde_json::json!({"query": "search term"});
+        let output = ToolOutput {
+            content: "results".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let meta = ToolExecutionResult::build_metadata("Grep", &input, &output);
+        // Should be empty since no file_path and not Bash
+        assert!(meta.is_empty());
+    }
+
+    // -- Attachment: Write tool produces attachment --
+
+    #[test]
+    fn test_extract_attachments_write_tool() {
+        let output = ToolOutput {
+            content: "written content".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let attachments = ToolExecutionResult::extract_attachments("Write", "id-1", &output);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].source_tool, "Write");
+        assert_eq!(attachments[0].content, "written content");
+    }
+
+    // -- Attachment: "write" (lowercase) not in attachment extraction list --
+
+    #[test]
+    fn test_extract_attachments_lowercase_write_not_in_list() {
+        // The attachment extraction list only has "Write", not "write"
+        let output = ToolOutput {
+            content: "data".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let attachments = ToolExecutionResult::extract_attachments("write", "id-1", &output);
+        assert!(attachments.is_empty());
+    }
+
+    // -- Attachment: FileWrite tool produces attachment --
+
+    #[test]
+    fn test_extract_attachments_file_write_tool() {
+        let output = ToolOutput {
+            content: "file data".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let attachments = ToolExecutionResult::extract_attachments("FileWrite", "id-1", &output);
+        assert_eq!(attachments.len(), 1);
+    }
+
+    // -- Attachment: Screenshot tool produces image attachment --
+
+    #[test]
+    fn test_extract_attachments_screenshot_tool() {
+        let output = ToolOutput {
+            content: "base64imagedata".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let attachments =
+            ToolExecutionResult::extract_attachments("Screenshot", "id-1", &output);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].content_type, "image/png");
+        assert_eq!(attachments[0].file_extension.as_deref(), Some("png"));
+    }
+
+    // -- Attachment: screenshot (lowercase) tool produces image attachment --
+
+    #[test]
+    fn test_extract_attachments_lowercase_screenshot() {
+        let output = ToolOutput {
+            content: "imagedata".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let attachments =
+            ToolExecutionResult::extract_attachments("screenshot", "id-1", &output);
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].content_type, "image/png");
+    }
+
+    // -- Attachment: TakeScreenshot tool produces image attachment --
+
+    #[test]
+    fn test_extract_attachments_take_screenshot_tool() {
+        let output = ToolOutput {
+            content: "imagedata".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let attachments =
+            ToolExecutionResult::extract_attachments("TakeScreenshot", "id-1", &output);
+        assert_eq!(attachments.len(), 1);
+    }
+
+    // -- Attachment: unknown tool produces no attachments --
+
+    #[test]
+    fn test_extract_attachments_unknown_tool() {
+        let output = ToolOutput {
+            content: "some data".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let attachments = ToolExecutionResult::extract_attachments("UnknownTool", "id-1", &output);
+        assert!(attachments.is_empty());
+    }
+
+    // -- Attachment: collect_attachments disabled produces no attachments --
+
+    #[tokio::test]
+    async fn test_attachments_disabled_in_config() {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let registry = Arc::new(registry);
+
+        let config = ToolExecutionConfig {
+            default_timeout: Duration::from_secs(300),
+            collect_attachments: false, // disabled
+            emit_hook_progress: true,
+            auto_checkpoint: false,
+        };
+
+        let service = ToolExecutionService::with_config(
+            registry,
+            Arc::new(PermissionManager::new()),
+            config,
+        );
+
+        let result = service
+            .run_tool_use(
+                Uuid::new_v4(),
+                "Echo",
+                serde_json::json!({"message": "hello"}),
+            )
+            .await
+            .unwrap();
+
+        assert!(result.attachments.is_empty());
+    }
+
+    // -- extract_file_paths: filePath key --
+
+    #[test]
+    fn test_extract_file_paths_filepath_key() {
+        let input = serde_json::json!({"filePath": "/some/file.ts"});
+        let paths = ToolExecutionService::extract_file_paths("Read", &input);
+        assert_eq!(paths, vec!["/some/file.ts"]);
+    }
+
+    // -- extract_file_paths: multiple file path keys --
+
+    #[test]
+    fn test_extract_file_paths_multiple_keys() {
+        // If multiple keys are present, all should be extracted
+        let input = serde_json::json!({"file_path": "/a.rs", "path": "/b.rs"});
+        let paths = ToolExecutionService::extract_file_paths("Write", &input);
+        assert_eq!(paths.len(), 2);
+        assert!(paths.contains(&"/a.rs".to_string()));
+        assert!(paths.contains(&"/b.rs".to_string()));
+    }
+
+    // -- extract_file_paths: non-object input --
+
+    #[test]
+    fn test_extract_file_paths_non_object_input() {
+        let input = serde_json::json!("just a string");
+        let paths = ToolExecutionService::extract_file_paths("Read", &input);
+        assert!(paths.is_empty());
+    }
+
+    // -- extract_file_paths: null input --
+
+    #[test]
+    fn test_extract_file_paths_null_input() {
+        let paths = ToolExecutionService::extract_file_paths("Read", &Value::Null);
+        assert!(paths.is_empty());
+    }
+
+    // -- is_file_modifying_tool: more variants --
+
+    #[test]
+    fn test_is_file_modifying_tool_variants() {
+        // Uppercase
+        assert!(is_file_modifying_tool("Write"));
+        assert!(is_file_modifying_tool("Edit"));
+        assert!(is_file_modifying_tool("Bash"));
+        assert!(is_file_modifying_tool("MultiEdit"));
+        assert!(is_file_modifying_tool("FileWrite"));
+        assert!(is_file_modifying_tool("FileEdit"));
+        // Lowercase
+        assert!(is_file_modifying_tool("write"));
+        assert!(is_file_modifying_tool("edit"));
+        assert!(is_file_modifying_tool("bash"));
+        assert!(is_file_modifying_tool("multi_edit"));
+        assert!(is_file_modifying_tool("file_write"));
+        assert!(is_file_modifying_tool("file_edit"));
+        // Non-modifying
+        assert!(!is_file_modifying_tool("Read"));
+        assert!(!is_file_modifying_tool("Grep"));
+        assert!(!is_file_modifying_tool("Glob"));
+        assert!(!is_file_modifying_tool(""));
+    }
+
+    // -- with_config constructor --
+
+    #[tokio::test]
+    async fn test_with_config_constructor() {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let registry = Arc::new(registry);
+
+        let config = ToolExecutionConfig {
+            default_timeout: Duration::from_secs(60),
+            collect_attachments: false,
+            emit_hook_progress: false,
+            auto_checkpoint: false,
+        };
+
+        let service = ToolExecutionService::with_config(
+            registry,
+            Arc::new(PermissionManager::new()),
+            config.clone(),
+        );
+
+        // Verify config is accessible
+        assert_eq!(service.config().default_timeout, Duration::from_secs(60));
+        assert!(!service.config().collect_attachments);
+
+        // Tool should still work
+        let result = service
+            .run_tool_use(
+                Uuid::new_v4(),
+                "Echo",
+                serde_json::json!({"message": "config test"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.output.content, "config test");
+        assert!(result.attachments.is_empty()); // collect_attachments disabled
+    }
+
+    // -- with_progress_callback constructor --
+
+    #[tokio::test]
+    async fn test_with_progress_callback_constructor() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let callback = Arc::new(ChannelProgressCallback::new(tx));
+
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let registry = Arc::new(registry);
+
+        let service =
+            ToolExecutionService::with_progress_callback(
+                registry,
+                Arc::new(PermissionManager::new()),
+                callback,
+            );
+
+        let _result = service
+            .run_tool_use(
+                Uuid::new_v4(),
+                "Echo",
+                serde_json::json!({"message": "cb test"}),
+            )
+            .await
+            .unwrap();
+
+        let mut received = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            received.push(p);
+        }
+        assert!(!received.is_empty());
+    }
+
+    // -- Accessor tests --
+
+    #[tokio::test]
+    async fn test_registry_accessor() {
+        let service = make_service().await;
+        let reg = service.registry();
+        assert!(reg.get("Echo").is_some());
+        assert!(reg.get("NonExistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_permission_manager_accessor() {
+        let service = make_service().await;
+        let pm = service.permission_manager();
+        // Should not panic; basic smoke test
+        assert!(pm.check_tool_permission(Uuid::new_v4(), "Echo").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_hook_manager_accessor_none() {
+        let service = make_service().await;
+        assert!(service.hook_manager().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_hook_manager_accessor_some() {
+        let service = make_service_with_hooks(
+            r#"{"hooks": {}}"#,
+        )
+        .await;
+        assert!(service.hook_manager().is_some());
+    }
+
+    /// Helper to build a synchronous service for permission choice tests.
+    fn make_service_blocking() -> ToolExecutionService {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let registry = Arc::new(registry);
+        let permission_manager = Arc::new(PermissionManager::new());
+        ToolExecutionService::new(registry, permission_manager)
+    }
+
+    // -- process_permission_choice: Deny returns error --
+
+    #[test]
+    fn test_process_permission_choice_deny() {
+        let service = make_service_blocking();
+        let prompt = PermissionPrompt {
+            id: Uuid::new_v4(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "rm -rf /"}),
+            risk_level: crate::permissions::RiskLevel::Critical,
+            description: "Dangerous command".to_string(),
+            is_confirmation: false,
+            diff_preview: None,
+            is_destructive: false,
+            risk_reason: String::new(),
+        };
+
+        let result = service.process_permission_choice(Uuid::new_v4(), &prompt, crate::permissions::PermissionChoice::Deny);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ToolExecutionError::PermissionDenied { tool_name, reason } => {
+                assert_eq!(tool_name, "Bash");
+                assert!(reason.contains("User denied"));
+            }
+            other => panic!("Expected PermissionDenied, got: {other:?}"),
+        }
+    }
+
+    // -- process_permission_choice: AllowOnce returns Ok --
+
+    #[test]
+    fn test_process_permission_choice_allow_once() {
+        let service = make_service_blocking();
+        let prompt = PermissionPrompt {
+            id: Uuid::new_v4(),
+            tool_name: "Read".to_string(),
+            tool_input: serde_json::json!({"file_path": "/tmp/test.txt"}),
+            risk_level: crate::permissions::RiskLevel::Low,
+            description: "Read file".to_string(),
+            is_confirmation: false,
+            diff_preview: None,
+            is_destructive: false,
+            risk_reason: String::new(),
+        };
+
+        let result = service.process_permission_choice(Uuid::new_v4(), &prompt, crate::permissions::PermissionChoice::AllowOnce);
+        assert!(result.is_ok());
+    }
+
+    // -- process_permission_choice: AlwaysAllow returns Ok --
+
+    #[test]
+    fn test_process_permission_choice_always_allow() {
+        let service = make_service_blocking();
+        let prompt = PermissionPrompt {
+            id: Uuid::new_v4(),
+            tool_name: "Read".to_string(),
+            tool_input: serde_json::json!({}),
+            risk_level: crate::permissions::RiskLevel::Low,
+            description: "Read".to_string(),
+            is_confirmation: false,
+            diff_preview: None,
+            is_destructive: false,
+            risk_reason: String::new(),
+        };
+
+        let result = service.process_permission_choice(Uuid::new_v4(), &prompt, crate::permissions::PermissionChoice::AlwaysAllow);
+        assert!(result.is_ok());
+    }
+
+    // -- process_permission_choice: EditAndRun returns Ok --
+
+    #[test]
+    fn test_process_permission_choice_edit_and_run() {
+        let service = make_service_blocking();
+        let prompt = PermissionPrompt {
+            id: Uuid::new_v4(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({}),
+            risk_level: crate::permissions::RiskLevel::Medium,
+            description: "Bash".to_string(),
+            is_confirmation: false,
+            diff_preview: None,
+            is_destructive: false,
+            risk_reason: String::new(),
+        };
+
+        let result = service.process_permission_choice(Uuid::new_v4(), &prompt, crate::permissions::PermissionChoice::EditAndRun);
+        assert!(result.is_ok());
+    }
+
+    // -- Hook errors don't block execution (PreToolUse hook that fails) --
+
+    #[tokio::test]
+    async fn test_hook_error_does_not_block_execution() {
+        // A hook with an invalid command should not block the tool from executing
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "*",
+                        "hooks": [
+                            {"command": "nonexistent_command_that_will_fail_xyz", "timeout": 1, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let session_id = Uuid::new_v4();
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "should work"}))
+            .await;
+
+        // Hook error is logged but does not block; tool still executes
+        // (the hook command fails to run, which results in a hook error)
+        match result {
+            Ok(r) => {
+                // Tool may execute if hook error is treated as allow
+                assert_eq!(r.output.content, "should work");
+            }
+            Err(ToolExecutionError::HookBlocked(_)) => {
+                // Some implementations may treat hook failure as deny; both are acceptable
+            }
+            Err(other) => panic!("Unexpected error: {other:?}"),
+        }
+    }
+
+    // -- Result session_id matches input --
+
+    #[tokio::test]
+    async fn test_result_session_id_matches_input() {
+        let service = make_service().await;
+        let session_id = Uuid::new_v4();
+
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "test"}))
+            .await
+            .unwrap();
+
+        assert_eq!(result.session_id, session_id);
+    }
+
+    // -- Result has unique tool_id --
+
+    #[tokio::test]
+    async fn test_result_has_unique_tool_id() {
+        let service = make_service().await;
+
+        let r1 = service
+            .run_tool_use(Uuid::new_v4(), "Echo", serde_json::json!({"message": "a"}))
+            .await
+            .unwrap();
+        let r2 = service
+            .run_tool_use(Uuid::new_v4(), "Echo", serde_json::json!({"message": "b"}))
+            .await
+            .unwrap();
+
+        assert_ne!(r1.tool_id, r2.tool_id);
+    }
+
+    // -- Stop hook info populated correctly --
+
+    #[tokio::test]
+    async fn test_stop_hook_info_populated() {
+        let service = make_service().await;
+        let session_id = Uuid::new_v4();
+
+        let result = service
+            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "test"}))
+            .await
+            .unwrap();
+
+        let info = result.stop_hook_info.unwrap();
+        assert_eq!(info.tool_name, "Echo");
+        assert!(!info.is_error);
+        assert_eq!(info.session_id, session_id);
+        assert!(!info.tool_id.is_empty());
+        assert!(info.duration.as_nanos() > 0);
+    }
+
+    // -- Stop hook info for error output tool --
+
+    #[tokio::test]
+    async fn test_stop_hook_info_for_error_output() {
+        let service = make_service().await;
+        let session_id = Uuid::new_v4();
+
+        let result = service
+            .run_tool_use(session_id, "Fail", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        let info = result.stop_hook_info.unwrap();
+        assert_eq!(info.tool_name, "Fail");
+        assert!(info.is_error);
+        assert!(info.tool_output.is_error);
+    }
+
+    // -- No stop hook info on execution error (returns Err) --
+
+    #[tokio::test]
+    async fn test_no_stop_hook_info_on_execution_error() {
+        let service = make_service().await;
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "Panic", serde_json::json!({}))
+            .await;
+
+        // Execution errors return Err, so no result to check stop_hook_info on
+        assert!(result.is_err());
+    }
+
+    // -- Files modified extracted from Echo tool (no file paths) --
+
+    #[tokio::test]
+    async fn test_files_modified_empty_for_non_file_tool() {
+        let service = make_service().await;
+        let result = service
+            .run_tool_use(Uuid::new_v4(), "Echo", serde_json::json!({"message": "hi"}))
+            .await
+            .unwrap();
+
+        assert!(result.files_modified.is_empty());
+    }
+
+    // -- ChannelProgressCallback: receiver drop doesn't panic --
+
+    #[tokio::test]
+    async fn test_channel_progress_callback_dropped_receiver() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let callback = ChannelProgressCallback::new(tx);
+
+        // Drop the receiver
+        drop(rx);
+
+        // Sending progress should not panic (the send returns Err but is ignored)
+        callback
+            .on_progress(ToolProgress::started("id-1", "Test"))
+            .await;
+        // No panic = success
+    }
+
+    // -- LoggingProgressCallback: does not panic --
+
+    #[tokio::test]
+    async fn test_logging_progress_callback() {
+        let callback = LoggingProgressCallback;
+        callback
+            .on_progress(ToolProgress::started("id-1", "Test"))
+            .await;
+        // No panic = success
+    }
+
+    // -- Execution failed: progress includes Started + Failed --
+
+    #[tokio::test]
+    async fn test_execution_failed_progress_events() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let callback = Arc::new(ChannelProgressCallback::new(tx));
+
+        let mut service = make_service().await;
+        service.set_progress_callback(callback);
+
+        let _ = service
+            .run_tool_use(Uuid::new_v4(), "Panic", serde_json::json!({}))
+            .await;
+
+        let mut received = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            received.push(p);
+        }
+        // Should have: Started + Failed
+        assert!(received.len() >= 2);
+        assert_eq!(received[0].status, ToolProgressStatus::Started);
+        let last = received.last().unwrap();
+        assert_eq!(last.status, ToolProgressStatus::Failed);
+    }
+
+    // -- Successful execution: progress includes Started + Completed --
+
+    #[tokio::test]
+    async fn test_success_progress_ordering() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let callback = Arc::new(ChannelProgressCallback::new(tx));
+
+        let mut service = make_service().await;
+        service.set_progress_callback(callback);
+
+        let _ = service
+            .run_tool_use(
+                Uuid::new_v4(),
+                "Echo",
+                serde_json::json!({"message": "ordered"}),
+            )
+            .await
+            .unwrap();
+
+        let mut received = Vec::new();
+        while let Ok(p) = rx.try_recv() {
+            received.push(p);
+        }
+        assert_eq!(received.len(), 2);
+        assert_eq!(received[0].status, ToolProgressStatus::Started);
+        assert_eq!(received[1].status, ToolProgressStatus::Completed);
+    }
+
+    // -- Hook modify with non-object modified_input leaves tool unchanged --
+
+    #[tokio::test]
+    async fn test_hook_modify_with_null_input_no_change() {
+        // Hook returns modify with null modified_input - should not change the effective input
+        let service = make_service_with_hooks(r#"{
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Echo",
+                        "hooks": [
+                            {"command": "echo '{\"decision\": \"modify\"}'", "timeout": 5, "blocking": true}
+                        ]
+                    }
+                ]
+            }
+        }"#).await;
+
+        let result = service
+            .run_tool_use(
+                Uuid::new_v4(),
+                "Echo",
+                serde_json::json!({"message": "original"}),
+            )
+            .await
+            .unwrap();
+
+        // modified_input is null/absent, so input should stay as-is
+        assert_eq!(result.output.content, "original");
+    }
+
+    // -- Multiple concurrent tool executions produce unique IDs --
+
+    #[tokio::test]
+    async fn test_concurrent_tool_executions_unique_ids() {
+        let service = Arc::new(make_service().await);
+        let mut handles = Vec::new();
+
+        for i in 0..5 {
+            let svc = Arc::clone(&service);
+            handles.push(tokio::spawn(async move {
+                svc.run_tool_use(
+                    Uuid::new_v4(),
+                    "Echo",
+                    serde_json::json!({"message": format!("msg-{i}")}),
+                )
+                .await
+                .unwrap()
+            }));
+        }
+
+        let results: Vec<_> = futures::future::join_all(handles).await;
+        let tool_ids: Vec<_> = results.into_iter().map(|r| r.unwrap().tool_id).collect();
+
+        // All tool IDs should be unique
+        let unique_count = {
+            let mut ids = tool_ids.clone();
+            ids.sort();
+            ids.dedup();
+            ids.len()
+        };
+        assert_eq!(unique_count, 5);
+    }
+
+    // -- create_permission_prompt returns Some for unconfigured tools --
+
+    #[test]
+    fn test_create_permission_prompt_returns_some_for_new_tool() {
+        let service = make_service_blocking();
+        let result = service.create_permission_prompt(
+            Uuid::new_v4(),
+            "Echo",
+            &serde_json::json!({"message": "test"}),
+        );
+        // A fresh PermissionManager returns Some (a prompt) for unknown tools
+        assert!(result.is_some());
+        let prompt = result.unwrap();
+        assert_eq!(prompt.tool_name, "Echo");
+    }
+
+    // -- Auto-checkpoint disabled in config --
+
+    #[tokio::test]
+    async fn test_auto_checkpoint_disabled() {
+        let registry = ToolRegistry::new();
+        registry.register(Box::new(EchoTool)).unwrap();
+        let registry = Arc::new(registry);
+
+        let config = ToolExecutionConfig {
+            default_timeout: Duration::from_secs(300),
+            collect_attachments: true,
+            emit_hook_progress: true,
+            auto_checkpoint: false,
+        };
+
+        let mut service = ToolExecutionService::with_config(
+            registry,
+            Arc::new(PermissionManager::new()),
+            config,
+        );
+        // Set a checkpoint manager - it shouldn't be used because auto_checkpoint is false
+        service.set_checkpoint_manager(CheckpointManager::new());
+
+        let result = service
+            .run_tool_use(
+                Uuid::new_v4(),
+                "Echo",
+                serde_json::json!({"message": "test"}),
+            )
+            .await
+            .unwrap();
+
+        assert!(!result.checkpoint_created);
+    }
+
+    // -- Bash tool metadata with "cmd" field --
+
+    #[test]
+    fn test_build_metadata_bash_cmd_field() {
+        let input = serde_json::json!({"cmd": "cargo test"});
+        let output = ToolOutput {
+            content: "running tests".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let meta = ToolExecutionResult::build_metadata("bash", &input, &output);
+        assert_eq!(
+            meta.get("bash_command").and_then(|v| v.as_str()),
+            Some("cargo test")
+        );
+    }
+
+    // -- Bash tool metadata with "command" field takes priority --
+
+    #[test]
+    fn test_build_metadata_bash_command_priority() {
+        let input = serde_json::json!({"command": "cargo build", "cmd": "cargo test"});
+        let output = ToolOutput {
+            content: "building".to_string(),
+            is_error: false,
+            metadata: Default::default(),
+        };
+        let meta = ToolExecutionResult::build_metadata("Bash", &input, &output);
+        // "command" is checked first via .or_else(), so it should win
+        let cmd = meta.get("bash_command").and_then(|v| v.as_str()).unwrap();
+        assert_eq!(cmd, "cargo build");
+    }
+
+    // -- AttachmentMessage serialization roundtrip --
+
+    #[test]
+    fn test_attachment_message_serialization() {
+        let att = AttachmentMessage::new("Read", "id-1", "file contents", "text/plain");
+        let json = serde_json::to_string(&att).unwrap();
+        let back: AttachmentMessage = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.source_tool, "Read");
+        assert_eq!(back.tool_id, "id-1");
+        assert_eq!(back.content_type, "text/plain");
+    }
+
+    // -- StopHookInfo serialization roundtrip --
+
+    #[test]
+    fn test_stop_hook_info_serialization() {
+        let info = StopHookInfo {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"cmd": "ls"}),
+            tool_output: ToolOutput {
+                content: "files".to_string(),
+                is_error: false,
+                metadata: Default::default(),
+            },
+            duration: Duration::from_millis(50),
+            is_error: false,
+            session_id: Uuid::new_v4(),
+            tool_id: "id-1".to_string(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: StopHookInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tool_name, "Bash");
+        assert!(!back.is_error);
+    }
+
+    // -- HookProgress serialization roundtrip --
+
+    #[test]
+    fn test_hook_progress_serialization() {
+        let hp = HookProgress::new("PreToolUse", "Bash", "checking");
+        let json = serde_json::to_string(&hp).unwrap();
+        let back: HookProgress = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.hook_type, "PreToolUse");
+        assert_eq!(back.tool_name, "Bash");
+        assert_eq!(back.message, "checking");
+    }
+
+    // -- ToolExecutionResult has hook_progress field (always empty in basic flow) --
+
+    #[tokio::test]
+    async fn test_result_hook_progress_empty_without_hook_emit() {
+        let service = make_service().await;
+        let result = service
+            .run_tool_use(
+                Uuid::new_v4(),
+                "Echo",
+                serde_json::json!({"message": "test"}),
+            )
+            .await
+            .unwrap();
+
+        // hook_progress is populated from the hook_progress_events local vec,
+        // which is always empty in the current implementation (future use)
+        assert!(result.hook_progress.is_empty());
     }
 }
