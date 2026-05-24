@@ -1141,6 +1141,7 @@ fn run_headless_query(
             eprintln!(
                 "Error: no API key configured. Set SHANNON_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY."
             );
+            return Err(anyhow::anyhow!("no API key configured"));
         }
 
         let llm_provider = client_config.provider.clone();
