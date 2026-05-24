@@ -1456,7 +1456,11 @@ mod tests {
             system_prompt: Some("You are a code reviewer".to_string()),
             agent_name: "reviewer-1".to_string(),
             permission_mode: Some("bypassPermissions".to_string()),
-            allowed_tools: Some(vec!["Read".to_string(), "Grep".to_string(), "Bash".to_string()]),
+            allowed_tools: Some(vec![
+                "Read".to_string(),
+                "Grep".to_string(),
+                "Bash".to_string(),
+            ]),
             startup_timeout_secs: 120,
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -1541,7 +1545,10 @@ mod tests {
 
         let event = rx.recv().await.expect("recv should succeed");
         match event {
-            AgentEvent::Ready { agent_name, capabilities } => {
+            AgentEvent::Ready {
+                agent_name,
+                capabilities,
+            } => {
                 assert_eq!(agent_name, "worker-1");
                 assert_eq!(capabilities.len(), 2);
             }
@@ -1602,7 +1609,10 @@ mod tests {
         }
 
         let e4 = rx.recv().await.expect("recv 4");
-        if let AgentEvent::TaskComplete { success, output, .. } = e4 {
+        if let AgentEvent::TaskComplete {
+            success, output, ..
+        } = e4
+        {
             assert!(success);
             assert_eq!(output, "done");
         } else {
@@ -1652,7 +1662,10 @@ mod tests {
             serde_json::json!({"ok": true}),
         );
         tx.send(Ok(msg)).expect("send should succeed");
-        let result = rx.await.expect("recv should succeed").expect("inner should be Ok");
+        let result = rx
+            .await
+            .expect("recv should succeed")
+            .expect("inner should be Ok");
         assert!(result.is_response());
     }
 
@@ -1672,21 +1685,30 @@ mod tests {
 
         // Insert a pending RPC
         let (tx1, rx1) = oneshot::channel();
-        pending.lock().unwrap().insert(1, PendingRpc { sender: tx1 });
+        pending
+            .lock()
+            .unwrap()
+            .insert(1, PendingRpc { sender: tx1 });
 
         // Insert a second
         let (tx2, rx2) = oneshot::channel();
-        pending.lock().unwrap().insert(2, PendingRpc { sender: tx2 });
+        pending
+            .lock()
+            .unwrap()
+            .insert(2, PendingRpc { sender: tx2 });
 
         assert_eq!(pending.lock().unwrap().len(), 2);
 
         // Resolve RPC 1
         let rpc1 = pending.lock().unwrap().remove(&1);
         assert!(rpc1.is_some());
-        rpc1.unwrap().sender.send(Ok(JsonRpcMessage::response(
-            protocol::JsonRpcId::Number(1),
-            serde_json::json!({"done": true}),
-        ))).expect("send should succeed");
+        rpc1.unwrap()
+            .sender
+            .send(Ok(JsonRpcMessage::response(
+                protocol::JsonRpcId::Number(1),
+                serde_json::json!({"done": true}),
+            )))
+            .expect("send should succeed");
 
         let resp = rx1.await.expect("recv").expect("ok");
         assert!(resp.result.is_some());
@@ -1707,8 +1729,14 @@ mod tests {
 
         let (tx1, _rx1) = oneshot::channel();
         let (tx2, _rx2) = oneshot::channel();
-        pending.lock().unwrap().insert(10, PendingRpc { sender: tx1 });
-        pending.lock().unwrap().insert(20, PendingRpc { sender: tx2 });
+        pending
+            .lock()
+            .unwrap()
+            .insert(10, PendingRpc { sender: tx1 });
+        pending
+            .lock()
+            .unwrap()
+            .insert(20, PendingRpc { sender: tx2 });
 
         // Drain all (same pattern as read_loop)
         let orphaned: Vec<_> = pending.lock().unwrap().drain().collect();
@@ -1907,7 +1935,11 @@ mod tests {
             agent_name: "reviewer".to_string(),
             capabilities: vec!["Read".to_string(), "Grep".to_string(), "Bash".to_string()],
         };
-        if let AgentEvent::Ready { agent_name, capabilities } = event {
+        if let AgentEvent::Ready {
+            agent_name,
+            capabilities,
+        } = event
+        {
             assert_eq!(agent_name, "reviewer");
             assert_eq!(capabilities.len(), 3);
         }
@@ -1920,7 +1952,12 @@ mod tests {
             task_id: "task-42".to_string(),
             chunk: "compiling...".to_string(),
         };
-        if let AgentEvent::Progress { agent_name, task_id, chunk } = event {
+        if let AgentEvent::Progress {
+            agent_name,
+            task_id,
+            chunk,
+        } = event
+        {
             assert_eq!(agent_name, "builder");
             assert_eq!(task_id, "task-42");
             assert_eq!(chunk, "compiling...");
@@ -1935,7 +1972,10 @@ mod tests {
             success: true,
             output: "all tests passed".to_string(),
         };
-        if let AgentEvent::TaskComplete { success, output, .. } = event {
+        if let AgentEvent::TaskComplete {
+            success, output, ..
+        } = event
+        {
             assert!(success);
             assert_eq!(output, "all tests passed");
         }
@@ -1949,7 +1989,10 @@ mod tests {
             success: false,
             output: "compilation failed: missing semicolon".to_string(),
         };
-        if let AgentEvent::TaskComplete { success, output, .. } = event {
+        if let AgentEvent::TaskComplete {
+            success, output, ..
+        } = event
+        {
             assert!(!success);
             assert!(output.contains("compilation failed"));
         }
@@ -1961,7 +2004,11 @@ mod tests {
             agent_name: "worker-3".to_string(),
             available_tasks_count: 7,
         };
-        if let AgentEvent::Idle { agent_name, available_tasks_count } = event {
+        if let AgentEvent::Idle {
+            agent_name,
+            available_tasks_count,
+        } = event
+        {
             assert_eq!(agent_name, "worker-3");
             assert_eq!(available_tasks_count, 7);
         }
@@ -1995,7 +2042,11 @@ mod tests {
             agent_name: "sick-agent".to_string(),
             consecutive_failures: 5,
         };
-        if let AgentEvent::HealthCheckFailed { consecutive_failures, .. } = event {
+        if let AgentEvent::HealthCheckFailed {
+            consecutive_failures,
+            ..
+        } = event
+        {
             assert_eq!(consecutive_failures, 5);
         }
     }
@@ -2019,7 +2070,13 @@ mod tests {
             method: "claim_task".to_string(),
             params: serde_json::json!({"task_id": "t-99"}),
         };
-        if let AgentEvent::RpcRequest { request_id, method, params, .. } = event {
+        if let AgentEvent::RpcRequest {
+            request_id,
+            method,
+            params,
+            ..
+        } = event
+        {
             assert_eq!(request_id, 42);
             assert_eq!(method, "claim_task");
             assert_eq!(params["task_id"], "t-99");
@@ -2043,9 +2100,9 @@ mod tests {
         let parsed = parse_message(&line).unwrap();
         if let Some(method) = parsed.method() {
             if method == "agent_ready" {
-                if let Ok(params) = serde_json::from_value::<AgentReadyParams>(
-                    parsed.params.unwrap_or_default(),
-                ) {
+                if let Ok(params) =
+                    serde_json::from_value::<AgentReadyParams>(parsed.params.unwrap_or_default())
+                {
                     event_tx
                         .send(AgentEvent::Ready {
                             agent_name: params.agent_name.clone(),
@@ -2058,7 +2115,11 @@ mod tests {
         }
 
         let event = rx.recv().await.unwrap();
-        if let AgentEvent::Ready { agent_name, capabilities } = event {
+        if let AgentEvent::Ready {
+            agent_name,
+            capabilities,
+        } = event
+        {
             assert_eq!(agent_name, "test-worker");
             assert_eq!(capabilities.len(), 3);
         } else {
@@ -2080,9 +2141,9 @@ mod tests {
 
         if let Some(method) = parsed.method() {
             if method == "task_progress" {
-                if let Ok(params) = serde_json::from_value::<TaskProgressParams>(
-                    parsed.params.unwrap_or_default(),
-                ) {
+                if let Ok(params) =
+                    serde_json::from_value::<TaskProgressParams>(parsed.params.unwrap_or_default())
+                {
                     event_tx
                         .send(AgentEvent::Progress {
                             agent_name: "worker".to_string(),
@@ -2119,9 +2180,9 @@ mod tests {
 
         if let Some(method) = parsed.method() {
             if method == "task_complete" {
-                if let Ok(params) = serde_json::from_value::<TaskCompleteParams>(
-                    parsed.params.unwrap_or_default(),
-                ) {
+                if let Ok(params) =
+                    serde_json::from_value::<TaskCompleteParams>(parsed.params.unwrap_or_default())
+                {
                     event_tx
                         .send(AgentEvent::TaskComplete {
                             agent_name: "tester".to_string(),
@@ -2136,7 +2197,13 @@ mod tests {
         }
 
         let event = rx.recv().await.unwrap();
-        if let AgentEvent::TaskComplete { task_id, success, output, .. } = event {
+        if let AgentEvent::TaskComplete {
+            task_id,
+            success,
+            output,
+            ..
+        } = event
+        {
             assert_eq!(task_id, "t-99");
             assert!(success);
             assert_eq!(output, "all tests passed");
@@ -2159,9 +2226,9 @@ mod tests {
 
         if let Some(method) = parsed.method() {
             if method == "agent_idle" {
-                if let Ok(params) = serde_json::from_value::<AgentIdleParams>(
-                    parsed.params.unwrap_or_default(),
-                ) {
+                if let Ok(params) =
+                    serde_json::from_value::<AgentIdleParams>(parsed.params.unwrap_or_default())
+                {
                     event_tx
                         .send(AgentEvent::Idle {
                             agent_name: params.agent_name,
@@ -2174,7 +2241,11 @@ mod tests {
         }
 
         let event = rx.recv().await.unwrap();
-        if let AgentEvent::Idle { agent_name, available_tasks_count } = event {
+        if let AgentEvent::Idle {
+            agent_name,
+            available_tasks_count,
+        } = event
+        {
             assert_eq!(agent_name, "free-agent");
             assert_eq!(available_tasks_count, 5);
         } else {
@@ -2187,18 +2258,20 @@ mod tests {
         let (event_tx, mut rx) = mpsc::channel::<AgentEvent>(16);
 
         // Simulate an incoming RPC request (has method + id)
-        let msg = JsonRpcMessage::request(
-            "claim_task",
-            serde_json::json!({"task_id": "t-7"}),
-            55,
-        );
+        let msg = JsonRpcMessage::request("claim_task", serde_json::json!({"task_id": "t-7"}), 55);
         let line = frame_message(&msg).unwrap();
         let parsed = parse_message(&line).unwrap();
 
         // In read_loop, RPC requests from agents (create_task, claim_task, etc.) are dispatched
         let rpc_methods = [
-            "create_task", "update_task", "get_task", "team_manifest",
-            "list_tasks", "claim_task", "disband_team", "add_agent",
+            "create_task",
+            "update_task",
+            "get_task",
+            "team_manifest",
+            "list_tasks",
+            "claim_task",
+            "disband_team",
+            "add_agent",
         ];
         if let Some(method) = parsed.method() {
             if rpc_methods.contains(&method) {
@@ -2217,7 +2290,13 @@ mod tests {
         }
 
         let event = rx.recv().await.unwrap();
-        if let AgentEvent::RpcRequest { request_id, method, params, .. } = event {
+        if let AgentEvent::RpcRequest {
+            request_id,
+            method,
+            params,
+            ..
+        } = event
+        {
             assert_eq!(request_id, 55);
             assert_eq!(method, "claim_task");
             assert_eq!(params["task_id"], "t-7");
@@ -2231,7 +2310,10 @@ mod tests {
         let pending: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>> =
             Arc::new(std::sync::Mutex::new(HashMap::new()));
         let (tx, rx) = oneshot::channel();
-        pending.lock().unwrap().insert(42, PendingRpc { sender: tx });
+        pending
+            .lock()
+            .unwrap()
+            .insert(42, PendingRpc { sender: tx });
 
         // Simulate a response arriving (has id, no method)
         let response = JsonRpcMessage::response(
@@ -2428,14 +2510,21 @@ mod tests {
             system_prompt: Some("Focus on refactoring".to_string()),
             agent_name: "refactorer".to_string(),
             permission_mode: Some("auto".to_string()),
-            allowed_tools: Some(vec!["Read".to_string(), "Edit".to_string(), "Grep".to_string()]),
+            allowed_tools: Some(vec![
+                "Read".to_string(),
+                "Edit".to_string(),
+                "Grep".to_string(),
+            ]),
             startup_timeout_secs: 90,
         };
 
         let json = serde_json::to_string(&config).unwrap();
         let de: AgentProcessConfig = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(de.worktree_path.unwrap(), PathBuf::from("/project/worktrees/feature-x"));
+        assert_eq!(
+            de.worktree_path.unwrap(),
+            PathBuf::from("/project/worktrees/feature-x")
+        );
         assert_eq!(de.allowed_tools.unwrap().len(), 3);
         assert_eq!(de.startup_timeout_secs, 90);
     }

@@ -1729,7 +1729,10 @@ mod tests {
         assert_eq!(restored.description, "Serde test team");
         assert_eq!(restored.assignment_index, 7);
         assert_eq!(restored.members.len(), 1);
-        let member = restored.members.get("worker-1").expect("member should exist");
+        let member = restored
+            .members
+            .get("worker-1")
+            .expect("member should exist");
         assert_eq!(member.agent_type, "backend");
         assert_eq!(member.capabilities, vec!["rust"]);
         assert_eq!(member.max_concurrent_tasks, 5);
@@ -2173,7 +2176,10 @@ mod tests {
         assert_eq!(loaded.assignment_index, 42);
         let agent_0 = loaded.members.get("agent-0").expect("agent-0 should exist");
         assert!(agent_0.is_lead);
-        let agent_49 = loaded.members.get("agent-49").expect("agent-49 should exist");
+        let agent_49 = loaded
+            .members
+            .get("agent-49")
+            .expect("agent-49 should exist");
         assert_eq!(agent_49.agent_type, "type-49");
     }
 
@@ -2190,7 +2196,11 @@ mod tests {
                 description: format!("Description for task {i}"),
                 status: if i % 3 == 0 { "pending" } else { "completed" }.into(),
                 priority: if i % 4 == 0 { "high" } else { "low" }.into(),
-                owner: if i % 2 == 0 { None } else { Some(format!("agent-{i}")) },
+                owner: if i % 2 == 0 {
+                    None
+                } else {
+                    Some(format!("agent-{i}"))
+                },
                 blocked_by: Vec::new(),
                 blocks: Vec::new(),
                 active_form: None,

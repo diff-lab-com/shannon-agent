@@ -814,10 +814,12 @@ mod tests {
         let models: ModelsResponse = serde_json::from_slice(&body).unwrap();
         // "test-model" is the configured model and should be present since
         // it differs from the three built-in ones.
-        assert!(models
-            .models
-            .iter()
-            .any(|m| m.id == "test-model" && m.provider == "ollama"));
+        assert!(
+            models
+                .models
+                .iter()
+                .any(|m| m.id == "test-model" && m.provider == "ollama")
+        );
     }
 
     #[tokio::test]
@@ -1155,10 +1157,7 @@ mod tests {
     #[tokio::test]
     async fn test_root_route_returns_not_found() {
         let app = test_app();
-        let req = Request::builder()
-            .uri("/")
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
 
         let response = app.oneshot(req).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -1764,9 +1763,11 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(req).await.unwrap();
-        assert!(response
-            .headers()
-            .contains_key("access-control-allow-origin"));
+        assert!(
+            response
+                .headers()
+                .contains_key("access-control-allow-origin")
+        );
     }
 
     // ══════════════════════════════════════════════════════════════════════

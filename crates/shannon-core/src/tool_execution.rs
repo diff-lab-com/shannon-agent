@@ -2177,7 +2177,9 @@ mod tests {
         registry.register(Box::new(EchoTool)).unwrap();
         registry.register(Box::new(FailTool)).unwrap();
         registry.register(Box::new(PanicTool)).unwrap();
-        registry.register(Box::new(DelayedTool { delay_ms: 0 })).unwrap();
+        registry
+            .register(Box::new(DelayedTool { delay_ms: 0 }))
+            .unwrap();
         registry.register(Box::new(LargeOutputTool)).unwrap();
         registry.register(Box::new(MetadataTool)).unwrap();
         registry.register(Box::new(InvalidInputTool)).unwrap();
@@ -2333,7 +2335,13 @@ mod tests {
         }
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].status, ToolProgressStatus::Failed);
-        assert!(received[0].message.as_ref().unwrap().contains("Tool not found"));
+        assert!(
+            received[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("Tool not found")
+        );
     }
 
     // -- Permission denied: progress events emitted --
@@ -2405,7 +2413,13 @@ mod tests {
         }
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].status, ToolProgressStatus::Failed);
-        assert!(received[0].message.as_ref().unwrap().contains("Hook blocked"));
+        assert!(
+            received[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .contains("Hook blocked")
+        );
     }
 
     // -- Tool execution timeout via config (service-level default_timeout) --
@@ -2427,11 +2441,8 @@ mod tests {
             auto_checkpoint: false,
         };
 
-        let service = ToolExecutionService::with_config(
-            registry,
-            Arc::new(PermissionManager::new()),
-            config,
-        );
+        let service =
+            ToolExecutionService::with_config(registry, Arc::new(PermissionManager::new()), config);
 
         let result = service
             .run_tool_use(Uuid::new_v4(), "Delayed", serde_json::json!({}))
@@ -2459,9 +2470,7 @@ mod tests {
 
         let registry = ToolRegistry::new();
         registry
-            .register(Box::new(DelayedTool {
-                delay_ms: 500,
-            }))
+            .register(Box::new(DelayedTool { delay_ms: 500 }))
             .unwrap();
         let registry = Arc::new(registry);
 
@@ -2472,11 +2481,8 @@ mod tests {
             auto_checkpoint: false,
         };
 
-        let mut service = ToolExecutionService::with_config(
-            registry,
-            Arc::new(PermissionManager::new()),
-            config,
-        );
+        let mut service =
+            ToolExecutionService::with_config(registry, Arc::new(PermissionManager::new()), config);
         service.set_progress_callback(callback);
 
         let result = service
@@ -2636,10 +2642,7 @@ mod tests {
             meta.get("file_extension").and_then(|v| v.as_str()),
             Some("py")
         );
-        assert_eq!(
-            meta.get("bytes_read").and_then(|v| v.as_u64()),
-            Some(1024)
-        );
+        assert_eq!(meta.get("bytes_read").and_then(|v| v.as_u64()), Some(1024));
     }
 
     // -- Metadata: non-file, non-bash tool has minimal metadata --
@@ -2708,8 +2711,7 @@ mod tests {
             is_error: false,
             metadata: Default::default(),
         };
-        let attachments =
-            ToolExecutionResult::extract_attachments("Screenshot", "id-1", &output);
+        let attachments = ToolExecutionResult::extract_attachments("Screenshot", "id-1", &output);
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].content_type, "image/png");
         assert_eq!(attachments[0].file_extension.as_deref(), Some("png"));
@@ -2724,8 +2726,7 @@ mod tests {
             is_error: false,
             metadata: Default::default(),
         };
-        let attachments =
-            ToolExecutionResult::extract_attachments("screenshot", "id-1", &output);
+        let attachments = ToolExecutionResult::extract_attachments("screenshot", "id-1", &output);
         assert_eq!(attachments.len(), 1);
         assert_eq!(attachments[0].content_type, "image/png");
     }
@@ -2772,11 +2773,8 @@ mod tests {
             auto_checkpoint: false,
         };
 
-        let service = ToolExecutionService::with_config(
-            registry,
-            Arc::new(PermissionManager::new()),
-            config,
-        );
+        let service =
+            ToolExecutionService::with_config(registry, Arc::new(PermissionManager::new()), config);
 
         let result = service
             .run_tool_use(
@@ -2902,12 +2900,11 @@ mod tests {
         registry.register(Box::new(EchoTool)).unwrap();
         let registry = Arc::new(registry);
 
-        let service =
-            ToolExecutionService::with_progress_callback(
-                registry,
-                Arc::new(PermissionManager::new()),
-                callback,
-            );
+        let service = ToolExecutionService::with_progress_callback(
+            registry,
+            Arc::new(PermissionManager::new()),
+            callback,
+        );
 
         let _result = service
             .run_tool_use(
@@ -2951,10 +2948,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hook_manager_accessor_some() {
-        let service = make_service_with_hooks(
-            r#"{"hooks": {}}"#,
-        )
-        .await;
+        let service = make_service_with_hooks(r#"{"hooks": {}}"#).await;
         assert!(service.hook_manager().is_some());
     }
 
@@ -2984,7 +2978,11 @@ mod tests {
             risk_reason: String::new(),
         };
 
-        let result = service.process_permission_choice(Uuid::new_v4(), &prompt, crate::permissions::PermissionChoice::Deny);
+        let result = service.process_permission_choice(
+            Uuid::new_v4(),
+            &prompt,
+            crate::permissions::PermissionChoice::Deny,
+        );
         assert!(result.is_err());
         match result.unwrap_err() {
             ToolExecutionError::PermissionDenied { tool_name, reason } => {
@@ -3012,7 +3010,11 @@ mod tests {
             risk_reason: String::new(),
         };
 
-        let result = service.process_permission_choice(Uuid::new_v4(), &prompt, crate::permissions::PermissionChoice::AllowOnce);
+        let result = service.process_permission_choice(
+            Uuid::new_v4(),
+            &prompt,
+            crate::permissions::PermissionChoice::AllowOnce,
+        );
         assert!(result.is_ok());
     }
 
@@ -3033,7 +3035,11 @@ mod tests {
             risk_reason: String::new(),
         };
 
-        let result = service.process_permission_choice(Uuid::new_v4(), &prompt, crate::permissions::PermissionChoice::AlwaysAllow);
+        let result = service.process_permission_choice(
+            Uuid::new_v4(),
+            &prompt,
+            crate::permissions::PermissionChoice::AlwaysAllow,
+        );
         assert!(result.is_ok());
     }
 
@@ -3054,7 +3060,11 @@ mod tests {
             risk_reason: String::new(),
         };
 
-        let result = service.process_permission_choice(Uuid::new_v4(), &prompt, crate::permissions::PermissionChoice::EditAndRun);
+        let result = service.process_permission_choice(
+            Uuid::new_v4(),
+            &prompt,
+            crate::permissions::PermissionChoice::EditAndRun,
+        );
         assert!(result.is_ok());
     }
 
@@ -3078,7 +3088,11 @@ mod tests {
 
         let session_id = Uuid::new_v4();
         let result = service
-            .run_tool_use(session_id, "Echo", serde_json::json!({"message": "should work"}))
+            .run_tool_use(
+                session_id,
+                "Echo",
+                serde_json::json!({"message": "should work"}),
+            )
             .await;
 
         // Hook error is logged but does not block; tool still executes
@@ -3368,11 +3382,8 @@ mod tests {
             auto_checkpoint: false,
         };
 
-        let mut service = ToolExecutionService::with_config(
-            registry,
-            Arc::new(PermissionManager::new()),
-            config,
-        );
+        let mut service =
+            ToolExecutionService::with_config(registry, Arc::new(PermissionManager::new()), config);
         // Set a checkpoint manager - it shouldn't be used because auto_checkpoint is false
         service.set_checkpoint_manager(CheckpointManager::new());
 

@@ -4227,14 +4227,16 @@ mod tests {
     fn test_system_prompt_default_is_set() {
         // Default config includes a built-in system prompt
         let engine = create_test_engine();
-        let prompt = engine.system_prompt().expect("default should have a system prompt");
+        let prompt = engine
+            .system_prompt()
+            .expect("default should have a system prompt");
         assert!(prompt.contains("Shannon"));
     }
 
     #[test]
     fn test_system_prompt_overrides_default() {
-        let engine = create_test_engine()
-            .with_system_prompt("You are a code reviewer.".to_string());
+        let engine =
+            create_test_engine().with_system_prompt("You are a code reviewer.".to_string());
         assert_eq!(
             engine.system_prompt(),
             Some("You are a code reviewer.".to_string())
@@ -4253,8 +4255,7 @@ mod tests {
 
     #[test]
     fn test_append_system_prompt_accumulates() {
-        let mut engine = create_test_engine()
-            .with_system_prompt("Base prompt.".to_string());
+        let mut engine = create_test_engine().with_system_prompt("Base prompt.".to_string());
         engine.append_system_prompt("Section A.");
         engine.append_system_prompt("Section B.");
         let prompt = engine.system_prompt().unwrap();
@@ -4310,12 +4311,12 @@ mod tests {
     fn test_set_model_for_provider_updates_cost_tracker_model_name() {
         let mut engine = create_test_engine();
 
-        engine.set_model_for_provider(
-            "claude-opus-4-20250514".to_string(),
-            LlmProvider::Anthropic,
-        );
+        engine.set_model_for_provider("claude-opus-4-20250514".to_string(), LlmProvider::Anthropic);
 
-        let tracker = engine.cost_tracker.read().unwrap_or_else(|e| e.into_inner());
+        let tracker = engine
+            .cost_tracker
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         assert_eq!(tracker.model_name, "claude-opus-4-20250514");
     }
 

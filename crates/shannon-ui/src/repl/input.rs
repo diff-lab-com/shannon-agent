@@ -2752,7 +2752,11 @@ mod tests {
         ];
         // All distinct
         let unique: std::collections::HashSet<char> = targets.iter().copied().collect();
-        assert_eq!(unique.len(), targets.len(), "All text object targets must be distinct");
+        assert_eq!(
+            unique.len(),
+            targets.len(),
+            "All text object targets must be distinct"
+        );
     }
 
     // ── looks_like_path ────────────────────────────────────────────
@@ -2910,10 +2914,7 @@ mod tests {
     #[test]
     fn test_complete_command_args_nonmatching_prefix_returns_empty() {
         let config = complete_command_args("config", "zzz");
-        assert!(
-            config.is_empty(),
-            "Non-matching prefix should return empty"
-        );
+        assert!(config.is_empty(), "Non-matching prefix should return empty");
     }
 
     #[test]
@@ -3314,5 +3315,4 @@ mod tests {
         assert!(diag.contains(&"--full".to_string()));
         assert!(diag.contains(&"--json".to_string()));
     }
-
 }
