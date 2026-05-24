@@ -61,9 +61,6 @@ pub use process_pool::{
     ServerStatus, UserPromptCallback, discover_pooled_remote_tools, discover_pooled_tools,
     make_elicitation_provider, make_sampling_provider,
 };
-pub use resource_subscription::{
-    ResourceSubscriptionManager, ResourceUpdate, SubscriptionInfo,
-};
 pub use protocol::{
     ClientCapabilities, ClientInfo, Completion, CompletionRef, CompletionRequest, CompletionResult,
     CompletionValue, CompletionsCapability, ContentBlock, CreateMessageRequest,
@@ -78,6 +75,7 @@ pub use protocol::{
     ServerCapabilities, ServerInfo, StopReason, SubscribeRequest, SubscribeResult, Tool,
     ToolAnnotations, ToolContent, UnsubscribeRequest,
 };
+pub use resource_subscription::{ResourceSubscriptionManager, ResourceUpdate, SubscriptionInfo};
 pub use resources::{
     ListResourcesInput, ListResourcesOutput, McpClientAdapter, McpResourceClient,
     McpResourceManager, ReadResourceInput, ReadResourceOutput, ResourceDescriptor,

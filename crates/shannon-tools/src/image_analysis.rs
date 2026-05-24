@@ -128,9 +128,7 @@ impl AnalyzeImageTool {
     }
 
     /// Load an image from a local file path, returning (base64_data, mime_type, size).
-    async fn load_from_file(
-        file_path: &str,
-    ) -> Result<(String, &'static str, u64), ToolError> {
+    async fn load_from_file(file_path: &str) -> Result<(String, &'static str, u64), ToolError> {
         use tokio::fs;
 
         // Validate extension
@@ -165,9 +163,7 @@ impl AnalyzeImageTool {
     }
 
     /// Load an image from a URL, returning (base64_data, mime_type, size).
-    async fn load_from_url(
-        url: &str,
-    ) -> Result<(String, &'static str, u64), ToolError> {
+    async fn load_from_url(url: &str) -> Result<(String, &'static str, u64), ToolError> {
         // Validate URL scheme
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err(ToolError::InvalidInput(
@@ -178,13 +174,14 @@ impl AnalyzeImageTool {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create HTTP client: {e}")))?;
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to create HTTP client: {e}"))
+            })?;
 
-        let response = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch image URL: {e}")))?;
+        let response =
+            client.get(url).send().await.map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to fetch image URL: {e}"))
+            })?;
 
         if !response.status().is_success() {
             return Err(ToolError::ExecutionFailed(format!(
@@ -226,10 +223,9 @@ impl AnalyzeImageTool {
             })
             .unwrap_or_else(|| Self::mime_type_from_url(url));
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read image response: {e}")))?;
+        let bytes = response.bytes().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to read image response: {e}"))
+        })?;
 
         let size = bytes.len() as u64;
         if size > MAX_IMAGE_SIZE {
@@ -302,14 +298,13 @@ impl Tool for AnalyzeImageTool {
             ));
         }
 
-        let (base64_data, media_type, size) =
-            if let Some(ref file_path) = analyze_input.file_path {
-                Self::load_from_file(file_path).await?
-            } else if let Some(ref url) = analyze_input.url {
-                Self::load_from_url(url).await?
-            } else {
-                unreachable!()
-            };
+        let (base64_data, media_type, size) = if let Some(ref file_path) = analyze_input.file_path {
+            Self::load_from_file(file_path).await?
+        } else if let Some(ref url) = analyze_input.url {
+            Self::load_from_url(url).await?
+        } else {
+            unreachable!()
+        };
 
         let source = analyze_input
             .file_path
@@ -326,8 +321,9 @@ impl Tool for AnalyzeImageTool {
             prompt: analyze_input.prompt.clone(),
         };
 
-        let json_output = serde_json::to_string_pretty(&output)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize image data: {e}")))?;
+        let json_output = serde_json::to_string_pretty(&output).map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to serialize image data: {e}"))
+        })?;
 
         Ok(ToolOutput {
             content: json_output,
@@ -338,10 +334,7 @@ impl Tool for AnalyzeImageTool {
                 map.insert("media_type".to_string(), json!(media_type));
                 map.insert("size".to_string(), json!(size));
                 map.insert("source".to_string(), json!(source));
-                map.insert(
-                    "prompt".to_string(),
-                    json!(analyze_input.prompt),
-                );
+                map.insert("prompt".to_string(), json!(analyze_input.prompt));
                 map
             },
         })
@@ -485,7 +478,12 @@ mod tests {
         assert!(schema["properties"]["file_path"].is_object());
         assert!(schema["properties"]["url"].is_object());
         assert!(schema["properties"]["prompt"].is_object());
-        assert!(schema["required"].as_array().unwrap().contains(&json!("prompt")));
+        assert!(
+            schema["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("prompt"))
+        );
     }
 
     #[test]
@@ -644,8 +642,9 @@ mod tests {
             .expect("write test png");
 
         let path_str = file_path.to_string_lossy().to_string();
-        let (base64_data, mime_type, size) =
-            AnalyzeImageTool::load_from_file(&path_str).await.expect("load from file");
+        let (base64_data, mime_type, size) = AnalyzeImageTool::load_from_file(&path_str)
+            .await
+            .expect("load from file");
 
         assert_eq!(mime_type, "image/png");
         assert_eq!(size, png_bytes.len() as u64);
@@ -662,15 +661,11 @@ mod tests {
     async fn test_execute_with_valid_file() {
         // Create a minimal PNG file
         let png_bytes: Vec<u8> = vec![
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-            0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
-            0x54, 0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x02,
-            0x00, 0x01, 0xE5, 0x27, 0xDE, 0xFC, 0x00, 0x00,
-            0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
-            0x60, 0x82,
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x62, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE5, 0x27, 0xDE, 0xFC, 0x00, 0x00,
+            0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
         ];
 
         let dir = tempfile::TempDir::new().expect("create temp dir");

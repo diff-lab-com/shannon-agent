@@ -19,7 +19,11 @@ fn create_temp_file(n_lines: usize) -> (tempfile::TempDir, std::path::PathBuf) {
     let path = dir.path().join(format!("bench_edit_{n_lines}.rs"));
     let mut file = std::fs::File::create(&path).expect("create file");
     for i in 0..n_lines {
-        writeln!(file, "fn function_{i:06}() -> Result<String, Box<dyn std::error::Error>> {{").expect("write line");
+        writeln!(
+            file,
+            "fn function_{i:06}() -> Result<String, Box<dyn std::error::Error>> {{"
+        )
+        .expect("write line");
         writeln!(file, "    let data = format!(\"processing item {i}\");").expect("write line");
         writeln!(file, "    Ok(data)").expect("write line");
         writeln!(file, "}}").expect("write line");
@@ -60,9 +64,7 @@ fn bench_perform_edit_single(c: &mut Criterion) {
             BenchmarkId::new("single_replace", n_lines),
             &n_lines,
             |b, _| {
-                b.iter(|| {
-                    perform_edit(&content, &old, &new, false).unwrap()
-                });
+                b.iter(|| perform_edit(&content, &old, &new, false).unwrap());
             },
         );
     }
@@ -101,17 +103,13 @@ fn bench_perform_edit_not_found(c: &mut Criterion) {
         let (_dir, path) = create_temp_file(n_lines);
         let content = read_content(&path);
         group.throughput(criterion::Throughput::Bytes(content.len() as u64));
-        group.bench_with_input(
-            BenchmarkId::new("not_found", n_lines),
-            &n_lines,
-            |b, _| {
-                b.iter(|| {
-                    let result = perform_edit(&content, "ZZZ_NOT_PRESENT_ANYWHERE", "replaced", false);
-                    assert!(result.is_err());
-                    result
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("not_found", n_lines), &n_lines, |b, _| {
+            b.iter(|| {
+                let result = perform_edit(&content, "ZZZ_NOT_PRESENT_ANYWHERE", "replaced", false);
+                assert!(result.is_err());
+                result
+            });
+        });
     }
     group.finish();
 }

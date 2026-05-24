@@ -547,16 +547,14 @@ impl McpToolSearchTool {
         let names = self.pool.deferred_schema_tool_names();
         if names.is_empty() {
             return Ok(ToolOutput::error(
-                "No deferred tools available. Deferred tool loading may not be enabled.".to_string(),
+                "No deferred tools available. Deferred tool loading may not be enabled."
+                    .to_string(),
             ));
         }
 
         let mut results = Vec::new();
         for name in &names {
-            let desc = self
-                .pool
-                .get_deferred_description(name)
-                .unwrap_or_default();
+            let desc = self.pool.get_deferred_description(name).unwrap_or_default();
             let name_lower = name.to_lowercase();
             let desc_lower = desc.to_lowercase();
 
@@ -584,7 +582,12 @@ impl McpToolSearchTool {
         if results.is_empty() {
             return Ok(ToolOutput::error(format!(
                 "No tools matching '{query}'. Available: {}",
-                names.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+                names
+                    .iter()
+                    .take(10)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         }
 
@@ -606,7 +609,8 @@ impl McpToolSearchTool {
         let names = self.pool.deferred_schema_tool_names();
         if names.is_empty() {
             return Ok(ToolOutput::error(
-                "No deferred tools available. Deferred tool loading may not be enabled.".to_string(),
+                "No deferred tools available. Deferred tool loading may not be enabled."
+                    .to_string(),
             ));
         }
 

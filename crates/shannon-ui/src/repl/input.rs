@@ -1416,8 +1416,7 @@ fn handle_active_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     }
                     "show_diff" => {
                         if let Some(preview) = repl.state.undo_preview.take() {
-                            let mut viewer =
-                                crate::widgets::diff_viewer::DiffViewerWidget::new();
+                            let mut viewer = crate::widgets::diff_viewer::DiffViewerWidget::new();
                             viewer.load_raw_diff(&preview.full_diff);
                             repl.state.diff_viewer = Some(viewer);
                         }

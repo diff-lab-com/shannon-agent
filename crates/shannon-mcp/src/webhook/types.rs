@@ -147,7 +147,8 @@ mod tests {
 
     #[test]
     fn webhook_config_new_receives_all_events() {
-        let config = WebhookConfig::new("https://example.com/hook".to_string(), "secret".to_string());
+        let config =
+            WebhookConfig::new("https://example.com/hook".to_string(), "secret".to_string());
         assert!(config.matches_event(&McpEventType::ToolCallStarted));
         assert!(config.matches_event(&McpEventType::ServerConnected));
         assert!(config.enabled);
@@ -159,7 +160,10 @@ mod tests {
         let config = WebhookConfig::with_event_types(
             "https://example.com/hook".to_string(),
             "secret".to_string(),
-            vec![McpEventType::ToolCallStarted, McpEventType::ToolCallCompleted],
+            vec![
+                McpEventType::ToolCallStarted,
+                McpEventType::ToolCallCompleted,
+            ],
         );
         assert!(config.matches_event(&McpEventType::ToolCallStarted));
         assert!(config.matches_event(&McpEventType::ToolCallCompleted));
@@ -168,7 +172,8 @@ mod tests {
 
     #[test]
     fn webhook_config_disabled_matches_nothing() {
-        let mut config = WebhookConfig::new("https://example.com/hook".to_string(), "secret".to_string());
+        let mut config =
+            WebhookConfig::new("https://example.com/hook".to_string(), "secret".to_string());
         config.enabled = false;
         assert!(!config.matches_event(&McpEventType::ToolCallStarted));
     }

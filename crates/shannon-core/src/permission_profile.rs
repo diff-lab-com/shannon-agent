@@ -86,9 +86,15 @@ impl PermissionProfile {
     /// Return all built-in profile names and their short descriptions.
     pub fn all_profiles() -> Vec<(&'static str, &'static str)> {
         vec![
-            ("strict", "Maximum safety: approve reads only, deny destructive tools"),
+            (
+                "strict",
+                "Maximum safety: approve reads only, deny destructive tools",
+            ),
             ("balanced", "Auto-approve reads, ask for writes/bash/delete"),
-            ("permissive", "Auto-approve reads, writes, bash; still deny system-critical ops"),
+            (
+                "permissive",
+                "Auto-approve reads, writes, bash; still deny system-critical ops",
+            ),
         ]
     }
 
@@ -161,10 +167,7 @@ mod tests {
             !rules.auto_approve_network,
             "strict should NOT auto-approve network"
         );
-        assert_eq!(
-            rules.deny_destructive,
-            vec!["Write", "Bash", "MultiEdit"]
-        );
+        assert_eq!(rules.deny_destructive, vec!["Write", "Bash", "MultiEdit"]);
     }
 
     #[test]
@@ -260,8 +263,7 @@ mod tests {
         ];
         for profile in &profiles {
             let json = serde_json::to_string(profile).expect("serialize");
-            let roundtrip: PermissionProfile =
-                serde_json::from_str(&json).expect("deserialize");
+            let roundtrip: PermissionProfile = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(&roundtrip, profile, "roundtrip failed for {profile}");
         }
     }

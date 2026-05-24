@@ -1244,10 +1244,7 @@ impl PermissionManager {
             && rules.auto_approve_delete
         {
             ApprovalMode::FullAuto
-        } else if rules.auto_approve_read
-            && !rules.auto_approve_write
-            && !rules.auto_approve_bash
-        {
+        } else if rules.auto_approve_read && !rules.auto_approve_write && !rules.auto_approve_bash {
             ApprovalMode::Suggest
         } else {
             // Fallback: treat as Suggest

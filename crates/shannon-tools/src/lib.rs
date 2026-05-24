@@ -84,7 +84,9 @@ pub use file::sandbox_adapter::{
     PathSandboxAdapter, SandboxAdapter, SandboxConfig as SandboxAdapterConfig, SandboxResult,
     SandboxViolation,
 };
-pub use file::{EditTool, FileOperation, GlobTool, MergeResolveTool, MultiEditTool, ReadTool, WriteTool};
+pub use file::{
+    EditTool, FileOperation, GlobTool, MergeResolveTool, MultiEditTool, ReadTool, WriteTool,
+};
 pub use git::{
     AutoCommitTool, GitBranchTool, GitDiffTool, GitLogTool, GitSafetyTool, GitStashTool,
 };

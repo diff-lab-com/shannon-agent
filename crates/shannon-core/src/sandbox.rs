@@ -2543,7 +2543,10 @@ mod tests {
     fn test_write_allowed_with_extras_rejects_custom_protected() {
         let extras = vec!["secrets/".to_string()];
         let result = check_write_allowed_with_extras(Path::new("secrets/api_key.pem"), &extras);
-        assert!(result.is_err(), "Should reject write to custom protected dir");
+        assert!(
+            result.is_err(),
+            "Should reject write to custom protected dir"
+        );
     }
 
     #[test]

@@ -203,7 +203,10 @@ impl ToolRegistry {
     ///
     /// When set, `execute_streaming` will check the cache before executing
     /// read-only tools and store successful results in the cache.
-    pub fn set_streaming_cache(&mut self, cache: std::sync::Arc<crate::tool_cache::ToolResultCache>) {
+    pub fn set_streaming_cache(
+        &mut self,
+        cache: std::sync::Arc<crate::tool_cache::ToolResultCache>,
+    ) {
         self.streaming_cache = Some(cache);
     }
 
@@ -1481,14 +1484,10 @@ mod tests {
     #[tokio::test]
     async fn test_tool_timeout_returns_error() {
         let mut registry = ToolRegistry::new();
-        registry
-            .register(Box::new(SlowTool))
-            .unwrap();
+        registry.register(Box::new(SlowTool)).unwrap();
         registry.set_execution_timeout(std::time::Duration::from_millis(50));
 
-        let result = registry
-            .execute("slow_tool", json!({}))
-            .await;
+        let result = registry.execute("slow_tool", json!({})).await;
 
         assert!(result.is_err(), "Should have timed out");
         match result.unwrap_err() {

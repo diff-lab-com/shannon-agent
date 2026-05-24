@@ -177,7 +177,10 @@ fn bench_micro_compact(c: &mut Criterion) {
                         .map(|i| {
                             make_tool_result_message(
                                 &format!("tool_{i}"),
-                                &format!("Detailed tool output for task {i}: {}", "data ".repeat(2000)),
+                                &format!(
+                                    "Detailed tool output for task {i}: {}",
+                                    "data ".repeat(2000)
+                                ),
                             )
                         })
                         .collect();

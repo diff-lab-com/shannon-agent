@@ -139,7 +139,6 @@ impl ShannonConfig {
 
     /// Resolve the API key for a given provider from config + env.
     pub fn resolve_api_key_for_provider(&self, provider: &LlmProvider) -> String {
-
         let display = provider.to_string();
 
         // 1. Top-level api_key in config (if provider matches)

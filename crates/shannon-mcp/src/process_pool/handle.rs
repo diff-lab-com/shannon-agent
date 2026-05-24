@@ -1156,9 +1156,7 @@ mod tests {
     async fn call_tool_rejects_when_not_healthy() {
         let handle = make_handle("unhealthy-srv");
         *handle.state.write().await = ServerState::Unhealthy("crashed".to_string());
-        let result = handle
-            .call_tool("some_tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("some_tool", serde_json::json!({})).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         match err {
@@ -1174,18 +1172,14 @@ mod tests {
     async fn call_tool_rejects_when_starting() {
         let handle = make_handle("starting-srv");
         *handle.state.write().await = ServerState::Starting;
-        let result = handle
-            .call_tool("some_tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("some_tool", serde_json::json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn call_tool_rejects_when_stopped() {
         let handle = make_handle("stopped-srv");
-        let result = handle
-            .call_tool("some_tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("some_tool", serde_json::json!({})).await;
         assert!(result.is_err());
     }
 

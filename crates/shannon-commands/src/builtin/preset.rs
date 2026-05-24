@@ -193,10 +193,7 @@ pub fn format_preset_list(presets: &HashMap<String, ConversationPreset>) -> Stri
 
     for name in &names {
         let preset = &presets[*name];
-        let desc = preset
-            .description
-            .as_deref()
-            .unwrap_or("No description");
+        let desc = preset.description.as_deref().unwrap_or("No description");
         output.push_str(&format!("  {name} - {desc}\n"));
 
         if let Some(ref model) = preset.model {
@@ -223,10 +220,7 @@ pub fn format_preset_detail(name: &str, preset: &ConversationPreset) -> String {
     let mut output = format!("Preset: {name}\n");
     output.push_str(&format!(
         "  Description: {}\n",
-        preset
-            .description
-            .as_deref()
-            .unwrap_or("No description")
+        preset.description.as_deref().unwrap_or("No description")
     ));
 
     if let Some(ref sp) = preset.system_prompt {
@@ -325,11 +319,7 @@ pub fn command() -> Command {
         progress_message: "Loading preset...".to_string(),
         content_length: 3000,
         arg_names: vec!["action".to_string(), "name".to_string()],
-        allowed_tools: vec![
-            "Read".to_string(),
-            "Glob".to_string(),
-            "Grep".to_string(),
-        ],
+        allowed_tools: vec!["Read".to_string(), "Glob".to_string(), "Grep".to_string()],
         model: None,
         hooks: HashMap::new(),
         context: ExecutionContext::Inline,

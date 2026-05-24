@@ -37,12 +37,20 @@ fn create_rust_project(n_files: usize) -> tempfile::TempDir {
         writeln!(file, "        Self {{ id, name }}").unwrap();
         writeln!(file, "    }}").unwrap();
         writeln!(file).unwrap();
-        writeln!(file, "    pub fn process(&self) -> Result<(), Box<dyn std::error::Error>> {{").unwrap();
+        writeln!(
+            file,
+            "    pub fn process(&self) -> Result<(), Box<dyn std::error::Error>> {{"
+        )
+        .unwrap();
         writeln!(file, "        Ok(())").unwrap();
         writeln!(file, "    }}").unwrap();
         writeln!(file, "}}").unwrap();
         writeln!(file).unwrap();
-        writeln!(file, "fn helper_{i}(data: &HashMap<String, String>) -> Vec<String> {{").unwrap();
+        writeln!(
+            file,
+            "fn helper_{i}(data: &HashMap<String, String>) -> Vec<String> {{"
+        )
+        .unwrap();
         writeln!(file, "    data.keys().cloned().collect()").unwrap();
         writeln!(file, "}}").unwrap();
     }
@@ -93,13 +101,9 @@ fn bench_generate_repomap_rust(c: &mut Criterion) {
     let mut group = c.benchmark_group("repomap/generate_rust");
     for &n_files in &[10, 100, 1000] {
         let dir = create_rust_project(n_files);
-        group.bench_with_input(
-            BenchmarkId::new("rust_files", n_files),
-            &n_files,
-            |b, _| {
-                b.iter(|| generate_repomap(dir.path(), n_files).unwrap());
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("rust_files", n_files), &n_files, |b, _| {
+            b.iter(|| generate_repomap(dir.path(), n_files).unwrap());
+        });
     }
     group.finish();
 }
@@ -123,20 +127,12 @@ fn bench_generate_repomap_filtered(c: &mut Criterion) {
     let mut group = c.benchmark_group("repomap/generate_filtered");
     for &n_files in &[10, 100, 1000] {
         let dir = create_mixed_project(n_files);
-        group.bench_with_input(
-            BenchmarkId::new("rs_only", n_files),
-            &n_files,
-            |b, _| {
-                b.iter(|| {
-                    shannon_codegen::generate_repomap_filtered(
-                        dir.path(),
-                        &["rs"],
-                        n_files + 10,
-                    )
+        group.bench_with_input(BenchmarkId::new("rs_only", n_files), &n_files, |b, _| {
+            b.iter(|| {
+                shannon_codegen::generate_repomap_filtered(dir.path(), &["rs"], n_files + 10)
                     .unwrap()
-                });
-            },
-        );
+            });
+        });
     }
     group.finish();
 }

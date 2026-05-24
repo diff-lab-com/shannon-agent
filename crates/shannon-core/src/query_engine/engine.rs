@@ -1588,7 +1588,9 @@ impl QueryEngine {
                                                         );
                                                         tool_results.push(ToolResultEntry {
                                                             tool_use_id: id,
-                                                            content: format!("Malformed tool input: {e}"),
+                                                            content: format!(
+                                                                "Malformed tool input: {e}"
+                                                            ),
                                                             is_error: true,
                                                             metadata: Default::default(),
                                                         });
@@ -1728,13 +1730,12 @@ impl QueryEngine {
                                                                     is_error: true,
                                                                 }
                                                             );
-                                                            tool_results
-                                                                .push(ToolResultEntry {
-                                                                    tool_use_id: tool_id,
-                                                                    content: error_msg,
-                                                                    is_error: true,
-                                                                    metadata: Default::default(),
-                                                                });
+                                                            tool_results.push(ToolResultEntry {
+                                                                tool_use_id: tool_id,
+                                                                content: error_msg,
+                                                                is_error: true,
+                                                                metadata: Default::default(),
+                                                            });
                                                             continue;
                                                         }
                                                     }
@@ -1766,13 +1767,12 @@ impl QueryEngine {
                                                                     is_error: true,
                                                                 }
                                                             );
-                                                            tool_results
-                                                                .push(ToolResultEntry {
-                                                                    tool_use_id: tool_id,
-                                                                    content: error_msg,
-                                                                    is_error: true,
-                                                                    metadata: Default::default(),
-                                                                });
+                                                            tool_results.push(ToolResultEntry {
+                                                                tool_use_id: tool_id,
+                                                                content: error_msg,
+                                                                is_error: true,
+                                                                metadata: Default::default(),
+                                                            });
                                                             continue;
                                                         }
                                                         Ok(None) => {
@@ -1989,13 +1989,12 @@ impl QueryEngine {
                                                                     is_error: true,
                                                                 }
                                                             );
-                                                            tool_results
-                                                                .push(ToolResultEntry {
-                                                                    tool_use_id: tool_id,
-                                                                    content: error_msg,
-                                                                    is_error: true,
-                                                                    metadata: Default::default(),
-                                                                });
+                                                            tool_results.push(ToolResultEntry {
+                                                                tool_use_id: tool_id,
+                                                                content: error_msg,
+                                                                is_error: true,
+                                                                metadata: Default::default(),
+                                                            });
                                                             continue;
                                                         }
                                                         crate::hooks::HookDecision::Modify {
@@ -2306,12 +2305,19 @@ impl QueryEngine {
                                                                             result: output.content.clone(),
                                                                             is_error: is_err,
                                                                         });
-                                                                        tool_results.push(ToolResultEntry {
-                                                                            tool_use_id: tool_id,
-                                                                            content: output.content.clone(),
-                                                                            is_error: is_err,
-                                                                            metadata: output.metadata.clone(),
-                                                                        });
+                                                                        tool_results.push(
+                                                                            ToolResultEntry {
+                                                                                tool_use_id:
+                                                                                    tool_id,
+                                                                                content: output
+                                                                                    .content
+                                                                                    .clone(),
+                                                                                is_error: is_err,
+                                                                                metadata: output
+                                                                                    .metadata
+                                                                                    .clone(),
+                                                                            },
+                                                                        );
                                                                         if matches!(
                                                                             tool_name.as_str(),
                                                                             "Edit" | "Write"
@@ -4155,21 +4161,22 @@ mod tests {
                 let mut map = std::collections::HashMap::new();
                 map.insert("type".to_string(), serde_json::json!("image"));
                 map.insert("media_type".to_string(), serde_json::json!("image/jpeg"));
-                map.insert("file_path".to_string(), serde_json::json!("/photos/img.jpg"));
+                map.insert(
+                    "file_path".to_string(),
+                    serde_json::json!("/photos/img.jpg"),
+                );
                 map
             },
         };
         let result = entry.to_tool_result_content().unwrap();
         match result {
-            ToolResultContent::Multiple(blocks) => {
-                match &blocks[1] {
-                    ContentBlock::Image { source } => {
-                        assert_eq!(source.media_type, "image/jpeg");
-                        assert_eq!(source.data, "/9j/4AAQSkZJ");
-                    }
-                    other => panic!("Expected Image block, got: {other:?}"),
+            ToolResultContent::Multiple(blocks) => match &blocks[1] {
+                ContentBlock::Image { source } => {
+                    assert_eq!(source.media_type, "image/jpeg");
+                    assert_eq!(source.data, "/9j/4AAQSkZJ");
                 }
-            }
+                other => panic!("Expected Image block, got: {other:?}"),
+            },
             other => panic!("Expected Multiple, got: {other:?}"),
         }
     }

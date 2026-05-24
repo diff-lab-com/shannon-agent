@@ -36,7 +36,10 @@ impl RateLimitCounter {
     /// Returns true if the delivery is within rate limits.
     fn check_and_increment(&mut self, url: &str) -> bool {
         let now_minute = Utc::now().timestamp() / 60;
-        let entry = self.counts.entry(url.to_string()).or_insert((0, now_minute));
+        let entry = self
+            .counts
+            .entry(url.to_string())
+            .or_insert((0, now_minute));
 
         if entry.1 != now_minute {
             // New minute — reset counter.
@@ -406,17 +409,25 @@ mod tests {
         //   f7bc9f6c3ea8a4c26bfae5f6c8e9c8d3c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4
         // We verify structural properties since the exact hex depends on the
         // HMAC computation.
-        let sig = WebhookRegistry::sign_payload("key", b"The quick brown fox jumps over the lazy dog");
+        let sig =
+            WebhookRegistry::sign_payload("key", b"The quick brown fox jumps over the lazy dog");
         assert_eq!(sig.len(), 64, "HMAC-SHA256 must produce 64 hex characters");
         // Must be valid lowercase hex.
-        assert!(sig.chars().all(|c| c.is_ascii_hexdigit()), "signature must be hex");
+        assert!(
+            sig.chars().all(|c| c.is_ascii_hexdigit()),
+            "signature must be hex"
+        );
     }
 
     /// Minimal mock HTTP server that validates webhook headers and simulates retry.
     ///
     /// Returns 500 on the first request, 200 on the second, so the retry path is exercised.
     /// Records all received requests for post-delivery assertions.
-    async fn start_mock_webhook_server() -> (String, tokio::task::JoinHandle<()>, std::sync::Arc<std::sync::Mutex<MockServerState>>) {
+    async fn start_mock_webhook_server() -> (
+        String,
+        tokio::task::JoinHandle<()>,
+        std::sync::Arc<std::sync::Mutex<MockServerState>>,
+    ) {
         let state = std::sync::Arc::new(std::sync::Mutex::new(MockServerState {
             received_requests: Vec::new(),
         }));
@@ -497,7 +508,11 @@ mod tests {
         let response = format!(
             "HTTP/1.1 {} {}\r\nContent-Length: 0\r\n\r\n",
             status,
-            if status == 200 { "OK" } else { "Internal Server Error" }
+            if status == 200 {
+                "OK"
+            } else {
+                "Internal Server Error"
+            }
         );
 
         {
@@ -590,7 +605,10 @@ mod tests {
         // Verify X-Webhook-ID header is present (webhook ID from registry).
         let id_header = find_header(&first.headers, "X-Webhook-ID")
             .expect("X-Webhook-ID header must be present");
-        assert!(id_header.starts_with("wh_"), "webhook ID should have wh_ prefix");
+        assert!(
+            id_header.starts_with("wh_"),
+            "webhook ID should have wh_ prefix"
+        );
 
         // Verify Content-Type.
         let ct_header = find_header(&first.headers, "Content-Type")
@@ -598,8 +616,8 @@ mod tests {
         assert_eq!(ct_header, "application/json");
 
         // Verify body is valid JSON matching the event.
-        let parsed_event: McpEvent = serde_json::from_slice(&first.body)
-            .expect("body should deserialize to McpEvent");
+        let parsed_event: McpEvent =
+            serde_json::from_slice(&first.body).expect("body should deserialize to McpEvent");
         assert_eq!(parsed_event.event_type, McpEventType::ToolCallStarted);
         assert_eq!(parsed_event.server_name, "test-server");
     }
@@ -631,7 +649,13 @@ mod tests {
         let history = publisher.delivery_history().await;
         assert!(!history.is_empty(), "delivery should be recorded");
         let delivery = &history[0];
-        assert_eq!(delivery.status, "failed", "should be failed after exhausting retries");
-        assert_eq!(delivery.attempts, MAX_RETRIES, "should have attempted MAX_RETRIES times");
+        assert_eq!(
+            delivery.status, "failed",
+            "should be failed after exhausting retries"
+        );
+        assert_eq!(
+            delivery.attempts, MAX_RETRIES,
+            "should have attempted MAX_RETRIES times"
+        );
     }
 }

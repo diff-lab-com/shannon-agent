@@ -4,19 +4,22 @@
 //! - Sub-agent lifecycle and registry integration
 
 use shannon_agents::{
-    AgentConfig, AgentCoordinator, AgentStatus, CoordinatorConfig, JsonRpcError,
-    JsonRpcId, JsonRpcMessage, SubAgent, SubAgentRegistry, TaskBoard,
-    TaskBoardEvent, TaskPriority, TaskStatus, AgentTask, AgentReadyParams, AgentIdleParams,
-    ClaimTaskParams, ExecuteTaskParams, ListTasksParams, ListTasksResult, SendMessageParams,
-    ShutdownParams, TaskCompleteParams, TaskProgressParams, TaskSummary, frame_message,
-    parse_message,
+    AgentConfig, AgentCoordinator, AgentIdleParams, AgentReadyParams, AgentStatus, AgentTask,
+    ClaimTaskParams, CoordinatorConfig, ExecuteTaskParams, JsonRpcError, JsonRpcId, JsonRpcMessage,
+    ListTasksParams, ListTasksResult, SendMessageParams, ShutdownParams, SubAgent,
+    SubAgentRegistry, TaskBoard, TaskBoardEvent, TaskCompleteParams, TaskPriority,
+    TaskProgressParams, TaskStatus, TaskSummary, frame_message, parse_message,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
 
 // Helper to create a basic task
 fn make_task(subject: &str, priority: TaskPriority) -> AgentTask {
-    AgentTask::new(subject.to_string(), format!("Description for {subject}"), priority)
+    AgentTask::new(
+        subject.to_string(),
+        format!("Description for {subject}"),
+        priority,
+    )
 }
 
 // Helper to create coordinator + board
@@ -40,7 +43,10 @@ mod task_board_integration {
         let task = make_task("Lifecycle test", TaskPriority::High);
         let task_id = task.id;
         board.add_task(task).await.unwrap();
-        assert!(matches!(rx.try_recv().unwrap(), TaskBoardEvent::TaskAdded { .. }));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            TaskBoardEvent::TaskAdded { .. }
+        ));
 
         // Claim (assign)
         board
@@ -724,6 +730,9 @@ mod sub_agent_integration {
         assert_eq!(AgentStatus::Idle.to_string(), "idle");
         assert_eq!(AgentStatus::Running.to_string(), "running");
         assert_eq!(AgentStatus::Completed.to_string(), "completed");
-        assert_eq!(AgentStatus::Failed("timeout".to_string()).to_string(), "failed: timeout");
+        assert_eq!(
+            AgentStatus::Failed("timeout".to_string()).to_string(),
+            "failed: timeout"
+        );
     }
 }

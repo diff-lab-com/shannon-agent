@@ -2172,7 +2172,10 @@ fn test_command_injection_via_command_substitution_detected() {
         "Command substitution should be flagged as destructive"
     );
     assert!(
-        analysis.warnings.iter().any(|w| w.contains("Command substitution")),
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("Command substitution")),
         "Should warn about command substitution"
     );
 }
@@ -2196,7 +2199,10 @@ fn test_fork_bomb_pattern_detected() {
         analysis.risk_level
     );
     // The command is not read-only and contains a pipe
-    assert!(!analysis.is_read_only, "Fork bomb should not be classified as read-only");
+    assert!(
+        !analysis.is_read_only,
+        "Fork bomb should not be classified as read-only"
+    );
 }
 
 #[test]
@@ -2204,7 +2210,10 @@ fn test_base64_pipe_to_shell_detected() {
     let analysis = analyze_command_security("echo 'cm0gLXJmIC8=' | base64 -d | bash");
     assert_eq!(analysis.risk_level, SecurityLevel::Critical);
     assert!(
-        analysis.warnings.iter().any(|w| w.contains("Encoded command") || w.contains("pipe-to-shell")),
+        analysis
+            .warnings
+            .iter()
+            .any(|w| w.contains("Encoded command") || w.contains("pipe-to-shell")),
         "Should detect encoded command execution"
     );
 }

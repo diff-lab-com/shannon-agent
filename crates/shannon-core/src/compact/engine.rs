@@ -213,10 +213,12 @@ impl CompactEngine {
             let count = messages.len();
             let estimated = original_tokens;
             tokio::spawn(async move {
-                let _ = hm.run_hooks(&HookEvent::PreCompact {
-                    messages_count: count,
-                    estimated_tokens: estimated,
-                }).await;
+                let _ = hm
+                    .run_hooks(&HookEvent::PreCompact {
+                        messages_count: count,
+                        estimated_tokens: estimated,
+                    })
+                    .await;
             });
         }
 
@@ -238,13 +240,17 @@ impl CompactEngine {
                     let hm = hm.clone();
                     let before = messages_before;
                     let after = messages.len();
-                    let tokens_freed = compact_result.original_tokens.saturating_sub(compact_result.compacted_tokens);
+                    let tokens_freed = compact_result
+                        .original_tokens
+                        .saturating_sub(compact_result.compacted_tokens);
                     tokio::spawn(async move {
-                        let _ = hm.run_hooks(&HookEvent::PostCompact {
-                            messages_before: before,
-                            messages_after: after,
-                            tokens_freed,
-                        }).await;
+                        let _ = hm
+                            .run_hooks(&HookEvent::PostCompact {
+                                messages_before: before,
+                                messages_after: after,
+                                tokens_freed,
+                            })
+                            .await;
                     });
                 }
 

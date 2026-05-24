@@ -60,13 +60,9 @@ fn make_tool_definitions(count: usize) -> Vec<ToolDefinition> {
 fn bench_budget_creation(c: &mut Criterion) {
     let mut group = c.benchmark_group("context_budget/creation");
     for &tokens in &[1_000usize, 100_000, 200_000, 1_000_000] {
-        group.bench_with_input(
-            BenchmarkId::new("new", tokens),
-            &tokens,
-            |b, &tokens| {
-                b.iter(|| ContextBudget::new(tokens));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("new", tokens), &tokens, |b, &tokens| {
+            b.iter(|| ContextBudget::new(tokens));
+        });
     }
     group.finish();
 }
@@ -89,13 +85,9 @@ fn bench_priority_allocation(c: &mut Criterion) {
     let mut group = c.benchmark_group("context_budget/priority_allocation");
     for &tokens in &[1_000usize, 100_000, 200_000] {
         let budget = ContextBudget::new(tokens);
-        group.bench_with_input(
-            BenchmarkId::new("allocate", tokens),
-            &tokens,
-            |b, _| {
-                b.iter(|| budget.priority_allocation());
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("allocate", tokens), &tokens, |b, _| {
+            b.iter(|| budget.priority_allocation());
+        });
     }
     group.finish();
 }
@@ -110,17 +102,13 @@ fn bench_pressure_adjustment(c: &mut Criterion) {
         ("Emergency", PressureLevel::Emergency),
     ];
     for (label, level) in levels {
-        group.bench_with_input(
-            BenchmarkId::new("adjust", label),
-            &level,
-            |b, &level| {
-                b.iter_batched(
-                    || ContextBudget::new(200_000),
-                    |mut budget| budget.adjust_for_pressure(level),
-                    criterion::BatchSize::SmallInput,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("adjust", label), &level, |b, &level| {
+            b.iter_batched(
+                || ContextBudget::new(200_000),
+                |mut budget| budget.adjust_for_pressure(level),
+                criterion::BatchSize::SmallInput,
+            );
+        });
     }
     group.finish();
 }
@@ -145,13 +133,9 @@ fn bench_check_schema_budget(c: &mut Criterion) {
     for &n_tools in &[10usize, 50, 100, 200] {
         let defs = make_tool_definitions(n_tools);
         let budget = ContextBudget::new(200_000);
-        group.bench_with_input(
-            BenchmarkId::new("check", n_tools),
-            &n_tools,
-            |b, _| {
-                b.iter(|| budget.check_schema_budget(&defs));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("check", n_tools), &n_tools, |b, _| {
+            b.iter(|| budget.check_schema_budget(&defs));
+        });
     }
     group.finish();
 }
@@ -162,13 +146,9 @@ fn bench_tools_to_defer(c: &mut Criterion) {
         let defs = make_tool_definitions(n_tools);
         // Use a small budget so deferral logic actually runs
         let budget = ContextBudget::new(5_000);
-        group.bench_with_input(
-            BenchmarkId::new("defer", n_tools),
-            &n_tools,
-            |b, _| {
-                b.iter(|| budget.tools_to_defer(&defs));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("defer", n_tools), &n_tools, |b, _| {
+            b.iter(|| budget.tools_to_defer(&defs));
+        });
     }
     group.finish();
 }
