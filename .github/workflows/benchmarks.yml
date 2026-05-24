@@ -21,32 +21,19 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
 
-      - name: Run benchmarks
-        run: cargo bench --workspace 2>&1 | tee benchmark-results.txt
+      - name: Save baseline (scheduled)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: bash scripts/bench-regression.sh save
 
-      - name: PR baseline comparison
+      - name: Compare against baseline (PR)
         if: github.event_name == 'pull_request'
-        run: |
-          BASE_SHA=$(git merge-base origin/main HEAD)
-          echo "Comparing against base commit: $BASE_SHA"
-          git stash || true
-          git checkout $BASE_SHA
-          cargo bench --workspace 2>&1 | tee /tmp/bench-base.txt || true
-          git checkout -
-          git stash pop || true
-          echo ""
-          echo "=== Baseline (main @ $BASE_SHA) ==="
-          tail -15 /tmp/bench-base.txt || true
-          echo ""
-          echo "=== PR ($(git rev-parse --short HEAD)) ==="
-          tail -15 benchmark-results.txt || true
+        run: bash scripts/bench-regression.sh compare
 
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
-          path: |
-            benchmark-results.txt
-            /tmp/bench-base.txt
+          path: benchmark-results.txt
           retention-days: 30
+          if-no-files-found: ignore

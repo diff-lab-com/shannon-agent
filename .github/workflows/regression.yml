@@ -37,11 +37,11 @@ jobs:
           path: /tmp/shannon-regression-timing.log
           retention-days: 7
 
-  benchmark-comparison:
-    name: Benchmark Comparison
+  benchmark-regression:
+    name: Benchmark Regression Check
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,34 +51,14 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
 
-      - name: Checkout base branch for baseline
-        run: |
-          BASE_SHA=$(git merge-base origin/main HEAD)
-          echo "Base commit: $BASE_SHA"
-          git checkout $BASE_SHA
-          cargo bench --workspace 2>&1 | tee /tmp/bench-base.txt || true
-          git checkout -
+      - name: Compare benchmarks against baseline
+        run: bash scripts/bench-regression.sh compare
 
-      - name: Run PR benchmarks
-        run: |
-          cargo bench --workspace 2>&1 | tee /tmp/bench-pr.txt || true
-
-      - name: Compare benchmarks
-        run: |
-          echo "=== Benchmark Comparison ==="
-          echo ""
-          echo "--- Base benchmarks ---"
-          tail -20 /tmp/bench-base.txt || true
-          echo ""
-          echo "--- PR benchmarks ---"
-          tail -20 /tmp/bench-pr.txt || true
-
-      - name: Upload benchmark results
+      - name: Upload comparison results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-comparison
-          path: |
-            /tmp/bench-base.txt
-            /tmp/bench-pr.txt
+          path: benchmark-results.txt
           retention-days: 7
+          if-no-files-found: ignore
