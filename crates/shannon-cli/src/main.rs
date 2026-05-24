@@ -1133,7 +1133,14 @@ fn run_headless_query(
         }
 
         if let Err(e) = client_config.validate() {
-            eprintln!("Warning: {e}");
+            eprintln!("Error: {e}");
+        }
+
+        // Ensure we have an API key when the provider requires auth
+        if client_config.provider.requires_auth() && client_config.api_key.is_empty() {
+            eprintln!(
+                "Error: no API key configured. Set SHANNON_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY."
+            );
         }
 
         let llm_provider = client_config.provider.clone();
