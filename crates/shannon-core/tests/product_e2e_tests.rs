@@ -1,6 +1,8 @@
 //! Product-level end-to-end integration tests for Shannon Code.
 //!
 //! These tests verify the complete product pipeline from user input to final
+
+#![allow(clippy::collapsible_match)]
 //! output, covering the most critical user-facing flows:
 //!
 //! - Full query pipeline (user → LLM → tool → response)

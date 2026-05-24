@@ -16,8 +16,6 @@ mod colors {
     pub const CYAN: &str = "\x1b[36m";
     pub const YELLOW: &str = "\x1b[33m";
     pub const MAGENTA: &str = "\x1b[35m";
-    #[allow(dead_code)]
-    pub const BLUE: &str = "\x1b[34m";
     pub const BOLD: &str = "\x1b[1m";
     pub const DIM: &str = "\x1b[2m";
     pub const RESET: &str = "\x1b[0m";
@@ -43,19 +41,7 @@ mod diff_colors {
     pub const FG_GUTTER: &str = "\x1b[38;5;243m"; // Dim gray
     pub const FG_GUTTER_SEP: &str = "\x1b[38;5;240m"; // Slightly brighter for separator
 
-    // Error background
-    #[allow(dead_code)]
-    pub const BG_ERROR: &str = "\x1b[48;5;52m";
-    #[allow(dead_code)]
-    pub const BG_ERROR_LIGHT: &str = "\x1b[48;5;224m";
-
     pub const RESET: &str = "\x1b[0m";
-    #[allow(dead_code)]
-    pub const BOLD: &str = "\x1b[1m";
-    #[allow(dead_code)]
-    pub const DIM: &str = "\x1b[2m";
-    #[allow(dead_code)]
-    pub const CYAN: &str = "\x1b[36m";
 }
 
 /// Check if the terminal has a light background by inspecting the `COLORFGBG` env var.

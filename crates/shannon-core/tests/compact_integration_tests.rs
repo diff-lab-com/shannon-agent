@@ -1,6 +1,8 @@
 //! Integration tests for CompactEngine with custom Summarizer implementations
 //! and edge cases not covered by the unit test suite.
 
+#![allow(clippy::collapsible_match)]
+
 #[cfg(test)]
 mod compact_integration_tests {
     use std::sync::{Arc, Mutex};

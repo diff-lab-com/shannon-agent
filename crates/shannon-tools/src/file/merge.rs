@@ -70,7 +70,7 @@ impl MergeResult {
 
 /// A contiguous region of change between base and a modified version.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[allow(dead_code)] // changed_start/changed_end used by LCS merge algorithm
 struct DiffHunk {
     /// Start line in base (0-based).
     base_start: usize,

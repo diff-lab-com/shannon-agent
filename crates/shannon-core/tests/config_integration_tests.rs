@@ -1,6 +1,8 @@
 //! Integration tests for credential_manager, settings, and unified_config modules.
 //!
 //! Covers:
+
+#![allow(clippy::field_reassign_with_default)]
 //! - CredentialManager: store/retrieve/delete, overwrite, list, import/export, persistence
 //! - Settings: defaults, validation, serialization round-trip, get/set/merge, env parsing
 //! - UnifiedConfig: creation, merging, priority chain, ConfigBuilder, file loading

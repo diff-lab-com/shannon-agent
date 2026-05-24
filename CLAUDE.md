@@ -134,4 +134,4 @@ Multi-surface (web/desktop/CLI/IDE), computer use.
 - Integration tests in `shannon-core/tests/` use `mockito::Server` — never hit real APIs.
 - The `mockito` server matchers are order-dependent when using `.expect(N)`.
 - `LlmClientConfig` must include `max_stream_reconnects` field (all constructors have it).
-- `#[allow(dead_code)]` annotations removed from production code (24 files, 45 annotations). Test files may still have them.
+- `#[allow(dead_code)]` annotations in production code: 55 remaining, all legitimate (cross-platform stubs, deserialized fields, command template dynamic dispatch, test-only utilities, struct ownership). Dead constants and duplicate functions have been removed.

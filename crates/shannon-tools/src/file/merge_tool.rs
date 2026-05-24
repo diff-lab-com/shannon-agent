@@ -286,7 +286,7 @@ line3
             "resolutions": ["ours"]
         });
         let result = tool.execute(input).await;
-        assert!(result.is_ok(), "Expected success, got {:?}", result);
+        assert!(result.is_ok(), "Expected success, got {result:?}");
         let output = result.unwrap();
         assert!(!output.is_error);
         assert!(output.content.contains("Resolved 1 conflict"));

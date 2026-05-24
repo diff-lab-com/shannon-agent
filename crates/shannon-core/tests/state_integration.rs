@@ -1,6 +1,8 @@
 //! Integration tests for state management (session save/load/restore).
 //!
 //! Tests:
+
+#![allow(clippy::field_reassign_with_default)]
 //! - Session save/load round-trip with message preservation
 //! - Session listing with metadata
 //! - Multi-session management

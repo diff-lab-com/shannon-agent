@@ -297,7 +297,8 @@ mod tests {
         let history = publisher.delivery_history().await;
         // Delivery attempt should be recorded (may be "failed" since httpbin might not be reachable).
         // This test verifies the mechanics work, not network delivery.
-        assert!(!history.is_empty() || true); // Always passes — network-dependent.
+        // Always passes — network-dependent. Verify delivery_history() returns without error.
+        let _ = history.is_empty();
     }
 
     #[tokio::test]

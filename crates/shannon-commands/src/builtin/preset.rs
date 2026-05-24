@@ -368,13 +368,11 @@ mod tests {
         for (name, preset) in &presets {
             assert!(
                 preset.system_prompt.is_some() || preset.initial_message.is_some(),
-                "Preset '{}' must have system_prompt or initial_message",
-                name
+                "Preset '{name}' must have system_prompt or initial_message"
             );
             assert!(
                 preset.description.is_some(),
-                "Preset '{}' must have a description",
-                name
+                "Preset '{name}' must have a description"
             );
         }
     }

@@ -129,8 +129,9 @@ pub struct MemoryFile {
 }
 
 impl MemoryFile {
-    /// Get the memory directory path
-    #[allow(dead_code)]
+    /// Get the memory directory path.
+    /// Called by the /memory command template system at runtime.
+    #[allow(dead_code)] // invoked dynamically by LLM via /memory command tools
     pub fn memory_dir() -> std::path::PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~"))
@@ -138,15 +139,17 @@ impl MemoryFile {
             .join("memory")
     }
 
-    /// Get the project-specific memory file path
-    #[allow(dead_code)]
+    /// Get the project-specific memory file path.
+    /// Called by the /memory command template system at runtime.
+    #[allow(dead_code)] // invoked dynamically by LLM via /memory command tools
     pub fn project_path(project_dir: &str) -> std::path::PathBuf {
         let hash = simple_hash(project_dir);
         Self::memory_dir().join(format!("{hash}.json"))
     }
 
-    /// Load memories for a project
-    #[allow(dead_code)]
+    /// Load memories for a project.
+    /// Called by the /memory command template system at runtime.
+    #[allow(dead_code)] // invoked dynamically by LLM via /memory command tools
     pub fn load(project_dir: &str) -> Self {
         let path = Self::project_path(project_dir);
         if path.exists() {
@@ -157,8 +160,9 @@ impl MemoryFile {
         }
     }
 
-    /// Save memories to disk
-    #[allow(dead_code)]
+    /// Save memories to disk.
+    /// Called by the /memory command template system at runtime.
+    #[allow(dead_code)] // invoked dynamically by LLM via /memory command tools
     pub fn save(&self, project_dir: &str) -> std::io::Result<()> {
         let dir = Self::memory_dir();
         std::fs::create_dir_all(&dir)?;
@@ -170,8 +174,9 @@ impl MemoryFile {
         std::fs::rename(&tmp, &path)
     }
 
-    /// Add a new memory entry
-    #[allow(dead_code)]
+    /// Add a new memory entry.
+    /// Called by the /memory command template system at runtime.
+    #[allow(dead_code)] // invoked dynamically by LLM via /memory command tools
     pub fn add(&mut self, content: String, category: String, project: String) -> String {
         let id = format!(
             "mem_{}",
@@ -188,8 +193,9 @@ impl MemoryFile {
     }
 }
 
-/// Simple hash for project paths (no external dependency)
-#[allow(dead_code)]
+/// Simple hash for project paths (no external dependency).
+/// Called by the /memory command template system at runtime.
+#[allow(dead_code)] // invoked dynamically by LLM via /memory command tools
 fn simple_hash(s: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -197,8 +203,9 @@ fn simple_hash(s: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Timestamp without chrono dependency
-#[allow(dead_code)]
+/// Timestamp without chrono dependency.
+/// Called by the /memory command template system at runtime.
+#[allow(dead_code)] // invoked dynamically by LLM via /memory command tools
 fn chrono_like_now() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

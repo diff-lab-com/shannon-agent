@@ -48,7 +48,6 @@ mod outline;
 mod plugin;
 mod repl;
 mod repomap;
-#[allow(dead_code)]
 mod session;
 
 /// Register all built-in commands

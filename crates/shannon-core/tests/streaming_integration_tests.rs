@@ -3,6 +3,8 @@
 //! Tests SseStream against actual mockito HTTP servers to verify
 //! chunk boundary handling, event parsing, and multi-format support.
 
+#![allow(clippy::collapsible_match)]
+
 #[cfg(test)]
 mod streaming_tests {
     use futures::StreamExt;

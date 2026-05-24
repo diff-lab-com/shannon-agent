@@ -1,6 +1,8 @@
 //! Integration tests for LLM API clients (Anthropic, OpenAI, Ollama)
 //!
 //! Tests:
+
+#![allow(clippy::collapsible_match)]
 //! - HTTP request formatting for each provider
 //! - Response parsing and error handling
 //! - Concurrent API requests

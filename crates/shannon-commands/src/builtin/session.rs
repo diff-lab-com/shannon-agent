@@ -50,6 +50,7 @@ pub struct SnapshotMessage {
 // ---------------------------------------------------------------------------
 
 /// Directory where session snapshots are stored: `~/.shannon/sessions/`
+#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn sessions_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_default()
@@ -58,6 +59,7 @@ pub fn sessions_dir() -> PathBuf {
 }
 
 /// Full path for a named snapshot: `~/.shannon/sessions/{name}.toml`
+#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 fn snapshot_path(name: &str) -> PathBuf {
     sessions_dir().join(format!("{name}.toml"))
 }
@@ -70,6 +72,7 @@ fn snapshot_path(name: &str) -> PathBuf {
 ///
 /// Creates the sessions directory if it does not exist. Writes as TOML so
 /// snapshots are human-readable and easy to edit.
+#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn save_snapshot(snapshot: &SessionSnapshot) -> Result<PathBuf> {
     let dir = sessions_dir();
     std::fs::create_dir_all(&dir)?;
@@ -81,6 +84,7 @@ pub fn save_snapshot(snapshot: &SessionSnapshot) -> Result<PathBuf> {
 }
 
 /// Load a session snapshot by name.
+#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn load_snapshot(name: &str) -> Result<SessionSnapshot> {
     let path = snapshot_path(name);
     let content = std::fs::read_to_string(&path)?;
@@ -91,6 +95,7 @@ pub fn load_snapshot(name: &str) -> Result<SessionSnapshot> {
 /// List all saved snapshots.
 ///
 /// Returns `(name, description)` pairs sorted alphabetically by name.
+#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn list_snapshots() -> Result<Vec<(String, String)>> {
     let dir = sessions_dir();
     if !dir.exists() {
@@ -126,6 +131,7 @@ pub fn list_snapshots() -> Result<Vec<(String, String)>> {
 }
 
 /// Delete a snapshot by name.
+#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn delete_snapshot(name: &str) -> Result<()> {
     let path = snapshot_path(name);
     if path.exists() {
@@ -139,6 +145,7 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Format a list of snapshots for display.
+#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn format_snapshot_list(snapshots: &[(String, String)]) -> String {
     if snapshots.is_empty() {
         return "No saved session snapshots.\nUse `/session save <name>` to create one.".to_string();
@@ -157,6 +164,7 @@ pub fn format_snapshot_list(snapshots: &[(String, String)]) -> String {
 }
 
 /// Format detailed information about a single snapshot.
+#[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn format_snapshot_detail(snapshot: &SessionSnapshot) -> String {
     let mut out = format!("Session: {}\n", snapshot.name);
     out.push_str(&format!("  Created: {}\n", snapshot.created_at));

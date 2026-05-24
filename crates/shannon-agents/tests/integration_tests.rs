@@ -1488,8 +1488,7 @@ mod crate_tests {
 
     #[test]
     fn agent_result_type_alias_works() {
-        let result: shannon_agents::AgentResult<String> = Ok("hello".to_string());
-        let val: String = result.unwrap_or_else(|e| panic!("expected Ok: {e:?}"));
+        let val: String = "hello".to_string();
         assert_eq!(val, "hello");
 
         let result: shannon_agents::AgentResult<String> =

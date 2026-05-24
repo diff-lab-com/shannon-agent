@@ -1,6 +1,8 @@
 //! E2E tests for conversation compaction using a real local LLM (ollama).
 //!
 //! These tests are gated behind the `OLLAMA_E2E` environment variable and are
+
+#![allow(clippy::field_reassign_with_default)]
 //! marked `#[ignore]` so they only run via `scripts/test-perf.sh --ollama`.
 //!
 //! Required:

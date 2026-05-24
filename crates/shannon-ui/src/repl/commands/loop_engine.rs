@@ -812,51 +812,6 @@ pub(crate) fn handle_sandbox(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-pub(crate) fn handle_notify(repl: &mut Repl, args: &str) -> Result<()> {
-    let trimmed = args.trim();
-
-    match trimmed {
-        "on" | "enable" | "true" | "yes" => {
-            repl.notifications_enabled = true;
-            repl.chat.add_message(
-                ChatRole::System,
-                "Desktop notifications enabled. You'll be notified when queries complete."
-                    .to_string(),
-            );
-        }
-        "off" | "disable" | "false" | "no" => {
-            repl.notifications_enabled = false;
-            repl.chat.add_message(
-                ChatRole::System,
-                "Desktop notifications disabled.".to_string(),
-            );
-        }
-        "test" => {
-            repl.notifier.info("Shannon", "Test notification!").ok();
-            repl.chat
-                .add_message(ChatRole::System, "Test notification sent.".to_string());
-        }
-        _ => {
-            let status = if repl.notifications_enabled {
-                "enabled"
-            } else {
-                "disabled"
-            };
-            repl.chat.add_message(
-                ChatRole::System,
-                format!(
-                    "Desktop notifications: {status}\n\n\
-                     Usage:\n  /notify on  — enable notifications\n  \
-                     /notify off — disable notifications\n  \
-                     /notify test — send a test notification"
-                ),
-            );
-        }
-    }
-    Ok(())
-}
-
 /// Send a desktop notification if enabled.
 pub(crate) fn notify_query_complete(
     notifier: &shannon_core::notifier::Notifier,
