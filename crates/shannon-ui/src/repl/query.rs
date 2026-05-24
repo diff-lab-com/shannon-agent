@@ -410,10 +410,15 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     let streaming_summary = if let Ok(s) = ss.lock() {
                         let line_count = s.tool_streaming_content.lines().count();
                         let elapsed = s.streaming_start.map(|t| t.elapsed().as_secs_f64());
-                        if line_count > 0 && elapsed.is_some() {
-                            let e = elapsed.unwrap();
-                            let icon = if is_error { "✗" } else { "✓" };
-                            Some(format!("\n  ▸ {tool_name} ({e:.1}s, {line_count} lines) {icon}"))
+                        if line_count > 0 {
+                            if let Some(e) = elapsed {
+                                let icon = if is_error { "✗" } else { "✓" };
+                                Some(format!(
+                                    "\n  ▸ {tool_name} ({e:.1}s, {line_count} lines) {icon}"
+                                ))
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         }
