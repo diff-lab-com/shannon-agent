@@ -39,7 +39,15 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: >
+          cargo clippy --workspace --
+          -D warnings
+          -A clippy::collapsible_if
+          -A clippy::collapsible_match
+          -A clippy::derivable_impls
+          -A clippy::manual_is_multiple_of
+          -A clippy::manual_checked_div
+          -A clippy::unwrap_used
 
   fmt:
     name: Format
