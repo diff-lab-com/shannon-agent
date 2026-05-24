@@ -73,7 +73,7 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ### Test Coverage
 
-8628 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
+9129 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
 
 ## Competitor Feature Tiers
 
@@ -98,4 +98,4 @@ Multi-surface (web/desktop/CLI/IDE), computer use.
 - Integration tests in `shannon-core/tests/` use `mockito::Server` — never hit real APIs.
 - The `mockito` server matchers are order-dependent when using `.expect(N)`.
 - `LlmClientConfig` must include `max_stream_reconnects` field (all constructors have it).
-- `#[allow(dead_code)]` annotations in production code: 61 remaining, all legitimate (cross-platform stubs, deserialized fields, command template dynamic dispatch, test-only utilities, struct ownership, watcher lifecycle fields). Dead constants, duplicate functions, and unused error types have been removed.
+- `#[allow(dead_code)]` annotations in production code: 61 remaining, all annotated with `// KEEP: <reason>` comments. Categories: cross-platform stubs, deserialized fields, command template dynamic dispatch, test-only utilities, struct ownership, watcher lifecycle fields. Dead constants, duplicate functions, and unused error types have been removed.

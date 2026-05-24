@@ -15,16 +15,18 @@
 set -euo pipefail
 
 BASELINE_NAME="shannon-main"
+# Specific bench targets to avoid lib test harness conflicts
+BENCH_TARGETS="--bench compact_bench --bench context_budget_bench --bench core_benchmarks --bench recording_benchmarks --bench edit_bench --bench tool_benchmarks --bench repomap_bench --bench protocol_benchmarks --bench skills_benchmarks"
 
 case "${1:-run}" in
     save)
         echo "Saving benchmark baseline as '$BASELINE_NAME'..."
-        cargo bench --workspace -- --save-baseline "$BASELINE_NAME"
+        cargo bench $BENCH_TARGETS -- --save-baseline "$BASELINE_NAME"
         echo "Baseline saved. Run './scripts/bench-regression.sh compare' to check regressions."
         ;;
     compare)
         echo "Comparing benchmarks against baseline '$BASELINE_NAME'..."
-        cargo bench --workspace -- --baseline "$BASELINE_NAME" 2>&1 | tee bench-results.txt
+        cargo bench $BENCH_TARGETS -- --baseline "$BASELINE_NAME" 2>&1 | tee bench-results.txt
         if grep -q "Performance has regressed" bench-results.txt 2>/dev/null; then
             echo ""
             echo "WARNING: Performance regressions detected!"
@@ -37,7 +39,7 @@ case "${1:-run}" in
         ;;
     run)
         echo "Running benchmarks..."
-        cargo bench --workspace
+        cargo bench $BENCH_TARGETS
         ;;
     *)
         echo "Usage: $0 {save|compare|run}"
