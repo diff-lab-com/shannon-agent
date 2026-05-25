@@ -8,6 +8,9 @@ license = "MIT"
 repository = "https://github.com/shannon-agent/shannon-code"
 homepage = "https://github.com/shannon-agent/shannon-code"
 
+[package.metadata.dist]
+dist = false
+
 [dependencies]
 shannon-agents = { path = "../shannon-agents" }
 shannon-core = { path = "../shannon-core" }
