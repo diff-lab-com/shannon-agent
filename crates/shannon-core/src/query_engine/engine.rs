@@ -1507,18 +1507,6 @@ impl QueryEngine {
                                                 ContentBlock::ToolUse { id, name, input } => {
                                                     current_tool_use =
                                                         Some((id.clone(), name.clone()));
-                                                    // Ollama sends full arguments upfront in
-                                                    // ContentBlockStart; Anthropic/OpenAI send
-                                                    // them incrementally via InputJsonDelta.
-                                                    // Seed only when input has actual content
-                                                    // (non-empty object), not the empty `{}`
-                                                    // placeholder Anthropic uses.
-                                                    if input
-                                                        .as_object()
-                                                        .is_some_and(|o| !o.is_empty())
-                                                    {
-                                                        accumulated_tool_input = input.to_string();
-                                                    }
                                                     send_event!(
                                                         tx,
                                                         QueryEvent::ToolUseRequest {

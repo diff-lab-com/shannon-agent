@@ -981,7 +981,10 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
     }
 
     if let Some(ref msg) = chunk.message {
-        // Tool calls — return ALL events (start + stop for each)
+        // Tool calls — emit ContentBlockStart with empty input, then
+        // InputJsonDelta with the full arguments, then ContentBlockStop.
+        // This matches Anthropic's incremental pattern so the engine's
+        // ContentBlockStop handler naturally finalizes the tool input.
         if let Some(ref tool_calls) = msg.tool_calls {
             let mut events = Vec::new();
             for (idx, tc) in tool_calls.iter().enumerate() {
@@ -990,7 +993,13 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
                     content_block: ContentBlock::ToolUse {
                         id: format!("call_{idx}"),
                         name: tc.function.name.clone(),
-                        input: tc.function.arguments.clone(),
+                        input: serde_json::Value::Object(Default::default()),
+                    },
+                });
+                events.push(StreamEvent::ContentBlockDelta {
+                    index: idx,
+                    delta: ContentDelta::InputJsonDelta {
+                        partial_json: tc.function.arguments.to_string(),
                     },
                 });
                 events.push(StreamEvent::ContentBlockStop { index: idx });
@@ -1837,11 +1846,11 @@ mod tests {
     fn test_ollama_multiple_tool_calls() {
         let chunk_json = r#"{"message":{"role":"assistant","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}},{"function":{"name":"read","arguments":{"path":"foo.rs"}}}]}}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        // 2 tool calls × (start + stop) = 4 events
+        // 2 tool calls × (start + delta + stop) = 6 events
         assert_eq!(
             result.len(),
-            4,
-            "Expected 4 events for 2 Ollama tool calls, got {}",
+            6,
+            "Expected 6 events for 2 Ollama tool calls, got {}",
             result.len()
         );
     }
@@ -2054,7 +2063,7 @@ mod tests {
         let chunk_json =
             r#"{"message":{"tool_calls":[{"function":{"name":"bash","arguments":{}}}]}}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 2); // start + stop
+        assert_eq!(result.len(), 3); // start + delta + stop
         match &result[0] {
             Ok(StreamEvent::ContentBlockStart { content_block, .. }) => match content_block {
                 ContentBlock::ToolUse { input, .. } => {
@@ -2063,6 +2072,15 @@ mod tests {
                 _ => panic!("Expected ToolUse"),
             },
             _ => panic!("Expected ContentBlockStart"),
+        }
+        match &result[1] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
+                ContentDelta::InputJsonDelta { partial_json } => {
+                    assert_eq!(partial_json, "{}");
+                }
+                _ => panic!("Expected InputJsonDelta"),
+            },
+            _ => panic!("Expected ContentBlockDelta"),
         }
     }
 
