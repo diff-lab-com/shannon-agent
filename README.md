@@ -5,11 +5,11 @@
 **A high-performance, open-source AI-assisted coding tool, written in Rust**
 
 [![Rust](https://img.shields.io/badge/rust-1.88+-orange.svg)](https://www.rust-lang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-8516-brightgreen.svg)
 [![Lines](https://img.shields.io/badge/code-300K-blue.svg)
 
-[English](#what-is-shannon-code) | [中文文档](#中文文档)
+[English](#what-is-shannon-code) | [中文文档](#中文文档) | [Documentation](https://shannon-agent.github.io/shannon-code/)
 
 </div>
 
@@ -188,7 +188,7 @@ Shannon Code ships two binaries:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/shannon-code.git
+git clone https://github.com/shannon-agent/shannon-code.git
 cd shannon-code
 
 # Build in release mode
@@ -455,7 +455,11 @@ Every source file in every crate has test coverage. Integration tests use `mocki
 
 ## License
 
-This project is released under the MIT License. See [LICENSE](LICENSE) for details.
+This project is released under the [Apache License 2.0](LICENSE).
+
+## Documentation
+
+Full documentation is available at [shannon-agent.github.io/shannon-code](https://shannon-agent.github.io/shannon-code/).
 
 ### Acknowledgments
 
@@ -610,7 +614,7 @@ Shannon Code 是一个功能丰富、类型安全的 AI 辅助编程工具，完
 ### 构建
 
 ```bash
-git clone https://github.com/your-username/shannon-code.git
+git clone https://github.com/shannon-agent/shannon-code.git
 cd shannon-code
 cargo build --release
 ```
@@ -741,7 +745,11 @@ shannon --prompt "修复lint" --diff-only  # 仅输出 diff
 
 ## 许可证
 
-本项目采用 MIT 许可证发布。详见 [LICENSE](LICENSE)。
+本项目采用 [Apache License 2.0](LICENSE) 发布。
+
+## 文档
+
+完整文档请访问 [shannon-agent.github.io/shannon-code](https://shannon-agent.github.io/shannon-code/)。
 
 ---
 

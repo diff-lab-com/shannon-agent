@@ -555,10 +555,12 @@ fn test_compaction_quality_long_session() {
     let mut sim = ConversationSimulator::new(config);
 
     // Important file names that should survive compaction
-    let critical_files = ["src/lib.rs",
+    let critical_files = [
+        "src/lib.rs",
         "src/main.rs",
         "Cargo.toml",
-        "tests/integration.rs"];
+        "tests/integration.rs",
+    ];
 
     for i in 0..30 {
         let file = critical_files[i % critical_files.len()];

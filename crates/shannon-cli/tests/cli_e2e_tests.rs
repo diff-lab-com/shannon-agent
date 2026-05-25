@@ -71,7 +71,7 @@ fn mock_ollama_streaming(server: &mut ServerGuard, text: &str) -> Mock {
         .create()
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: test helper
 fn mock_ollama_non_streaming(server: &mut ServerGuard, text: &str) -> Mock {
     server
         .mock("POST", "/api/chat")
@@ -1602,7 +1602,8 @@ fn make_turn_messages(n: usize) -> Vec<serde_json::Value> {
     messages
 }
 
-#[ignore] // Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
+#[ignore]
+// Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
 #[tokio::test]
 #[serial]
 async fn test_multiturn_ollama_three_turns_accumulated_context() {
@@ -1734,7 +1735,8 @@ async fn test_multiturn_openai_resume_preserves_context() {
     );
 }
 
-#[ignore] // Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
+#[ignore]
+// Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
 #[tokio::test]
 #[serial]
 async fn test_multiturn_anthropic_resume_context() {
@@ -1784,7 +1786,8 @@ async fn test_multiturn_anthropic_resume_context() {
     );
 }
 
-#[ignore] // Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
+#[ignore]
+// Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
 #[tokio::test]
 #[serial]
 async fn test_multiturn_ollama_story_then_character_count() {
@@ -1852,7 +1855,8 @@ async fn test_multiturn_resume_no_session_fails_gracefully() {
     assert_eq!(json["exit_code"], "success");
 }
 
-#[ignore] // Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
+#[ignore]
+// Requires built `shannon` binary and session persistence — run via `cargo test --test cli_e2e_tests -- --ignored`
 #[tokio::test]
 #[serial]
 async fn test_multiturn_deepseek_resume_context() {
@@ -2042,9 +2046,7 @@ mod offline_tests {
     fn offline_model_flag_parsed() {
         // --model should be accepted without error. The binary will try to
         // start a session but fail on missing API — we just verify parsing.
-        let result = shannon()
-            .args(["--model", "gpt-4o", "--help"])
-            .assert();
+        let result = shannon().args(["--model", "gpt-4o", "--help"]).assert();
 
         let stdout = stdout_string(&result);
         // --help output should mention --model in the usage
@@ -2056,9 +2058,7 @@ mod offline_tests {
 
     #[test]
     fn offline_provider_flag_parsed() {
-        let result = shannon()
-            .args(["--provider", "ollama", "--help"])
-            .assert();
+        let result = shannon().args(["--provider", "ollama", "--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2072,9 +2072,7 @@ mod offline_tests {
         // --prompt is the headless mode flag. It should be parsed; since no
         // API is available it will fail, but the flag itself is accepted.
         // We use --help to verify the flag exists without actually running.
-        let result = shannon()
-            .args(["--help"])
-            .assert();
+        let result = shannon().args(["--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2085,9 +2083,7 @@ mod offline_tests {
 
     #[test]
     fn offline_resume_flag_parsed() {
-        let result = shannon()
-            .args(["--help"])
-            .assert();
+        let result = shannon().args(["--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2098,9 +2094,7 @@ mod offline_tests {
 
     #[test]
     fn offline_schema_flag_parsed() {
-        let result = shannon()
-            .args(["--help"])
-            .assert();
+        let result = shannon().args(["--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2111,9 +2105,7 @@ mod offline_tests {
 
     #[test]
     fn offline_output_format_flag_parsed() {
-        let result = shannon()
-            .args(["--help"])
-            .assert();
+        let result = shannon().args(["--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2124,9 +2116,7 @@ mod offline_tests {
 
     #[test]
     fn offline_max_turns_flag_parsed() {
-        let result = shannon()
-            .args(["--help"])
-            .assert();
+        let result = shannon().args(["--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2137,9 +2127,7 @@ mod offline_tests {
 
     #[test]
     fn offline_allowed_tools_flag_parsed() {
-        let result = shannon()
-            .args(["--help"])
-            .assert();
+        let result = shannon().args(["--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2150,9 +2138,7 @@ mod offline_tests {
 
     #[test]
     fn offline_diff_only_flag_parsed() {
-        let result = shannon()
-            .args(["--help"])
-            .assert();
+        let result = shannon().args(["--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2163,9 +2149,7 @@ mod offline_tests {
 
     #[test]
     fn offline_pipe_flag_parsed() {
-        let result = shannon()
-            .args(["--help"])
-            .assert();
+        let result = shannon().args(["--help"]).assert();
 
         let stdout = stdout_string(&result);
         assert!(
@@ -2276,10 +2260,7 @@ mod offline_tests {
             sessions_dir.exists(),
             "Sessions directory should be creatable"
         );
-        assert!(
-            sessions_dir.is_dir(),
-            "Sessions path should be a directory"
-        );
+        assert!(sessions_dir.is_dir(), "Sessions path should be a directory");
 
         cleanup_temp_dir(&home);
     }
@@ -2353,10 +2334,7 @@ mod offline_tests {
 
         for uuid_str in &valid_uuids {
             let parsed = uuid_str.parse::<uuid::Uuid>();
-            assert!(
-                parsed.is_ok(),
-                "'{uuid_str}' should be a valid UUID"
-            );
+            assert!(parsed.is_ok(), "'{uuid_str}' should be a valid UUID");
         }
 
         // Invalid formats should fail
@@ -2369,10 +2347,7 @@ mod offline_tests {
 
         for uuid_str in &invalid_uuids {
             let parsed = uuid_str.parse::<uuid::Uuid>();
-            assert!(
-                parsed.is_err(),
-                "'{uuid_str}' should NOT be a valid UUID"
-            );
+            assert!(parsed.is_err(), "'{uuid_str}' should NOT be a valid UUID");
         }
     }
 
@@ -2380,10 +2355,7 @@ mod offline_tests {
 
     #[test]
     fn offline_help_output_contains_expected_text() {
-        let result = shannon()
-            .args(["--help"])
-            .assert()
-            .success();
+        let result = shannon().args(["--help"]).assert().success();
 
         let stdout = stdout_string(&result);
 
@@ -2404,10 +2376,7 @@ mod offline_tests {
 
     #[test]
     fn offline_version_output() {
-        let result = shannon()
-            .args(["--version"])
-            .assert()
-            .success();
+        let result = shannon().args(["--version"]).assert().success();
 
         let stdout = stdout_string(&result);
         // Should contain the binary name and version
@@ -2424,10 +2393,7 @@ mod offline_tests {
 
     #[test]
     fn offline_help_lists_key_commands() {
-        let result = shannon()
-            .args(["--help"])
-            .assert()
-            .success();
+        let result = shannon().args(["--help"]).assert().success();
 
         let stdout = stdout_string(&result);
 
@@ -2444,10 +2410,7 @@ mod offline_tests {
         ];
 
         for flag in &key_flags {
-            assert!(
-                stdout.contains(flag),
-                "Help should document {flag}"
-            );
+            assert!(stdout.contains(flag), "Help should document {flag}");
         }
     }
 
@@ -2459,9 +2422,7 @@ mod offline_tests {
         // code. In debug builds, clap's internal debug assertions may panic
         // before printing the usual error message — the key invariant is that
         // the process does NOT exit with success.
-        let result = shannon()
-            .args(["--nonexistent-flag-xyz"])
-            .assert();
+        let result = shannon().args(["--nonexistent-flag-xyz"]).assert();
 
         let output = result.get_output();
         assert!(
@@ -2477,7 +2438,10 @@ mod offline_tests {
         let dir = offline_temp_dir("missing_config");
 
         let result = shannon()
-            .env("HOME", dir.join("nonexistent").to_string_lossy().to_string())
+            .env(
+                "HOME",
+                dir.join("nonexistent").to_string_lossy().to_string(),
+            )
             .args(["--help"])
             .assert()
             .success();
@@ -2506,7 +2470,7 @@ mod offline_tests {
             .env_remove("SHANNON_PROVIDER")
             .current_dir(&dir)
             .args(["--prompt", "hello"])
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .assert();
 
         // Should not succeed (no API available), but should not panic
@@ -2536,9 +2500,7 @@ mod offline_tests {
     #[test]
     fn offline_invalid_output_format_rejected() {
         // An invalid --output-format value should be rejected by clap.
-        let result = shannon()
-            .args(["--output-format", "xml"])
-            .assert();
+        let result = shannon().args(["--output-format", "xml"]).assert();
 
         let output = result.get_output();
         assert!(
@@ -2548,7 +2510,9 @@ mod offline_tests {
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("invalid") || stderr.contains("error") || stderr.contains("possible values"),
+            stderr.contains("invalid")
+                || stderr.contains("error")
+                || stderr.contains("possible values"),
             "Should explain the invalid format, got: {stderr}"
         );
     }

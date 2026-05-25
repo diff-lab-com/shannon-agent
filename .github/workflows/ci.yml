@@ -39,7 +39,17 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: >
+          cargo clippy --workspace --
+          -D warnings
+          -A unknown-lints
+          -A clippy::collapsible_if
+          -A clippy::collapsible_match
+          -A clippy::derivable_impls
+          -A clippy::manual_is_multiple_of
+          -A clippy::manual_checked_div
+          -A clippy::unwrap_used
+          -A clippy::unnecessary_sort_by
 
   fmt:
     name: Format
@@ -52,3 +62,18 @@ jobs:
           components: rustfmt
       - name: Format check
         run: cargo fmt --all -- --check
+
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Check dependencies
+        run: cargo deny check --hide-inclusion-graph

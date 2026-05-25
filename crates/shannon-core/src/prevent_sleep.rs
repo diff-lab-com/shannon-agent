@@ -108,12 +108,12 @@ fn kill_caffeinate() {
 /// Platform: no-op for non-macOS
 /// Platform: no-op stub for non-macOS (real impl gated by `#[cfg(target_os = "macos")]`)
 #[cfg(not(target_os = "macos"))]
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: cross-platform stub
 fn spawn_caffeinate() {}
 
 /// Platform: no-op stub for non-macOS
 #[cfg(not(target_os = "macos"))]
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: cross-platform stub
 fn kill_caffeinate() {}
 
 /// RAII guard that prevents sleep while alive.

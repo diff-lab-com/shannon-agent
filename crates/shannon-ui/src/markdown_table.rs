@@ -90,20 +90,14 @@ fn is_table_line(line: &str) -> bool {
 fn is_separator_line(line: &str) -> bool {
     let trimmed = line.trim();
     // Strip leading/trailing pipes for analysis.
-    let inner = trimmed
-        .trim_start_matches('|')
-        .trim_end_matches('|')
-        .trim();
+    let inner = trimmed.trim_start_matches('|').trim_end_matches('|').trim();
     if inner.is_empty() {
         return false;
     }
     // All segments between pipes should be dashes, colons, or spaces.
     inner.split('|').all(|seg| {
         let s = seg.trim();
-        !s.is_empty()
-            && s
-                .chars()
-                .all(|c| c == '-' || c == ':' || c == ' ')
+        !s.is_empty() && s.chars().all(|c| c == '-' || c == ':' || c == ' ')
     })
 }
 
@@ -149,9 +143,7 @@ fn is_numeric(value: &str) -> bool {
 /// Parse a table row into cells, stripping leading/trailing pipes and whitespace.
 fn parse_row(line: &str) -> Vec<String> {
     let trimmed = line.trim();
-    let inner = trimmed
-        .trim_start_matches('|')
-        .trim_end_matches('|');
+    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
     inner
         .split('|')
         .map(|cell| cell.trim().to_string())
@@ -167,7 +159,9 @@ fn calculate_widths(
     max_width: usize,
     overrides: Option<Vec<usize>>,
 ) -> (Vec<usize>, Vec<ColumnAlign>) {
-    let num_cols = headers.len().max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
+    let num_cols = headers
+        .len()
+        .max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
     if num_cols == 0 {
         return (Vec::new(), Vec::new());
     }
@@ -276,11 +270,7 @@ fn align_cell(value: &str, width: usize, align: ColumnAlign) -> String {
 /// # Panics
 ///
 /// Does not panic; returns an empty string for empty input.
-pub fn render_table(
-    header: &[&str],
-    rows: &[Vec<String>],
-    widths: Option<Vec<usize>>,
-) -> String {
+pub fn render_table(header: &[&str], rows: &[Vec<String>], widths: Option<Vec<usize>>) -> String {
     if header.is_empty() {
         return String::new();
     }
@@ -392,8 +382,7 @@ pub fn format_table(raw: &str, max_width: usize) -> String {
     }
 
     // Calculate widths using the provided max_width.
-    let (col_widths, alignments) =
-        calculate_widths(&header, &data_rows, max_width, None);
+    let (col_widths, alignments) = calculate_widths(&header, &data_rows, max_width, None);
 
     if col_widths.is_empty() {
         return raw.to_string();
@@ -517,8 +506,14 @@ mod tests {
         let rows = vec![vec![long_name.clone(), "42".to_string()]];
         let result = render_table(header, &rows, None);
         // The long name should be truncated with ellipsis.
-        assert!(result.contains('\u{2026}'), "Long text should be truncated with ellipsis");
-        assert!(!result.contains(&long_name), "Full long text should not appear");
+        assert!(
+            result.contains('\u{2026}'),
+            "Long text should be truncated with ellipsis"
+        );
+        assert!(
+            !result.contains(&long_name),
+            "Full long text should not appear"
+        );
     }
 
     #[test]
@@ -541,7 +536,11 @@ mod tests {
     #[test]
     fn test_render_table_with_width_overrides() {
         let header = &["A", "B", "C"];
-        let rows = vec![vec!["short".to_string(), "medium".to_string(), "longer text here".to_string()]];
+        let rows = vec![vec![
+            "short".to_string(),
+            "medium".to_string(),
+            "longer text here".to_string(),
+        ]];
         let result = render_table(header, &rows, Some(vec![5, 8, 12]));
         assert!(result.contains("short"));
     }

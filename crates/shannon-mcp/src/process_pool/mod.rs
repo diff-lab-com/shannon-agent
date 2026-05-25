@@ -620,10 +620,7 @@ impl McpProcessPool {
                     "content_length": output.content.len(),
                 }),
             ),
-            Err(e) => (
-                "error",
-                serde_json::json!({"error": e.to_string()}),
-            ),
+            Err(e) => ("error", serde_json::json!({"error": e.to_string()})),
         };
         self.fire_event(McpEvent::new(
             McpEventType::ToolCallCompleted,

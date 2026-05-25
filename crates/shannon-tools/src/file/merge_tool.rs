@@ -139,9 +139,8 @@ impl crate::Tool for MergeResolveTool {
         }
 
         // Resolve conflicts
-        let resolved = resolve_conflicts(&content, &resolve_input.resolutions).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to resolve conflicts: {e}"))
-        })?;
+        let resolved = resolve_conflicts(&content, &resolve_input.resolutions)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to resolve conflicts: {e}")))?;
 
         // Write the resolved file atomically
         let temp_path = format!(
@@ -187,10 +186,7 @@ impl crate::Tool for MergeResolveTool {
                 let mut map = std::collections::HashMap::new();
                 map.insert("file_path".to_string(), json!(resolve_input.file_path));
                 map.insert("conflicts_resolved".to_string(), json!(conflicts.len()));
-                map.insert(
-                    "resolutions".to_string(),
-                    json!(resolve_input.resolutions),
-                );
+                map.insert("resolutions".to_string(), json!(resolve_input.resolutions));
                 map
             },
         })
@@ -387,7 +383,12 @@ b
         });
         let result = tool.execute(input).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid resolution"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid resolution")
+        );
     }
 
     #[tokio::test]

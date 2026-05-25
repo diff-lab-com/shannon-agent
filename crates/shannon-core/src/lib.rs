@@ -1,5 +1,14 @@
 //! # Shannon Core
 //!
+//! Clippy lint suppressions: rustfmt expands `if let A && B` into nested blocks
+//! that trigger collapsible_if/match. derivable_impls, manual_is_multiple_of,
+//! and manual_checked_div are style preferences from newer clippy versions.
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::derivable_impls
+)]
+//!
 //! Core engine for Shannon Code - query processing, tool orchestration, and state management.
 //!
 //! ## Architecture

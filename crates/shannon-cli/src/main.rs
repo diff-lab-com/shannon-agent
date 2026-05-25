@@ -55,7 +55,7 @@ enum HeadlessExitCode {
     /// 2 - maximum turns reached before completion.
     TurnLimit = 2,
     /// 3 - timeout occurred (request took too long).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: future use
     Timeout = 3,
     /// 4 - rate limited by API provider.
     RateLimited = 4,
@@ -124,11 +124,11 @@ enum CiEvent {
     },
     /// Message/response content.
     #[serde(rename = "message")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: future use
     Message { content: String },
     /// File diff (unified format).
     #[serde(rename = "diff")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: future use
     Diff { path: String, content: String },
     /// Error occurred.
     #[serde(rename = "error")]
@@ -1133,7 +1133,15 @@ fn run_headless_query(
         }
 
         if let Err(e) = client_config.validate() {
-            eprintln!("Warning: {e}");
+            eprintln!("Error: {e}");
+        }
+
+        // Ensure we have an API key when the provider requires auth
+        if client_config.provider.requires_auth() && client_config.api_key.is_empty() {
+            eprintln!(
+                "Error: no API key configured. Set SHANNON_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY."
+            );
+            return Err(anyhow::anyhow!("no API key configured"));
         }
 
         let llm_provider = client_config.provider.clone();
@@ -2006,11 +2014,7 @@ fn parse_deep_link(arg: &str) -> Option<Vec<String>> {
             let text = urlencoding::decode(&raw)
                 .unwrap_or_else(|_| std::borrow::Cow::Borrowed(&raw))
                 .into_owned();
-            Some(vec![
-                "shannon".to_string(),
-                "--prompt".to_string(),
-                text,
-            ])
+            Some(vec!["shannon".to_string(), "--prompt".to_string(), text])
         }
         "resume" => {
             let raw_id = parse_query_param(query, "id");
@@ -2019,16 +2023,9 @@ fn parse_deep_link(arg: &str) -> Option<Vec<String>> {
                     let id = urlencoding::decode(&raw)
                         .unwrap_or_else(|_| std::borrow::Cow::Borrowed(&raw))
                         .into_owned();
-                    Some(vec![
-                        "shannon".to_string(),
-                        "--resume".to_string(),
-                        id,
-                    ])
+                    Some(vec!["shannon".to_string(), "--resume".to_string(), id])
                 }
-                None => Some(vec![
-                    "shannon".to_string(),
-                    "--continue".to_string(),
-                ]),
+                None => Some(vec!["shannon".to_string(), "--continue".to_string()]),
             }
         }
         _ => None,
@@ -2052,7 +2049,8 @@ fn parse_query_param(query: &str, key: &str) -> Option<String> {
 /// Creates a `.desktop` file in `~/.local/share/applications/` and registers
 /// it as the default handler for `x-scheme-handler/shannon`.
 fn register_url_scheme_linux() -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let apps_dir = home.join(".local").join("share").join("applications");
     std::fs::create_dir_all(&apps_dir)?;
 
@@ -2087,7 +2085,8 @@ NoDisplay=true
 
 /// Unregister the `shannon://` URL scheme handler on Linux.
 fn unregister_url_scheme_linux() -> Result<()> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let desktop_path = home
         .join(".local")
         .join("share")
@@ -3789,73 +3788,86 @@ mod tests {
     #[test]
     fn test_parse_deep_link_prompt() {
         let result = parse_deep_link("shannon://prompt?text=hello%20world").unwrap();
-        assert_eq!(result, vec![
-            "shannon".to_string(),
-            "--prompt".to_string(),
-            "hello world".to_string(),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                "shannon".to_string(),
+                "--prompt".to_string(),
+                "hello world".to_string(),
+            ]
+        );
     }
 
     #[test]
     fn test_parse_deep_link_prompt_encoded() {
         let result =
             parse_deep_link("shannon://prompt?text=fix%20the%20bug%20in%20main.rs").unwrap();
-        assert_eq!(result, vec![
-            "shannon".to_string(),
-            "--prompt".to_string(),
-            "fix the bug in main.rs".to_string(),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                "shannon".to_string(),
+                "--prompt".to_string(),
+                "fix the bug in main.rs".to_string(),
+            ]
+        );
     }
 
     #[test]
     fn test_parse_deep_link_prompt_with_trailing_slash() {
         let result = parse_deep_link("shannon://prompt/?text=hello").unwrap();
-        assert_eq!(result, vec![
-            "shannon".to_string(),
-            "--prompt".to_string(),
-            "hello".to_string(),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                "shannon".to_string(),
+                "--prompt".to_string(),
+                "hello".to_string(),
+            ]
+        );
     }
 
     #[test]
     fn test_parse_deep_link_prompt_no_text() {
         let result = parse_deep_link("shannon://prompt").unwrap();
-        assert_eq!(result, vec![
-            "shannon".to_string(),
-            "--prompt".to_string(),
-            "".to_string(),
-        ]);
+        assert_eq!(
+            result,
+            vec![
+                "shannon".to_string(),
+                "--prompt".to_string(),
+                "".to_string(),
+            ]
+        );
     }
 
     #[test]
     fn test_parse_deep_link_resume_with_id() {
-        let result = parse_deep_link(
-            "shannon://resume?id=550e8400-e29b-41d4-a716-446655440000",
-        )
-        .unwrap();
-        assert_eq!(result, vec![
-            "shannon".to_string(),
-            "--resume".to_string(),
-            "550e8400-e29b-41d4-a716-446655440000".to_string(),
-        ]);
+        let result =
+            parse_deep_link("shannon://resume?id=550e8400-e29b-41d4-a716-446655440000").unwrap();
+        assert_eq!(
+            result,
+            vec![
+                "shannon".to_string(),
+                "--resume".to_string(),
+                "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            ]
+        );
     }
 
     #[test]
     fn test_parse_deep_link_resume_no_id() {
         let result = parse_deep_link("shannon://resume").unwrap();
-        assert_eq!(result, vec![
-            "shannon".to_string(),
-            "--continue".to_string(),
-        ]);
+        assert_eq!(
+            result,
+            vec!["shannon".to_string(), "--continue".to_string(),]
+        );
     }
 
     #[test]
     fn test_parse_deep_link_resume_with_trailing_slash() {
         let result = parse_deep_link("shannon://resume/").unwrap();
-        assert_eq!(result, vec![
-            "shannon".to_string(),
-            "--continue".to_string(),
-        ]);
+        assert_eq!(
+            result,
+            vec!["shannon".to_string(), "--continue".to_string(),]
+        );
     }
 
     #[test]
@@ -3917,10 +3929,8 @@ mod tests {
 
     #[test]
     fn test_deep_link_to_cli_resume_with_id() {
-        let args = parse_deep_link(
-            "shannon://resume?id=550e8400-e29b-41d4-a716-446655440000",
-        )
-        .unwrap();
+        let args =
+            parse_deep_link("shannon://resume?id=550e8400-e29b-41d4-a716-446655440000").unwrap();
         let cli = Cli::try_parse_from(args).unwrap();
         assert_eq!(
             cli.resume.as_deref(),

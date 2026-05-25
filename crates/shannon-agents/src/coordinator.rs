@@ -2735,10 +2735,12 @@ impl AgentCoordinator {
             let agent_id = agent_id_for_hook.clone();
             let at = agent_type_for_hook.clone();
             tokio::spawn(async move {
-                let _ = hm.run_hooks(&HookEvent::SubagentStart {
-                    agent_id,
-                    agent_type: at,
-                }).await;
+                let _ = hm
+                    .run_hooks(&HookEvent::SubagentStart {
+                        agent_id,
+                        agent_type: at,
+                    })
+                    .await;
             });
         }
 
@@ -2771,10 +2773,12 @@ impl AgentCoordinator {
                             let hm = hm.clone();
                             let aid = agent_name_owned.clone();
                             tokio::spawn(async move {
-                                let _ = hm.run_hooks(&HookEvent::SubagentStop {
-                                    agent_id: aid,
-                                    result_summary: "timed out".to_string(),
-                                }).await;
+                                let _ = hm
+                                    .run_hooks(&HookEvent::SubagentStop {
+                                        agent_id: aid,
+                                        result_summary: "timed out".to_string(),
+                                    })
+                                    .await;
                             });
                         }
                         // Clean up tracking entry
@@ -2803,10 +2807,12 @@ impl AgentCoordinator {
                         let aid = agent_name_owned.clone();
                         let summary = output.clone();
                         tokio::spawn(async move {
-                            let _ = hm.run_hooks(&HookEvent::SubagentStop {
-                                agent_id: aid,
-                                result_summary: summary,
-                            }).await;
+                            let _ = hm
+                                .run_hooks(&HookEvent::SubagentStop {
+                                    agent_id: aid,
+                                    result_summary: summary,
+                                })
+                                .await;
                         });
                     }
                     if let Err(e) = event_sender.send(CoordinatorEvent::AgentCompleted {
@@ -2830,10 +2836,12 @@ impl AgentCoordinator {
                         let aid = agent_name_owned.clone();
                         let summary = e.to_string();
                         tokio::spawn(async move {
-                            let _ = hm.run_hooks(&HookEvent::SubagentStop {
-                                agent_id: aid,
-                                result_summary: summary,
-                            }).await;
+                            let _ = hm
+                                .run_hooks(&HookEvent::SubagentStop {
+                                    agent_id: aid,
+                                    result_summary: summary,
+                                })
+                                .await;
                         });
                     }
                     if let Err(e) = event_sender.send(CoordinatorEvent::AgentCompleted {
@@ -3070,7 +3078,10 @@ mod tests {
             subject: "implement auth".to_string(),
             priority: "High".to_string(),
         };
-        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::TaskCreated);
+        assert_eq!(
+            event.event_type(),
+            shannon_core::hooks::HookEventType::TaskCreated
+        );
         assert_eq!(event.match_subject(), "implement auth");
         // Verify JSON roundtrip
         let json = serde_json::to_vec(&event).unwrap();
@@ -3083,7 +3094,10 @@ mod tests {
             task_id: "t-456".to_string(),
             subject: "fix bug".to_string(),
         };
-        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::TaskCompleted);
+        assert_eq!(
+            event.event_type(),
+            shannon_core::hooks::HookEventType::TaskCompleted
+        );
         assert_eq!(event.match_subject(), "fix bug");
         let json = serde_json::to_vec(&event).unwrap();
         assert!(!json.is_empty());
@@ -3095,7 +3109,10 @@ mod tests {
             agent_id: "agent-007".to_string(),
             agent_type: "general-purpose".to_string(),
         };
-        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::SubagentStart);
+        assert_eq!(
+            event.event_type(),
+            shannon_core::hooks::HookEventType::SubagentStart
+        );
         assert_eq!(event.match_subject(), "agent-007");
     }
 
@@ -3105,7 +3122,10 @@ mod tests {
             agent_id: "agent-007".to_string(),
             result_summary: "completed task".to_string(),
         };
-        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::SubagentStop);
+        assert_eq!(
+            event.event_type(),
+            shannon_core::hooks::HookEventType::SubagentStop
+        );
         assert_eq!(event.match_subject(), "agent-007");
     }
 
@@ -3115,7 +3135,10 @@ mod tests {
             path: "/tmp/worktree-1".to_string(),
             branch: "worktree/agent-1".to_string(),
         };
-        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::WorktreeCreate);
+        assert_eq!(
+            event.event_type(),
+            shannon_core::hooks::HookEventType::WorktreeCreate
+        );
         assert_eq!(event.match_subject(), "/tmp/worktree-1");
     }
 
@@ -3124,7 +3147,10 @@ mod tests {
         let event = HookEvent::WorktreeRemove {
             path: "/tmp/worktree-1".to_string(),
         };
-        assert_eq!(event.event_type(), shannon_core::hooks::HookEventType::WorktreeRemove);
+        assert_eq!(
+            event.event_type(),
+            shannon_core::hooks::HookEventType::WorktreeRemove
+        );
         assert_eq!(event.match_subject(), "/tmp/worktree-1");
     }
 

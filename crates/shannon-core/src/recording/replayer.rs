@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(tool_calls[0].tool, "Read");
         assert_eq!(tool_calls[0].result, "fn main() {}");
         assert!(!tool_calls[0].is_error);
-        assert!(tool_calls[0].duration_ms >= 0); // just verify field exists
+        let _ = tool_calls[0].duration_ms; // just verify field exists
 
         let _ = std::fs::remove_dir_all(&dir);
     }

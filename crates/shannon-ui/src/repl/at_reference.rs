@@ -71,7 +71,7 @@ pub struct AtReferenceResult {
 
 impl AtReferenceResult {
     /// Create a successful result with the given injected text.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: future use
     pub fn ok(text: impl Into<String>) -> Self {
         Self {
             injected_text: text.into(),
@@ -128,7 +128,7 @@ pub fn detect_reference_kind(path: &str) -> AtReferenceKind {
 
 /// Detect whether an input string typed after `@` is a URL.
 /// Returns `Some(url)` if the text starts with `http://` or `https://`.
-#[allow(dead_code)]
+#[allow(dead_code)] // KEEP: future use
 pub fn detect_url_in_input(input: &str) -> Option<String> {
     let trimmed = input.trim();
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {

@@ -1,5 +1,12 @@
 //! shannon-codegen - Tree-sitter based code understanding for Shannon Code
 //!
+//! Suppress lints that conflict with rustfmt or are style preferences from newer clippy.
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::derivable_impls
+)]
+//!
 //! This crate provides code analysis capabilities using tree-sitter grammars:
 //! - Language detection from file extensions
 //! - Symbol outline extraction (functions, classes, etc.)

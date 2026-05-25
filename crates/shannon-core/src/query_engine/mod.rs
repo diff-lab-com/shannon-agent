@@ -24,7 +24,7 @@ mod tests {
     use std::collections::HashMap;
     use uuid::Uuid;
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: test helper
     struct TestTool {
         name: String,
     }

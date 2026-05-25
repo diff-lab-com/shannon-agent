@@ -25,12 +25,17 @@ fn buffer_text(buf: &Buffer, area: Rect) -> String {
     lines.join("\n")
 }
 
+/// Fixed timestamp for deterministic snapshots.
+fn fixed_timestamp() -> chrono::DateTime<chrono::Utc> {
+    "2026-01-15T12:00:00Z".parse().unwrap()
+}
+
 /// Helper: build a ChatMessage with sensible defaults.
 fn make_message(role: ChatRole, content: &str) -> ChatMessage {
     ChatMessage {
         role,
         content: content.to_string(),
-        timestamp: chrono::Utc::now(),
+        timestamp: fixed_timestamp(),
         image_lines: None,
         is_error: false,
         tool_name: None,
@@ -52,7 +57,7 @@ fn make_tool_message(tool_name: &str, content: &str, is_error: bool) -> ChatMess
     ChatMessage {
         role: ChatRole::Tool,
         content: content.to_string(),
-        timestamp: chrono::Utc::now(),
+        timestamp: fixed_timestamp(),
         image_lines: None,
         is_error,
         tool_name: Some(tool_name.to_string()),

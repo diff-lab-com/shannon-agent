@@ -1,3 +1,10 @@
+// Suppress lints that conflict with rustfmt or are style preferences from newer clippy.
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::derivable_impls
+)]
+
 //! Shannon Terminal UI
 //!
 //! Terminal-based user interface for Shannon using Ratatui.

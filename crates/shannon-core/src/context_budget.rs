@@ -649,10 +649,7 @@ mod tests {
     fn test_for_model_gpt4() {
         let budget = ContextBudget::for_model("gpt-4o", &LlmProvider::OpenAI);
         assert_eq!(budget.total_tokens, 128_000);
-        assert_eq!(
-            budget.system_prompt_budget,
-            (128_000_f32 * 0.15) as usize
-        );
+        assert_eq!(budget.system_prompt_budget, (128_000_f32 * 0.15) as usize);
         assert_eq!(budget.tool_schema_budget, (128_000_f32 * 0.25) as usize);
         assert_eq!(budget.conversation_budget, (128_000_f32 * 0.60) as usize);
     }
@@ -681,8 +678,14 @@ mod tests {
     #[test]
     fn test_phase_initialization() {
         let budget = ContextBudget::new(200_000);
-        assert_eq!(budget.current_phase(1, 0.1), ConversationPhase::Initialization);
-        assert_eq!(budget.current_phase(3, 0.1), ConversationPhase::Initialization);
+        assert_eq!(
+            budget.current_phase(1, 0.1),
+            ConversationPhase::Initialization
+        );
+        assert_eq!(
+            budget.current_phase(3, 0.1),
+            ConversationPhase::Initialization
+        );
     }
 
     #[test]
@@ -710,7 +713,10 @@ mod tests {
     fn test_phase_initialization_overrides_usage() {
         // Even with high usage, few messages means Initialization
         let budget = ContextBudget::new(200_000);
-        assert_eq!(budget.current_phase(2, 0.9), ConversationPhase::Initialization);
+        assert_eq!(
+            budget.current_phase(2, 0.9),
+            ConversationPhase::Initialization
+        );
     }
 
     // ── Phase adaptation tests ─────────────────────────────────────────
@@ -748,10 +754,22 @@ mod tests {
 
     #[test]
     fn test_compaction_threshold_varies_by_phase() {
-        assert_eq!(ContextBudget::compaction_threshold(ConversationPhase::Initialization), 0.70);
-        assert_eq!(ContextBudget::compaction_threshold(ConversationPhase::Active), 0.75);
-        assert_eq!(ContextBudget::compaction_threshold(ConversationPhase::Extended), 0.80);
-        assert_eq!(ContextBudget::compaction_threshold(ConversationPhase::Critical), 0.85);
+        assert_eq!(
+            ContextBudget::compaction_threshold(ConversationPhase::Initialization),
+            0.70
+        );
+        assert_eq!(
+            ContextBudget::compaction_threshold(ConversationPhase::Active),
+            0.75
+        );
+        assert_eq!(
+            ContextBudget::compaction_threshold(ConversationPhase::Extended),
+            0.80
+        );
+        assert_eq!(
+            ContextBudget::compaction_threshold(ConversationPhase::Critical),
+            0.85
+        );
     }
 
     #[test]
@@ -794,7 +812,10 @@ mod tests {
 
     #[test]
     fn test_conversation_phase_display() {
-        assert_eq!(ConversationPhase::Initialization.to_string(), "INITIALIZATION");
+        assert_eq!(
+            ConversationPhase::Initialization.to_string(),
+            "INITIALIZATION"
+        );
         assert_eq!(ConversationPhase::Active.to_string(), "ACTIVE");
         assert_eq!(ConversationPhase::Extended.to_string(), "EXTENDED");
         assert_eq!(ConversationPhase::Critical.to_string(), "CRITICAL");

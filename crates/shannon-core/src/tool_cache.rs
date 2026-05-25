@@ -115,7 +115,8 @@ impl ToolResultCache {
     fn sort_json_keys(value: &Value) -> String {
         match value {
             Value::Object(map) => {
-                let mut pairs: Vec<(String, Value)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let mut pairs: Vec<(String, Value)> =
+                    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));
                 let inner: Vec<String> = pairs
                     .iter()
@@ -232,9 +233,8 @@ impl ToolResultCache {
     /// This is called when a source file changes so stale cached results
     /// are not returned.
     pub fn invalidate_path(&self, file_path: &str) {
-        self.entries.retain(|_, entry| {
-            !entry.file_paths.iter().any(|p| p == file_path)
-        });
+        self.entries
+            .retain(|_, entry| !entry.file_paths.iter().any(|p| p == file_path));
     }
 
     /// Invalidate all cache entries (e.g., on branch switch).
@@ -245,9 +245,8 @@ impl ToolResultCache {
     /// Remove expired entries. Called periodically or when cache is full.
     pub fn evict_expired(&self) {
         let ttl = self.config.ttl;
-        self.entries.retain(|_, entry| {
-            entry.cached_at.elapsed() < ttl
-        });
+        self.entries
+            .retain(|_, entry| entry.cached_at.elapsed() < ttl);
     }
 
     /// Return the number of cached entries.
@@ -396,7 +395,10 @@ mod tests {
         // Invalidate entries referencing /tmp/test.rs
         cache.invalidate_path("/tmp/test.rs");
 
-        assert!(cache.get("Read", &input1).is_none(), "Invalidated entry should be gone");
+        assert!(
+            cache.get("Read", &input1).is_none(),
+            "Invalidated entry should be gone"
+        );
         assert!(
             cache.get("Read", &input2).is_some(),
             "Non-matching entry should remain"
@@ -434,7 +436,13 @@ mod tests {
         // Insert an expired entry directly
         let old_input = json!({"file_path": "/tmp/old.rs"});
         let old_output = make_output("old", false);
-        insert_with_age(&cache, "Read", &old_input, &old_output, Duration::from_secs(600));
+        insert_with_age(
+            &cache,
+            "Read",
+            &old_input,
+            &old_output,
+            Duration::from_secs(600),
+        );
 
         assert_eq!(cache.len(), 2);
 
@@ -466,7 +474,10 @@ mod tests {
         let new_output = make_output("new", false);
         cache.put("Read", &new_input, &new_output, true);
 
-        assert!(cache.get("Read", &new_input).is_some(), "New entry should be cached");
+        assert!(
+            cache.get("Read", &new_input).is_some(),
+            "New entry should be cached"
+        );
 
         // The total should still be <= max_entries (oldest was evicted)
         assert!(
@@ -723,8 +734,18 @@ mod tests {
         assert!(result.is_some());
 
         // Expired entry after 60s TTL
-        insert_with_age(&cache, "Read", &json!({"file_path": "/tmp/old.rs"}), &make_output("old", false), Duration::from_secs(120));
-        assert!(cache.get("Read", &json!({"file_path": "/tmp/old.rs"})).is_none());
+        insert_with_age(
+            &cache,
+            "Read",
+            &json!({"file_path": "/tmp/old.rs"}),
+            &make_output("old", false),
+            Duration::from_secs(120),
+        );
+        assert!(
+            cache
+                .get("Read", &json!({"file_path": "/tmp/old.rs"}))
+                .is_none()
+        );
     }
 
     #[test]
@@ -782,6 +803,9 @@ mod tests {
         cache.put("Read", &input3, &make_output("newest", false), true);
 
         assert!(cache.len() <= 2);
-        assert!(cache.get("Read", &input3).is_some(), "newest should survive");
+        assert!(
+            cache.get("Read", &input3).is_some(),
+            "newest should survive"
+        );
     }
 }

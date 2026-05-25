@@ -1292,14 +1292,8 @@ mod tests {
         let saved_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
-        let result = attempt_merge_fallback(
-            "test.txt",
-            "hello world",
-            "hello",
-            "goodbye",
-            false,
-        )
-        .await;
+        let result =
+            attempt_merge_fallback("test.txt", "hello world", "hello", "goodbye", false).await;
 
         std::env::set_current_dir(&saved_cwd).unwrap();
 
@@ -1368,14 +1362,8 @@ mod tests {
         let saved_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
-        let result = attempt_merge_fallback(
-            "test.txt",
-            disk_content,
-            "line2",
-            "replaced",
-            false,
-        )
-        .await;
+        let result =
+            attempt_merge_fallback("test.txt", disk_content, "line2", "replaced", false).await;
 
         std::env::set_current_dir(&saved_cwd).unwrap();
 
@@ -1423,14 +1411,9 @@ mod tests {
         let saved_cwd = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
-        let result = attempt_merge_fallback(
-            "test.txt",
-            disk_content,
-            "line2",
-            "changed_by_edit",
-            false,
-        )
-        .await;
+        let result =
+            attempt_merge_fallback("test.txt", disk_content, "line2", "changed_by_edit", false)
+                .await;
 
         std::env::set_current_dir(&saved_cwd).unwrap();
 

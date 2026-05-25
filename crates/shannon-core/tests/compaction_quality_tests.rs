@@ -275,9 +275,7 @@ mod compaction_quality_tests {
             ));
             old_turns.push(tool_result_msg(
                 &format!("tu_r{i}"),
-                &format!(
-                    "Line 1-10 of src/config.rs (read {i})\npub struct Config {{"
-                ),
+                &format!("Line 1-10 of src/config.rs (read {i})\npub struct Config {{"),
                 false,
             ));
             old_turns.push(assistant_msg(&format!(

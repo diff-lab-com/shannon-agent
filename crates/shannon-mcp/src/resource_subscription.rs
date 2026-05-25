@@ -50,8 +50,7 @@ pub struct ResourceUpdate {
 ///
 /// Receives `(&ResourceUpdate)` so the caller can react (e.g. re-read the
 /// resource, update a cache, notify the UI).
-pub type ResourceUpdateCallback =
-    std::sync::Arc<dyn Fn(&ResourceUpdate) + Send + Sync>;
+pub type ResourceUpdateCallback = std::sync::Arc<dyn Fn(&ResourceUpdate) + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // ResourceSubscriptionManager
@@ -134,10 +133,7 @@ impl ResourceSubscriptionManager {
     /// should contain `uri` and optionally updated content.
     pub fn handle_notification(&self, server_name: &str, notification: &Value) {
         // Extract the URI from the notification params.
-        let uri = match notification
-            .get("uri")
-            .and_then(|v| v.as_str())
-        {
+        let uri = match notification.get("uri").and_then(|v| v.as_str()) {
             Some(u) => u.to_string(),
             None => {
                 warn!(

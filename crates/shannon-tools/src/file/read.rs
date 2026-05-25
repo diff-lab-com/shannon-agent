@@ -204,17 +204,15 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
 
     // Apply progressive truncation when no explicit offset/limit was given
     // and truncation is enabled (the default).
-    let (output_content, was_truncated) = if input.truncate_large_files
-        && input.offset.is_none()
-        && input.limit.is_none()
-    {
-        let config = ProgressiveLoaderConfig::default();
-        let truncated = truncate_content(&selected_lines, &config);
-        let did_truncate = truncated.len() < selected_lines.len();
-        (truncated, did_truncate)
-    } else {
-        (selected_lines.clone(), false)
-    };
+    let (output_content, was_truncated) =
+        if input.truncate_large_files && input.offset.is_none() && input.limit.is_none() {
+            let config = ProgressiveLoaderConfig::default();
+            let truncated = truncate_content(&selected_lines, &config);
+            let did_truncate = truncated.len() < selected_lines.len();
+            (truncated, did_truncate)
+        } else {
+            (selected_lines.clone(), false)
+        };
 
     // Count actual lines in the output (may differ from total after truncation)
     let output_lines = output_content.lines().count();

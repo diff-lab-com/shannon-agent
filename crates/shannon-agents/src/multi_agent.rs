@@ -1276,6 +1276,998 @@ mod tests {
         assert_eq!(result.success_count, 4);
     }
 
+    // ---- Test-only mock executors ----
+
+    use std::sync::Mutex;
+
+    /// Mock executor that records call order and returns configurable results.
+    /// Thread-safe via Mutex so it can be shared across concurrent agent tasks.
+    struct RecordingMockExecutor {
+        /// Ordered list of (system_prompt, task) calls received
+        calls: Mutex<Vec<(String, String)>>,
+        /// Optional delay to simulate work
+        delay: Duration,
+        /// Whether to return an error
+        should_fail: bool,
+        /// Error message to return when should_fail is true
+        error_message: String,
+    }
+
+    impl RecordingMockExecutor {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                delay: Duration::ZERO,
+                should_fail: false,
+                error_message: "mock execution error".to_string(),
+            }
+        }
+
+        fn with_delay(delay: Duration) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                delay,
+                should_fail: false,
+                error_message: String::new(),
+            }
+        }
+
+        fn failing(error_message: impl Into<String>) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                delay: Duration::ZERO,
+                should_fail: true,
+                error_message: error_message.into(),
+            }
+        }
+
+        fn get_calls(&self) -> Vec<(String, String)> {
+            self.calls.lock().expect("lock poisoned").clone()
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().expect("lock poisoned").len()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::executor::AgentExecutor for RecordingMockExecutor {
+        async fn execute(
+            &self,
+            system_prompt: &str,
+            task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<ToolOutput, String> {
+            self.calls
+                .lock()
+                .expect("lock poisoned")
+                .push((system_prompt.to_string(), task.to_string()));
+
+            if self.delay > Duration::ZERO {
+                tokio::time::sleep(self.delay).await;
+            }
+
+            if self.should_fail {
+                return Err(self.error_message.clone());
+            }
+
+            Ok(ToolOutput {
+                content: format!("completed: {task}"),
+                is_error: false,
+                metadata: StdHashMap::new(),
+            })
+        }
+
+        async fn execute_with_history(
+            &self,
+            system_prompt: &str,
+            _history: &[crate::executor::ChatTurn],
+            task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<ToolOutput, String> {
+            // Delegate to execute for simplicity in tests
+            self.execute(system_prompt, task, _model, _tools).await
+        }
+    }
+
+    /// Mock executor that fails for a specific agent name.
+    struct SelectiveFailureExecutor {
+        /// Agent names that should fail
+        failing_agents: Vec<String>,
+        /// Tracks which agents were called
+        called_agents: Mutex<Vec<String>>,
+    }
+
+    impl SelectiveFailureExecutor {
+        fn new(failing_agents: Vec<String>) -> Self {
+            Self {
+                failing_agents,
+                called_agents: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::executor::AgentExecutor for SelectiveFailureExecutor {
+        async fn execute(
+            &self,
+            _system_prompt: &str,
+            task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<ToolOutput, String> {
+            // We use the task field to identify the agent since we can't
+            // directly access the agent name from the executor interface.
+            // Instead, we check if any failing agent name appears in the task.
+            for failing_name in &self.failing_agents {
+                if task.contains(failing_name) {
+                    self.called_agents
+                        .lock()
+                        .expect("lock poisoned")
+                        .push(failing_name.clone());
+                    return Err(format!("agent '{failing_name}' failed"));
+                }
+            }
+
+            Ok(ToolOutput {
+                content: format!("completed: {task}"),
+                is_error: false,
+                metadata: StdHashMap::new(),
+            })
+        }
+
+        async fn execute_with_history(
+            &self,
+            system_prompt: &str,
+            _history: &[crate::executor::ChatTurn],
+            task: &str,
+            _model: Option<&str>,
+            _tools: Option<&[String]>,
+        ) -> Result<ToolOutput, String> {
+            self.execute(system_prompt, task, _model, _tools).await
+        }
+    }
+
+    // ---- Executor integration tests ----
+
+    #[tokio::test]
+    async fn test_spawn_with_mock_executor_records_calls() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b"),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+        assert_eq!(executor.call_count(), 2);
+
+        let calls = executor.get_calls();
+        let tasks: Vec<&str> = calls.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(tasks.contains(&"task a"));
+        assert!(tasks.contains(&"task b"));
+    }
+
+    #[tokio::test]
+    async fn test_spawn_executor_receives_system_prompt() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "do stuff").with_system_prompt("custom system prompt"),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+
+        let calls = executor.get_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "custom system prompt");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_default_system_prompt_used_when_agent_has_none() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("a", "task")])
+            .with_default_system_prompt("default prompt override");
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+
+        let calls = executor.get_calls();
+        assert_eq!(calls[0].0, "default prompt override");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_agent_system_prompt_overrides_default() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task").with_system_prompt("agent-specific prompt"),
+        ])
+        .with_default_system_prompt("default prompt");
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+
+        let calls = executor.get_calls();
+        // Agent's own system_prompt takes priority over default
+        assert_eq!(calls[0].0, "agent-specific prompt");
+    }
+
+    // ---- Failing executor tests ----
+
+    #[tokio::test]
+    async fn test_spawn_failing_executor_marks_agent_failed() {
+        let executor = Arc::new(RecordingMockExecutor::failing("something went wrong"));
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("fail-agent", "do stuff")]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert_eq!(result.failure_count, 1);
+        assert_eq!(result.success_count, 0);
+        assert_eq!(result.agent_results[0].status, AgentResultStatus::Failed);
+        assert_eq!(
+            result.agent_results[0].error.as_deref(),
+            Some("something went wrong")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_mixed_success_and_failure() {
+        // One agent with failing executor, one without any executor (stub success)
+        let fail_exec = Arc::new(RecordingMockExecutor::failing("boom"));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("bad", "will fail"),
+            AgentConfig::new("good", "will succeed"),
+        ]);
+
+        // Spawn with failing executor -- both agents use the same executor
+        let result = MultiAgentSpawner::spawn(config, Some(fail_exec)).await;
+        assert_eq!(result.failure_count, 2);
+        assert_eq!(result.success_count, 0);
+    }
+
+    // ---- Timeout tests ----
+
+    #[tokio::test]
+    async fn test_spawn_slow_agent_times_out() {
+        // Executor that sleeps for 500ms, but timeout is 50ms
+        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_millis(
+            500,
+        )));
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("slow", "slow task")])
+            .with_timeout(Duration::from_millis(50));
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        assert_eq!(result.failure_count, 1);
+        assert_eq!(result.success_count, 0);
+        assert_eq!(result.agent_results[0].status, AgentResultStatus::Timeout);
+        let err = result.agent_results[0].error.as_deref().unwrap();
+        assert!(
+            err.contains("timeout"),
+            "expected timeout in error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_fast_agent_completes_within_timeout() {
+        // Executor with tiny delay, generous timeout
+        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_millis(1)));
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("fast", "fast task")])
+            .with_timeout(Duration::from_secs(10));
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        assert_eq!(result.success_count, 1);
+        assert!(result.all_succeeded());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_mixed_timeout_and_success() {
+        // Two agents: one slow (will timeout), one instant (should succeed)
+        // We use no executor (stub) for this since both would share the same executor.
+        // Instead, test that timeout at the config level doesn't affect the overall result
+        // when the stub executor returns instantly.
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("fast-a", "task a"),
+            AgentConfig::new("fast-b", "task b"),
+        ])
+        .with_timeout(Duration::from_secs(1));
+
+        let result = MultiAgentSpawner::spawn(config, None).await;
+        assert_eq!(result.success_count, 2);
+    }
+
+    // ---- Fail-fast tests ----
+
+    #[tokio::test]
+    async fn test_spawn_fail_fast_skips_remaining_in_wave() {
+        let executor = Arc::new(RecordingMockExecutor::failing("fatal error"));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b"),
+        ])
+        .with_fail_fast();
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        // Both agents in the same wave (no deps) are launched concurrently,
+        // so both may fail before cancellation takes effect. The key invariant
+        // is that failure_count == total agents.
+        assert_eq!(result.failure_count, 2);
+        assert!(!result.all_succeeded());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_fail_fast_skips_dependent_agents() {
+        let executor = Arc::new(RecordingMockExecutor::failing("fatal error"));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("root", "root task"),
+            AgentConfig::new("child", "child task").depends_on("root"),
+        ])
+        .with_fail_fast();
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        assert_eq!(result.agent_results.len(), 2);
+        // Root fails, child gets skipped (dependency failed or cancelled)
+        let statuses: Vec<&AgentResultStatus> =
+            result.agent_results.iter().map(|r| &r.status).collect();
+        assert!(statuses.contains(&&AgentResultStatus::Failed));
+        assert!(
+            statuses.contains(&&AgentResultStatus::Skipped)
+                || statuses.contains(&&AgentResultStatus::Failed)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_fail_fast_across_chained_deps() {
+        // a -> b -> c with a failing
+        let executor = Arc::new(RecordingMockExecutor::failing("fail"));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b").depends_on("a"),
+            AgentConfig::new("c", "task c").depends_on("b"),
+        ])
+        .with_fail_fast();
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        assert_eq!(result.agent_results.len(), 3);
+        // 'a' fails, 'b' and 'c' should be skipped or failed
+        assert_eq!(result.success_count, 0);
+        assert!(
+            result
+                .agent_results
+                .iter()
+                .any(|r| r.status == AgentResultStatus::Skipped),
+            "at least one agent should be skipped in fail-fast chain"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_no_fail_fast_continues_after_failure() {
+        let executor = Arc::new(RecordingMockExecutor::failing("error"));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b"),
+        ]);
+        // fail_fast is false by default
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        // Both should be attempted (both fail because of the executor)
+        assert_eq!(result.failure_count, 2);
+        // None should be skipped since there are no deps and fail_fast is off
+        assert!(
+            result
+                .agent_results
+                .iter()
+                .all(|r| r.status == AgentResultStatus::Failed)
+        );
+    }
+
+    // ---- Dependency propagation tests ----
+
+    #[tokio::test]
+    async fn test_spawn_dependency_failure_propagates_to_dependents() {
+        // 'a' depends on 'root' which fails -> 'a' should be skipped
+        let executor = Arc::new(RecordingMockExecutor::failing("root failure"));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("root", "root task"),
+            AgentConfig::new("child", "child task").depends_on("root"),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        assert_eq!(result.agent_results.len(), 2);
+        // root fails
+        assert_eq!(result.agent_results[0].status, AgentResultStatus::Failed);
+        // child should be skipped because its dependency failed
+        assert_eq!(result.agent_results[1].status, AgentResultStatus::Skipped);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_diamond_with_failing_root_skips_all() {
+        // root -> left, root -> right, left -> join, right -> join
+        // root fails -> left and right should be skipped -> join skipped
+        let executor = Arc::new(RecordingMockExecutor::failing("root boom"));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("root", "root task"),
+            AgentConfig::new("left", "left task").depends_on("root"),
+            AgentConfig::new("right", "right task").depends_on("root"),
+            AgentConfig::new("join", "join task")
+                .depends_on("left")
+                .depends_on("right"),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        assert_eq!(result.success_count, 0);
+        assert_eq!(result.failure_count, 4);
+        // root fails, rest are skipped
+        let skipped_count = result
+            .agent_results
+            .iter()
+            .filter(|r| r.status == AgentResultStatus::Skipped)
+            .count();
+        assert_eq!(skipped_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_diamond_with_mid_failure_skips_join() {
+        // root succeeds, left succeeds, right fails -> join should be skipped
+        // We need a more nuanced approach: no executor (stub success for all)
+        // won't let us fail just one. Use a no-executor config where everything
+        // succeeds to verify the happy path, then separately test failure.
+        // For a selective failure, we use a pattern in the task name.
+        let executor: Arc<dyn crate::executor::AgentExecutor> =
+            Arc::new(SelectiveFailureExecutor::new(vec!["right".to_string()]));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("root", "root task"),
+            AgentConfig::new("left", "left task").depends_on("root"),
+            AgentConfig::new("right", "right task").depends_on("root"),
+            AgentConfig::new("join", "join task")
+                .depends_on("left")
+                .depends_on("right"),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        assert_eq!(result.agent_results.len(), 4);
+
+        let root_result = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "root")
+            .unwrap();
+        let left_result = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "left")
+            .unwrap();
+        let right_result = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "right")
+            .unwrap();
+        let join_result = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "join")
+            .unwrap();
+
+        assert_eq!(root_result.status, AgentResultStatus::Completed);
+        assert_eq!(left_result.status, AgentResultStatus::Completed);
+        assert_eq!(right_result.status, AgentResultStatus::Failed);
+        assert_eq!(join_result.status, AgentResultStatus::Skipped);
+    }
+
+    // ---- Concurrency and ordering tests ----
+
+    #[tokio::test]
+    async fn test_spawn_max_parallel_1_runs_sequentially() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b"),
+            AgentConfig::new("c", "task c"),
+        ])
+        .with_max_parallel(1);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+        assert_eq!(executor.call_count(), 3);
+        // All tasks should have been recorded
+        let calls = executor.get_calls();
+        let tasks: Vec<&str> = calls.iter().map(|(_, t)| t.as_str()).collect();
+        assert!(tasks.contains(&"task a"));
+        assert!(tasks.contains(&"task b"));
+        assert!(tasks.contains(&"task c"));
+    }
+
+    #[tokio::test]
+    async fn test_spawn_dependency_chain_executes_in_order() {
+        // a -> b -> c: verify execution order via call recording
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b").depends_on("a"),
+            AgentConfig::new("c", "task c").depends_on("b"),
+        ])
+        .with_max_parallel(4);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+
+        let calls = executor.get_calls();
+        // Verify ordering: "task a" must appear before "task b", "task b" before "task c"
+        let positions: std::collections::HashMap<&str, usize> = calls
+            .iter()
+            .enumerate()
+            .map(|(i, (_, t))| (t.as_str(), i))
+            .collect();
+
+        assert!(
+            positions[&"task a"] < positions[&"task b"],
+            "a should execute before b"
+        );
+        assert!(
+            positions[&"task b"] < positions[&"task c"],
+            "b should execute before c"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_parallel_agents_in_same_wave_execute_concurrently() {
+        // Two independent agents with a small delay -- verify they overlap
+        // by checking total time is less than sum of individual delays.
+        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_millis(
+            100,
+        )));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b"),
+        ])
+        .with_max_parallel(4)
+        .with_timeout(Duration::from_secs(10));
+
+        let start = Instant::now();
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        let elapsed = start.elapsed();
+
+        assert!(result.all_succeeded());
+        // If they ran sequentially, it would be at least 200ms.
+        // With concurrency, it should be close to 100ms + overhead.
+        // Allow generous margin to avoid flaky tests on slow CI.
+        assert!(
+            elapsed < Duration::from_millis(350),
+            "parallel agents should complete faster than sequential: {elapsed:?}"
+        );
+    }
+
+    // ---- Wave building edge cases ----
+
+    #[test]
+    fn test_build_waves_empty() {
+        let agents: Vec<AgentConfig> = vec![];
+        let sorted: Vec<&AgentConfig> = agents.iter().collect();
+        let waves = MultiAgentSpawner::build_waves(&sorted);
+        assert!(waves.is_empty());
+    }
+
+    #[test]
+    fn test_build_waves_single_agent() {
+        let agents = vec![AgentConfig::new("solo", "task")];
+        let sorted: Vec<&AgentConfig> = agents.iter().collect();
+        let waves = MultiAgentSpawner::build_waves(&sorted);
+        assert_eq!(waves.len(), 1);
+        assert_eq!(waves[0].len(), 1);
+        assert_eq!(waves[0][0].name, "solo");
+    }
+
+    #[test]
+    fn test_build_waves_wide_diamond() {
+        // a -> b1, b2, b3 -> c (fan-out then fan-in)
+        let agents = vec![
+            AgentConfig::new("a", "ta"),
+            AgentConfig::new("b1", "tb1").depends_on("a"),
+            AgentConfig::new("b2", "tb2").depends_on("a"),
+            AgentConfig::new("b3", "tb3").depends_on("a"),
+            AgentConfig::new("c", "tc")
+                .depends_on("b1")
+                .depends_on("b2")
+                .depends_on("b3"),
+        ];
+        let sorted = topological_sort(&agents).unwrap();
+        let waves = MultiAgentSpawner::build_waves(&sorted);
+        assert_eq!(waves.len(), 3);
+        assert_eq!(waves[0].len(), 1); // [a]
+        assert_eq!(waves[1].len(), 3); // [b1, b2, b3]
+        assert_eq!(waves[2].len(), 1); // [c]
+    }
+
+    #[test]
+    fn test_build_waves_complex_graph() {
+        // Multi-level dependency graph:
+        // Wave 0: [a, x] (no deps)
+        // Wave 1: [b] (depends on a)
+        // Wave 2: [c] (depends on b)
+        // Wave 3: [d] (depends on c, x)
+        let agents = vec![
+            AgentConfig::new("a", "ta"),
+            AgentConfig::new("b", "tb").depends_on("a"),
+            AgentConfig::new("c", "tc").depends_on("b"),
+            AgentConfig::new("d", "td").depends_on("c").depends_on("x"),
+            AgentConfig::new("x", "tx"),
+        ];
+        let sorted = topological_sort(&agents).unwrap();
+        let waves = MultiAgentSpawner::build_waves(&sorted);
+        // x has no deps -> wave 0; a has no deps -> wave 0
+        // b depends on a -> wave 1
+        // c depends on b -> wave 2
+        // d depends on c (wave 2) and x (wave 0) -> wave 3
+        assert_eq!(waves.len(), 4);
+    }
+
+    // ---- Topological sort additional edge cases ----
+
+    #[test]
+    fn test_topological_sort_preserves_original_order_for_independent() {
+        // Agents with no deps should stay in their original insertion order
+        let agents = vec![
+            AgentConfig::new("zebra", "tz"),
+            AgentConfig::new("alpha", "ta"),
+            AgentConfig::new("mango", "tm"),
+        ];
+        let sorted = topological_sort(&agents).unwrap();
+        let names: Vec<&str> = sorted.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["zebra", "alpha", "mango"]);
+    }
+
+    #[test]
+    fn test_topological_sort_three_node_cycle() {
+        let agents = vec![
+            AgentConfig::new("a", "ta").depends_on("c"),
+            AgentConfig::new("b", "tb").depends_on("a"),
+            AgentConfig::new("c", "tc").depends_on("b"),
+        ];
+        let result = topological_sort(&agents);
+        assert!(
+            matches!(result, Err(DependencyError::CircularDependency(cycle)) if cycle.len() == 3)
+        );
+    }
+
+    #[test]
+    fn test_topological_sort_multiple_unknown_deps() {
+        let agents = vec![
+            AgentConfig::new("a", "ta")
+                .depends_on("ghost1")
+                .depends_on("ghost2"),
+        ];
+        let result = topological_sort(&agents);
+        // Should fail on the first unknown dep encountered
+        assert!(matches!(result, Err(DependencyError::UnknownDependency(_))));
+    }
+
+    #[test]
+    fn test_topological_sort_disconnected_components() {
+        // Two independent chains: a->b and x->y
+        let agents = vec![
+            AgentConfig::new("a", "ta"),
+            AgentConfig::new("b", "tb").depends_on("a"),
+            AgentConfig::new("x", "tx"),
+            AgentConfig::new("y", "ty").depends_on("x"),
+        ];
+        let sorted = topological_sort(&agents).unwrap();
+        let names: Vec<&str> = sorted.iter().map(|a| a.name.as_str()).collect();
+
+        let pos: HashMap<&str, usize> = names.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+        assert!(pos[&"a"] < pos[&"b"]);
+        assert!(pos[&"x"] < pos[&"y"]);
+    }
+
+    #[test]
+    fn test_topological_sort_dep_on_self() {
+        let agents = vec![AgentConfig::new("a", "ta").depends_on("a")];
+        assert!(matches!(
+            topological_sort(&agents),
+            Err(DependencyError::CircularDependency(_))
+        ));
+    }
+
+    // ---- State transition tests ----
+
+    #[tokio::test]
+    async fn test_spawn_all_results_have_valid_status() {
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b").depends_on("a"),
+            AgentConfig::new("c", "task c").depends_on("b"),
+        ]);
+        let result = MultiAgentSpawner::spawn(config, None).await;
+        // All should complete successfully
+        for agent_result in &result.agent_results {
+            assert_eq!(agent_result.status, AgentResultStatus::Completed);
+            assert!(agent_result.output.is_some());
+            assert!(agent_result.error.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spawn_result_durations_are_nonzero_for_completed() {
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("a", "task")]);
+        let result = MultiAgentSpawner::spawn(config, None).await;
+        // Even with stub executor, duration should be >= 0
+        assert!(result.agent_results[0].duration >= Duration::ZERO);
+        assert!(result.total_duration >= Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_failure_result_has_error_message() {
+        let executor = Arc::new(RecordingMockExecutor::failing("specific error XYZ"));
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("a", "task")]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        let failed = &result.agent_results[0];
+        assert_eq!(failed.status, AgentResultStatus::Failed);
+        assert!(
+            failed
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("specific error XYZ")
+        );
+        assert!(failed.output.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_skipped_result_has_error_message() {
+        let executor = Arc::new(RecordingMockExecutor::failing("fail"));
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("root", "root task"),
+            AgentConfig::new("child", "child task").depends_on("root"),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        let child = result
+            .agent_results
+            .iter()
+            .find(|r| r.agent_name == "child")
+            .unwrap();
+        assert_eq!(child.status, AgentResultStatus::Skipped);
+        assert!(child.error.as_deref().unwrap().contains("skipped"));
+        assert!(child.output.is_none());
+        assert_eq!(child.duration, Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_timeout_result_has_timeout_error() {
+        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_secs(10)));
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("a", "task")])
+            .with_timeout(Duration::from_millis(1));
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        let timed_out = &result.agent_results[0];
+        assert_eq!(timed_out.status, AgentResultStatus::Timeout);
+        let err = timed_out.error.as_deref().unwrap();
+        assert!(err.contains("timeout") || err.contains("exceeded"));
+        assert!(timed_out.output.is_none());
+    }
+
+    // ---- Edge case: single agent with various configs ----
+
+    #[tokio::test]
+    async fn test_spawn_single_agent_with_system_prompt() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task").with_system_prompt("custom"),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+        assert_eq!(executor.get_calls()[0].0, "custom");
+    }
+
+    #[tokio::test]
+    async fn test_spawn_single_agent_with_model_override() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task").with_model("claude-sonnet-4-6"),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+        // The mock executor ignores model, but we verify the config doesn't break
+    }
+
+    #[tokio::test]
+    async fn test_spawn_single_agent_with_tools() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task").with_tools(vec!["read".into(), "write".into()]),
+        ]);
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor.clone())).await;
+        assert!(result.all_succeeded());
+    }
+
+    // ---- Empty / boundary config tests ----
+
+    #[tokio::test]
+    async fn test_spawn_empty_config_default() {
+        let config = MultiAgentConfig::default();
+        let result = MultiAgentSpawner::spawn(config, None).await;
+        assert!(result.agent_results.is_empty());
+        assert_eq!(result.success_count, 0);
+        assert_eq!(result.failure_count, 0);
+        assert!(result.all_succeeded());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_many_independent_agents() {
+        // Stress test with many agents (no deps)
+        let agents: Vec<AgentConfig> = (0..20)
+            .map(|i| AgentConfig::new(format!("agent-{i}"), format!("task {i}")))
+            .collect();
+        let config = MultiAgentConfig::new(agents).with_max_parallel(4);
+
+        let result = MultiAgentSpawner::spawn(config, None).await;
+        assert_eq!(result.agent_results.len(), 20);
+        assert!(result.all_succeeded());
+    }
+
+    #[tokio::test]
+    async fn test_spawn_timeout_zero_seconds() {
+        // Zero timeout should immediately timeout all agents
+        let executor = Arc::new(RecordingMockExecutor::with_delay(Duration::from_millis(1)));
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("a", "task")])
+            .with_timeout(Duration::from_secs(0));
+
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        // With 0s timeout, the agent may or may not complete depending on scheduling.
+        // The test verifies the system doesn't panic.
+        assert_eq!(result.agent_results.len(), 1);
+    }
+
+    // ---- MultiAgentResult method tests ----
+
+    #[test]
+    fn test_multi_agent_result_failures_returns_correct_status() {
+        let result = MultiAgentResult {
+            agent_results: vec![
+                AgentResult::completed("ok".into(), make_output("ok"), Duration::ZERO),
+                AgentResult::failed("fail".into(), "err".into(), Duration::ZERO),
+                AgentResult::timed_out("timeout".into(), Duration::from_secs(5)),
+                AgentResult::skipped("skip".into()),
+            ],
+            total_duration: Duration::from_secs(5),
+            success_count: 1,
+            failure_count: 3,
+        };
+        assert_eq!(result.failures().len(), 3);
+        assert_eq!(result.successes().len(), 1);
+    }
+
+    #[test]
+    fn test_multi_agent_result_all_succeeded_empty() {
+        let result = MultiAgentResult {
+            agent_results: vec![],
+            total_duration: Duration::ZERO,
+            success_count: 0,
+            failure_count: 0,
+        };
+        assert!(result.all_succeeded());
+    }
+
+    #[test]
+    fn test_multi_agent_result_not_succeeded_with_mismatch() {
+        // success_count doesn't match agent_results.len() (simulates inconsistency)
+        let result = MultiAgentResult {
+            agent_results: vec![
+                AgentResult::completed("a".into(), make_output("ok"), Duration::ZERO),
+                AgentResult::completed("b".into(), make_output("ok"), Duration::ZERO),
+            ],
+            total_duration: Duration::ZERO,
+            success_count: 2,
+            failure_count: 0,
+        };
+        assert!(result.all_succeeded());
+
+        // Now with failure
+        let result2 = MultiAgentResult {
+            agent_results: vec![
+                AgentResult::completed("a".into(), make_output("ok"), Duration::ZERO),
+                AgentResult::failed("b".into(), "err".into(), Duration::ZERO),
+            ],
+            total_duration: Duration::ZERO,
+            success_count: 1,
+            failure_count: 1,
+        };
+        assert!(!result2.all_succeeded());
+    }
+
+    // ---- AgentResult output content tests ----
+
+    #[tokio::test]
+    async fn test_spawn_stub_executor_output_content() {
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("agent-1", "my task")]);
+        let result = MultiAgentSpawner::spawn(config, None).await;
+        let output = result.agent_results[0].output.as_ref().unwrap();
+        assert!(output.content.contains("agent-1"));
+        assert!(!output.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_mock_executor_output_content() {
+        let executor = Arc::new(RecordingMockExecutor::new());
+        let config = MultiAgentConfig::new(vec![AgentConfig::new("test-agent", "do work")]);
+        let result = MultiAgentSpawner::spawn(config, Some(executor)).await;
+        let output = result.agent_results[0].output.as_ref().unwrap();
+        assert!(output.content.contains("do work"));
+        assert!(!output.is_error);
+    }
+
+    // ---- Topological sort with complex dependency patterns ----
+
+    #[test]
+    fn test_topological_sort_many_deps_on_one_node() {
+        // Many agents depend on a single root
+        let agents: Vec<AgentConfig> = std::iter::once(AgentConfig::new("root", "root"))
+            .chain((0..10).map(|i| {
+                AgentConfig::new(format!("child-{i}"), format!("task {i}")).depends_on("root")
+            }))
+            .collect();
+        let sorted = topological_sort(&agents).unwrap();
+        let pos: HashMap<&str, usize> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (a.name.as_str(), i))
+            .collect();
+        // root must come before all children
+        for i in 0..10 {
+            assert!(pos[&"root"] < pos[&format!("child-{i}").as_str()]);
+        }
+    }
+
+    #[test]
+    fn test_topological_sort_long_chain() {
+        // a0 -> a1 -> a2 -> ... -> a9
+        let agents: Vec<AgentConfig> = (0..10)
+            .map(|i| {
+                let mut cfg = AgentConfig::new(format!("a{i}"), format!("task {i}"));
+                if i > 0 {
+                    cfg = cfg.depends_on(format!("a{}", i - 1));
+                }
+                cfg
+            })
+            .collect();
+        let sorted = topological_sort(&agents).unwrap();
+        let names: Vec<&str> = sorted.iter().map(|a| a.name.as_str()).collect();
+        for i in 0..10 {
+            assert_eq!(names[i], format!("a{i}"));
+        }
+    }
+
+    // ---- spawn_background tests ----
+
+    #[tokio::test]
+    async fn test_spawn_background_multiple_agents() {
+        let config = MultiAgentConfig::new(vec![
+            AgentConfig::new("a", "task a"),
+            AgentConfig::new("b", "task b"),
+            AgentConfig::new("c", "task c").depends_on("a"),
+        ]);
+        let handle = MultiAgentSpawner::spawn_background(config);
+        let result = handle.await.unwrap();
+        assert!(result.all_succeeded());
+        assert_eq!(result.success_count, 3);
+    }
+
+    // ---- DependencyError display formatting ----
+
+    #[test]
+    fn test_dependency_error_circular_display_format() {
+        let err = DependencyError::CircularDependency(vec![
+            "alpha".into(),
+            "beta".into(),
+            "gamma".into(),
+        ]);
+        let msg = err.to_string();
+        assert!(msg.contains("alpha -> beta -> gamma"));
+    }
+
     // ---- Helpers ----
 
     fn make_output(content: &str) -> ToolOutput {

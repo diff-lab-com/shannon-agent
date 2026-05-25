@@ -9,7 +9,9 @@
 
 use shannon_mcp::protocol::*;
 use shannon_mcp::resource_subscription::ResourceSubscriptionManager;
-use shannon_mcp::webhook::{McpEvent, McpEventType, WebhookConfig, WebhookDelivery, WebhookRegistry};
+use shannon_mcp::webhook::{
+    McpEvent, McpEventType, WebhookConfig, WebhookDelivery, WebhookRegistry,
+};
 use std::sync::{Arc, Mutex};
 
 // =========================================================================
@@ -147,7 +149,10 @@ mod webhook_integration {
         let tool_webhook = WebhookConfig::with_event_types(
             "https://example.com/tools".to_string(),
             "secret1".to_string(),
-            vec![McpEventType::ToolCallStarted, McpEventType::ToolCallCompleted],
+            vec![
+                McpEventType::ToolCallStarted,
+                McpEventType::ToolCallCompleted,
+            ],
         );
         registry.register(tool_webhook);
 
@@ -177,10 +182,7 @@ mod webhook_integration {
             "secret-a".to_string(),
             vec![McpEventType::ToolCallStarted],
         );
-        let wh2 = WebhookConfig::new(
-            "https://b.com".to_string(),
-            "secret-b".to_string(),
-        );
+        let wh2 = WebhookConfig::new("https://b.com".to_string(), "secret-b".to_string());
         let id1 = registry.register(wh1);
         let id2 = registry.register(wh2);
         registry.persist(&path).unwrap();

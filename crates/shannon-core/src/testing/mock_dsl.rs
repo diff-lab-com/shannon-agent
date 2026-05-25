@@ -712,8 +712,10 @@ mod tests {
 
     #[test]
     fn test_cache_hit_rate_zero_when_no_caching() {
-        let responses = [text_response("No cache here"),
-            text_response("No cache either")];
+        let responses = [
+            text_response("No cache here"),
+            text_response("No cache either"),
+        ];
         let total_cache_read: u32 = responses
             .iter()
             .map(|r| r.usage.cache_read_input_tokens)
