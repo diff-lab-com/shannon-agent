@@ -1,0 +1,24 @@
+#!/bin/bash
+# Pre-commit hook: run cargo fmt on staged Rust files
+# Install: git config core.hooksPath .githooks
+
+staged_rs=$(git diff --cached --name-only --diff-filter=ACM '*.rs')
+
+if [ -z "$staged_rs" ]; then
+    exit 0
+fi
+
+# Check if cargo fmt would change anything
+if ! cargo fmt --all -- --check; then
+    echo ""
+    echo ">>> Running cargo fmt --all to fix formatting..."
+    cargo fmt --all
+
+    # Re-stage the formatted files
+    for f in $staged_rs; do
+        git add "$f"
+    done
+    echo ">>> Reformatted files re-staged. Commit will proceed."
+fi
+
+exit 0
