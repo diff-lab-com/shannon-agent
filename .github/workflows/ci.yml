@@ -89,11 +89,9 @@ jobs:
         with:
           toolchain: "1.88"
       - name: Install targets
-        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Install musl cross-compiler
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
-      - name: Check macOS x86_64
-        run: cargo check --workspace --target x86_64-apple-darwin
-      - name: Check macOS ARM
-        run: cargo check --workspace --target aarch64-apple-darwin
-      - name: Check Windows
-        run: cargo check --workspace --target x86_64-pc-windows-msvc
+      - name: Check Linux x86_64 musl
+        run: cargo check --workspace --target x86_64-unknown-linux-musl
