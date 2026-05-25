@@ -992,4 +992,67 @@ end
             MergeResult::Clean(_) => panic!("Expected conflict"),
         }
     }
+
+    // ======================================================================
+    // Property-based tests (proptest)
+    // ======================================================================
+
+    proptest::proptest! {
+        /// Merging identical content always returns the original — no panics.
+        #[test]
+        fn proptest_three_way_merge_identical(content in ".*") {
+            let result = three_way_merge(&content, &content, &content);
+            let merged = result.into_content();
+            // Merged content should match the original (lines comparison).
+            // lines() strips trailing newlines, so compare via lines.
+            assert_eq!(merged.lines().collect::<Vec<_>>(), content.lines().collect::<Vec<_>>());
+        }
+
+        /// three_way_merge is deterministic: calling it twice yields identical results.
+        #[test]
+        fn proptest_three_way_merge_deterministic(
+            base in ".*",
+            ours in ".*",
+            theirs in ".*"
+        ) {
+            let r1 = three_way_merge(&base, &ours, &theirs);
+            let r2 = three_way_merge(&base, &ours, &theirs);
+            assert_eq!(r1.into_content(), r2.into_content());
+        }
+
+        /// When only ours differs (base == theirs), the result is always ours.
+        #[test]
+        fn proptest_three_way_merge_only_ours_changed(base in ".*", ours in ".*") {
+            let result = three_way_merge(&base, &ours, &base);
+            let merged = result.into_content();
+            assert_eq!(merged.lines().collect::<Vec<_>>(), ours.lines().collect::<Vec<_>>());
+        }
+
+        /// When only theirs differs (base == ours), the result is always theirs.
+        #[test]
+        fn proptest_three_way_merge_only_theirs_changed(base in ".*", theirs in ".*") {
+            let result = three_way_merge(&base, &base, &theirs);
+            let merged = result.into_content();
+            assert_eq!(merged.lines().collect::<Vec<_>>(), theirs.lines().collect::<Vec<_>>());
+        }
+
+        /// parse_conflict_markers never panics on arbitrary input.
+        #[test]
+        fn proptest_parse_conflict_markers_no_panic(content in ".*") {
+            let _ = parse_conflict_markers(&content);
+        }
+
+        /// Valid conflict markers are always parsed correctly.
+        #[test]
+        fn proptest_parse_conflict_markers_valid(
+            ours in "[a-zA-Z ]{0,20}",
+            theirs in "[a-zA-Z ]{0,20}"
+        ) {
+            let content = format!("before\n<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\nafter", ours, theirs);
+            let conflicts = parse_conflict_markers(&content);
+            assert_eq!(conflicts.len(), 1);
+            assert_eq!(conflicts[0].ours_content, ours);
+            assert_eq!(conflicts[0].theirs_content, theirs);
+        }
+    }
 }

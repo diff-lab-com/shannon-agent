@@ -4148,4 +4148,51 @@ mod tests {
         let tool = AutoCommitTool::new();
         assert_eq!(tool.category(), "git");
     }
+
+    // ======================================================================
+    // Property-based tests (proptest)
+    // ======================================================================
+
+    proptest::proptest! {
+        /// validate_git_arg never panics on arbitrary input.
+        #[test]
+        fn proptest_validate_git_arg_no_panic(arg in ".*") {
+            let _ = validate_git_arg(&arg);
+        }
+
+        /// Simple alphanumeric strings (no shell metacharacters, no dash prefix,
+        /// no null bytes, no path traversal, under 256 chars) are always accepted.
+        #[test]
+        fn proptest_validate_git_arg_safe_names(name in "[a-zA-Z0-9_/]{1,50}") {
+            let result = validate_git_arg(&name);
+            assert!(result.is_ok(), "Expected '{}' to be valid, got {:?}", name, result);
+        }
+
+        /// Any input containing shell metacharacters is rejected.
+        #[test]
+        fn proptest_validate_git_arg_rejects_shell_meta(
+            prefix in "[a-zA-Z]{0,10}",
+            meta in "[;&|`${}()]",
+            suffix in "[a-zA-Z]{0,10}"
+        ) {
+            let arg = format!("{}{}{}", prefix, meta, suffix);
+            let result = validate_git_arg(&arg);
+            assert!(result.is_err(), "Expected '{}' to be rejected (shell meta)", arg);
+        }
+
+        /// Any input starting with '-' is rejected.
+        #[test]
+        fn proptest_validate_git_arg_rejects_dash_prefix(rest in "[a-zA-Z0-9]{1,20}") {
+            let arg = format!("-{}", rest);
+            let result = validate_git_arg(&arg);
+            assert!(result.is_err(), "Expected '-{}' to be rejected (dash prefix)", rest);
+        }
+
+        /// Empty strings are always rejected.
+        #[test]
+        fn proptest_validate_git_arg_rejects_empty(arg in "") {
+            let result = validate_git_arg(&arg);
+            assert!(result.is_err(), "Expected empty string to be rejected");
+        }
+    }
 }
