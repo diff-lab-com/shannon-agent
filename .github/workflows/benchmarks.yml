@@ -1,17 +1,54 @@
-name: Benchmarks
+name: Nightly Benchmarks
+
 on:
   schedule:
     - cron: '0 3 * * 0'  # Weekly Sunday 3am UTC
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  bench:
+  save-baseline:
+    name: Save Baseline
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run regression tests
+        run: |
+          chmod +x scripts/test-regression.sh
+          ./scripts/test-regression.sh --skip-perf
+
+      - name: Save benchmark baseline
+        run: bash scripts/bench-regression.sh save
+
+      - name: Upload baseline artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-baseline
+          path: target/criterion
+          retention-days: 14
+
+      - name: Upload timing log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-timing
+          path: /tmp/shannon-regression-timing.log
+          retention-days: 7
+
+  compare-baseline:
+    name: Compare Against Previous Baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -22,33 +59,28 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
 
-      - name: Restore baseline cache
-        uses: actions/cache@v4
+      - name: Download previous baseline
+        uses: dawidd6/action-download-artifact@v6
+        continue-on-error: true
         with:
+          name: bench-baseline
           path: target/criterion
-          key: bench-baseline-${{ github.base_ref || 'main' }}
-          restore-keys: |
-            bench-baseline-main
+          if_no_artifact_found: warn
 
-      - name: Save baseline (scheduled or dispatch)
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-        run: bash scripts/bench-regression.sh save
-
-      - name: Compare against baseline (PR)
-        if: github.event_name == 'pull_request'
+      - name: Compare benchmarks
         run: |
           if [ -d "target/criterion" ] && [ "$(ls -A target/criterion 2>/dev/null)" ]; then
             bash scripts/bench-regression.sh compare
           else
-            echo "No baseline found — saving initial baseline instead"
+            echo "No previous baseline found — saving initial baseline"
             bash scripts/bench-regression.sh save
           fi
 
-      - name: Upload results
+      - name: Upload comparison results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results
+          name: benchmark-comparison
           path: benchmark-results.txt
           retention-days: 30
           if-no-files-found: ignore

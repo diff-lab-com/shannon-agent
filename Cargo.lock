@@ -4576,6 +4576,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "serial_test",
  "shannon-core",
  "shannon-types",
  "tempfile",

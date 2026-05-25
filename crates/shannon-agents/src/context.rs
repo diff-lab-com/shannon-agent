@@ -172,8 +172,10 @@ impl TeamContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn teams_enabled_defaults_to_false() {
         unsafe {
             std::env::remove_var(TEAMS_ENV_VAR);
@@ -182,6 +184,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn teams_enabled_with_value_1() {
         unsafe {
             std::env::set_var(TEAMS_ENV_VAR, "1");
@@ -193,6 +196,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn teams_enabled_with_value_true() {
         unsafe {
             std::env::set_var(TEAMS_ENV_VAR, "true");
@@ -204,6 +208,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn teams_enabled_case_insensitive() {
         unsafe {
             std::env::set_var(TEAMS_ENV_VAR, "YES");
@@ -215,6 +220,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn teams_enabled_rejects_random_values() {
         unsafe {
             std::env::set_var(TEAMS_ENV_VAR, "maybe");
@@ -226,6 +232,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn new_returns_error_when_disabled() {
         // Set to "0" instead of remove_var to avoid race with parallel tests
         unsafe {
@@ -246,6 +253,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn permission_mode_builder() {
         unsafe {
             std::env::set_var(TEAMS_ENV_VAR, "1");
