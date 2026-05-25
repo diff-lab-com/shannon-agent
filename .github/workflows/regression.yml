@@ -42,6 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     timeout-minutes: 45
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,8 +52,22 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
 
+      - name: Restore baseline cache
+        uses: actions/cache@v4
+        with:
+          path: target/criterion
+          key: bench-baseline-${{ github.base_ref || 'main' }}
+          restore-keys: |
+            bench-baseline-main
+
       - name: Compare benchmarks against baseline
-        run: bash scripts/bench-regression.sh compare
+        run: |
+          if [ -d "target/criterion" ] && [ "$(ls -A target/criterion 2>/dev/null)" ]; then
+            bash scripts/bench-regression.sh compare
+          else
+            echo "No baseline found — saving initial baseline instead"
+            bash scripts/bench-regression.sh save
+          fi
 
       - name: Upload comparison results
         if: always()

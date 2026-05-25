@@ -227,12 +227,16 @@ mod tests {
 
     #[test]
     fn new_returns_error_when_disabled() {
+        // Set to "0" instead of remove_var to avoid race with parallel tests
         unsafe {
-            std::env::remove_var(TEAMS_ENV_VAR);
+            std::env::set_var(TEAMS_ENV_VAR, "0");
         }
         let rt = tokio::runtime::Runtime::new().unwrap();
         let config = shannon_core::api::LlmClientConfig::default();
         let result = rt.block_on(TeamContext::new(config));
+        unsafe {
+            std::env::remove_var(TEAMS_ENV_VAR);
+        }
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
