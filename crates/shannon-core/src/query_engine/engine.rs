@@ -1507,6 +1507,18 @@ impl QueryEngine {
                                                 ContentBlock::ToolUse { id, name, input } => {
                                                     current_tool_use =
                                                         Some((id.clone(), name.clone()));
+                                                    // Ollama sends full arguments upfront in
+                                                    // ContentBlockStart; Anthropic/OpenAI send
+                                                    // them incrementally via InputJsonDelta.
+                                                    // Seed only when input has actual content
+                                                    // (non-empty object), not the empty `{}`
+                                                    // placeholder Anthropic uses.
+                                                    if input
+                                                        .as_object()
+                                                        .is_some_and(|o| !o.is_empty())
+                                                    {
+                                                        accumulated_tool_input = input.to_string();
+                                                    }
                                                     send_event!(
                                                         tx,
                                                         QueryEvent::ToolUseRequest {
@@ -1685,6 +1697,44 @@ impl QueryEngine {
                                                     cache_read_tokens,
                                                 }
                                             );
+
+                                            // Flush any pending tool input that wasn't finalized by
+                                            // ContentBlockStop (OpenAI/Ollama don't emit that event).
+                                            if let Some((id, name)) = current_tool_use.take() {
+                                                let raw =
+                                                    std::mem::take(&mut accumulated_tool_input);
+                                                match serde_json::from_str::<serde_json::Value>(
+                                                    &raw,
+                                                ) {
+                                                    Ok(json_val) => {
+                                                        tool_inputs.push((
+                                                            id.clone(),
+                                                            name.clone(),
+                                                            json_val.clone(),
+                                                        ));
+                                                        assistant_tool_uses.push(
+                                                            ContentBlock::ToolUse {
+                                                                id,
+                                                                name,
+                                                                input: json_val,
+                                                            },
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::warn!(
+                                                            "Malformed tool input (post-stream flush): {e}"
+                                                        );
+                                                        tool_results.push(ToolResultEntry {
+                                                            tool_use_id: id,
+                                                            content: format!(
+                                                                "Malformed tool input: {e}"
+                                                            ),
+                                                            is_error: true,
+                                                            metadata: Default::default(),
+                                                        });
+                                                    }
+                                                }
+                                            }
 
                                             if !tool_inputs.is_empty() {
                                                 // Phase 1: Check permissions and hooks (sequential — may need user input)
@@ -2767,7 +2817,10 @@ impl QueryEngine {
                             }
                         }
 
-                        if !has_content && tool_inputs.is_empty() {
+                        if !has_content
+                            && tool_inputs.is_empty()
+                            && phase != StreamingPhase::Finalized
+                        {
                             let total_cost = CostTracker::calculate_cost(
                                 &client_model,
                                 total_input_tokens,
