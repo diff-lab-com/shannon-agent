@@ -1,12 +1,15 @@
 //! LLM API client with multi-provider and streaming support.
 
 use reqwest::Client;
+use std::path::PathBuf;
 use std::time::Duration;
 
+use super::adapter::{OpenaiStreamState, normalize_sse_event};
 use super::error::ApiError;
 use super::retry::retry_request;
 use super::streaming::MessageStream;
 use super::types::*;
+use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
 
 /// LLM API client with multi-provider and streaming support
 #[derive(Clone)]
@@ -166,6 +169,122 @@ impl LlmClient {
         )
     }
 
+    // ── Record/Replay Hooks ────────────────────────────────────────────
+
+    /// Check if recording mode is enabled via `SHANNON_RECORD_DIR`.
+    fn record_dir() -> Option<PathBuf> {
+        std::env::var("SHANNON_RECORD_DIR").ok().map(PathBuf::from)
+    }
+
+    /// Check if replay mode is enabled via `SHANNON_REPLAY_DIR`.
+    fn replay_dir() -> Option<PathBuf> {
+        std::env::var("SHANNON_REPLAY_DIR").ok().map(PathBuf::from)
+    }
+
+    /// Hash the serialized request body for fixture matching.
+    fn request_hash(serialized: &serde_json::Value) -> String {
+        RecordedExchange::hash_body(&serialized.to_string())
+    }
+
+    /// Try to replay a recorded fixture. Returns `Some(MessageStream)` if a
+    /// matching fixture is found, `None` if replay mode is not active or no
+    /// fixture matches.
+    fn try_replay(
+        &self,
+        serialized_body: &serde_json::Value,
+        provider: &LlmProvider,
+    ) -> Option<MessageStream> {
+        let dir = Self::replay_dir()?;
+        let hash = Self::request_hash(serialized_body);
+
+        // Search for a fixture matching provider + hash
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let fixture = RecordedExchange::load(&path).ok()?;
+            if fixture.provider == format!("{provider}") && fixture.request_hash == hash {
+                let events = Self::parse_raw_body(&fixture.response.body, provider);
+                return Some(Box::pin(futures::stream::iter(events.into_iter())));
+            }
+        }
+
+        tracing::warn!(
+            "Replay mode active but no fixture found for {provider} hash={hash}. \
+             Run with SHANNON_RECORD_DIR to create fixtures."
+        );
+        None
+    }
+
+    /// Parse a raw SSE/NDJSON response body into a list of StreamEvents.
+    fn parse_raw_body(body: &str, provider: &LlmProvider) -> Vec<Result<StreamEvent, ApiError>> {
+        let mut state = OpenaiStreamState::new();
+        let mut events = Vec::new();
+
+        for line in body.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            // Strip "data: " prefix for SSE format (Anthropic/OpenAI)
+            let data = if provider.wire_format() == WireFormat::Ollama {
+                line
+            } else if let Some(stripped) = line.strip_prefix("data: ") {
+                if stripped == "[DONE]" {
+                    continue;
+                }
+                stripped
+            } else {
+                continue; // skip non-data lines in SSE format
+            };
+
+            let normalized = normalize_sse_event(data, provider, &mut state);
+            events.extend(normalized);
+        }
+
+        events
+    }
+
+    /// Record a request/response exchange to the fixture directory.
+    fn record_exchange(
+        &self,
+        serialized_body: &serde_json::Value,
+        path: &str,
+        response_status: u16,
+        response_headers: Vec<(String, String)>,
+        response_body: &str,
+    ) {
+        if let Some(dir) = Self::record_dir() {
+            let exchange = RecordedExchange {
+                request_hash: Self::request_hash(serialized_body),
+                provider: format!("{}", self.config.provider),
+                model: self.config.model.clone(),
+                request: RecordedRequest {
+                    method: "POST".to_string(),
+                    path: path.to_string(),
+                    body: serialized_body.to_string(),
+                },
+                response: RecordedResponse {
+                    status: response_status,
+                    headers: response_headers,
+                    body: response_body.to_string(),
+                },
+            };
+            if let Err(e) = exchange.save(&dir) {
+                tracing::warn!("Failed to save recording: {e}");
+            } else {
+                tracing::info!(
+                    "Recorded fixture: {}_{}",
+                    exchange.provider,
+                    exchange.request_hash
+                );
+            }
+        }
+    }
+
     /// Send a message with streaming response (SSE)
     pub async fn send_message_stream(
         &self,
@@ -174,11 +293,6 @@ impl LlmClient {
         system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
         let max_reconnects = self.config.max_stream_reconnects;
-
-        // Clone upfront for potential reconnection use
-        let messages_clone = messages.clone();
-        let tools_clone = tools.clone();
-        let system_clone = system.clone();
 
         let request_body = MessageRequest {
             model: self.config.model.clone(),
@@ -197,17 +311,24 @@ impl LlmClient {
             reasoning_effort: self.config.reasoning_effort,
         };
 
+        let serialized = super::adapter::serialize_request(&request_body, &self.config.provider);
+
+        // ── Replay mode: return saved fixture ──
+        if let Some(stream) = self.try_replay(&serialized, &self.config.provider) {
+            tracing::info!("Replaying recorded fixture for this request");
+            return Ok(stream);
+        }
+
+        // ── Real API call ──
         let url = self.endpoint_url();
+        let provider_path = self.config.provider.endpoint().to_string();
         let headers = self.auth_headers();
 
         let mut request = self
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(
-                &request_body,
-                &self.config.provider,
-            ));
+            .json(&serialized);
 
         for (key, value) in headers {
             request = request.header(&key, &value);
@@ -247,7 +368,30 @@ impl LlmClient {
             ));
         }
 
+        // ── Record mode: buffer full response, save fixture ──
+        if Self::record_dir().is_some() {
+            let status = response.status().as_u16();
+            let resp_headers: Vec<(String, String)> = response
+                .headers()
+                .iter()
+                .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.to_string(), s.to_string())))
+                .collect();
+            let body = response.text().await.map_err(|e| {
+                ApiError::InvalidResponse(format!("Failed to read response for recording: {e}"))
+            })?;
+
+            self.record_exchange(&serialized, &provider_path, status, resp_headers, &body);
+
+            // Parse the buffered body into a stream
+            let events = Self::parse_raw_body(&body, &self.config.provider);
+            return Ok(Box::pin(futures::stream::iter(events.into_iter())));
+        }
+
+        // ── Normal mode: live streaming ──
         if max_reconnects > 0 {
+            let messages_clone = request_body.messages.clone();
+            let tools_clone = request_body.tools.clone();
+            let system_clone = request_body.system.clone();
             Ok(super::streaming::sse_stream_from_response_resumable(
                 response,
                 self.config.provider.clone(),
