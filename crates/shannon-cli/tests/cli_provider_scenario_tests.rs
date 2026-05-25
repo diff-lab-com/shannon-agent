@@ -549,3 +549,255 @@ async fn scenario_ollama_bash_tool() {
 
     cleanup_workspace(&workspace);
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// Scenario 4: Read tool + text summary across all providers
+// ════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+#[serial]
+async fn scenario_anthropic_read_file() {
+    let workspace = create_workspace("a_read");
+    let file_path = workspace.join("src.rs");
+    fs::write(&file_path, "fn main() { println!(\"hello\"); }").unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+
+    let read_input = json!({"file_path": "src.rs"});
+
+    let _m1 = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(&anthropic_tool_use_sse("toolu_1", "Read", read_input))
+        .expect(1)
+        .create();
+
+    let _m2 = server
+        .mock("POST", "/v1/messages")
+        .match_body(mockito::Matcher::Regex(r#"tool_result"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(&anthropic_text_sse("The file contains a main function."))
+        .expect(1)
+        .create();
+
+    let result = shannon_anthropic(&server.url(), &workspace)
+        .args([
+            "--prompt",
+            "Read src.rs and describe it",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(json["exit_code"], "success");
+    assert!(
+        json["response"]
+            .as_str()
+            .unwrap_or("")
+            .contains("main function"),
+        "Response should describe the file content"
+    );
+
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+#[serial]
+async fn scenario_openai_read_file() {
+    let workspace = create_workspace("o_read");
+    let file_path = workspace.join("src.rs");
+    fs::write(&file_path, "fn main() { println!(\"hello\"); }").unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+
+    let read_input = json!({"file_path": "src.rs"});
+
+    let _m1 = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(&openai_tool_use_sse("call_0", "Read", read_input))
+        .expect(1)
+        .create();
+
+    let _m2 = server
+        .mock("POST", "/v1/chat/completions")
+        .match_body(mockito::Matcher::Regex(r#"tool"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(&openai_text_sse("The file contains a main function."))
+        .expect(1)
+        .create();
+
+    let result = shannon_openai(&server.url(), &workspace)
+        .args([
+            "--prompt",
+            "Read src.rs and describe it",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(json["exit_code"], "success");
+    assert!(
+        json["response"]
+            .as_str()
+            .unwrap_or("")
+            .contains("main function")
+    );
+
+    cleanup_workspace(&workspace);
+}
+
+#[tokio::test]
+#[serial]
+async fn scenario_ollama_read_file() {
+    let workspace = create_workspace("ol_read");
+    let file_path = workspace.join("src.rs");
+    fs::write(&file_path, "fn main() { println!(\"hello\"); }").unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+
+    let read_input = json!({"file_path": "src.rs"});
+
+    let _m1 = server
+        .mock("POST", "/api/chat")
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(&ollama_tool_use_ndjson("Read", read_input))
+        .expect(1)
+        .create();
+
+    let _m2 = server
+        .mock("POST", "/api/chat")
+        .match_body(mockito::Matcher::Regex(r#"tool"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(&ollama_text_ndjson("The file contains a main function."))
+        .expect(1)
+        .create();
+
+    let result = shannon_ollama(&server.url(), &workspace)
+        .args([
+            "--prompt",
+            "Read src.rs and describe it",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert();
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(json["exit_code"], "success");
+    assert!(
+        json["response"]
+            .as_str()
+            .unwrap_or("")
+            .contains("main function")
+    );
+
+    cleanup_workspace(&workspace);
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Scenario 5: Multi-tool (Write + Bash) in one response
+// ════════════════════════════════════════════════════════════════════════
+
+fn anthropic_multi_tool_sse(
+    tool1_id: &str,
+    tool1_name: &str,
+    tool1_input: serde_json::Value,
+    tool2_id: &str,
+    tool2_name: &str,
+    tool2_input: serde_json::Value,
+) -> String {
+    let mut body = String::new();
+    body.push_str(&sse(&json!({"type":"message_start","message":{"id":"msg_sc","role":"assistant","content":[],"model":"test","stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}})));
+    body.push_str(&sse(&json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":tool1_id,"name":tool1_name,"input":{}}})));
+    body.push_str(&sse(&json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":tool1_input.to_string()}})));
+    body.push_str(&sse(&json!({"type":"content_block_stop","index":0})));
+    body.push_str(&sse(&json!({"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":tool2_id,"name":tool2_name,"input":{}}})));
+    body.push_str(&sse(&json!({"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":tool2_input.to_string()}})));
+    body.push_str(&sse(&json!({"type":"content_block_stop","index":1})));
+    body.push_str(&sse(&json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":10,"output_tokens":20}})));
+    body.push_str(&sse(&json!({"type":"message_stop"})));
+    body
+}
+
+#[tokio::test]
+#[serial]
+async fn scenario_anthropic_multi_tool() {
+    let workspace = create_workspace("a_multi");
+    let file_path = workspace.join("out.txt");
+    fs::write(&file_path, "").unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+
+    let write_input = json!({"file_path": "out.txt", "content": "multi-tool works"});
+    let bash_input = json!({"command": "echo parallel"});
+
+    let _m1 = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(&anthropic_multi_tool_sse(
+            "toolu_1",
+            "Write",
+            write_input,
+            "toolu_2",
+            "Bash",
+            bash_input,
+        ))
+        .expect(1)
+        .create();
+
+    let _m2 = server
+        .mock("POST", "/v1/messages")
+        .match_body(mockito::Matcher::Regex(r#"tool_result"#.to_string()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_header("anthropic-version", "2023-06-01")
+        .with_body(&anthropic_text_sse("Both operations completed."))
+        .expect(1)
+        .create();
+
+    let result = shannon_anthropic(&server.url(), &workspace)
+        .args([
+            "--prompt",
+            "Write 'multi-tool works' to out.txt and run echo parallel",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(30))
+        .assert();
+
+    let content = fs::read_to_string(&file_path).expect("read file");
+    assert_eq!(content, "multi-tool works");
+
+    let stdout = stdout_string(&result);
+    let json = parse_json_output(&stdout);
+    assert_eq!(json["exit_code"], "success");
+    let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
+    assert!(
+        tool_calls.iter().any(|tc| tc["tool"] == "Write"),
+        "Should have a Write tool call"
+    );
+    assert!(
+        tool_calls.iter().any(|tc| tc["tool"] == "Bash"),
+        "Should have a Bash tool call"
+    );
+
+    cleanup_workspace(&workspace);
+}
