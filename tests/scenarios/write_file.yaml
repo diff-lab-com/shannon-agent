@@ -1,0 +1,26 @@
+name: write_file
+description: "Create a file via Write tool"
+prompt: "Create a file called hello.txt with the content world"
+provider: anthropic
+
+setup:
+  files: []
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Write
+      tool_id: toolu_1
+      input: { "path": "hello.txt", "content": "world" }
+  - response:
+      type: text
+      content: "I've created hello.txt with the content 'world'."
+
+validate:
+  - rule: file_exists
+    path: hello.txt
+  - rule: file_content
+    path: hello.txt
+    contains: "world"
+  - rule: exit_code
+    value: success

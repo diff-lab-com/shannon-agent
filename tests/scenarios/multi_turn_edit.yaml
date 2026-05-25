@@ -1,0 +1,36 @@
+name: multi_turn_edit
+description: "Multi-turn: read file, analyze, then edit it"
+prompt: "Read src/lib.rs and add a doc comment to the add function"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/lib.rs
+      content: |
+        pub fn add(a: i32, b: i32) -> i32 {
+            a + b
+        }
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Read
+      tool_id: toolu_1
+      input: { "path": "src/lib.rs" }
+  - response:
+      type: tool_use
+      tool: Edit
+      tool_id: toolu_2
+      input: { "path": "src/lib.rs", "old_string": "pub fn add", "new_string": "/// Adds two integers.\npub fn add" }
+  - response:
+      type: text
+      content: "I've added a doc comment to the add function."
+
+validate:
+  - rule: file_exists
+    path: src/lib.rs
+  - rule: file_content
+    path: src/lib.rs
+    contains: "/// Adds two integers"
+  - rule: exit_code
+    value: success
