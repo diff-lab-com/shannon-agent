@@ -2506,7 +2506,11 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         .as_ref()
         .is_some_and(|d| d.mode == DashboardMode::Detail)
     {
-        let dashboard = repl.state.agent_dashboard.as_mut().expect("dashboard presence checked in if-condition above");
+        let dashboard = repl
+            .state
+            .agent_dashboard
+            .as_mut()
+            .expect("dashboard presence checked in if-condition above");
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 dashboard.exit_detail();
@@ -2524,7 +2528,9 @@ fn handle_dashboard_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
         }
     } else {
         // List mode: navigate agents, enter detail, or close
-        let dashboard = repl.state.agent_dashboard.as_mut().expect("dashboard is Some in else branch: only called when dashboard overlay is expanded");
+        let dashboard = repl.state.agent_dashboard.as_mut().expect(
+            "dashboard is Some in else branch: only called when dashboard overlay is expanded",
+        );
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 dashboard.close();
