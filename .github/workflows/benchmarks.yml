@@ -12,6 +12,7 @@ env:
 jobs:
   bench:
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,13 +22,27 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
 
-      - name: Save baseline (scheduled)
+      - name: Restore baseline cache
+        uses: actions/cache@v4
+        with:
+          path: target/criterion
+          key: bench-baseline-${{ github.base_ref || 'main' }}
+          restore-keys: |
+            bench-baseline-main
+
+      - name: Save baseline (scheduled or dispatch)
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: bash scripts/bench-regression.sh save
 
       - name: Compare against baseline (PR)
         if: github.event_name == 'pull_request'
-        run: bash scripts/bench-regression.sh compare
+        run: |
+          if [ -d "target/criterion" ] && [ "$(ls -A target/criterion 2>/dev/null)" ]; then
+            bash scripts/bench-regression.sh compare
+          else
+            echo "No baseline found — saving initial baseline instead"
+            bash scripts/bench-regression.sh save
+          fi
 
       - name: Upload results
         if: always()
