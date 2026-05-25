@@ -8,6 +8,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test:
@@ -77,3 +78,22 @@ jobs:
           tool: cargo-deny
       - name: Check dependencies
         run: cargo deny check --hide-inclusion-graph
+
+  check-cross-platform:
+    name: Cross-platform Check
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - name: Install targets
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Check macOS x86_64
+        run: cargo check --workspace --target x86_64-apple-darwin
+      - name: Check macOS ARM
+        run: cargo check --workspace --target aarch64-apple-darwin
+      - name: Check Windows
+        run: cargo check --workspace --target x86_64-pc-windows-msvc
