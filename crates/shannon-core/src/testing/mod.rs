@@ -8,5 +8,6 @@
 
 pub mod mock_dsl;
 pub mod record_replay;
+pub mod scenario;
 pub mod snapshot;
 pub mod test_env;

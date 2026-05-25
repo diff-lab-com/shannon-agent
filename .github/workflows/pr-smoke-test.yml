@@ -35,6 +35,31 @@ jobs:
         env:
           SHANNON_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
+  smoke-test-anthropic:
+    name: Live API Smoke Test (Anthropic)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p shannon-cli
+      - name: Smoke test — Anthropic
+        run: |
+          ./target/release/shannon \
+            --prompt "Say exactly: smoke test passed" \
+            --provider anthropic \
+            --output-format json \
+            2>&1 | tee /tmp/smoke-anthropic.json
+          exit_code=$(python3 -c "import json,sys; d=json.load(open('/tmp/smoke-anthropic.json')); sys.exit(0 if d.get('exit_code')=='success' else 1)")
+          echo "Anthropic exit_code check: $?"
+        env:
+          SHANNON_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
   smoke-test-ollama:
     name: Live API Smoke Test (Ollama)
     runs-on: ubuntu-latest
