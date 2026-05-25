@@ -128,8 +128,7 @@ impl DiffViewerWidget {
         }
         let all_lines: Vec<&str> = diff_text.lines().collect();
         let lines = if all_lines.len() > 500 {
-            let mut capped: Vec<String> =
-                all_lines[..500].iter().map(|s| s.to_string()).collect();
+            let mut capped: Vec<String> = all_lines[..500].iter().map(|s| s.to_string()).collect();
             capped.push(format!(
                 "  ... diff truncated ({} more lines)",
                 all_lines.len() - 500

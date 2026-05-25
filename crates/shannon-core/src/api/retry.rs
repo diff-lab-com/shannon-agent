@@ -186,8 +186,7 @@ impl RetryPolicy {
     /// capped at `max_backoff_ms`, with random jitter in the range
     /// `[0.5 * backoff, backoff]` to avoid thundering herd.
     pub fn backoff_duration(&self, attempt: u32) -> Duration {
-        let base_ms = self.initial_backoff_ms as f64
-            * self.backoff_multiplier.powi(attempt as i32);
+        let base_ms = self.initial_backoff_ms as f64 * self.backoff_multiplier.powi(attempt as i32);
         let capped = base_ms.min(self.max_backoff_ms as f64) as u64;
         // Jitter: multiply by random factor in [0.5, 1.0]
         let jitter_factor = 0.5 + rand_jitter_factor() * 0.5;
@@ -607,13 +606,22 @@ mod tests {
         let d2 = policy.backoff_duration(2);
 
         // d0 ~= 1000 * 2^0 = 1000ms (with jitter [500, 1000])
-        assert!(d0.as_millis() >= 400 && d0.as_millis() <= 1100, "d0 = {d0:?}");
+        assert!(
+            d0.as_millis() >= 400 && d0.as_millis() <= 1100,
+            "d0 = {d0:?}"
+        );
 
         // d1 ~= 1000 * 2^1 = 2000ms (with jitter [1000, 2000])
-        assert!(d1.as_millis() >= 800 && d1.as_millis() <= 2100, "d1 = {d1:?}");
+        assert!(
+            d1.as_millis() >= 800 && d1.as_millis() <= 2100,
+            "d1 = {d1:?}"
+        );
 
         // d2 ~= 1000 * 2^2 = 4000ms (with jitter [2000, 4000])
-        assert!(d2.as_millis() >= 1800 && d2.as_millis() <= 4100, "d2 = {d2:?}");
+        assert!(
+            d2.as_millis() >= 1800 && d2.as_millis() <= 4100,
+            "d2 = {d2:?}"
+        );
 
         // Generally increasing
         assert!(d1 > d0, "d1 ({d1:?}) should be > d0 ({d0:?})");
@@ -770,8 +778,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_policy_honors_retry_after() {
-        use std::sync::atomic::{AtomicU32, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
 
         let policy = RetryPolicy::new(2, 1, 5, 2.0);
         let attempts = Arc::new(AtomicU32::new(0));

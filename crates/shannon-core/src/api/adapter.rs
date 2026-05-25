@@ -515,7 +515,7 @@ struct OpenAiResponseMessage {
 struct OpenAiResponseToolCall {
     id: String,
     #[serde(rename = "type")]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: deserialized field
     call_type: Option<String>,
     function: OpenAiResponseFunction,
 }

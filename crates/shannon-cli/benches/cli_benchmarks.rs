@@ -130,13 +130,22 @@ fn bench_ndjson_serialization(c: &mut Criterion) {
     });
 }
 
-criterion_group!(
-    benches,
-    bench_cold_start,
-    bench_config_load,
-    bench_config_load_large,
-    bench_session_id_generation,
-    bench_cli_arg_parsing,
-    bench_ndjson_serialization,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_cold_start,
+        bench_config_load,
+        bench_config_load_large,
+        bench_session_id_generation,
+        bench_cli_arg_parsing,
+        bench_ndjson_serialization
+}
 criterion_main!(benches);

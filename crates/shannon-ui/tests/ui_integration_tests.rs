@@ -5,9 +5,11 @@
 //! - Tool format utility functions
 
 use shannon_ui::markdown_table::{detect_table, format_table, render_table};
-use shannon_ui::streaming_diff::{ContentDelta, StreamingDiffTracker};
 use shannon_ui::stream_buffer::{StreamBuffer, StreamMode};
-use shannon_ui::tool_format::{looks_like_json, parse_diff_stats, format_diff_summary, strip_ansi, DiffStats};
+use shannon_ui::streaming_diff::{ContentDelta, StreamingDiffTracker};
+use shannon_ui::tool_format::{
+    DiffStats, format_diff_summary, looks_like_json, parse_diff_stats, strip_ansi,
+};
 
 // =========================================================================
 // 1. Markdown Table Rendering
@@ -85,8 +87,14 @@ More text after the table.";
         // Should contain box-drawing borders
         assert!(result.contains('\u{250C}'), "Should have top-left corner");
         assert!(result.contains('\u{2510}'), "Should have top-right corner");
-        assert!(result.contains('\u{2514}'), "Should have bottom-left corner");
-        assert!(result.contains('\u{2518}'), "Should have bottom-right corner");
+        assert!(
+            result.contains('\u{2514}'),
+            "Should have bottom-left corner"
+        );
+        assert!(
+            result.contains('\u{2518}'),
+            "Should have bottom-right corner"
+        );
 
         // Should contain the data
         assert!(result.contains("Alice"));
@@ -163,7 +171,10 @@ More text after the table.";
         let result = render_table(header, &rows, None);
 
         // Should be truncated with ellipsis, not contain the full 200-char string
-        assert!(result.contains('\u{2026}'), "Long values should be truncated");
+        assert!(
+            result.contains('\u{2026}'),
+            "Long values should be truncated"
+        );
         assert!(!result.contains(&long_value));
     }
 

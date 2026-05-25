@@ -278,12 +278,21 @@ impl CheckpointManager {
             let parts: Vec<&str> = line.split('|').collect();
             if parts.len() == 2 {
                 let path = parts[0].trim().to_string();
-                if path.is_empty() || path.contains("file changed") || path.contains("files changed") {
+                if path.is_empty()
+                    || path.contains("file changed")
+                    || path.contains("files changed")
+                {
                     continue;
                 }
                 let nums: Vec<&str> = parts[1].split_whitespace().collect();
-                let additions = nums.first().and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
-                let deletions = nums.get(1).and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+                let additions = nums
+                    .first()
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(0);
+                let deletions = nums
+                    .get(1)
+                    .and_then(|n| n.parse::<usize>().ok())
+                    .unwrap_or(0);
                 files_changed.push(FileChangePreview {
                     path,
                     additions,
@@ -762,7 +771,12 @@ mod tests {
             description: "before edit".to_string(),
             timestamp: 1700000000,
         };
-        mgr.record_turn(0, cp, vec!["src/main.rs".to_string()], Some("edit file".to_string()));
+        mgr.record_turn(
+            0,
+            cp,
+            vec!["src/main.rs".to_string()],
+            Some("edit file".to_string()),
+        );
         // preview_revert requires a real git diff, so it may fail in test env
         // but should at least accept the index and attempt the diff
         let result = mgr.preview_revert(0);

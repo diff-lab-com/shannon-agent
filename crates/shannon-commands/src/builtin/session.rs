@@ -148,7 +148,8 @@ pub fn delete_snapshot(name: &str) -> Result<()> {
 #[allow(dead_code)] // invoked dynamically by LLM via /session command tools
 pub fn format_snapshot_list(snapshots: &[(String, String)]) -> String {
     if snapshots.is_empty() {
-        return "No saved session snapshots.\nUse `/session save <name>` to create one.".to_string();
+        return "No saved session snapshots.\nUse `/session save <name>` to create one."
+            .to_string();
     }
 
     let mut out = String::from("Saved session snapshots:\n\n");
@@ -181,7 +182,10 @@ pub fn format_snapshot_detail(snapshot: &SessionSnapshot) -> String {
         out.push_str(&format!("  Temperature: {temp}\n"));
     }
     out.push_str(&format!("  Messages: {}\n", snapshot.messages.len()));
-    out.push_str(&format!("  Enabled tools: {}\n", snapshot.enabled_tools.len()));
+    out.push_str(&format!(
+        "  Enabled tools: {}\n",
+        snapshot.enabled_tools.len()
+    ));
     if let Some(ref additions) = snapshot.system_prompt_additions {
         if !additions.is_empty() {
             out.push_str(&format!("  System prompt additions: {additions}\n"));
@@ -327,7 +331,10 @@ mod tests {
 
     /// Helper: create a unique temp directory for test isolation
     fn test_temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("shannon-session-test-{name}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "shannon-session-test-{name}-{}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         dir
@@ -385,11 +392,12 @@ mod tests {
                     .and_then(|s| s.to_str())
                     .unwrap_or("")
                     .to_string();
-                let desc =
-                    toml::from_str::<SessionSnapshot>(&std::fs::read_to_string(&path).expect("read"))
-                        .ok()
-                        .and_then(|s| s.description)
-                        .unwrap_or_default();
+                let desc = toml::from_str::<SessionSnapshot>(
+                    &std::fs::read_to_string(&path).expect("read"),
+                )
+                .ok()
+                .and_then(|s| s.description)
+                .unwrap_or_default();
                 entries.push((name, desc));
             }
         }

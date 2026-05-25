@@ -889,8 +889,8 @@ impl Tool for DeferredSchemaSearchTool {
         if let Some(name) = tool_name {
             return match schemas.get(name) {
                 Some(schema) => {
-                    let schema_str = serde_json::to_string_pretty(schema)
-                        .unwrap_or_else(|_| schema.to_string());
+                    let schema_str =
+                        serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
                     Ok(ToolOutput::success(schema_str))
                 }
                 None => {
@@ -929,7 +929,9 @@ impl Tool for DeferredSchemaSearchTool {
                     available.iter().take(10).collect::<Vec<_>>()
                 )))
             } else {
-                Ok(ToolOutput::error("No deferred tools available.".to_string()))
+                Ok(ToolOutput::error(
+                    "No deferred tools available.".to_string(),
+                ))
             }
         } else {
             let label = if query.is_some() {

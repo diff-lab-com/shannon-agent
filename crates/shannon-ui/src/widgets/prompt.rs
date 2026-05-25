@@ -397,11 +397,7 @@ impl PromptWidget {
                 // cursor_col is a character index; convert to display column
                 let cursor_display_col: usize =
                     line.chars().take(cursor_col).map(char_display_width).sum();
-                let wrap_row = if inner_width > 0 {
-                    cursor_display_col / inner_width
-                } else {
-                    0
-                };
+                let wrap_row = cursor_display_col.checked_div(inner_width).unwrap_or(0);
                 let wrap_col = if inner_width > 0 {
                     cursor_display_col % inner_width
                 } else {

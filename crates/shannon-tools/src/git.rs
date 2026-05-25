@@ -2109,4 +2109,2043 @@ mod tests {
         assert!(parsed.dry_run);
         assert!(!parsed.add_all);
     }
+
+    // =========================================================================
+    // EDGE CASE TESTS
+    // =========================================================================
+
+    // ---- validate_git_arg edge cases ----
+
+    #[test]
+    fn test_validate_git_arg_rejects_empty_string() {
+        let result = validate_git_arg("");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("must not be empty"),
+            "expected empty message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_dash_prefix() {
+        let result = validate_git_arg("--flag");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must not start with")
+        );
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_single_dash() {
+        let result = validate_git_arg("-a");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_null_byte() {
+        let result = validate_git_arg("branch\0name");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("null bytes"));
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_path_traversal_dotdot_slash() {
+        let result = validate_git_arg("../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Path traversal"));
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_path_traversal_backslash() {
+        let result = validate_git_arg("..\\windows\\system32");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Path traversal"));
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_semicolon() {
+        let result = validate_git_arg("foo;rm -rf /");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("metacharacters"));
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_ampersand() {
+        let result = validate_git_arg("foo&&bar");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_pipe() {
+        let result = validate_git_arg("foo|bar");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_dollar() {
+        let result = validate_git_arg("foo$BAR");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_backtick() {
+        let result = validate_git_arg("foo`cmd`");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_parentheses() {
+        assert!(validate_git_arg("foo(bar)").is_err());
+        assert!(validate_git_arg("foo{baz}").is_err());
+    }
+
+    #[test]
+    fn test_validate_git_arg_rejects_overlong_name() {
+        let long_name = "x".repeat(257);
+        let result = validate_git_arg(&long_name);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too long"));
+    }
+
+    #[test]
+    fn test_validate_git_arg_accepts_max_length() {
+        // Exactly 256 chars should be accepted
+        let name = "a".repeat(256);
+        let result = validate_git_arg(&name);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_git_arg_accepts_valid_branch_names() {
+        assert!(validate_git_arg("main").is_ok());
+        assert!(validate_git_arg("feature/my-feature").is_ok());
+        assert!(validate_git_arg("fix_123").is_ok());
+        assert!(validate_git_arg("release/v2.0").is_ok());
+    }
+
+    #[test]
+    fn test_validate_git_arg_accepts_unicode() {
+        assert!(validate_git_arg("feature/日本語").is_ok());
+        assert!(validate_git_arg("branch-ñoño").is_ok());
+    }
+
+    #[test]
+    fn test_validate_git_arg_accepts_commit_range() {
+        // A commit range like abc123..def456 contains dots but not "../"
+        assert!(validate_git_arg("abc123..def456").is_ok());
+    }
+
+    // ---- find_git_root edge cases ----
+
+    #[test]
+    fn test_find_git_root_finds_repo_in_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git_dir = tmp.path();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(git_dir)
+            .output()
+            .expect("git init failed");
+
+        let subdir = git_dir.join("a").join("b");
+        std::fs::create_dir_all(&subdir).unwrap();
+
+        let root = find_git_root(subdir.to_str()).unwrap();
+        assert_eq!(root, git_dir.to_str().unwrap());
+    }
+
+    #[test]
+    fn test_find_git_root_at_exact_git_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(tmp.path())
+            .output()
+            .expect("git init failed");
+
+        let root = find_git_root(tmp.path().to_str()).unwrap();
+        assert_eq!(root, tmp.path().to_str().unwrap());
+    }
+
+    #[test]
+    fn test_find_git_root_nonexistent_path() {
+        let result = find_git_root(Some("/nonexistent/path/that/does/not/exist"));
+        assert!(result.is_err());
+    }
+
+    // ---- current_branch edge cases ----
+
+    #[test]
+    fn test_current_branch_in_fresh_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init failed");
+
+        let result = current_branch(Some(cwd.to_str().unwrap()));
+        // Fresh repo without commits may return error or a branch name depending on git version
+        assert!(
+            result.is_ok()
+                || result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to determine")
+        );
+    }
+
+    #[test]
+    fn test_current_branch_with_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("README.md"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        let branch = current_branch(Some(cwd.to_str().unwrap())).unwrap();
+        assert!(!branch.is_empty());
+        assert_ne!(branch, "HEAD");
+    }
+
+    // ---- is_working_dir_dirty edge cases ----
+
+    #[test]
+    fn test_is_working_dir_dirty_clean_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        assert!(!is_working_dir_dirty(Some(cwd.to_str().unwrap())).unwrap());
+    }
+
+    #[test]
+    fn test_is_working_dir_dirty_with_untracked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::fs::write(cwd.join("new_file.txt"), "new").unwrap();
+        assert!(is_working_dir_dirty(Some(cwd.to_str().unwrap())).unwrap());
+    }
+
+    #[test]
+    fn test_is_working_dir_dirty_with_modified() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::fs::write(cwd.join("file.txt"), "modified").unwrap();
+        assert!(is_working_dir_dirty(Some(cwd.to_str().unwrap())).unwrap());
+    }
+
+    // ---- run_git edge cases ----
+
+    #[test]
+    fn test_run_git_invalid_subcommand() {
+        let (stdout, stderr, success) = run_git(&["nonexistent-command-xyz"], None).unwrap();
+        assert!(!success);
+        assert!(!stderr.is_empty() || !stdout.is_empty());
+    }
+
+    #[test]
+    fn test_run_git_in_nonexistent_dir() {
+        let result = run_git(&["status"], Some("/nonexistent/dir/path"));
+        // Command::new may succeed (git handles the error) or fail (OS error)
+        if let Ok((_, _, success)) = result {
+            assert!(!success);
+        }
+        // If Err, that's also acceptable (OS-level failure)
+    }
+
+    // ---- GitBranchTool edge cases ----
+
+    #[tokio::test]
+    async fn test_git_branch_create_without_name() {
+        // Set up a git repo so find_git_root succeeds, then create without name
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool.execute(json!({"action": "create"})).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Branch name is required")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_switch_without_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool.execute(json!({"action": "switch"})).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Branch name is required")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_delete_without_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool.execute(json!({"action": "delete"})).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Branch name is required")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_create_with_injection_attempt() {
+        let tool = GitBranchTool::new();
+        let result = tool
+            .execute(json!({"action": "create", "name": "foo;rm -rf /"}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_create_with_dash_prefix() {
+        let tool = GitBranchTool::new();
+        let result = tool
+            .execute(json!({"action": "create", "name": "--flag"}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_delete_current_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        let branch = current_branch(Some(cwd.to_str().unwrap())).unwrap();
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool
+            .execute(json!({"action": "delete", "name": branch}))
+            .await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Cannot delete the current branch")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_list_in_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool.execute(json!({"action": "list"})).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result.metadata.contains_key("current_branch"));
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_create_and_switch_in_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool
+            .execute(json!({"action": "create", "name": "feature/test-branch"}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("Created branch"));
+        assert_eq!(result.metadata["branch"], json!("feature/test-branch"));
+        assert_eq!(result.metadata["checkout"], json!(false));
+
+        let result = tool
+            .execute(json!({
+                "action": "create",
+                "name": "feature/checkout-branch",
+                "checkout": true
+            }))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("Created and switched"));
+        assert_eq!(result.metadata["checkout"], json!(true));
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_delete_nonexistent_branch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool
+            .execute(json!({"action": "delete", "name": "nonexistent-branch"}))
+            .await
+            .unwrap();
+        assert!(result.is_error);
+        assert!(result.content.contains("Failed to delete"));
+    }
+
+    #[tokio::test]
+    async fn test_git_branch_force_delete_returns_warning() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        Command::new("git")
+            .args(["branch", "to-force-delete"])
+            .current_dir(cwd)
+            .output()
+            .expect("git branch");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool
+            .execute(json!({"action": "delete", "name": "to-force-delete", "force": true}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("SAFETY WARNING"));
+        assert_eq!(result.metadata["force_delete_warning"], json!(true));
+    }
+
+    // ---- GitDiffTool edge cases ----
+
+    #[test]
+    fn test_git_diff_build_args_stat_mode() {
+        let tool = GitDiffTool::new();
+        let input = GitDiffInput {
+            staged: None,
+            commit_range: None,
+            file: None,
+            context_lines: None,
+            ignore_whitespace: None,
+            stat: Some(true),
+        };
+        let args = tool.build_diff_args(&input).unwrap();
+        assert!(args.contains(&"--stat".to_string()));
+    }
+
+    #[test]
+    fn test_git_diff_build_args_all_options() {
+        let tool = GitDiffTool::new();
+        let input = GitDiffInput {
+            staged: Some(true),
+            commit_range: Some("abc..def".to_string()),
+            file: Some("src/main.rs".to_string()),
+            context_lines: Some(10),
+            ignore_whitespace: Some(true),
+            stat: Some(true),
+        };
+        let args = tool.build_diff_args(&input).unwrap();
+        assert!(args.contains(&"--cached".to_string()));
+        assert!(args.contains(&"abc..def".to_string()));
+        assert!(args.contains(&"--".to_string()));
+        assert!(args.contains(&"src/main.rs".to_string()));
+        assert!(args.contains(&"-U10".to_string()));
+        assert!(args.contains(&"-w".to_string()));
+        assert!(args.contains(&"--stat".to_string()));
+        assert!(args.contains(&"--color=never".to_string()));
+    }
+
+    #[test]
+    fn test_git_diff_build_args_empty_input() {
+        let tool = GitDiffTool::new();
+        let input = GitDiffInput {
+            staged: None,
+            commit_range: None,
+            file: None,
+            context_lines: None,
+            ignore_whitespace: None,
+            stat: None,
+        };
+        let args = tool.build_diff_args(&input).unwrap();
+        assert!(args.contains(&"--color=never".to_string()));
+    }
+
+    #[test]
+    fn test_git_diff_build_args_rejects_injection_in_commit_range() {
+        let tool = GitDiffTool::new();
+        let input = GitDiffInput {
+            staged: None,
+            commit_range: Some("abc;rm -rf /".to_string()),
+            file: None,
+            context_lines: None,
+            ignore_whitespace: None,
+            stat: None,
+        };
+        let result = tool.build_diff_args(&input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_git_diff_build_args_rejects_injection_in_file() {
+        let tool = GitDiffTool::new();
+        let input = GitDiffInput {
+            staged: None,
+            commit_range: None,
+            file: Some("$(evil)".to_string()),
+            context_lines: None,
+            ignore_whitespace: None,
+            stat: None,
+        };
+        let result = tool.build_diff_args(&input);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_git_diff_not_in_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let tool = GitDiffTool::new();
+        let result = tool.execute(json!({})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_git_diff_no_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitDiffTool::new();
+        let result = tool.execute(json!({})).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("No unstaged changes found"));
+        assert_eq!(result.metadata["has_changes"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn test_git_diff_with_unstaged_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::fs::write(cwd.join("file.txt"), "modified content").unwrap();
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitDiffTool::new();
+        let result = tool.execute(json!({})).await.unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.metadata["has_changes"], json!(true));
+        assert!(result.content.contains("file.txt"));
+    }
+
+    // ---- GitLogTool edge cases ----
+
+    #[test]
+    fn test_git_log_build_args_count_capped_at_100() {
+        let tool = GitLogTool::new();
+        let input = GitLogInput {
+            count: Some(500),
+            author: None,
+            since: None,
+            oneline: None,
+            file: None,
+            patch: None,
+            branch: None,
+        };
+        let args = tool.build_log_args(&input).unwrap();
+        assert!(args.contains(&"-100".to_string()));
+        assert!(!args.contains(&"-500".to_string()));
+    }
+
+    #[test]
+    fn test_git_log_build_args_with_patch() {
+        let tool = GitLogTool::new();
+        let input = GitLogInput {
+            count: Some(5),
+            author: None,
+            since: None,
+            oneline: None,
+            file: None,
+            patch: Some(true),
+            branch: None,
+        };
+        let args = tool.build_log_args(&input).unwrap();
+        assert!(args.contains(&"-p".to_string()));
+    }
+
+    #[test]
+    fn test_git_log_build_args_rejects_injection_in_author() {
+        let tool = GitLogTool::new();
+        let input = GitLogInput {
+            count: None,
+            author: Some("foo;rm -rf /".to_string()),
+            since: None,
+            oneline: None,
+            file: None,
+            patch: None,
+            branch: None,
+        };
+        let result = tool.build_log_args(&input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_git_log_build_args_rejects_injection_in_branch() {
+        let tool = GitLogTool::new();
+        let input = GitLogInput {
+            count: None,
+            author: None,
+            since: None,
+            oneline: None,
+            file: None,
+            patch: None,
+            branch: Some("$(evil)".to_string()),
+        };
+        let result = tool.build_log_args(&input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_git_log_build_args_rejects_injection_in_file() {
+        let tool = GitLogTool::new();
+        let input = GitLogInput {
+            count: None,
+            author: None,
+            since: None,
+            oneline: None,
+            file: Some("file`cmd`".to_string()),
+            patch: None,
+            branch: None,
+        };
+        let result = tool.build_log_args(&input);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_git_log_not_in_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let tool = GitLogTool::new();
+        let result = tool.execute(json!({"count": 5})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_git_log_empty_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitLogTool::new();
+        let result = tool.execute(json!({"count": 5})).await.unwrap();
+        // Empty repo: git log fails, so the tool returns is_error=true with "Log failed" message
+        assert!(result.is_error || result.content.contains("No commits found"));
+    }
+
+    #[tokio::test]
+    async fn test_git_log_single_commit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitLogTool::new();
+        let result = tool
+            .execute(json!({"count": 1, "oneline": true}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("initial commit"));
+    }
+
+    #[tokio::test]
+    async fn test_git_log_unicode_commit_message() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Tëst Üser"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "日本語コミットメッセージ"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitLogTool::new();
+        let result = tool
+            .execute(json!({"count": 1, "oneline": true}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("日本語"));
+    }
+
+    #[tokio::test]
+    async fn test_git_log_with_author_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "unique@author.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Unique Author"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "commit by unique"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitLogTool::new();
+        let result = tool
+            .execute(json!({"count": 10, "author": "unique@author.com"}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("commit by unique"));
+    }
+
+    // ---- GitStashTool edge cases ----
+
+    #[tokio::test]
+    async fn test_git_stash_not_in_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let tool = GitStashTool::new();
+        let result = tool.execute(json!({"action": "list"})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_git_stash_list_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitStashTool::new();
+        let result = tool.execute(json!({"action": "list"})).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("No stashes found"));
+        assert_eq!(result.metadata["stash_count"], json!(0));
+    }
+
+    #[tokio::test]
+    async fn test_git_stash_push_clean_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitStashTool::new();
+        let result = tool.execute(json!({"action": "push"})).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("Nothing to stash"));
+    }
+
+    #[tokio::test]
+    async fn test_git_stash_push_and_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::fs::write(cwd.join("file.txt"), "modified").unwrap();
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitStashTool::new();
+        let result = tool
+            .execute(json!({"action": "push", "message": "test stash"}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("stashed successfully"));
+
+        let result = tool.execute(json!({"action": "list"})).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("test stash"));
+        assert_eq!(result.metadata["stash_count"], json!(1));
+    }
+
+    #[tokio::test]
+    async fn test_git_stash_pop_nonexistent_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitStashTool::new();
+        let result = tool
+            .execute(json!({"action": "pop", "index": 99}))
+            .await
+            .unwrap();
+        assert!(result.is_error);
+        assert!(result.content.contains("Failed to pop stash"));
+    }
+
+    #[tokio::test]
+    async fn test_git_stash_drop_nonexistent_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitStashTool::new();
+        let result = tool
+            .execute(json!({"action": "drop", "index": 5}))
+            .await
+            .unwrap();
+        assert!(result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_git_stash_apply_nonexistent_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitStashTool::new();
+        let result = tool
+            .execute(json!({"action": "apply", "index": 42}))
+            .await
+            .unwrap();
+        assert!(result.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_git_stash_push_with_untracked() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::fs::write(cwd.join("untracked.txt"), "new").unwrap();
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitStashTool::new();
+        let result = tool
+            .execute(json!({"action": "push", "include_untracked": true}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("stashed successfully"));
+    }
+
+    // ---- GitSafetyTool edge cases ----
+
+    #[test]
+    fn test_git_safety_block_clean_force_dx() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("clean -fdx");
+        assert!(!result.allowed);
+        assert_eq!(result.risk, "blocked");
+        assert!(result.message.contains("-fdx"));
+    }
+
+    #[test]
+    fn test_git_safety_block_clean_force_no_flags() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("clean --force");
+        assert!(!result.allowed);
+    }
+
+    #[test]
+    fn test_git_safety_safe_checkout_branch() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("checkout feature-branch");
+        assert!(result.allowed);
+        assert_eq!(result.risk, "safe");
+    }
+
+    #[test]
+    fn test_git_safety_case_insensitive() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("PUSH --FORCE ORIGIN MAIN");
+        assert!(!result.allowed);
+        assert_eq!(result.risk, "blocked");
+    }
+
+    #[test]
+    fn test_git_safety_safe_diff() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("diff HEAD");
+        assert!(result.allowed);
+        assert_eq!(result.risk, "safe");
+    }
+
+    #[test]
+    fn test_git_safety_safe_add() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("add src/main.rs");
+        assert!(result.allowed);
+        assert_eq!(result.risk, "safe");
+    }
+
+    #[test]
+    fn test_git_safety_warn_force_push_non_main() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("push --force origin my-feature");
+        assert!(result.allowed);
+        assert_eq!(result.risk, "warning");
+    }
+
+    #[test]
+    fn test_git_safety_empty_string() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("");
+        assert!(result.allowed);
+        assert_eq!(result.risk, "safe");
+    }
+
+    #[test]
+    fn test_git_safety_whitespace_command() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("   ");
+        assert!(result.allowed);
+    }
+
+    #[test]
+    fn test_git_safety_block_reset_hard_head_n() {
+        let tool = GitSafetyTool::new();
+        let result = tool.check_command("reset --hard HEAD~3");
+        assert!(!result.allowed);
+        assert_eq!(result.risk, "blocked");
+    }
+
+    #[tokio::test]
+    async fn test_git_safety_execute_whitespace_command() {
+        let tool = GitSafetyTool::new();
+        let result = tool.execute(json!({"command": "   "})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_git_safety_execute_with_metadata() {
+        let tool = GitSafetyTool::new();
+        let result = tool
+            .execute(json!({"command": "log --oneline"}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert_eq!(result.metadata["allowed"], json!(true));
+        assert_eq!(result.metadata["risk"], json!("safe"));
+    }
+
+    // ---- AutoCommitTool edge cases ----
+
+    #[test]
+    fn test_auto_commit_tool_name() {
+        let tool = AutoCommitTool::new();
+        assert_eq!(tool.name(), "auto_commit");
+    }
+
+    #[test]
+    fn test_auto_commit_tool_schema() {
+        let tool = AutoCommitTool::new();
+        let schema = tool.input_schema();
+        assert_eq!(schema["type"], "object");
+        let props = schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("message"));
+        assert!(props.contains_key("dry_run"));
+        assert!(props.contains_key("add_all"));
+        assert!(props.contains_key("files"));
+        assert!(props.contains_key("co_author"));
+    }
+
+    #[test]
+    fn test_auto_commit_input_defaults() {
+        let input = json!({});
+        let parsed: AutoCommitInput = serde_json::from_value(input).unwrap();
+        assert!(parsed.message.is_none());
+        assert!(!parsed.dry_run);
+        assert!(parsed.add_all);
+        assert!(parsed.files.is_empty());
+        assert!(parsed.co_author.is_none());
+    }
+
+    #[test]
+    fn test_detect_commit_type_test_files() {
+        assert_eq!(
+            AutoCommitTool::detect_commit_type(&["tests/unit_test.rs"]),
+            "test"
+        );
+        assert_eq!(
+            AutoCommitTool::detect_commit_type(&["test/helper.js"]),
+            "test"
+        );
+        assert_eq!(AutoCommitTool::detect_commit_type(&["foo.test.ts"]), "test");
+        assert_eq!(AutoCommitTool::detect_commit_type(&["bar_test.py"]), "test");
+    }
+
+    #[test]
+    fn test_detect_commit_type_docs() {
+        assert_eq!(AutoCommitTool::detect_commit_type(&["README.md"]), "docs");
+        assert_eq!(
+            AutoCommitTool::detect_commit_type(&["docs/guide.txt"]),
+            "docs"
+        );
+    }
+
+    #[test]
+    fn test_detect_commit_type_style() {
+        assert_eq!(
+            AutoCommitTool::detect_commit_type(&["styles/main.css"]),
+            "style"
+        );
+        assert_eq!(AutoCommitTool::detect_commit_type(&["theme.scss"]), "style");
+    }
+
+    #[test]
+    fn test_detect_commit_type_ci() {
+        assert_eq!(
+            AutoCommitTool::detect_commit_type(&[".github/workflows/ci.yml"]),
+            "ci"
+        );
+        assert_eq!(AutoCommitTool::detect_commit_type(&["Cargo.toml"]), "ci");
+        assert_eq!(AutoCommitTool::detect_commit_type(&["Dockerfile"]), "ci");
+    }
+
+    #[test]
+    fn test_detect_commit_type_feat() {
+        assert_eq!(
+            AutoCommitTool::detect_commit_type(&["my-crate/src/main.rs"]),
+            "feat"
+        );
+        assert_eq!(
+            AutoCommitTool::detect_commit_type(&["my-crate/lib/index.ts"]),
+            "feat"
+        );
+    }
+
+    #[test]
+    fn test_detect_commit_type_chore_default() {
+        assert_eq!(AutoCommitTool::detect_commit_type(&["random.bin"]), "chore");
+    }
+
+    #[test]
+    fn test_detect_commit_type_empty() {
+        assert_eq!(AutoCommitTool::detect_commit_type(&[]), "chore");
+    }
+
+    #[test]
+    fn test_message_from_stat_empty() {
+        let msg = AutoCommitTool::message_from_stat("");
+        assert_eq!(msg, "chore: update files");
+    }
+
+    #[test]
+    fn test_message_from_stat_single_file() {
+        let stat = " crates/shannon-core/src/main.rs | 5 +++--\n 1 file changed, 3 insertions(+), 2 deletions(-)";
+        let msg = AutoCommitTool::message_from_stat(stat);
+        assert!(msg.starts_with("feat:"));
+        assert!(msg.contains("crates/shannon-core/src/main.rs"));
+    }
+
+    #[test]
+    fn test_message_from_stat_many_files() {
+        let stat = " src/main.rs  | 5 +++--\n lib/mod.rs  | 10 +++++-----\n tests/a.rs  | 2 +-\
+                     \n tests/b.rs  | 2 +-\
+                     \n 4 files changed, 10 insertions(+), 10 deletions(-)";
+        let msg = AutoCommitTool::message_from_stat(stat);
+        assert!(msg.contains("4 files"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_commit_not_in_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let tool = AutoCommitTool::new();
+        let result = tool.execute(json!({})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_auto_commit_clean_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = AutoCommitTool::new();
+        let result = tool.execute(json!({})).await.unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("Nothing to commit"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_commit_dry_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::fs::write(cwd.join("file.txt"), "modified").unwrap();
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = AutoCommitTool::new();
+        let result = tool
+            .execute(json!({"dry_run": true, "message": "test msg"}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("dry-run"));
+        assert!(result.content.contains("test msg"));
+
+        // File should still be dirty (not actually committed)
+        let (status, _, _) =
+            run_git(&["status", "--porcelain"], Some(cwd.to_str().unwrap())).unwrap();
+        assert!(!status.trim().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_auto_commit_with_co_author() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::fs::write(cwd.join("file.txt"), "modified again").unwrap();
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = AutoCommitTool::new();
+        let result = tool
+            .execute(json!({
+                "message": "add co-author",
+                "co_author": "Claude <noreply@anthropic.com>"
+            }))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("Committed"));
+
+        let (log, _, _) =
+            run_git(&["log", "-1", "--format=%B"], Some(cwd.to_str().unwrap())).unwrap();
+        assert!(log.contains("Co-Authored-By: Claude <noreply@anthropic.com>"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_commit_specific_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("a.txt"), "a").unwrap();
+        std::fs::write(cwd.join("b.txt"), "b").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::fs::write(cwd.join("a.txt"), "a modified").unwrap();
+        std::fs::write(cwd.join("b.txt"), "b modified").unwrap();
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = AutoCommitTool::new();
+        let result = tool
+            .execute(json!({
+                "message": "only a.txt",
+                "files": ["a.txt"],
+                "add_all": true
+            }))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("Committed"));
+
+        let (status, _, _) =
+            run_git(&["status", "--porcelain"], Some(cwd.to_str().unwrap())).unwrap();
+        assert!(status.contains("b.txt"));
+    }
+
+    // ---- Deserialization edge cases ----
+
+    #[test]
+    fn test_branch_action_invalid_value() {
+        let input = json!({"action": "invalid_action"});
+        let result = serde_json::from_value::<GitBranchInput>(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_stash_action_invalid_value() {
+        let input = json!({"action": "invalid_stash"});
+        let result = serde_json::from_value::<GitStashInput>(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_branch_action_case_sensitivity() {
+        let input = json!({"action": "List"});
+        let result = serde_json::from_value::<GitBranchInput>(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_stash_action_case_sensitivity() {
+        let input = json!({"action": "PUSH"});
+        let result = serde_json::from_value::<GitStashInput>(input);
+        assert!(result.is_err());
+    }
+
+    // ---- Unicode edge cases in tool execution ----
+
+    #[tokio::test]
+    async fn test_git_branch_create_unicode_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cwd = tmp.path();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(cwd)
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(cwd)
+            .output()
+            .expect("git config");
+        std::fs::write(cwd.join("file.txt"), "content").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(cwd)
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(cwd)
+            .output()
+            .expect("git commit");
+
+        std::env::set_current_dir(cwd).unwrap();
+
+        let tool = GitBranchTool::new();
+        let result = tool
+            .execute(json!({"action": "create", "name": "feature/日本語"}))
+            .await
+            .unwrap();
+        assert!(!result.is_error);
+        assert!(result.content.contains("日本語"));
+    }
+
+    // ---- Category and read-only trait tests ----
+
+    #[test]
+    fn test_git_diff_tool_category() {
+        let tool = GitDiffTool::new();
+        assert_eq!(tool.category(), "git");
+    }
+
+    #[test]
+    fn test_git_diff_tool_is_read_only() {
+        let tool = GitDiffTool::new();
+        assert!(tool.is_read_only());
+    }
+
+    #[test]
+    fn test_git_log_tool_category() {
+        let tool = GitLogTool::new();
+        assert_eq!(tool.category(), "git");
+    }
+
+    #[test]
+    fn test_git_log_tool_is_read_only() {
+        let tool = GitLogTool::new();
+        assert!(tool.is_read_only());
+    }
+
+    #[test]
+    fn test_git_safety_tool_category() {
+        let tool = GitSafetyTool::new();
+        assert_eq!(tool.category(), "git");
+    }
+
+    #[test]
+    fn test_git_safety_tool_is_read_only() {
+        let tool = GitSafetyTool::new();
+        assert!(tool.is_read_only());
+    }
+
+    #[test]
+    fn test_git_stash_tool_category() {
+        let tool = GitStashTool::new();
+        assert_eq!(tool.category(), "git");
+    }
+
+    #[test]
+    fn test_git_branch_tool_not_read_only() {
+        let tool = GitBranchTool::new();
+        assert!(!tool.is_read_only());
+    }
+
+    #[test]
+    fn test_auto_commit_tool_category() {
+        let tool = AutoCommitTool::new();
+        assert_eq!(tool.category(), "git");
+    }
 }

@@ -357,8 +357,8 @@ pub async fn discover_pooled_remote_tools(
 mod tests {
     use super::*;
     use crate::{
-        ElicitationAction, ElicitationRequest, ElicitationResult,
-        SamplingContent, SamplingMessageRole,
+        ElicitationAction, ElicitationRequest, ElicitationResult, SamplingContent,
+        SamplingMessageRole,
     };
     use std::sync::Arc;
 
@@ -479,9 +479,8 @@ mod tests {
 
     #[tokio::test]
     async fn sampling_provider_can_return_error() {
-        let provider: SamplingProvider = Arc::new(|_req| {
-            Box::pin(async { Err("LLM unavailable".to_string()) })
-        });
+        let provider: SamplingProvider =
+            Arc::new(|_req| Box::pin(async { Err("LLM unavailable".to_string()) }));
 
         let req = crate::CreateMessageRequest {
             messages: vec![],
@@ -548,14 +547,7 @@ mod tests {
     #[tokio::test]
     async fn discover_pooled_tools_fails_with_empty_command() {
         let pool = Arc::new(McpProcessPool::new());
-        let result = discover_pooled_tools(
-            pool,
-            "empty-cmd",
-            "",
-            &[],
-            &HashMap::new(),
-        )
-        .await;
+        let result = discover_pooled_tools(pool, "empty-cmd", "", &[], &HashMap::new()).await;
         assert!(result.is_err());
         let err = result.err().unwrap();
         assert!(err.contains("empty command") || err.contains("Empty"));
@@ -638,11 +630,14 @@ mod tests {
 
     #[test]
     fn elicitation_action_deserialization_from_json() {
-        let accept: ElicitationAction = serde_json::from_value(serde_json::json!("accept")).unwrap();
+        let accept: ElicitationAction =
+            serde_json::from_value(serde_json::json!("accept")).unwrap();
         assert_eq!(accept, ElicitationAction::Accept);
-        let decline: ElicitationAction = serde_json::from_value(serde_json::json!("decline")).unwrap();
+        let decline: ElicitationAction =
+            serde_json::from_value(serde_json::json!("decline")).unwrap();
         assert_eq!(decline, ElicitationAction::Decline);
-        let cancel: ElicitationAction = serde_json::from_value(serde_json::json!("cancel")).unwrap();
+        let cancel: ElicitationAction =
+            serde_json::from_value(serde_json::json!("cancel")).unwrap();
         assert_eq!(cancel, ElicitationAction::Cancel);
     }
 
@@ -654,7 +649,10 @@ mod tests {
             Box::pin(async move {
                 assert!(!msg.is_empty());
                 let _ = schema;
-                (ElicitationAction::Accept, Some(serde_json::json!({"ok": true})))
+                (
+                    ElicitationAction::Accept,
+                    Some(serde_json::json!({"ok": true})),
+                )
             })
         });
 

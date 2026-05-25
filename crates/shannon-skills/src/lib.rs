@@ -1,6 +1,13 @@
 //! # Shannon Skills
 //!
 //! Extensible skill system for Shannon Code.
+
+// Suppress lints that conflict with rustfmt formatting or are style preferences.
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::derivable_impls
+)]
 //!
 //! ## Overview
 //!

@@ -107,7 +107,7 @@ impl RecordableTool {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: test helper
     fn with_responses(name: &str, responses: Vec<ToolOutput>) -> Self {
         Self {
             name: name.to_string(),
@@ -116,7 +116,7 @@ impl RecordableTool {
         }
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: test helper
     fn call_count(&self) -> usize {
         self.call_count.load(std::sync::atomic::Ordering::SeqCst)
     }

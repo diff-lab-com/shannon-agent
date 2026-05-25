@@ -466,20 +466,16 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
     let index = if trimmed.is_empty() {
         let count = mgr.len();
         if count == 0 {
-            repl.chat.add_message(
-                ChatRole::System,
-                "No checkpoints available.".to_string(),
-            );
+            repl.chat
+                .add_message(ChatRole::System, "No checkpoints available.".to_string());
             return Ok(());
         }
         count - 1
     } else if let Ok(n) = trimmed.parse::<usize>() {
         n
     } else {
-        repl.chat.add_message(
-            ChatRole::System,
-            "Usage: /undo [list|<number>]".to_string(),
-        );
+        repl.chat
+            .add_message(ChatRole::System, "Usage: /undo [list|<number>]".to_string());
         return Ok(());
     };
 
@@ -513,12 +509,10 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
             ))
             .with_subtitle(format!("{file_count} file(s) changed"))
             .with_content(content_lines.join("\n"))
-            .with_button(
-                crate::widgets::dialog::DialogButton::new(
-                    "Show Diff".to_string(),
-                    "show_diff".to_string(),
-                ),
-            )
+            .with_button(crate::widgets::dialog::DialogButton::new(
+                "Show Diff".to_string(),
+                "show_diff".to_string(),
+            ))
             .with_button(
                 crate::widgets::dialog::DialogButton::new(
                     "Revert".to_string(),
@@ -526,12 +520,10 @@ pub(crate) fn handle_undo(repl: &mut Repl, args: &str) -> Result<()> {
                 )
                 .dangerous(),
             )
-            .with_button(
-                crate::widgets::dialog::DialogButton::new(
-                    "Cancel".to_string(),
-                    "cancel".to_string(),
-                ),
-            );
+            .with_button(crate::widgets::dialog::DialogButton::new(
+                "Cancel".to_string(),
+                "cancel".to_string(),
+            ));
 
             repl.state.undo_preview = Some(preview);
             repl.state.undo_target_index = Some(index);

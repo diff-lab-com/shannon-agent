@@ -85,9 +85,7 @@ pub fn truncate_content(content: &str, config: &ProgressiveLoaderConfig) -> Stri
     let mut out = String::with_capacity(content.len() / 3);
 
     // Header
-    out.push_str(&format!(
-        "[Lines 1-{head_end} of {total_lines}]\n"
-    ));
+    out.push_str(&format!("[Lines 1-{head_end} of {total_lines}]\n"));
 
     // Head section
     for line in &all_lines[..head_end] {
@@ -192,24 +190,15 @@ mod tests {
         let result = truncate_content(&content, &config);
 
         // Should contain head lines
-        assert!(
-            result.contains("line 1"),
-            "should contain first head line"
-        );
-        assert!(
-            result.contains("line 2"),
-            "should contain second head line"
-        );
+        assert!(result.contains("line 1"), "should contain first head line");
+        assert!(result.contains("line 2"), "should contain second head line");
 
         // Should contain tail lines
         assert!(
             result.contains("line 19"),
             "should contain second-to-last tail line"
         );
-        assert!(
-            result.contains("line 20"),
-            "should contain last tail line"
-        );
+        assert!(result.contains("line 20"), "should contain last tail line");
 
         // Should NOT contain middle lines
         assert!(!result.contains("line 10"), "should omit middle lines");
@@ -241,7 +230,10 @@ mod tests {
         assert!(result.contains("L0"), "should contain first line");
         assert!(result.contains("L99"), "should contain last line");
         assert!(!result.contains("L50"), "should not contain middle");
-        assert!(result.contains("98 lines omitted"), "should report omitted count");
+        assert!(
+            result.contains("98 lines omitted"),
+            "should report omitted count"
+        );
     }
 
     #[test]

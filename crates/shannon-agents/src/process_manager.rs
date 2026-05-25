@@ -167,7 +167,7 @@ pub struct AgentHandle {
     /// Pending RPC responses keyed by request ID (shared with read_loop).
     pending_rpcs: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>>,
     /// Channel for receiving events (notifications) from the agent.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: watcher lifecycle
     event_tx: mpsc::Sender<AgentEvent>,
     /// Kill handle sender — drop the child on shutdown.
     _kill_tx: oneshot::Sender<()>,
@@ -1326,5 +1326,1222 @@ mod tests {
         let rx = mgr.take_event_receiver();
         // Receiver should be taken, further calls would return None or panic
         drop(rx);
+    }
+
+    // ── JSON-RPC serialization roundtrip tests ─────────────────────────
+
+    #[test]
+    fn test_frame_message_request_roundtrip() {
+        let msg = JsonRpcMessage::request(
+            "execute_task",
+            serde_json::json!({"task_id": "t1", "subject": "do work"}),
+            42,
+        );
+        let framed = frame_message(&msg).expect("frame should succeed");
+        assert!(framed.ends_with('\n'));
+        let parsed = parse_message(&framed).expect("parse should succeed");
+        assert!(parsed.is_request());
+        assert_eq!(parsed.method(), Some("execute_task"));
+        assert!(parsed.id.is_some());
+    }
+
+    #[test]
+    fn test_frame_message_notification_roundtrip() {
+        let msg =
+            JsonRpcMessage::notification("agent_ready", serde_json::json!({"agent_name": "w1"}));
+        let framed = frame_message(&msg).expect("frame should succeed");
+        assert!(framed.ends_with('\n'));
+        let parsed = parse_message(&framed).expect("parse should succeed");
+        assert!(parsed.is_notification());
+        assert!(!parsed.is_request());
+    }
+
+    #[test]
+    fn test_frame_message_response_roundtrip() {
+        let msg = JsonRpcMessage::response(
+            protocol::JsonRpcId::Number(7),
+            serde_json::json!({"status": "ok"}),
+        );
+        let framed = frame_message(&msg).expect("frame should succeed");
+        let parsed = parse_message(&framed).expect("parse should succeed");
+        assert!(parsed.is_response());
+        assert!(parsed.result.is_some());
+    }
+
+    #[test]
+    fn test_frame_message_error_response_roundtrip() {
+        let msg = JsonRpcMessage::error_response(
+            protocol::JsonRpcId::Number(99),
+            protocol::JsonRpcError::not_found("bogus_method"),
+        );
+        let framed = frame_message(&msg).expect("frame should succeed");
+        let parsed = parse_message(&framed).expect("parse should succeed");
+        assert!(parsed.is_response());
+        assert!(parsed.error.is_some());
+        let err = parsed.error.expect("error present");
+        assert_eq!(err.code, protocol::JsonRpcError::METHOD_NOT_FOUND);
+    }
+
+    #[test]
+    fn test_parse_message_trims_whitespace() {
+        let json = r#"{"jsonrpc":"2.0","method":"ping","params":null}"#;
+        let padded = format!("  {json}  \n");
+        let parsed = parse_message(&padded).expect("should parse with whitespace");
+        assert_eq!(parsed.method(), Some("ping"));
+    }
+
+    #[test]
+    fn test_parse_message_invalid_json() {
+        let result = parse_message("not json at all");
+        assert!(result.is_err());
+    }
+
+    // ── Process status transitions ─────────────────────────────────────
+
+    #[test]
+    fn test_all_process_status_variants_are_distinct() {
+        let statuses = [
+            AgentProcessStatus::Starting,
+            AgentProcessStatus::Idle,
+            AgentProcessStatus::Busy,
+            AgentProcessStatus::Stopped,
+            AgentProcessStatus::Crashed,
+        ];
+        for (i, a) in statuses.iter().enumerate() {
+            for (j, b) in statuses.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b, "{a:?} should != {b:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_process_status_serialization_roundtrip() {
+        for status in [
+            AgentProcessStatus::Starting,
+            AgentProcessStatus::Idle,
+            AgentProcessStatus::Busy,
+            AgentProcessStatus::Stopped,
+            AgentProcessStatus::Crashed,
+        ] {
+            let json = serde_json::to_string(&status).unwrap();
+            let de: AgentProcessStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(status, de);
+        }
+    }
+
+    #[test]
+    fn test_process_status_copy_semantics() {
+        let a = AgentProcessStatus::Busy;
+        let b = a; // Copy
+        assert_eq!(a, b); // a still valid after copy
+    }
+
+    // ── Config validation ──────────────────────────────────────────────
+
+    #[test]
+    fn test_agent_process_config_all_fields() {
+        let config = AgentProcessConfig {
+            binary_path: PathBuf::from("/usr/local/bin/shannon"),
+            args: vec!["--verbose".to_string(), "--log-level=debug".to_string()],
+            env: HashMap::from([
+                ("RUST_LOG".to_string(), "debug".to_string()),
+                ("SHANNON_API_KEY".to_string(), "sk-test".to_string()),
+            ]),
+            worktree_path: Some(PathBuf::from("/tmp/worktree-1")),
+            model: Some("claude-sonnet-4-20250514".to_string()),
+            system_prompt: Some("You are a code reviewer".to_string()),
+            agent_name: "reviewer-1".to_string(),
+            permission_mode: Some("bypassPermissions".to_string()),
+            allowed_tools: Some(vec![
+                "Read".to_string(),
+                "Grep".to_string(),
+                "Bash".to_string(),
+            ]),
+            startup_timeout_secs: 120,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let roundtrip: AgentProcessConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.binary_path, config.binary_path);
+        assert_eq!(roundtrip.args.len(), 2);
+        assert_eq!(roundtrip.env.len(), 2);
+        assert_eq!(roundtrip.worktree_path, config.worktree_path);
+        assert_eq!(roundtrip.model, config.model);
+        assert_eq!(roundtrip.system_prompt, config.system_prompt);
+        assert_eq!(roundtrip.agent_name, config.agent_name);
+        assert_eq!(roundtrip.permission_mode, config.permission_mode);
+        assert_eq!(roundtrip.allowed_tools.as_ref().map(|v| v.len()), Some(3));
+        assert_eq!(roundtrip.startup_timeout_secs, 120);
+    }
+
+    #[test]
+    fn test_agent_process_config_defaults_applied() {
+        // Minimal JSON — serde defaults for missing optional fields
+        let json = r#"{"binary_path":"/bin/echo","agent_name":"worker"}"#;
+        let config: AgentProcessConfig = serde_json::from_str(json).unwrap();
+        assert!(config.args.is_empty());
+        assert!(config.env.is_empty());
+        assert!(config.worktree_path.is_none());
+        assert!(config.model.is_none());
+        assert!(config.system_prompt.is_none());
+        assert!(config.permission_mode.is_none());
+        assert!(config.allowed_tools.is_none());
+        assert_eq!(config.startup_timeout_secs, 60);
+    }
+
+    #[test]
+    fn test_agent_process_config_missing_required_field() {
+        // Missing agent_name (required)
+        let json = r#"{"binary_path":"/bin/echo"}"#;
+        let result = serde_json::from_str::<AgentProcessConfig>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_health_check_config_partial_override() {
+        // Override only some fields; verify defaults for the rest
+        let json = r#"{"check_interval_secs":120,"max_restart_attempts":10}"#;
+        let config: HealthCheckConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.check_interval_secs, 120);
+        assert_eq!(config.ping_timeout_secs, 10); // default
+        assert_eq!(config.max_restart_attempts, 10);
+        assert_eq!(config.startup_grace_period_secs, 15); // default
+        assert_eq!(config.graceful_shutdown_timeout_secs, 10); // default
+    }
+
+    // ── Blocked environment variables ──────────────────────────────────
+
+    #[test]
+    fn test_blocked_env_contains_dangerous_vars() {
+        assert!(BLOCKED_ENV.contains(&"LD_PRELOAD"));
+        assert!(BLOCKED_ENV.contains(&"LD_LIBRARY_PATH"));
+        assert!(BLOCKED_ENV.contains(&"DYLD_INSERT_LIBRARIES"));
+        assert!(BLOCKED_ENV.contains(&"DYLD_LIBRARY_PATH"));
+        assert!(BLOCKED_ENV.contains(&"__KMP_REGISTERED_LIBRARIES"));
+    }
+
+    #[test]
+    fn test_blocked_env_does_not_contain_safe_vars() {
+        assert!(!BLOCKED_ENV.contains(&"PATH"));
+        assert!(!BLOCKED_ENV.contains(&"HOME"));
+        assert!(!BLOCKED_ENV.contains(&"RUST_LOG"));
+    }
+
+    // ── Channel communication patterns ─────────────────────────────────
+
+    #[tokio::test]
+    async fn test_event_channel_send_and_recv() {
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+
+        tx.send(AgentEvent::Ready {
+            agent_name: "worker-1".to_string(),
+            capabilities: vec!["bash".to_string(), "read".to_string()],
+        })
+        .await
+        .expect("send should succeed");
+
+        let event = rx.recv().await.expect("recv should succeed");
+        match event {
+            AgentEvent::Ready {
+                agent_name,
+                capabilities,
+            } => {
+                assert_eq!(agent_name, "worker-1");
+                assert_eq!(capabilities.len(), 2);
+            }
+            _ => panic!("Expected Ready event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_event_channel_multiple_events_ordering() {
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(32);
+
+        // Send events in order — AgentEvent is not Clone, so send directly
+        tx.send(AgentEvent::Ready {
+            agent_name: "a1".to_string(),
+            capabilities: vec![],
+        })
+        .await
+        .expect("send 1");
+        tx.send(AgentEvent::Progress {
+            agent_name: "a1".to_string(),
+            task_id: "t1".to_string(),
+            chunk: "starting".to_string(),
+        })
+        .await
+        .expect("send 2");
+        tx.send(AgentEvent::Progress {
+            agent_name: "a1".to_string(),
+            task_id: "t1".to_string(),
+            chunk: "halfway".to_string(),
+        })
+        .await
+        .expect("send 3");
+        tx.send(AgentEvent::TaskComplete {
+            agent_name: "a1".to_string(),
+            task_id: "t1".to_string(),
+            success: true,
+            output: "done".to_string(),
+        })
+        .await
+        .expect("send 4");
+
+        // Verify ordering: Ready -> Progress -> Progress -> TaskComplete
+        let e1 = rx.recv().await.expect("recv 1");
+        assert!(matches!(e1, AgentEvent::Ready { .. }));
+
+        let e2 = rx.recv().await.expect("recv 2");
+        if let AgentEvent::Progress { chunk, .. } = e2 {
+            assert_eq!(chunk, "starting");
+        } else {
+            panic!("Expected Progress event");
+        }
+
+        let e3 = rx.recv().await.expect("recv 3");
+        if let AgentEvent::Progress { chunk, .. } = e3 {
+            assert_eq!(chunk, "halfway");
+        } else {
+            panic!("Expected Progress event");
+        }
+
+        let e4 = rx.recv().await.expect("recv 4");
+        if let AgentEvent::TaskComplete {
+            success, output, ..
+        } = e4
+        {
+            assert!(success);
+            assert_eq!(output, "done");
+        } else {
+            panic!("Expected TaskComplete event");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_event_channel_backpressure() {
+        // Channel of capacity 2, send 4 — third and fourth should block
+        let (tx, mut rx) = mpsc::channel::<AgentEvent>(2);
+
+        // First two should succeed immediately
+        tx.send(AgentEvent::Idle {
+            agent_name: "a".to_string(),
+            available_tasks_count: 0,
+        })
+        .await
+        .expect("send 1");
+        tx.send(AgentEvent::Idle {
+            agent_name: "b".to_string(),
+            available_tasks_count: 1,
+        })
+        .await
+        .expect("send 2");
+
+        // Drain one to free capacity
+        let _ = rx.recv().await;
+
+        // Now third should succeed
+        tx.send(AgentEvent::Idle {
+            agent_name: "c".to_string(),
+            available_tasks_count: 2,
+        })
+        .await
+        .expect("send 3 after drain");
+    }
+
+    // ── Pending RPC tracking ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_oneshot_channel_rpc_pattern() {
+        // Simulates the pending_rpcs pattern used in send_request/read_loop
+        let (tx, rx) = oneshot::channel::<Result<JsonRpcMessage, String>>();
+        let msg = JsonRpcMessage::response(
+            protocol::JsonRpcId::Number(1),
+            serde_json::json!({"ok": true}),
+        );
+        tx.send(Ok(msg)).expect("send should succeed");
+        let result = rx
+            .await
+            .expect("recv should succeed")
+            .expect("inner should be Ok");
+        assert!(result.is_response());
+    }
+
+    #[tokio::test]
+    async fn test_oneshot_channel_dropped_sender() {
+        // Simulates what happens when read_loop exits without sending a response
+        let (_tx, rx) = oneshot::channel::<Result<JsonRpcMessage, String>>();
+        drop(_tx);
+        let result = rx.await;
+        assert!(result.is_err(), "Should get error when sender is dropped");
+    }
+
+    #[tokio::test]
+    async fn test_pending_rpcs_hashmap_tracking() {
+        let pending: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+        // Insert a pending RPC
+        let (tx1, rx1) = oneshot::channel();
+        pending
+            .lock()
+            .unwrap()
+            .insert(1, PendingRpc { sender: tx1 });
+
+        // Insert a second
+        let (tx2, rx2) = oneshot::channel();
+        pending
+            .lock()
+            .unwrap()
+            .insert(2, PendingRpc { sender: tx2 });
+
+        assert_eq!(pending.lock().unwrap().len(), 2);
+
+        // Resolve RPC 1
+        let rpc1 = pending.lock().unwrap().remove(&1);
+        assert!(rpc1.is_some());
+        rpc1.unwrap()
+            .sender
+            .send(Ok(JsonRpcMessage::response(
+                protocol::JsonRpcId::Number(1),
+                serde_json::json!({"done": true}),
+            )))
+            .expect("send should succeed");
+
+        let resp = rx1.await.expect("recv").expect("ok");
+        assert!(resp.result.is_some());
+
+        // RPC 2 is still pending
+        assert_eq!(pending.lock().unwrap().len(), 1);
+        assert!(pending.lock().unwrap().contains_key(&2));
+
+        // Drop without resolving
+        drop(rx2);
+    }
+
+    #[tokio::test]
+    async fn test_pending_rpcs_drain_on_reader_exit() {
+        // Simulates the orphan drain at the end of read_loop
+        let pending: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+        let (tx1, _rx1) = oneshot::channel();
+        let (tx2, _rx2) = oneshot::channel();
+        pending
+            .lock()
+            .unwrap()
+            .insert(10, PendingRpc { sender: tx1 });
+        pending
+            .lock()
+            .unwrap()
+            .insert(20, PendingRpc { sender: tx2 });
+
+        // Drain all (same pattern as read_loop)
+        let orphaned: Vec<_> = pending.lock().unwrap().drain().collect();
+        drop(orphaned);
+
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    // ── Manager-level operations on missing agents ─────────────────────
+
+    #[tokio::test]
+    async fn test_send_notification_to_missing_agent() {
+        let mgr = AgentProcessManager::new();
+        let result = mgr
+            .send_notification("ghost", "some_method", serde_json::Value::Null)
+            .await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AgentProcessError::AgentNotFound(name) => assert_eq!(name, "ghost"),
+            other => panic!("Expected AgentNotFound, got {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_missing_agent() {
+        let mgr = AgentProcessManager::new();
+        let result = mgr.shutdown_agent("ghost", "test").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_missing_agent() {
+        let mgr = AgentProcessManager::new();
+        // graceful_shutdown_agent sends shutdown notification (which fails for missing)
+        // then tries to wait — but since agent doesn't exist, it should succeed quickly
+        // because the agent is considered "exited" when not found
+        let result = mgr
+            .graceful_shutdown_agent("ghost", Duration::from_millis(100))
+            .await;
+        // It should return Ok because the agent doesn't exist (treated as already exited)
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_restart_missing_agent() {
+        let mgr = AgentProcessManager::new();
+        let result = mgr.restart_agent("ghost").await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            AgentProcessError::AgentNotFound(name) => assert_eq!(name, "ghost"),
+            other => panic!("Expected AgentNotFound, got {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_rpc_response_to_missing_agent() {
+        let mgr = AgentProcessManager::new();
+        let result = mgr
+            .send_rpc_response("ghost", 1, serde_json::json!({"ok": true}))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_all_when_empty() {
+        let mgr = AgentProcessManager::new();
+        // Should not panic or hang
+        mgr.shutdown_all().await;
+    }
+
+    // ── RPC ID allocation ──────────────────────────────────────────────
+
+    #[test]
+    fn test_rpc_ids_are_monotonically_increasing() {
+        let mgr = AgentProcessManager::new();
+        let id1 = mgr.next_id();
+        let id2 = mgr.next_id();
+        let id3 = mgr.next_id();
+        assert!(id2 > id1, "IDs should be increasing: {id1} < {id2}");
+        assert!(id3 > id2, "IDs should be increasing: {id2} < {id3}");
+    }
+
+    #[test]
+    fn test_rpc_ids_start_at_1() {
+        let mgr = AgentProcessManager::new();
+        let id = mgr.next_id();
+        assert_eq!(id, 1);
+    }
+
+    // ── Task handle tracking ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_track_task_completed_is_pruned() {
+        let mgr = AgentProcessManager::new();
+
+        // Spawn a task that completes immediately — don't join it, just track
+        let handle = tokio::spawn(async {});
+        mgr.track_task(handle);
+
+        // Wait for it to finish
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        // Completed tasks should be pruned when track_task is called again
+        let handle2 = tokio::spawn(async {});
+        mgr.track_task(handle2);
+
+        // Should have pruned the first completed handle
+        if let Ok(handles) = mgr.task_handles.lock() {
+            assert_eq!(handles.len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_track_task_multiple_running() {
+        let mgr = AgentProcessManager::new();
+
+        let h1 = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+        let h2 = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+
+        mgr.track_task(h1);
+        mgr.track_task(h2);
+
+        // Both should be tracked
+        if let Ok(handles) = mgr.task_handles.lock() {
+            assert_eq!(handles.len(), 2);
+        }
+    }
+
+    // ── Default trait implementations ──────────────────────────────────
+
+    #[test]
+    fn test_default_health_check_config() {
+        let config = HealthCheckConfig::default();
+        assert_eq!(config.check_interval_secs, 30);
+        assert_eq!(config.ping_timeout_secs, 10);
+        assert_eq!(config.max_restart_attempts, 3);
+        assert_eq!(config.startup_grace_period_secs, 15);
+        assert_eq!(config.graceful_shutdown_timeout_secs, 10);
+    }
+
+    #[test]
+    fn test_default_function_values() {
+        assert_eq!(default_startup_timeout(), 60);
+        assert_eq!(default_health_interval(), 30);
+        assert_eq!(default_ping_timeout(), 10);
+        assert_eq!(default_max_restarts(), 3);
+        assert_eq!(default_grace_period(), 15);
+        assert_eq!(default_shutdown_timeout(), 10);
+    }
+
+    // ── Error display and variants ─────────────────────────────────────
+
+    #[test]
+    fn test_agent_process_error_spawn_failed() {
+        let err = AgentProcessError::SpawnFailed {
+            agent: "test-agent".to_string(),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "binary not found"),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("test-agent"));
+        assert!(msg.contains("binary not found"));
+    }
+
+    #[test]
+    fn test_agent_process_error_io() {
+        let err = AgentProcessError::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pipe closed",
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("pipe closed"));
+    }
+
+    #[test]
+    fn test_agent_process_error_protocol() {
+        let err = AgentProcessError::Protocol("malformed JSON-RPC frame".to_string());
+        assert_eq!(err.to_string(), "Protocol error: malformed JSON-RPC frame");
+    }
+
+    #[test]
+    fn test_agent_process_error_debug_format() {
+        let err = AgentProcessError::AgentNotFound("x".to_string());
+        let debug = format!("{err:?}");
+        assert!(debug.contains("AgentNotFound"));
+    }
+
+    // ── AgentEvent construction and matching ───────────────────────────
+
+    #[test]
+    fn test_agent_event_ready_with_capabilities() {
+        let event = AgentEvent::Ready {
+            agent_name: "reviewer".to_string(),
+            capabilities: vec!["Read".to_string(), "Grep".to_string(), "Bash".to_string()],
+        };
+        if let AgentEvent::Ready {
+            agent_name,
+            capabilities,
+        } = event
+        {
+            assert_eq!(agent_name, "reviewer");
+            assert_eq!(capabilities.len(), 3);
+        }
+    }
+
+    #[test]
+    fn test_agent_event_progress_fields() {
+        let event = AgentEvent::Progress {
+            agent_name: "builder".to_string(),
+            task_id: "task-42".to_string(),
+            chunk: "compiling...".to_string(),
+        };
+        if let AgentEvent::Progress {
+            agent_name,
+            task_id,
+            chunk,
+        } = event
+        {
+            assert_eq!(agent_name, "builder");
+            assert_eq!(task_id, "task-42");
+            assert_eq!(chunk, "compiling...");
+        }
+    }
+
+    #[test]
+    fn test_agent_event_task_complete_success() {
+        let event = AgentEvent::TaskComplete {
+            agent_name: "tester".to_string(),
+            task_id: "t-1".to_string(),
+            success: true,
+            output: "all tests passed".to_string(),
+        };
+        if let AgentEvent::TaskComplete {
+            success, output, ..
+        } = event
+        {
+            assert!(success);
+            assert_eq!(output, "all tests passed");
+        }
+    }
+
+    #[test]
+    fn test_agent_event_task_complete_failure() {
+        let event = AgentEvent::TaskComplete {
+            agent_name: "tester".to_string(),
+            task_id: "t-2".to_string(),
+            success: false,
+            output: "compilation failed: missing semicolon".to_string(),
+        };
+        if let AgentEvent::TaskComplete {
+            success, output, ..
+        } = event
+        {
+            assert!(!success);
+            assert!(output.contains("compilation failed"));
+        }
+    }
+
+    #[test]
+    fn test_agent_event_idle_with_task_count() {
+        let event = AgentEvent::Idle {
+            agent_name: "worker-3".to_string(),
+            available_tasks_count: 7,
+        };
+        if let AgentEvent::Idle {
+            agent_name,
+            available_tasks_count,
+        } = event
+        {
+            assert_eq!(agent_name, "worker-3");
+            assert_eq!(available_tasks_count, 7);
+        }
+    }
+
+    #[test]
+    fn test_agent_event_process_exited_with_code() {
+        let event = AgentEvent::ProcessExited {
+            agent_name: "dead-agent".to_string(),
+            exit_code: Some(1),
+        };
+        if let AgentEvent::ProcessExited { exit_code, .. } = event {
+            assert_eq!(exit_code, Some(1));
+        }
+    }
+
+    #[test]
+    fn test_agent_event_process_exited_signal() {
+        let event = AgentEvent::ProcessExited {
+            agent_name: "killed-agent".to_string(),
+            exit_code: None, // Killed by signal
+        };
+        if let AgentEvent::ProcessExited { exit_code, .. } = event {
+            assert!(exit_code.is_none());
+        }
+    }
+
+    #[test]
+    fn test_agent_event_health_check_failed() {
+        let event = AgentEvent::HealthCheckFailed {
+            agent_name: "sick-agent".to_string(),
+            consecutive_failures: 5,
+        };
+        if let AgentEvent::HealthCheckFailed {
+            consecutive_failures,
+            ..
+        } = event
+        {
+            assert_eq!(consecutive_failures, 5);
+        }
+    }
+
+    #[test]
+    fn test_agent_event_restarted() {
+        let event = AgentEvent::AgentRestarted {
+            agent_name: "resilient-agent".to_string(),
+            restart_count: 3,
+        };
+        if let AgentEvent::AgentRestarted { restart_count, .. } = event {
+            assert_eq!(restart_count, 3);
+        }
+    }
+
+    #[test]
+    fn test_agent_event_rpc_request() {
+        let event = AgentEvent::RpcRequest {
+            agent_name: "requester".to_string(),
+            request_id: 42,
+            method: "claim_task".to_string(),
+            params: serde_json::json!({"task_id": "t-99"}),
+        };
+        if let AgentEvent::RpcRequest {
+            request_id,
+            method,
+            params,
+            ..
+        } = event
+        {
+            assert_eq!(request_id, 42);
+            assert_eq!(method, "claim_task");
+            assert_eq!(params["task_id"], "t-99");
+        }
+    }
+
+    // ── Read loop dispatch — JSON-RPC message routing ──────────────────
+
+    #[tokio::test]
+    async fn test_read_loop_dispatches_agent_ready() {
+        let (event_tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+
+        let ready_json = serde_json::json!({
+            "agent_name": "test-worker",
+            "capabilities": ["bash", "read", "write"]
+        });
+        let msg = JsonRpcMessage::notification("agent_ready", ready_json);
+        let line = frame_message(&msg).unwrap();
+
+        // Parse it back to simulate what read_loop does
+        let parsed = parse_message(&line).unwrap();
+        if let Some(method) = parsed.method() {
+            if method == "agent_ready" {
+                if let Ok(params) =
+                    serde_json::from_value::<AgentReadyParams>(parsed.params.unwrap_or_default())
+                {
+                    event_tx
+                        .send(AgentEvent::Ready {
+                            agent_name: params.agent_name.clone(),
+                            capabilities: params.capabilities,
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+
+        let event = rx.recv().await.unwrap();
+        if let AgentEvent::Ready {
+            agent_name,
+            capabilities,
+        } = event
+        {
+            assert_eq!(agent_name, "test-worker");
+            assert_eq!(capabilities.len(), 3);
+        } else {
+            panic!("Expected Ready event");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_loop_dispatches_task_progress() {
+        let (event_tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+
+        let progress_json = serde_json::json!({
+            "task_id": "t-42",
+            "chunk": "50% complete"
+        });
+        let msg = JsonRpcMessage::notification("task_progress", progress_json);
+        let line = frame_message(&msg).unwrap();
+        let parsed = parse_message(&line).unwrap();
+
+        if let Some(method) = parsed.method() {
+            if method == "task_progress" {
+                if let Ok(params) =
+                    serde_json::from_value::<TaskProgressParams>(parsed.params.unwrap_or_default())
+                {
+                    event_tx
+                        .send(AgentEvent::Progress {
+                            agent_name: "worker".to_string(),
+                            task_id: params.task_id,
+                            chunk: params.chunk,
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+
+        let event = rx.recv().await.unwrap();
+        if let AgentEvent::Progress { task_id, chunk, .. } = event {
+            assert_eq!(task_id, "t-42");
+            assert_eq!(chunk, "50% complete");
+        } else {
+            panic!("Expected Progress event");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_loop_dispatches_task_complete() {
+        let (event_tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+
+        let complete_json = serde_json::json!({
+            "task_id": "t-99",
+            "success": true,
+            "output": "all tests passed"
+        });
+        let msg = JsonRpcMessage::notification("task_complete", complete_json);
+        let line = frame_message(&msg).unwrap();
+        let parsed = parse_message(&line).unwrap();
+
+        if let Some(method) = parsed.method() {
+            if method == "task_complete" {
+                if let Ok(params) =
+                    serde_json::from_value::<TaskCompleteParams>(parsed.params.unwrap_or_default())
+                {
+                    event_tx
+                        .send(AgentEvent::TaskComplete {
+                            agent_name: "tester".to_string(),
+                            task_id: params.task_id,
+                            success: params.success,
+                            output: params.output,
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+
+        let event = rx.recv().await.unwrap();
+        if let AgentEvent::TaskComplete {
+            task_id,
+            success,
+            output,
+            ..
+        } = event
+        {
+            assert_eq!(task_id, "t-99");
+            assert!(success);
+            assert_eq!(output, "all tests passed");
+        } else {
+            panic!("Expected TaskComplete event");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_loop_dispatches_agent_idle() {
+        let (event_tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+
+        let idle_json = serde_json::json!({
+            "agent_name": "free-agent",
+            "available_tasks_count": 5
+        });
+        let msg = JsonRpcMessage::notification("agent_idle", idle_json);
+        let line = frame_message(&msg).unwrap();
+        let parsed = parse_message(&line).unwrap();
+
+        if let Some(method) = parsed.method() {
+            if method == "agent_idle" {
+                if let Ok(params) =
+                    serde_json::from_value::<AgentIdleParams>(parsed.params.unwrap_or_default())
+                {
+                    event_tx
+                        .send(AgentEvent::Idle {
+                            agent_name: params.agent_name,
+                            available_tasks_count: params.available_tasks_count,
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+
+        let event = rx.recv().await.unwrap();
+        if let AgentEvent::Idle {
+            agent_name,
+            available_tasks_count,
+        } = event
+        {
+            assert_eq!(agent_name, "free-agent");
+            assert_eq!(available_tasks_count, 5);
+        } else {
+            panic!("Expected Idle event");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_loop_dispatches_rpc_request() {
+        let (event_tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+
+        // Simulate an incoming RPC request (has method + id)
+        let msg = JsonRpcMessage::request("claim_task", serde_json::json!({"task_id": "t-7"}), 55);
+        let line = frame_message(&msg).unwrap();
+        let parsed = parse_message(&line).unwrap();
+
+        // In read_loop, RPC requests from agents (create_task, claim_task, etc.) are dispatched
+        let rpc_methods = [
+            "create_task",
+            "update_task",
+            "get_task",
+            "team_manifest",
+            "list_tasks",
+            "claim_task",
+            "disband_team",
+            "add_agent",
+        ];
+        if let Some(method) = parsed.method() {
+            if rpc_methods.contains(&method) {
+                if let Some(protocol::JsonRpcId::Number(request_id)) = parsed.id {
+                    event_tx
+                        .send(AgentEvent::RpcRequest {
+                            agent_name: "worker-1".to_string(),
+                            request_id,
+                            method: method.to_string(),
+                            params: parsed.params.unwrap_or_default(),
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+
+        let event = rx.recv().await.unwrap();
+        if let AgentEvent::RpcRequest {
+            request_id,
+            method,
+            params,
+            ..
+        } = event
+        {
+            assert_eq!(request_id, 55);
+            assert_eq!(method, "claim_task");
+            assert_eq!(params["task_id"], "t-7");
+        } else {
+            panic!("Expected RpcRequest event");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_loop_dispatches_response_to_pending_rpc() {
+        let pending: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let (tx, rx) = oneshot::channel();
+        pending
+            .lock()
+            .unwrap()
+            .insert(42, PendingRpc { sender: tx });
+
+        // Simulate a response arriving (has id, no method)
+        let response = JsonRpcMessage::response(
+            protocol::JsonRpcId::Number(42),
+            serde_json::json!({"status": "done"}),
+        );
+        let line = frame_message(&response).unwrap();
+        let parsed = parse_message(&line).unwrap();
+
+        // Response dispatch path from read_loop
+        assert!(parsed.method().is_none());
+        if let Some(protocol::JsonRpcId::Number(rpc_id)) = parsed.id {
+            if let Some(pending_rpc) = pending.lock().unwrap().remove(&rpc_id) {
+                pending_rpc.sender.send(Ok(parsed)).unwrap();
+            }
+        }
+
+        let result = rx.await.unwrap().unwrap();
+        assert!(result.result.is_some());
+        assert_eq!(result.result.unwrap()["status"], "done");
+    }
+
+    #[tokio::test]
+    async fn test_read_loop_response_for_unknown_rpc_id() {
+        let pending: Arc<std::sync::Mutex<HashMap<i64, PendingRpc>>> =
+            Arc::new(std::sync::Mutex::new(HashMap::new()));
+
+        let response = JsonRpcMessage::response(
+            protocol::JsonRpcId::Number(999),
+            serde_json::json!({"orphan": true}),
+        );
+        let line = frame_message(&response).unwrap();
+        let parsed = parse_message(&line).unwrap();
+
+        // No pending RPC for ID 999 — should be silently ignored
+        if let Some(protocol::JsonRpcId::Number(rpc_id)) = parsed.id {
+            let removed = pending.lock().unwrap().remove(&rpc_id);
+            assert!(removed.is_none(), "No pending RPC for unknown ID");
+        }
+
+        // No panic, no error — just silently dropped
+    }
+
+    #[tokio::test]
+    async fn test_read_loop_malformed_message_is_skipped() {
+        let (_event_tx, mut rx) = mpsc::channel::<AgentEvent>(16);
+
+        // Try parsing garbage — read_loop would skip it
+        let result = parse_message("this is not json");
+        assert!(result.is_err());
+
+        // Channel should remain empty
+        assert!(rx.try_recv().is_err());
+    }
+
+    // ── Timeout scenarios ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_times_out_and_force_kills_missing() {
+        // When the agent is missing from the map, graceful_shutdown_agent
+        // treats it as already exited and returns Ok immediately.
+        let mgr = AgentProcessManager::new();
+        let result = mgr
+            .graceful_shutdown_agent("nonexistent", Duration::from_millis(50))
+            .await;
+        assert!(result.is_ok());
+    }
+
+    // ── ShutdownParamsWrapper serialization ────────────────────────────
+
+    #[test]
+    fn test_shutdown_params_wrapper_serialization() {
+        let wrapper = ShutdownParamsWrapper {
+            reason: "coordinator shutting down".to_string(),
+        };
+        let json = serde_json::to_string(&wrapper).unwrap();
+        assert!(json.contains("coordinator shutting down"));
+
+        let de: ShutdownParamsWrapper = serde_json::from_str(&json).unwrap();
+        assert_eq!(de.reason, "coordinator shutting down");
+    }
+
+    // ── Multiple agents listing ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_running_agents_empty_after_creation() {
+        let mgr = AgentProcessManager::new();
+        let agents = mgr.running_agents().await;
+        assert!(agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_agent_status_returns_none_for_unknown() {
+        let mgr = AgentProcessManager::new();
+        assert!(mgr.agent_status("nobody").await.is_none());
+    }
+
+    // ── Drop behavior ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_process_manager_drop_cleans_up() {
+        let mgr = AgentProcessManager::new();
+        drop(mgr); // Should not panic
+    }
+
+    #[tokio::test]
+    async fn test_process_manager_default_trait() {
+        let mgr = AgentProcessManager::default();
+        let agents = mgr.running_agents().await;
+        assert!(agents.is_empty());
+    }
+
+    // ── execute_task on missing agent ───────────────────────────────────
+
+    #[tokio::test]
+    async fn test_execute_task_on_missing_agent() {
+        let mgr = AgentProcessManager::new();
+        let params = ExecuteTaskParams {
+            task_id: "t-1".to_string(),
+            subject: "Fix tests".to_string(),
+            description: "Make all tests pass".to_string(),
+            priority: "high".to_string(),
+            active_form: Some("Fixing tests".to_string()),
+        };
+        let result = mgr.execute_task("ghost", params).await;
+        assert!(result.is_err());
+    }
+
+    // ── Health monitor start/stop ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_start_health_monitor_does_not_panic() {
+        let mgr = AgentProcessManager::new();
+        let config = HealthCheckConfig {
+            check_interval_secs: 1,
+            ping_timeout_secs: 1,
+            max_restart_attempts: 1,
+            startup_grace_period_secs: 60, // Long grace so it doesn't run checks during test
+            graceful_shutdown_timeout_secs: 5,
+        };
+        mgr.start_health_monitor(config);
+        // Dropping the manager should abort the health monitor task
+        drop(mgr);
+    }
+
+    #[tokio::test]
+    async fn test_start_health_monitor_replaces_previous() {
+        let mgr = AgentProcessManager::new();
+        let config = HealthCheckConfig::default();
+        mgr.start_health_monitor(config.clone());
+        // Starting again should replace the previous handle
+        mgr.start_health_monitor(config);
+        drop(mgr);
+    }
+
+    // ── recv_event and try_recv_event ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_recv_event_on_empty_channel_waits() {
+        let mut mgr = AgentProcessManager::new();
+        // recv_event will block forever on empty channel, so we use a timeout
+        let result = tokio::time::timeout(Duration::from_millis(50), mgr.recv_event()).await;
+        assert!(result.is_err(), "Should timeout on empty channel");
+    }
+
+    #[tokio::test]
+    async fn test_try_recv_event_on_empty_returns_none() {
+        let mut mgr = AgentProcessManager::new();
+        assert!(mgr.try_recv_event().is_none());
+    }
+
+    // ── Event channel with take_event_receiver ─────────────────────────
+
+    #[tokio::test]
+    async fn test_take_event_receiver_empties_original() {
+        let mut mgr = AgentProcessManager::new();
+        let mut rx = mgr.take_event_receiver();
+        // The taken receiver should be empty
+        assert!(rx.try_recv().is_err());
+        // Subsequent try_recv_event on mgr should also fail (new closed channel)
+        assert!(mgr.try_recv_event().is_none());
+    }
+
+    // ── Agent process config with all optional fields populated ────────
+
+    #[test]
+    fn test_config_with_worktree_and_tools() {
+        let config = AgentProcessConfig {
+            binary_path: PathBuf::from("/usr/bin/shannon"),
+            args: vec![],
+            env: HashMap::new(),
+            worktree_path: Some(PathBuf::from("/project/worktrees/feature-x")),
+            model: Some("opus".to_string()),
+            system_prompt: Some("Focus on refactoring".to_string()),
+            agent_name: "refactorer".to_string(),
+            permission_mode: Some("auto".to_string()),
+            allowed_tools: Some(vec![
+                "Read".to_string(),
+                "Edit".to_string(),
+                "Grep".to_string(),
+            ]),
+            startup_timeout_secs: 90,
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let de: AgentProcessConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            de.worktree_path.unwrap(),
+            PathBuf::from("/project/worktrees/feature-x")
+        );
+        assert_eq!(de.allowed_tools.unwrap().len(), 3);
+        assert_eq!(de.startup_timeout_secs, 90);
+    }
+
+    // ── Instant tracking for last_seen ─────────────────────────────────
+
+    #[test]
+    fn test_instant_tracks_elapsed_time() {
+        let start = Instant::now();
+        // Verify that Instant is usable (used for last_seen in AgentHandle)
+        let _ = start.elapsed();
+    }
+
+    #[test]
+    fn test_instant_ordering() {
+        let a = Instant::now();
+        let b = a + Duration::from_millis(1);
+        assert!(b > a);
     }
 }

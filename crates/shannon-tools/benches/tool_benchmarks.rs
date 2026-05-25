@@ -145,7 +145,7 @@ fn bench_grep_search(c: &mut Criterion) {
 
     for &file_count in &[10, 100] {
         let paths = create_test_files(dir.path(), file_count, 10_000);
-        let pattern = regex::Regex::new(r"fn\s+\w+\s*\(").expect("compile regex");
+        let pattern = regex::Regex::new(r"L\d{6}").expect("compile regex");
 
         // Read all files into memory (simulating file traversal)
         let file_contents: Vec<(std::path::PathBuf, String)> = paths
@@ -175,18 +175,18 @@ fn bench_grep_search(c: &mut Criterion) {
             &file_count,
             |b, _| {
                 b.iter(|| {
-                    let _ = regex::Regex::new(r"fn\s+\w+\s*\(").expect("compile");
+                    let _ = regex::Regex::new(r"L\d{6}").expect("compile");
                 });
             },
         );
 
         // Multi-pattern search
         let patterns = vec![
-            regex::Regex::new(r"fn\s+\w+").unwrap(),
-            regex::Regex::new(r"struct\s+\w+").unwrap(),
-            regex::Regex::new(r"impl\s+<").unwrap(),
-            regex::Regex::new(r"use\s+\w+::").unwrap(),
-            regex::Regex::new(r#"println!\("#).unwrap(),
+            regex::Regex::new(r"L\d{6}").unwrap(),
+            regex::Regex::new(r"seed \d+").unwrap(),
+            regex::Regex::new(r"Lorem").unwrap(),
+            regex::Regex::new(r"dolor").unwrap(),
+            regex::Regex::new(r"adipiscing").unwrap(),
         ];
 
         let patterns_ref = &patterns;
@@ -330,12 +330,21 @@ fn bench_file_traversal(c: &mut Criterion) {
     });
 }
 
-criterion_group!(
-    benches,
-    bench_file_read,
-    bench_file_edit,
-    bench_grep_search,
-    bench_glob_pattern,
-    bench_file_traversal,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_file_read,
+        bench_file_edit,
+        bench_grep_search,
+        bench_glob_pattern,
+        bench_file_traversal
+}
 criterion_main!(benches);

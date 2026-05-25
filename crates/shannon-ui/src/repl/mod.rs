@@ -797,9 +797,8 @@ impl Repl {
         // Wrap tool registry in Arc so it can be shared with MCP callbacks
         // for dynamic tool re-registration.
         // Attach streaming cache for read-only tool result caching.
-        let streaming_cache = std::sync::Arc::new(
-            shannon_core::tool_cache::ToolResultCache::with_default(),
-        );
+        let streaming_cache =
+            std::sync::Arc::new(shannon_core::tool_cache::ToolResultCache::with_default());
         tool_registry.set_streaming_cache(streaming_cache.clone());
         let tool_registry = std::sync::Arc::new(tool_registry);
 

@@ -43,7 +43,7 @@ pub(crate) struct McpServerHandle {
     /// Maximum restart attempts before giving up.
     pub(crate) max_restarts: u32,
     /// Health check interval.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // KEEP: watcher lifecycle
     pub(crate) health_interval: Duration,
     /// Request timeout (for regular JSON-RPC requests like tools/list, ping).
     pub(crate) request_timeout: Duration,
@@ -613,7 +613,6 @@ impl McpServerHandle {
             id,
             PendingRequest {
                 tx,
-                created_at: Instant::now(),
                 progress_token: progress_token.clone(),
                 on_progress,
             },
@@ -1156,9 +1155,7 @@ mod tests {
     async fn call_tool_rejects_when_not_healthy() {
         let handle = make_handle("unhealthy-srv");
         *handle.state.write().await = ServerState::Unhealthy("crashed".to_string());
-        let result = handle
-            .call_tool("some_tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("some_tool", serde_json::json!({})).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         match err {
@@ -1174,18 +1171,14 @@ mod tests {
     async fn call_tool_rejects_when_starting() {
         let handle = make_handle("starting-srv");
         *handle.state.write().await = ServerState::Starting;
-        let result = handle
-            .call_tool("some_tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("some_tool", serde_json::json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn call_tool_rejects_when_stopped() {
         let handle = make_handle("stopped-srv");
-        let result = handle
-            .call_tool("some_tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("some_tool", serde_json::json!({})).await;
         assert!(result.is_err());
     }
 
@@ -1215,7 +1208,6 @@ mod tests {
             1,
             PendingRequest {
                 tx,
-                created_at: Instant::now(),
                 progress_token: None,
                 on_progress: None,
             },

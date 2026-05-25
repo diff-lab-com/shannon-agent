@@ -140,6 +140,7 @@ impl IndexBuilder {
 
         let mut file = fs::File::create(output_path).await?;
         file.write_all(json.as_bytes()).await?;
+        file.flush().await?;
 
         Ok(())
     }

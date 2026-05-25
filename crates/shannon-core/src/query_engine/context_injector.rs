@@ -9,17 +9,6 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 // ---------------------------------------------------------------------------
-// Error types
-// ---------------------------------------------------------------------------
-
-/// Errors that can occur during context injection.
-#[derive(thiserror::Error, Debug)]
-pub enum ContextInjectionError {
-    #[error("I/O error reading instructions: {0}")]
-    Io(#[from] std::io::Error),
-}
-
-// ---------------------------------------------------------------------------
 // ContextInjector
 // ---------------------------------------------------------------------------
 

@@ -1,3 +1,10 @@
+// Suppress lints that conflict with rustfmt or are style preferences from newer clippy.
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::derivable_impls
+)]
+
 //! Shannon Tools - Claude Code tool implementations
 //!
 //! This crate provides implementations of Claude Code tools including:
@@ -84,7 +91,9 @@ pub use file::sandbox_adapter::{
     PathSandboxAdapter, SandboxAdapter, SandboxConfig as SandboxAdapterConfig, SandboxResult,
     SandboxViolation,
 };
-pub use file::{EditTool, FileOperation, GlobTool, MergeResolveTool, MultiEditTool, ReadTool, WriteTool};
+pub use file::{
+    EditTool, FileOperation, GlobTool, MergeResolveTool, MultiEditTool, ReadTool, WriteTool,
+};
 pub use git::{
     AutoCommitTool, GitBranchTool, GitDiffTool, GitLogTool, GitSafetyTool, GitStashTool,
 };

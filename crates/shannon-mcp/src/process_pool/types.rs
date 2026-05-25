@@ -489,9 +489,6 @@ pub struct ServerStatus {
 pub(crate) struct PendingRequest {
     /// Oneshot channel to deliver the response.
     pub(crate) tx: oneshot::Sender<Value>,
-    /// When this request was created (for timeout tracking).
-    #[allow(dead_code)]
-    pub(crate) created_at: Instant,
     /// Optional progress token sent in `_meta.progressToken`.
     pub(crate) progress_token: Option<Value>,
     /// Optional callback invoked on `notifications/progress` for this request.

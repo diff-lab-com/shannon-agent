@@ -469,11 +469,7 @@ mod tests {
         );
         // Protected message should still be in result
         let protected_content = extract_text_content(&msgs[5]);
-        let result_texts: Vec<String> = result
-            .messages
-            .iter()
-            .map(extract_text_content)
-            .collect();
+        let result_texts: Vec<String> = result.messages.iter().map(extract_text_content).collect();
         assert!(result_texts.iter().any(|t| t == &protected_content));
     }
 

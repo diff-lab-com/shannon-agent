@@ -272,7 +272,10 @@ pub fn three_way_merge(base: &str, ours: &str, theirs: &str) -> MergeResult {
     let mut ours_idx = 0usize;
     let mut theirs_idx = 0usize;
 
-    while base_pos < base_lines.len() || ours_idx < ours_intervals.len() || theirs_idx < theirs_intervals.len() {
+    while base_pos < base_lines.len()
+        || ours_idx < ours_intervals.len()
+        || theirs_idx < theirs_intervals.len()
+    {
         // Find the next event (hunk start or base end)
         let ours_next = ours_intervals.get(ours_idx).map(|(s, _, _)| *s);
         let theirs_next = theirs_intervals.get(theirs_idx).map(|(s, _, _)| *s);
@@ -293,14 +296,17 @@ pub fn three_way_merge(base: &str, ours: &str, theirs: &str) -> MergeResult {
         }
 
         // Check if ours has a hunk starting here
-        let ours_hunk = if ours_idx < ours_intervals.len() && ours_intervals[ours_idx].0 == next_hunk_start {
-            Some(ours_intervals[ours_idx].2)
-        } else {
-            None
-        };
+        let ours_hunk =
+            if ours_idx < ours_intervals.len() && ours_intervals[ours_idx].0 == next_hunk_start {
+                Some(ours_intervals[ours_idx].2)
+            } else {
+                None
+            };
 
         // Check if theirs has a hunk starting here
-        let theirs_hunk = if theirs_idx < theirs_intervals.len() && theirs_intervals[theirs_idx].0 == next_hunk_start {
+        let theirs_hunk = if theirs_idx < theirs_intervals.len()
+            && theirs_intervals[theirs_idx].0 == next_hunk_start
+        {
             Some(theirs_intervals[theirs_idx].2)
         } else {
             None
@@ -325,7 +331,9 @@ pub fn three_way_merge(base: &str, ours: &str, theirs: &str) -> MergeResult {
             }
             (Some(oh), Some(th)) => {
                 // Both sides changed this region
-                let base_region: Vec<&str> = base_lines[oh.base_start.min(th.base_start)..oh.base_end.max(th.base_end)].to_vec();
+                let base_region: Vec<&str> = base_lines
+                    [oh.base_start.min(th.base_start)..oh.base_end.max(th.base_end)]
+                    .to_vec();
                 let base_region_str = base_region.join("\n");
                 let ours_str = oh.changed_lines.join("\n");
                 let theirs_str = th.changed_lines.join("\n");
@@ -384,10 +392,7 @@ pub fn three_way_merge(base: &str, ours: &str, theirs: &str) -> MergeResult {
     if conflicts.is_empty() {
         MergeResult::Clean(merged)
     } else {
-        MergeResult::Conflicted {
-            merged,
-            conflicts,
-        }
+        MergeResult::Conflicted { merged, conflicts }
     }
 }
 

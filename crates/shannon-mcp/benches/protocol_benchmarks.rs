@@ -271,11 +271,20 @@ fn bench_complex_types(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_jsonrpc_serialize,
-    bench_jsonrpc_deserialize,
-    bench_batch_request_response,
-    bench_complex_types,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_jsonrpc_serialize,
+        bench_jsonrpc_deserialize,
+        bench_batch_request_response,
+        bench_complex_types
+}
 criterion_main!(benches);

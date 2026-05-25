@@ -547,16 +547,14 @@ impl McpToolSearchTool {
         let names = self.pool.deferred_schema_tool_names();
         if names.is_empty() {
             return Ok(ToolOutput::error(
-                "No deferred tools available. Deferred tool loading may not be enabled.".to_string(),
+                "No deferred tools available. Deferred tool loading may not be enabled."
+                    .to_string(),
             ));
         }
 
         let mut results = Vec::new();
         for name in &names {
-            let desc = self
-                .pool
-                .get_deferred_description(name)
-                .unwrap_or_default();
+            let desc = self.pool.get_deferred_description(name).unwrap_or_default();
             let name_lower = name.to_lowercase();
             let desc_lower = desc.to_lowercase();
 
@@ -584,7 +582,12 @@ impl McpToolSearchTool {
         if results.is_empty() {
             return Ok(ToolOutput::error(format!(
                 "No tools matching '{query}'. Available: {}",
-                names.iter().take(10).cloned().collect::<Vec<_>>().join(", ")
+                names
+                    .iter()
+                    .take(10)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         }
 
@@ -606,7 +609,8 @@ impl McpToolSearchTool {
         let names = self.pool.deferred_schema_tool_names();
         if names.is_empty() {
             return Ok(ToolOutput::error(
-                "No deferred tools available. Deferred tool loading may not be enabled.".to_string(),
+                "No deferred tools available. Deferred tool loading may not be enabled."
+                    .to_string(),
             ));
         }
 
@@ -701,18 +705,6 @@ mod tests {
         async fn unsubscribe_resource(&self, _uri: &str) -> shannon_mcp::McpResult<bool> {
             Ok(false)
         }
-    }
-
-    #[allow(dead_code)]
-    fn make_manager() -> Arc<McpResourceManager> {
-        let manager = Arc::new(McpResourceManager::new());
-        let client = MockClient::new("test-server", true, true)
-            .with_resource("file:///readme", "Readme", "Project readme")
-            .with_resource("file:///config", "Config", "Configuration file");
-        // We need to register in an async context, so we return the manager
-        // and register in the test body.
-        drop(client); // Don't need it here
-        manager
     }
 
     #[tokio::test]

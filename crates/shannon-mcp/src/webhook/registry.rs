@@ -76,8 +76,8 @@ impl WebhookRegistry {
     ///
     /// Returns the hex-encoded signature.
     pub fn sign_payload(secret: &str, payload: &[u8]) -> String {
-        let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-            .expect("HMAC can take key of any size");
+        let mut mac =
+            HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC can take key of any size");
         mac.update(payload);
         let result = mac.finalize();
         let code_bytes = result.into_bytes();
@@ -210,12 +210,11 @@ mod tests {
         let path = dir.path().join("webhooks.json");
 
         let registry = WebhookRegistry::new();
-        let config =
-            WebhookConfig::with_event_types(
-                "https://example.com".to_string(),
-                "my_secret".to_string(),
-                vec![McpEventType::ServerConnected],
-            );
+        let config = WebhookConfig::with_event_types(
+            "https://example.com".to_string(),
+            "my_secret".to_string(),
+            vec![McpEventType::ServerConnected],
+        );
         let id = registry.register(config);
         registry.persist(&path).unwrap();
 
@@ -262,7 +261,10 @@ mod tests {
     #[test]
     fn register_with_id() {
         let registry = WebhookRegistry::new();
-        registry.register_with_id("wh_custom".to_string(), sample_config("https://example.com"));
+        registry.register_with_id(
+            "wh_custom".to_string(),
+            sample_config("https://example.com"),
+        );
         assert_eq!(registry.len(), 1);
         let config = registry.get("wh_custom").unwrap();
         assert_eq!(config.url, "https://example.com");

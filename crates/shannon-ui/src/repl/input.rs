@@ -1416,8 +1416,7 @@ fn handle_active_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     }
                     "show_diff" => {
                         if let Some(preview) = repl.state.undo_preview.take() {
-                            let mut viewer =
-                                crate::widgets::diff_viewer::DiffViewerWidget::new();
+                            let mut viewer = crate::widgets::diff_viewer::DiffViewerWidget::new();
                             viewer.load_raw_diff(&preview.full_diff);
                             repl.state.diff_viewer = Some(viewer);
                         }
@@ -2706,5 +2705,614 @@ mod tests {
             perm, perm_alias,
             "permissions and perms should have same completions"
         );
+    }
+
+    // ── text_object_target mapping ─────────────────────────────────
+
+    #[test]
+    fn test_text_object_target_word() {
+        assert_eq!(text_object_target(TextObject::Word), 'w');
+    }
+
+    #[test]
+    fn test_text_object_target_double_quote() {
+        assert_eq!(text_object_target(TextObject::DoubleQuote), '"');
+    }
+
+    #[test]
+    fn test_text_object_target_single_quote() {
+        assert_eq!(text_object_target(TextObject::SingleQuote), '\'');
+    }
+
+    #[test]
+    fn test_text_object_target_paren() {
+        assert_eq!(text_object_target(TextObject::Paren), '(');
+    }
+
+    #[test]
+    fn test_text_object_target_bracket() {
+        assert_eq!(text_object_target(TextObject::Bracket), '[');
+    }
+
+    #[test]
+    fn test_text_object_target_brace() {
+        assert_eq!(text_object_target(TextObject::Brace), '{');
+    }
+
+    #[test]
+    fn test_text_object_target_all_variants_covered() {
+        // Ensure every TextObject variant maps to a distinct char
+        let targets: Vec<char> = vec![
+            text_object_target(TextObject::Word),
+            text_object_target(TextObject::DoubleQuote),
+            text_object_target(TextObject::SingleQuote),
+            text_object_target(TextObject::Paren),
+            text_object_target(TextObject::Bracket),
+            text_object_target(TextObject::Brace),
+        ];
+        // All distinct
+        let unique: std::collections::HashSet<char> = targets.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            targets.len(),
+            "All text object targets must be distinct"
+        );
+    }
+
+    // ── looks_like_path ────────────────────────────────────────────
+
+    #[test]
+    fn test_looks_like_path_absolute() {
+        assert!(looks_like_path("/usr/local/bin"));
+    }
+
+    #[test]
+    fn test_looks_like_path_dot_slash() {
+        assert!(looks_like_path("./src/main.rs"));
+    }
+
+    #[test]
+    fn test_looks_like_path_dot_dot_slash() {
+        assert!(looks_like_path("../parent/file.rs"));
+    }
+
+    #[test]
+    fn test_looks_like_path_tilde() {
+        assert!(looks_like_path("~/Documents"));
+    }
+
+    #[test]
+    fn test_looks_like_path_with_slash_no_leading() {
+        // Contains / but doesn't start with /
+        assert!(looks_like_path("src/lib.rs"));
+    }
+
+    #[test]
+    fn test_looks_like_path_bare_word() {
+        assert!(!looks_like_path("hello"));
+    }
+
+    #[test]
+    fn test_looks_like_path_empty() {
+        assert!(!looks_like_path(""));
+    }
+
+    #[test]
+    fn test_looks_like_path_just_slash() {
+        // Starts with / so it matches absolute path
+        assert!(looks_like_path("/"));
+    }
+
+    #[test]
+    fn test_looks_like_path_command_name() {
+        assert!(!looks_like_path("commit"));
+    }
+
+    // ── complete_command_args comprehensive ─────────────────────────
+
+    #[test]
+    fn test_complete_command_args_model_prefixes() {
+        let claude = complete_command_args("model", "claude");
+        assert!(
+            claude.iter().any(|c| c.contains("claude")),
+            "Should match claude models"
+        );
+
+        let gpt = complete_command_args("model", "gpt");
+        assert!(
+            gpt.iter().any(|c| c.contains("gpt")),
+            "Should match gpt models"
+        );
+    }
+
+    #[test]
+    fn test_complete_command_args_theme_completions() {
+        let themes = complete_command_args("theme", "");
+        assert!(themes.contains(&"dark".to_string()));
+        assert!(themes.contains(&"light".to_string()));
+        assert!(themes.contains(&"pick".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_config_completions() {
+        let config = complete_command_args("config", "");
+        assert!(config.contains(&"list".to_string()));
+        assert!(config.contains(&"get".to_string()));
+        assert!(config.contains(&"set".to_string()));
+        assert!(config.contains(&"reset".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_mcp_completions() {
+        let mcp = complete_command_args("mcp", "");
+        assert!(mcp.contains(&"list".to_string()));
+        assert!(mcp.contains(&"connect".to_string()));
+        assert!(mcp.contains(&"disconnect".to_string()));
+        assert!(mcp.contains(&"tools".to_string()));
+        assert!(mcp.contains(&"status".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_undo_completions() {
+        let undo = complete_command_args("undo", "");
+        assert!(undo.contains(&"--dry-run".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_rewind_completions() {
+        let rewind = complete_command_args("rewind", "");
+        assert!(rewind.contains(&"1".to_string()));
+        assert!(rewind.contains(&"2".to_string()));
+        assert!(rewind.contains(&"--dry-run".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_hook_completions() {
+        let hooks = complete_command_args("hooks", "");
+        assert!(hooks.contains(&"list".to_string()));
+        assert!(hooks.contains(&"add".to_string()));
+        assert!(hooks.contains(&"remove".to_string()));
+        assert!(hooks.contains(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_session_completions() {
+        let session = complete_command_args("session", "");
+        assert!(session.contains(&"list".to_string()));
+        assert!(session.contains(&"save".to_string()));
+        assert!(session.contains(&"delete".to_string()));
+        assert!(session.contains(&"export".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_lang_completions() {
+        let langs = complete_command_args("lang", "");
+        assert!(langs.contains(&"en".to_string()));
+        assert!(langs.contains(&"zh".to_string()));
+        assert!(langs.contains(&"ja".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_prefix_filtering() {
+        let completions = complete_command_args("model", "ollama");
+        assert!(
+            completions.iter().all(|c| c.contains("ollama")),
+            "Prefix 'ollama' should filter to only ollama models"
+        );
+        assert!(!completions.is_empty(), "Should have ollama models");
+    }
+
+    #[test]
+    fn test_complete_command_args_empty_prefix_returns_all() {
+        let config = complete_command_args("config", "");
+        assert!(
+            config.len() >= 4,
+            "Empty prefix should return all config subcommands"
+        );
+    }
+
+    #[test]
+    fn test_complete_command_args_nonmatching_prefix_returns_empty() {
+        let config = complete_command_args("config", "zzz");
+        assert!(config.is_empty(), "Non-matching prefix should return empty");
+    }
+
+    #[test]
+    fn test_complete_command_args_diff_completions() {
+        let diff = complete_command_args("diff", "");
+        assert!(diff.contains(&"--staged".to_string()));
+        assert!(diff.contains(&"--stat".to_string()));
+        assert!(diff.contains(&"--word-diff".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_ci_completions() {
+        let ci = complete_command_args("ci", "");
+        assert!(ci.contains(&"status".to_string()));
+        assert!(ci.contains(&"runs".to_string()));
+        assert!(ci.contains(&"workflows".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_agent_completions() {
+        let agent = complete_command_args("agent", "");
+        assert!(agent.contains(&"spawn".to_string()));
+        assert!(agent.contains(&"list".to_string()));
+        assert!(agent.contains(&"status".to_string()));
+        assert!(agent.contains(&"stop".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_sandbox_completions() {
+        let sandbox = complete_command_args("sandbox", "");
+        assert!(sandbox.contains(&"run".to_string()));
+        assert!(sandbox.contains(&"status".to_string()));
+        assert!(sandbox.contains(&"stop".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_webhook_completions() {
+        let webhook = complete_command_args("webhook", "");
+        assert!(webhook.contains(&"list".to_string()));
+        assert!(webhook.contains(&"add".to_string()));
+        assert!(webhook.contains(&"remove".to_string()));
+        assert!(webhook.contains(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_debug_completions() {
+        let dbg = complete_command_args("debug", "");
+        assert!(dbg.contains(&"info".to_string()));
+        assert!(dbg.contains(&"log".to_string()));
+        assert!(dbg.contains(&"profile".to_string()));
+        assert!(dbg.contains(&"trace".to_string()));
+    }
+
+    // ── complete_file_path ─────────────────────────────────────────
+
+    #[test]
+    fn test_complete_file_path_nonexistent_dir() {
+        let results = complete_file_path("/nonexistent_dir_xyz_12345/");
+        assert!(
+            results.is_empty(),
+            "Nonexistent directory should return empty"
+        );
+    }
+
+    #[test]
+    fn test_complete_file_path_current_dir() {
+        let results = complete_file_path("./");
+        // Current directory should exist and have entries
+        // (this test is environment-dependent but reasonable for a project dir)
+        // Just ensure it doesn't panic
+        let _ = results;
+    }
+
+    #[test]
+    fn test_complete_file_path_empty() {
+        let results = complete_file_path("");
+        // Empty prefix should list entries in current dir
+        let _ = results;
+    }
+
+    // ── looks_like_path edge cases ─────────────────────────────────
+
+    #[test]
+    fn test_looks_like_path_just_tilde() {
+        assert!(looks_like_path("~"));
+    }
+
+    #[test]
+    fn test_looks_like_path_tilde_slash() {
+        assert!(looks_like_path("~/"));
+    }
+
+    #[test]
+    fn test_looks_like_path_dot() {
+        // "./foo" starts with "./" so yes
+        assert!(looks_like_path("./"));
+    }
+
+    #[test]
+    fn test_looks_like_path_space() {
+        assert!(!looks_like_path("hello world"));
+    }
+
+    #[test]
+    fn test_looks_like_path_numbers() {
+        assert!(!looks_like_path("123"));
+    }
+
+    // ── complete_command_args more aliases ──────────────────────────
+
+    #[test]
+    fn test_complete_command_args_debug_aliases() {
+        let debug = complete_command_args("debug", "");
+        let dbg = complete_command_args("dbg", "");
+        let dev = complete_command_args("dev", "");
+        assert_eq!(debug, dbg, "debug and dbg should have same completions");
+        assert_eq!(debug, dev, "debug and dev should have same completions");
+    }
+
+    #[test]
+    fn test_complete_command_args_export_import_aliases() {
+        let export = complete_command_args("export", "");
+        let save = complete_command_args("save", "");
+        assert_eq!(export, save, "export and save should have same completions");
+
+        let import = complete_command_args("import", "");
+        let load = complete_command_args("load", "");
+        assert_eq!(import, load, "import and load should have same completions");
+    }
+
+    #[test]
+    fn test_complete_command_args_search_aliases() {
+        let search = complete_command_args("search", "");
+        let hist = complete_command_args("hist", "");
+        assert_eq!(search, hist, "search and hist should have same completions");
+    }
+
+    #[test]
+    fn test_complete_command_args_status_aliases() {
+        let status = complete_command_args("status", "");
+        let st = complete_command_args("st", "");
+        assert_eq!(status, st, "status and st should have same completions");
+    }
+
+    #[test]
+    fn test_complete_command_args_remember_aliases() {
+        let remember = complete_command_args("remember", "");
+        let mem = complete_command_args("mem", "");
+        let memo = complete_command_args("memo", "");
+        assert_eq!(remember, mem);
+        assert_eq!(remember, memo);
+    }
+
+    #[test]
+    fn test_complete_command_args_image_aliases() {
+        let image = complete_command_args("image", "");
+        let img = complete_command_args("img", "");
+        assert_eq!(image, img, "image and img should have same completions");
+    }
+
+    #[test]
+    fn test_complete_command_args_cost_completions() {
+        let cost = complete_command_args("cost", "");
+        assert!(cost.contains(&"summary".to_string()));
+        assert!(cost.contains(&"breakdown".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_plan_completions() {
+        let plan = complete_command_args("plan", "");
+        assert!(plan.contains(&"create".to_string()));
+        assert!(plan.contains(&"approve".to_string()));
+        assert!(plan.contains(&"reject".to_string()));
+        assert!(plan.contains(&"done".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_effort_completions() {
+        let effort = complete_command_args("effort", "");
+        assert!(effort.contains(&"low".to_string()));
+        assert!(effort.contains(&"medium".to_string()));
+        assert!(effort.contains(&"high".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_accessibility_completions() {
+        let a11y = complete_command_args("accessibility", "");
+        assert!(a11y.contains(&"on".to_string()));
+        assert!(a11y.contains(&"off".to_string()));
+        assert!(a11y.contains(&"status".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_local_models_completions() {
+        let local = complete_command_args("local", "");
+        assert!(local.contains(&"list".to_string()));
+        assert!(local.contains(&"pull".to_string()));
+        assert!(local.contains(&"remove".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_route_completions() {
+        let route = complete_command_args("route", "");
+        assert!(route.contains(&"list".to_string()));
+        assert!(route.contains(&"set".to_string()));
+        assert!(route.contains(&"auto".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_create_pr_completions() {
+        let pr = complete_command_args("create-pr", "");
+        assert!(pr.contains(&"--draft".to_string()));
+        assert!(pr.contains(&"--title".to_string()));
+        assert!(pr.contains(&"--body".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_copy_completions() {
+        let copy = complete_command_args("copy", "");
+        assert!(copy.contains(&"1".to_string()));
+        assert!(copy.contains(&"last".to_string()));
+        assert!(copy.contains(&"response".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_select_tools_completions() {
+        let tools = complete_command_args("select-tools", "");
+        assert!(tools.contains(&"enable".to_string()));
+        assert!(tools.contains(&"disable".to_string()));
+        assert!(tools.contains(&"list".to_string()));
+        assert!(tools.contains(&"reset".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_watch_completions() {
+        let watch = complete_command_args("watch", "");
+        assert!(watch.contains(&"--pattern".to_string()));
+        assert!(watch.contains(&"stop".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_project_completions() {
+        let project = complete_command_args("project", "");
+        assert!(project.contains(&"info".to_string()));
+        assert!(project.contains(&"reset".to_string()));
+        assert!(project.contains(&"save".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_notify_completions() {
+        let notify = complete_command_args("notify", "");
+        assert!(notify.contains(&"on".to_string()));
+        assert!(notify.contains(&"off".to_string()));
+        assert!(notify.contains(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_context_completions() {
+        let ctx = complete_command_args("context", "");
+        assert!(ctx.contains(&"list".to_string()));
+        assert!(ctx.contains(&"add".to_string()));
+        assert!(ctx.contains(&"remove".to_string()));
+        assert!(ctx.contains(&"clear".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_mode_completions() {
+        let mode = complete_command_args("mode", "");
+        assert!(mode.contains(&"default".to_string()));
+        assert!(mode.contains(&"plan".to_string()));
+        assert!(mode.contains(&"bypass".to_string()));
+        assert!(mode.contains(&"auto".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_bind_completions() {
+        let bind = complete_command_args("bind", "");
+        assert!(bind.contains(&"list".to_string()));
+        assert!(bind.contains(&"set".to_string()));
+        assert!(bind.contains(&"remove".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_review_completions() {
+        let review = complete_command_args("review", "");
+        assert!(review.contains(&"HEAD~1".to_string()));
+        assert!(review.contains(&"main...HEAD".to_string()));
+        assert!(review.contains(&"--staged".to_string()));
+        assert!(review.contains(&"--full".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_stats_completions() {
+        let stats = complete_command_args("stats", "");
+        assert!(stats.contains(&"summary".to_string()));
+        assert!(stats.contains(&"tokens".to_string()));
+        assert!(stats.contains(&"timing".to_string()));
+        assert!(stats.contains(&"cache".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_billing_completions() {
+        let billing = complete_command_args("billing", "");
+        assert!(billing.contains(&"summary".to_string()));
+        assert!(billing.contains(&"details".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_web_search_completions() {
+        let ws = complete_command_args("web-search", "");
+        assert!(ws.contains(&"--limit".to_string()));
+        assert!(ws.contains(&"--depth".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_patch_completions() {
+        let patch = complete_command_args("patch", "");
+        assert!(patch.contains(&"--stat".to_string()));
+        assert!(patch.contains(&"--apply".to_string()));
+        assert!(patch.contains(&"--reverse".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_statusline_completions() {
+        let sl = complete_command_args("statusline", "");
+        assert!(sl.contains(&"on".to_string()));
+        assert!(sl.contains(&"off".to_string()));
+        assert!(sl.contains(&"config".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_color_completions() {
+        let color = complete_command_args("color", "");
+        assert!(color.contains(&"on".to_string()));
+        assert!(color.contains(&"off".to_string()));
+        assert!(color.contains(&"auto".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_forget_completions() {
+        let forget = complete_command_args("forget", "");
+        assert!(forget.contains(&"--all".to_string()));
+        assert!(forget.contains(&"--confirm".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_recall_completions() {
+        let recall = complete_command_args("recall", "");
+        assert!(recall.contains(&"--limit".to_string()));
+        assert!(recall.contains(&"--recent".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_suggest_completions() {
+        let suggest = complete_command_args("suggest", "");
+        assert!(suggest.contains(&"--model".to_string()));
+        assert!(suggest.contains(&"--context".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_image_flags() {
+        let image = complete_command_args("image", "");
+        assert!(image.contains(&"--paste".to_string()));
+        assert!(image.contains(&"--path".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_loop_flags() {
+        let lp = complete_command_args("loop", "");
+        assert!(lp.contains(&"--max".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_resume_completions() {
+        let resume = complete_command_args("resume", "");
+        assert!(resume.contains(&"--last".to_string()));
+        assert!(resume.contains(&"--list".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_browse_completions() {
+        let browse = complete_command_args("browse", "");
+        assert!(browse.contains(&"--hidden".to_string()));
+        assert!(browse.contains(&"--limit".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_find_completions() {
+        let find = complete_command_args("find", "");
+        assert!(find.contains(&"--regex".to_string()));
+        assert!(find.contains(&"--limit".to_string()));
+        assert!(find.contains(&"--role".to_string()));
+    }
+
+    #[test]
+    fn test_complete_command_args_diag_completions() {
+        let diag = complete_command_args("diag", "");
+        assert!(diag.contains(&"--full".to_string()));
+        assert!(diag.contains(&"--json".to_string()));
     }
 }

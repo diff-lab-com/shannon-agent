@@ -1026,9 +1026,7 @@ mod tests {
     async fn call_tool_rejects_when_not_healthy() {
         let handle = make_remote_handle("reject-remote");
         *handle.state.write().await = ServerState::Unhealthy("conn refused".to_string());
-        let result = handle
-            .call_tool("some_tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("some_tool", serde_json::json!({})).await;
         assert!(result.is_err());
         match result.unwrap_err() {
             shannon_tool_interface::ToolError::ExecutionFailed(msg) => {
@@ -1043,18 +1041,14 @@ mod tests {
     async fn call_tool_rejects_when_starting() {
         let handle = make_remote_handle("starting-remote");
         *handle.state.write().await = ServerState::Starting;
-        let result = handle
-            .call_tool("tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("tool", serde_json::json!({})).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn call_tool_rejects_when_stopped() {
         let handle = make_remote_handle("stopped-remote");
-        let result = handle
-            .call_tool("tool", serde_json::json!({}))
-            .await;
+        let result = handle.call_tool("tool", serde_json::json!({})).await;
         assert!(result.is_err());
     }
 
@@ -1106,10 +1100,7 @@ mod tests {
     async fn session_id_can_be_set() {
         let handle = make_remote_handle("session-test");
         *handle.session_id.write().await = Some("sid-abc".to_string());
-        assert_eq!(
-            handle.session_id.read().await.as_deref(),
-            Some("sid-abc")
-        );
+        assert_eq!(handle.session_id.read().await.as_deref(), Some("sid-abc"));
     }
 
     // -- next_id counter test ----------------------------------------------
@@ -1159,10 +1150,7 @@ mod tests {
         let unsafe_chars = [';', '&', '|', '$', '`', '(', ')', '{', '}', '<', '>', '\\'];
         for ch in unsafe_chars {
             let cmd = format!("echo {ch}something");
-            assert!(
-                cmd.contains(ch),
-                "Command should contain '{ch}'"
-            );
+            assert!(cmd.contains(ch), "Command should contain '{ch}'");
         }
         // The ".." path traversal should also be caught.
         let traversal_cmd = "../bin/get-token";

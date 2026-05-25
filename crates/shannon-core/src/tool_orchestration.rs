@@ -289,7 +289,11 @@ impl ToolCallOptimizer {
         }
 
         // Deduplicate sequential list and sort for deterministic output.
-        let mut seq_dedup: Vec<usize> = sequential.into_iter().collect::<HashSet<_>>().into_iter().collect();
+        let mut seq_dedup: Vec<usize> = sequential
+            .into_iter()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
         seq_dedup.sort();
         sequential = seq_dedup;
 
@@ -304,11 +308,16 @@ impl ToolCallOptimizer {
     fn is_read_only(tool_name: &str) -> bool {
         matches!(
             tool_name,
-            "Read" | "read"
-                | "Glob" | "glob"
-                | "Grep" | "grep"
-                | "LS" | "ls"
-                | "ListFiles" | "list_files"
+            "Read"
+                | "read"
+                | "Glob"
+                | "glob"
+                | "Grep"
+                | "grep"
+                | "LS"
+                | "ls"
+                | "ListFiles"
+                | "list_files"
         )
     }
 
@@ -320,12 +329,14 @@ impl ToolCallOptimizer {
     fn extract_file_path(tool_name: &str, input: &Value) -> Option<String> {
         let obj = input.as_object()?;
         match tool_name {
-            "Read" | "read" | "Edit" | "edit" | "Write" | "write" => {
-                obj.get("file_path").and_then(|v| v.as_str()).map(|s| s.to_string())
-            }
-            "Glob" | "glob" | "Grep" | "grep" => {
-                obj.get("path").and_then(|v| v.as_str()).map(|s| s.to_string())
-            }
+            "Read" | "read" | "Edit" | "edit" | "Write" | "write" => obj
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            "Glob" | "glob" | "Grep" | "grep" => obj
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
             _ => None,
         }
     }
@@ -403,10 +414,16 @@ mod tests {
         let mut tracker = ToolOrchestrationTracker::new();
 
         let input = r#"{"file_path":"/tmp/a.rs"}"#;
-        assert!(!tracker.is_cached("Read", input), "should not be cached initially");
+        assert!(
+            !tracker.is_cached("Read", input),
+            "should not be cached initially"
+        );
 
         tracker.record("Read", input, 0xABCD);
-        assert!(tracker.is_cached("Read", input), "should be cached after recording");
+        assert!(
+            tracker.is_cached("Read", input),
+            "should be cached after recording"
+        );
     }
 
     #[test]
@@ -415,7 +432,10 @@ mod tests {
 
         let input = r#"{"file_path":"/tmp/a.rs"}"#;
         tracker.record("Read", input, 0xABCD);
-        assert!(tracker.is_cached("Read", input), "should be cached immediately");
+        assert!(
+            tracker.is_cached("Read", input),
+            "should be cached immediately"
+        );
 
         // Wait for TTL to expire
         std::thread::sleep(Duration::from_millis(80));
@@ -468,7 +488,11 @@ mod tests {
 
         let plan = ToolCallOptimizer::optimize(&calls);
 
-        assert_eq!(plan.deduplicated, vec![1], "second identical call should be deduplicated");
+        assert_eq!(
+            plan.deduplicated,
+            vec![1],
+            "second identical call should be deduplicated"
+        );
     }
 
     #[test]
@@ -482,10 +506,17 @@ mod tests {
         let plan = ToolCallOptimizer::optimize(&calls);
 
         assert!(plan.deduplicated.is_empty(), "no duplicates");
-        assert!(plan.sequential.is_empty(), "read-only calls have no sequential deps");
+        assert!(
+            plan.sequential.is_empty(),
+            "read-only calls have no sequential deps"
+        );
 
         // All three should be in a single parallel group.
-        assert_eq!(plan.parallel_groups.len(), 1, "one parallel group for reads");
+        assert_eq!(
+            plan.parallel_groups.len(),
+            1,
+            "one parallel group for reads"
+        );
         let group = &plan.parallel_groups[0];
         assert_eq!(group.len(), 3);
         assert!(group.contains(&0));
@@ -496,7 +527,10 @@ mod tests {
     #[test]
     fn test_optimizer_sequential_for_write_then_read() {
         let calls = vec![
-            PendingToolCall::new("Edit", json!({"file_path": "/tmp/a.rs", "old_string": "x", "new_string": "y"})),
+            PendingToolCall::new(
+                "Edit",
+                json!({"file_path": "/tmp/a.rs", "old_string": "x", "new_string": "y"}),
+            ),
             PendingToolCall::new("Read", json!({"file_path": "/tmp/a.rs"})),
         ];
 
@@ -513,15 +547,25 @@ mod tests {
     #[test]
     fn test_optimizer_parallel_for_different_files() {
         let calls = vec![
-            PendingToolCall::new("Edit", json!({"file_path": "/tmp/a.rs", "old_string": "x", "new_string": "y"})),
-            PendingToolCall::new("Edit", json!({"file_path": "/tmp/b.rs", "old_string": "x", "new_string": "y"})),
+            PendingToolCall::new(
+                "Edit",
+                json!({"file_path": "/tmp/a.rs", "old_string": "x", "new_string": "y"}),
+            ),
+            PendingToolCall::new(
+                "Edit",
+                json!({"file_path": "/tmp/b.rs", "old_string": "x", "new_string": "y"}),
+            ),
         ];
 
         let plan = ToolCallOptimizer::optimize(&calls);
 
         assert!(plan.deduplicated.is_empty());
         // Writes to different files can be parallel.
-        assert_eq!(plan.parallel_groups.len(), 1, "one parallel group for writes to different files");
+        assert_eq!(
+            plan.parallel_groups.len(),
+            1,
+            "one parallel group for writes to different files"
+        );
         let group = &plan.parallel_groups[0];
         assert!(group.contains(&0));
         assert!(group.contains(&1));
@@ -530,8 +574,14 @@ mod tests {
     #[test]
     fn test_optimizer_multiple_writes_same_file_sequential() {
         let calls = vec![
-            PendingToolCall::new("Edit", json!({"file_path": "/tmp/a.rs", "old_string": "x", "new_string": "y"})),
-            PendingToolCall::new("Edit", json!({"file_path": "/tmp/a.rs", "old_string": "y", "new_string": "z"})),
+            PendingToolCall::new(
+                "Edit",
+                json!({"file_path": "/tmp/a.rs", "old_string": "x", "new_string": "y"}),
+            ),
+            PendingToolCall::new(
+                "Edit",
+                json!({"file_path": "/tmp/a.rs", "old_string": "y", "new_string": "z"}),
+            ),
         ];
 
         let plan = ToolCallOptimizer::optimize(&calls);
@@ -597,7 +647,11 @@ mod tests {
     fn test_hash_value_deterministic() {
         let v1 = json!({"file_path": "/tmp/a.rs", "offset": 10});
         let v2 = json!({"offset": 10, "file_path": "/tmp/a.rs"});
-        assert_eq!(hash_value(&v1), hash_value(&v2), "key order should not affect hash");
+        assert_eq!(
+            hash_value(&v1),
+            hash_value(&v2),
+            "key order should not affect hash"
+        );
     }
 
     #[test]
@@ -625,13 +679,19 @@ mod tests {
             // 0: Read a.rs
             PendingToolCall::new("Read", json!({"file_path": "/tmp/a.rs"})),
             // 1: Edit a.rs
-            PendingToolCall::new("Edit", json!({"file_path": "/tmp/a.rs", "old_string": "x", "new_string": "y"})),
+            PendingToolCall::new(
+                "Edit",
+                json!({"file_path": "/tmp/a.rs", "old_string": "x", "new_string": "y"}),
+            ),
             // 2: Read a.rs (duplicate of 0)
             PendingToolCall::new("Read", json!({"file_path": "/tmp/a.rs"})),
             // 3: Read b.rs
             PendingToolCall::new("Read", json!({"file_path": "/tmp/b.rs"})),
             // 4: Edit c.rs
-            PendingToolCall::new("Edit", json!({"file_path": "/tmp/c.rs", "old_string": "a", "new_string": "b"})),
+            PendingToolCall::new(
+                "Edit",
+                json!({"file_path": "/tmp/c.rs", "old_string": "a", "new_string": "b"}),
+            ),
         ];
 
         let plan = ToolCallOptimizer::optimize(&calls);
@@ -641,7 +701,10 @@ mod tests {
 
         // Call 3 (Read b.rs) has no write dependency -> parallel.
         let all_parallel: HashSet<usize> = plan.parallel_groups.iter().flatten().copied().collect();
-        assert!(all_parallel.contains(&3), "independent read should be parallel");
+        assert!(
+            all_parallel.contains(&3),
+            "independent read should be parallel"
+        );
     }
 
     #[test]
@@ -656,7 +719,10 @@ mod tests {
 
     #[test]
     fn test_optimizer_single_call() {
-        let calls = vec![PendingToolCall::new("Read", json!({"file_path": "/tmp/a.rs"}))];
+        let calls = vec![PendingToolCall::new(
+            "Read",
+            json!({"file_path": "/tmp/a.rs"}),
+        )];
         let plan = ToolCallOptimizer::optimize(&calls);
 
         assert!(plan.deduplicated.is_empty());

@@ -336,14 +336,23 @@ fn bench_cache_token_extraction_from_sse(c: &mut Criterion) {
     });
 }
 
-criterion_group!(
-    benches,
-    bench_message_serialization,
-    bench_context_estimation,
-    bench_compaction_small,
-    bench_compaction_large,
-    bench_system_prompt_construction,
-    bench_cache_hit_rate_calculation,
-    bench_cache_token_extraction_from_sse,
-);
+fn criterion_config() -> Criterion {
+    Criterion::default()
+        .noise_threshold(0.03)
+        .confidence_level(0.98)
+        .significance_level(0.02)
+        .sample_size(50)
+}
+
+criterion_group! {
+    name = benches;
+    config = criterion_config();
+    targets = bench_message_serialization,
+        bench_context_estimation,
+        bench_compaction_small,
+        bench_compaction_large,
+        bench_system_prompt_construction,
+        bench_cache_hit_rate_calculation,
+        bench_cache_token_extraction_from_sse
+}
 criterion_main!(benches);
