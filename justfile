@@ -6,17 +6,17 @@
 # 录制:       just record       (真实 API → fixture, 需要 SHANNON_API_KEY)
 # 发布:       just build        (编译 release binary)
 #
-# 安装: cargo install just
+# 安装: cargo install just cargo-nextest
 
 # 日常开发：提交前跑一次 (check + lint + test)
 dev:
     cargo check --workspace
     cargo clippy --workspace
-    cargo test --workspace -- --test-threads=1
+    cargo nextest run --workspace --config-file .config/nextest.toml
 
 # 全量测试 (CI 也用这个)
 test:
-    cargo test --workspace -- --test-threads=1
+    cargo nextest run --workspace --config-file .config/nextest.toml
 
 # 快速类型检查
 check:
