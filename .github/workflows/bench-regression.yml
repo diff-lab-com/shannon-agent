@@ -21,9 +21,8 @@ jobs:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
 
-      # Run performance and E2E latency tests (threshold-based assertions)
-      - name: Performance Tests
-        run: cargo test --test perf_tests -- --test-threads=1
+      # ci.yml already runs all tests (perf_tests, scenario_tests) via nextest
+      # This workflow only adds criterion benchmarks
 
       # Run criterion benchmarks and save baseline
       - name: Run Benchmarks
@@ -34,10 +33,6 @@ jobs:
           cargo bench --bench compact_bench -- --save-baseline pr
           cargo bench --bench context_budget_bench -- --save-baseline pr
         continue-on-error: true
-
-      # Run scenario tests (validates YAML scenario pipeline)
-      - name: Scenario Tests
-        run: cargo test --test scenario_tests -- --test-threads=1
 
       # Summary
       - name: Benchmark Summary
