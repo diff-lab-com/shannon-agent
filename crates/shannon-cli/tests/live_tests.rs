@@ -711,6 +711,427 @@ fn record_task_multi_turn_anthropic() {
     );
 }
 
+// ── Tier 1: Core tool chain recordings ────────────────────────────────────
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_edit_precise_match() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_edit_precise");
+
+    fs::write(
+        workspace.path().join("config.toml"),
+        "name = \"old_name\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("write config.toml");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Read config.toml and change the name from 'old_name' to 'new_name' using an exact string replacement",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("config.toml")).unwrap();
+    assert!(
+        content.contains("new_name"),
+        "config.toml should contain 'new_name', got: {content}"
+    );
+    assert!(
+        !content.contains("old_name"),
+        "config.toml should not contain 'old_name', got: {content}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_search_read_edit() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_search_read_edit");
+
+    fs::write(
+        workspace.path().join("src/lib.rs"),
+        "pub fn calculate(x: i32, y: i32) -> i32 {\n    x + y\n}\n",
+    )
+    .expect("write src/lib.rs");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Search for 'calculate' in the codebase, read the file where it's defined, and rename the function to 'add_numbers'",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
+    assert!(
+        content.contains("add_numbers"),
+        "lib.rs should contain 'add_numbers', got: {content}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_bash_verify() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_bash_verify");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Create a directory called 'build', then create a file build/output.txt with the content 'build successful', then verify the file exists by reading it",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    assert!(
+        workspace.path().join("build/output.txt").exists(),
+        "build/output.txt should exist"
+    );
+    let content = fs::read_to_string(workspace.path().join("build/output.txt")).unwrap();
+    assert!(
+        content.contains("build successful"),
+        "output.txt should contain 'build successful', got: {content}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_error_recovery() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_error_recovery");
+
+    // Create a file with a syntax error for the LLM to find and fix
+    fs::write(
+        workspace.path().join("src/main.rs"),
+        "fn main() {\n    let x = 1 + ;\n    println!(\"{}\", x);\n}\n",
+    )
+    .expect("write src/main.rs");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Read src/main.rs — it has a syntax error. Find and fix it so the code compiles correctly.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("src/main.rs")).unwrap();
+    // Should no longer have the broken "1 + ;" pattern
+    assert!(
+        !content.contains("1 + ;"),
+        "main.rs should have the syntax error fixed, got: {content}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_glob_pattern() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_glob_pattern");
+
+    // Create multiple files with different extensions
+    fs::create_dir_all(workspace.path().join("src")).expect("create src");
+    fs::write(workspace.path().join("src/main.rs"), "fn main() {}").expect("write main.rs");
+    fs::write(workspace.path().join("src/lib.rs"), "pub fn lib() {}").expect("write lib.rs");
+    fs::write(workspace.path().join("src/utils.rs"), "pub fn utils() {}").expect("write utils.rs");
+    fs::write(workspace.path().join("README.md"), "# test").expect("write README");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Find all .rs files in the src/ directory using glob patterns, read each one, and add a comment '// documented' at the top of each file",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    for name in &["main.rs", "lib.rs", "utils.rs"] {
+        let content = fs::read_to_string(workspace.path().join("src").join(name)).unwrap();
+        assert!(
+            content.contains("// documented") || content.contains("//documented"),
+            "{name} should have a comment added, got: {content}"
+        );
+    }
+}
+
+// ── Tier 2: Multi-file / complex task recordings ──────────────────────────
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_multi_file_edit() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_multi_file");
+
+    fs::write(
+        workspace.path().join("src/types.rs"),
+        "pub struct User {\n    pub name: String,\n    pub age: u32,\n}\n",
+    )
+    .expect("write types.rs");
+    fs::write(
+        workspace.path().join("src/api.rs"),
+        "use crate::types::User;\n\npub fn get_user() -> User {\n    User { name: \"Alice\".into(), age: 30 }\n}\n",
+    )
+    .expect("write api.rs");
+    fs::write(
+        workspace.path().join("src/main.rs"),
+        "use crate::api::get_user;\n\nfn main() {\n    let user = get_user();\n    println!(\"Name: {}\", user.name);\n}\n",
+    )
+    .expect("write main.rs");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Read all three source files (src/types.rs, src/api.rs, src/main.rs). Add an 'email: String' field to the User struct in types.rs, update the get_user() function in api.rs to include email, and update the println in main.rs to also print the email.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(180))
+        .assert()
+        .success();
+
+    let types = fs::read_to_string(workspace.path().join("src/types.rs")).unwrap();
+    assert!(
+        types.contains("email"),
+        "types.rs should have email field, got: {types}"
+    );
+    let api = fs::read_to_string(workspace.path().join("src/api.rs")).unwrap();
+    assert!(
+        api.contains("email"),
+        "api.rs should have email in get_user, got: {api}"
+    );
+    let main = fs::read_to_string(workspace.path().join("src/main.rs")).unwrap();
+    assert!(
+        main.contains("email"),
+        "main.rs should print email, got: {main}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_refactor_rename() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_refactor_rename");
+
+    fs::write(
+        workspace.path().join("src/lib.rs"),
+        "pub fn process_data(data: &str) -> String {\n    data.to_uppercase()\n}\n",
+    )
+    .expect("write lib.rs");
+    fs::write(
+        workspace.path().join("src/main.rs"),
+        "use crate::lib::process_data;\n\nfn main() {\n    let result = process_data(\"hello\");\n    println!(\"{}\", result);\n}\n",
+    )
+    .expect("write main.rs");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Rename the function 'process_data' to 'transform_input' across all files. Make sure to update both the definition in src/lib.rs and all usages in src/main.rs.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    let lib = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
+    assert!(
+        lib.contains("transform_input"),
+        "lib.rs should have transform_input, got: {lib}"
+    );
+    assert!(
+        !lib.contains("process_data"),
+        "lib.rs should not have process_data, got: {lib}"
+    );
+    let main = fs::read_to_string(workspace.path().join("src/main.rs")).unwrap();
+    assert!(
+        main.contains("transform_input"),
+        "main.rs should use transform_input, got: {main}"
+    );
+    assert!(
+        !main.contains("process_data"),
+        "main.rs should not have process_data, got: {main}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_create_with_tests() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_create_tests");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Create a Rust library crate with cargo init. Then create src/math.rs with a function 'pub fn multiply(a: i32, b: i32) -> i32' that returns a * b. Add 'mod math;' to src/lib.rs. Then create tests/test_math.rs with a test that verifies multiply(3, 4) == 12.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(180))
+        .assert()
+        .success();
+
+    assert!(
+        workspace.path().join("src/math.rs").exists(),
+        "src/math.rs should exist"
+    );
+    let math = fs::read_to_string(workspace.path().join("src/math.rs")).unwrap();
+    assert!(
+        math.contains("multiply"),
+        "math.rs should have multiply function, got: {math}"
+    );
+    assert!(
+        workspace.path().join("tests/test_math.rs").exists()
+            || workspace.path().join("tests/math.rs").exists(),
+        "test file should exist"
+    );
+}
+
+// ── Tier 3: Edge case recordings ──────────────────────────────────────────
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_long_file_handling() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_long_file");
+
+    // Generate a ~100 line file
+    let mut content = String::from("// Auto-generated module\n\n");
+    for i in 0..50 {
+        content.push_str(&format!("pub fn function_{}() -> i32 {{ {} }}\n\n", i, i));
+    }
+
+    fs::write(workspace.path().join("src/lib.rs"), &content).expect("write lib.rs");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "Read src/lib.rs and add a new function 'pub fn function_50() -> i32 { 50 }' at the end of the file, after function_49.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
+    assert!(
+        content.contains("function_50"),
+        "lib.rs should contain function_50, got: (first 200 chars) {}",
+        &content[..content.len().min(200)]
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_json_schema_output() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_json_schema");
+
+    shannon()
+        .env("SHANNON_API_KEY", &api_key)
+        .env("SHANNON_RECORD_DIR", &record_dir)
+        .env("SHANNON_PROVIDER", "anthropic")
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path())
+        .args([
+            "--prompt",
+            "List the top 3 programming languages by popularity",
+            "--output-format",
+            "json",
+            "--schema",
+            "{\"type\":\"object\",\"properties\":{\"languages\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"rank\":{\"type\":\"integer\"}},\"required\":[\"name\",\"rank\"]}},\"required\":[\"languages\"]}}",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    // The output should be valid JSON with the expected structure
+    let output = std::fs::read_dir(&record_dir).expect("record dir").count();
+    assert!(output > 0, "should have recorded at least one fixture");
+}
+
 // ── Replay tests (no API key needed, use recorded fixtures) ───────────────
 
 #[tokio::test]
