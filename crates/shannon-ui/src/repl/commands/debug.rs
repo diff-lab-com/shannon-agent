@@ -264,3 +264,48 @@ pub(crate) fn parse_path_prefix(
         source: Some("check".to_string()),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_diag_line_cargo_error() {
+        let d = parse_diag_line("src/main.rs:10:5: error[E0001]: type mismatch").unwrap();
+        assert_eq!(d.file_path, "src/main.rs");
+        assert_eq!(d.line, 10);
+        assert!(d.message.contains("type mismatch"));
+    }
+
+    #[test]
+    fn parse_diag_line_cargo_warning() {
+        let d = parse_diag_line("src/lib.rs:42:1: warning: unused variable").unwrap();
+        assert_eq!(d.file_path, "src/lib.rs");
+        assert_eq!(d.line, 42);
+    }
+
+    #[test]
+    fn parse_diag_line_empty() {
+        assert!(parse_diag_line("").is_none());
+        assert!(parse_diag_line("   ").is_none());
+    }
+
+    #[test]
+    fn parse_diag_line_plain_text() {
+        assert!(parse_diag_line("just some text").is_none());
+    }
+
+    #[test]
+    fn parse_path_prefix_valid() {
+        use crate::lsp_bridge::DiagnosticSeverity;
+        let d = parse_path_prefix("foo.rs:5:10: error: bad", DiagnosticSeverity::Error).unwrap();
+        assert_eq!(d.file_path, "foo.rs");
+        assert_eq!(d.line, 5);
+    }
+
+    #[test]
+    fn parse_path_prefix_invalid_line() {
+        use crate::lsp_bridge::DiagnosticSeverity;
+        assert!(parse_path_prefix("foo.rs:abc:10: error", DiagnosticSeverity::Error).is_none());
+    }
+}

@@ -236,3 +236,52 @@ pub mod plugin_utils {
         parse_plugin_subcommand, search_index, uninstall, update_plugins,
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_commands_returns_nonempty() {
+        let cmds = all_commands();
+        assert!(!cmds.is_empty());
+    }
+
+    #[test]
+    fn all_commands_no_duplicate_names() {
+        let cmds = all_commands();
+        let names: Vec<&str> = cmds.iter().map(|c| c.name()).collect();
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(names.len(), unique.len());
+    }
+
+    #[test]
+    fn all_commands_includes_key_commands() {
+        let cmds = all_commands();
+        let names: std::collections::HashSet<&str> = cmds.iter().map(|c| c.name()).collect();
+        assert!(names.contains("commit"));
+        assert!(names.contains("help"));
+        assert!(names.contains("status"));
+        assert!(names.contains("diff"));
+        assert!(names.contains("config"));
+        assert!(names.contains("pdf"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn register_all_populates_registry() {
+        let registry = CommandRegistry::new();
+        register_all(&registry);
+        let count = registry.count().await;
+        assert_eq!(count, all_commands().len());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn register_all_key_commands_lookup() {
+        let registry = CommandRegistry::new();
+        register_all(&registry);
+        assert!(registry.contains("commit").await);
+        assert!(registry.contains("help").await);
+        assert!(registry.contains("status").await);
+        assert!(registry.contains("clear").await);
+    }
+}

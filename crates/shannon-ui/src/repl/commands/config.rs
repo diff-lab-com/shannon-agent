@@ -972,3 +972,69 @@ pub(crate) fn handle_lang(repl: &mut Repl, args: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_provider_name_aliases() {
+        assert!(matches!(
+            parse_provider_name("claude"),
+            Ok(LlmProvider::Anthropic)
+        ));
+        assert!(matches!(
+            parse_provider_name("gpt"),
+            Ok(LlmProvider::OpenAI)
+        ));
+        assert!(matches!(
+            parse_provider_name("ds"),
+            Ok(LlmProvider::DeepSeek)
+        ));
+        assert!(matches!(
+            parse_provider_name("local"),
+            Ok(LlmProvider::Ollama)
+        ));
+        assert!(matches!(parse_provider_name("grok"), Ok(LlmProvider::Xai)));
+        assert!(matches!(parse_provider_name("glm"), Ok(LlmProvider::Zhipu)));
+    }
+
+    #[test]
+    fn parse_provider_name_case_insensitive() {
+        assert!(matches!(
+            parse_provider_name("ANTHROPIC"),
+            Ok(LlmProvider::Anthropic)
+        ));
+        assert!(matches!(
+            parse_provider_name("OpenAI"),
+            Ok(LlmProvider::OpenAI)
+        ));
+    }
+
+    #[test]
+    fn parse_provider_name_unknown() {
+        assert!(parse_provider_name("unknown_provider").is_err());
+    }
+
+    #[test]
+    fn parse_color_string_named() {
+        use ratatui::style::Color;
+        assert_eq!(parse_color_string("red"), Some(Color::Red));
+        assert_eq!(parse_color_string("purple"), Some(Color::Magenta));
+        assert_eq!(parse_color_string("grey"), Some(Color::Gray));
+        assert_eq!(parse_color_string("light_blue"), Some(Color::LightBlue));
+    }
+
+    #[test]
+    fn parse_color_string_hex() {
+        use ratatui::style::Color;
+        assert_eq!(parse_color_string("#ff0000"), Some(Color::Rgb(255, 0, 0)));
+        assert_eq!(parse_color_string("#00ff00"), Some(Color::Rgb(0, 255, 0)));
+    }
+
+    #[test]
+    fn parse_color_string_invalid() {
+        assert_eq!(parse_color_string("notacolor"), None);
+        assert_eq!(parse_color_string("#xyz"), None);
+    }
+}
