@@ -7,11 +7,12 @@ Rust-based AI code assistant (like Claude Code) with multi-provider LLM support,
 ```bash
 cargo build                    # Build workspace
 cargo check --workspace        # Fast type-check
-cargo test --workspace -- --test-threads=1  # Run all tests (threading avoids env contention)
+just test                      # Run all tests (nextest, faster than cargo test)
+just dev                       # check + lint + test, run before commits
 cargo clippy --workspace       # Lint
 ```
 
-Tests use `--test-threads=1` because some tests share environment variables and file paths.
+Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` handles per-crate thread limits.
 
 ## Architecture
 
@@ -45,7 +46,8 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ## Testing Guidelines
 
-- **Always use `--test-threads=1`** for workspace tests (shared env vars, file paths).
+- **Use `just test` (nextest)** for running tests. nextest isolates each test in its own process. Config in `.config/nextest.toml` handles per-crate thread limits (shannon-core and shannon-commands run single-threaded).
+- **Fallback**: `cargo test --workspace -- --test-threads=1` works without nextest but is slower.
 - **Inline tests**: Most crates use `#[cfg(test)] mod tests` within source files. Tests near the code they test.
 - **Integration tests**: `crates/shannon-*/tests/` directories for cross-module testing.
 - **Mockito**: For HTTP API tests. Server matchers are order-dependent with `.expect(N)`.
