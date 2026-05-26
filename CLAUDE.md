@@ -51,6 +51,49 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Mockito**: For HTTP API tests. Server matchers are order-dependent with `.expect(N)`.
 - **Test helpers**: `CollectingSender` (progress sender), `tempfile::TempDir` (file tests), `mockito::Server` (HTTP tests).
 
+### Test Commands (justfile)
+
+`just test` runs everything without API keys. Install: `cargo install just`.
+
+| Command | What | Needs key? |
+|---------|------|-----------|
+| `just test` | All unit + mock tests | No |
+| `just scenarios` | YAML scenario tests | No |
+| `just perf` | Performance regression | No |
+| `just bench` | Criterion benchmarks | No |
+| `just record` | Record real API fixtures | Yes |
+| `just replay` | Replay recorded fixtures | No |
+| `just ci` | Full CI suite (no key) | No |
+
+### Test File Map
+
+**shannon-core/tests/** (component-level):
+- `api_integration.rs` — mockito HTTP tests
+- `multi_turn_conversation.rs` — multi-turn mockito conversations
+- `streaming_stress.rs` — streaming stress tests
+- `snapshot_regression.rs` — insta snapshot tests
+- `perf_tests.rs` — performance thresholds + E2E latency
+- `scenario_tests.rs` — YAML scenario parser/validator/runner
+
+**shannon-cli/tests/** (CLI-level):
+- `cli_args_tests.rs` — argument parsing
+- `cli_interactive_tests.rs` — interactive mode
+- `cli_e2e_tests.rs` — comprehensive provider mock tests
+- `cli_mock_tests.rs` — tool pipeline + provider scenario mocks
+- `live_tests.rs` — real API tests (Ollama/DeepSeek/Anthropic) + record/replay
+
+**YAML scenarios**: `tests/scenarios/*.yaml` — 10 declarative test scenarios
+
+### Recording Real API Fixtures
+
+```bash
+# Record (local, needs API key):
+SHANNON_API_KEY=sk-ant-... just record
+
+# Replay (CI, no key needed):
+just replay
+```
+
 ## Known Gaps (vs Claude Code / Codex CLI / OpenCode)
 
 ### HIGH — Shannon has partial support
