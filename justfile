@@ -1,12 +1,24 @@
-# Shannon test commands
-# Install: cargo install just
-# Usage: just <target>
+# Shannon 测试命令速查
+#
+# 日常开发:   just dev          (check + lint + test, 提交前跑一次)
+# 云端 CI:    just test         (全量测试)
+# 回归/调优:  just bench        (微基准测试)
+# 录制:       just record       (真实 API → fixture, 需要 SHANNON_API_KEY)
+# 发布:       just build        (编译 release binary)
+#
+# 安装: cargo install just
 
-# Default: run all mock tests (no API key needed)
+# 日常开发：提交前跑一次 (check + lint + test)
+dev:
+    cargo check --workspace
+    cargo clippy --workspace
+    cargo test --workspace -- --test-threads=1
+
+# 全量测试 (CI 也用这个)
 test:
     cargo test --workspace -- --test-threads=1
 
-# Fast type check
+# 快速类型检查
 check:
     cargo check --workspace
 
@@ -14,35 +26,21 @@ check:
 lint:
     cargo clippy --workspace
 
-# YAML scenario tests only
-scenarios:
-    cargo test --test scenario_tests -- --test-threads=1
-
-# Performance regression tests
-perf:
-    cargo test --test perf_tests -- --test-threads=1
-
-# Record real API fixtures (needs SHANNON_API_KEY)
+# 录制真实 API fixture (需要 SHANNON_API_KEY)
 record:
     #!/usr/bin/bash
     if [ -z "$SHANNON_API_KEY" ]; then echo "Set SHANNON_API_KEY first"; exit 1; fi
     SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
     cargo test --test live_tests -- --ignored --test-threads=1
 
-# Replay recorded fixtures (no API key needed)
+# 回放录制的 fixture (不需要 API key)
 replay:
     cargo test --test live_tests -- --test-threads=1
 
-# Criterion benchmarks
+# 微基准测试
 bench:
     cargo bench
 
-# Run everything that doesn't need a key (CI without secrets)
-ci:
-    cargo test --workspace -- --test-threads=1
-    cargo test --test scenario_tests -- --test-threads=1
-    cargo test --test perf_tests -- --test-threads=1
-
-# Build release binary
+# 编译 release binary
 build:
     cargo build --release -p shannon-cli
