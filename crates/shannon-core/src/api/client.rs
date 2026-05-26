@@ -207,7 +207,7 @@ impl LlmClient {
             let fixture = RecordedExchange::load(&path).ok()?;
             if fixture.provider == format!("{provider}") && fixture.request_hash == hash {
                 let events = Self::parse_raw_body(&fixture.response.body, provider);
-                return Some(Box::pin(futures::stream::iter(events.into_iter())));
+                return Some(Box::pin(futures::stream::iter(events)));
             }
         }
 
@@ -384,7 +384,7 @@ impl LlmClient {
 
             // Parse the buffered body into a stream
             let events = Self::parse_raw_body(&body, &self.config.provider);
-            return Ok(Box::pin(futures::stream::iter(events.into_iter())));
+            return Ok(Box::pin(futures::stream::iter(events)));
         }
 
         // ── Normal mode: live streaming ──
