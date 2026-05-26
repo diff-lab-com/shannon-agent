@@ -51,13 +51,13 @@ run_test "Stress: cache token streaming" \
 
 # Tier 4: Performance regression (cache hit rate time bounds)
 run_test "Perf: cache hit rate regression" \
-    cargo test -p shannon-core --test perf_regression -- cache_hit_rate --test-threads=1
+    cargo test -p shannon-core --test perf_tests -- cache_hit_rate --test-threads=1
 
 run_test "Perf: cache accumulation regression" \
-    cargo test -p shannon-core --test perf_regression -- cache_accumulation --test-threads=1
+    cargo test -p shannon-core --test perf_tests -- cache_accumulation --test-threads=1
 
 run_test "Perf: cache edge cases" \
-    cargo test -p shannon-core --test perf_regression -- cache_hit_rate_edge --test-threads=1
+    cargo test -p shannon-core --test perf_tests -- cache_hit_rate_edge --test-threads=1
 
 # Tier 5: UI snapshot tests (cache display)
 run_test "UI: cache hit rate snapshot" \
