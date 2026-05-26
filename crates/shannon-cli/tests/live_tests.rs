@@ -109,6 +109,12 @@ fn require_record_dir() -> PathBuf {
     }
 }
 
+/// Recording provider: override via SHANNON_RECORD_PROVIDER (defaults to "anthropic").
+/// Supports any OpenAI-compatible provider: anthropic, minimax, deepseek, openai, etc.
+fn record_provider() -> String {
+    std::env::var("SHANNON_RECORD_PROVIDER").unwrap_or_else(|_| "anthropic".to_string())
+}
+
 /// Check if replay fixtures exist for a given test name. Skip if not found.
 fn has_fixture(prefix: &str) -> bool {
     let dir = fixtures_dir();
@@ -540,7 +546,7 @@ fn record_task_create_file_anthropic() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -581,7 +587,7 @@ fn record_task_bash_command_anthropic() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -618,7 +624,7 @@ fn record_task_read_and_edit_anthropic() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -655,7 +661,7 @@ fn record_task_code_search_anthropic() {
     let output = shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -691,7 +697,7 @@ fn record_task_multi_turn_anthropic() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -730,7 +736,7 @@ fn record_task_edit_precise_match() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -771,7 +777,7 @@ fn record_task_search_read_edit() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -802,7 +808,7 @@ fn record_task_bash_verify() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -844,7 +850,7 @@ fn record_task_error_recovery() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -883,7 +889,7 @@ fn record_task_glob_pattern() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -934,7 +940,7 @@ fn record_task_multi_file_edit() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -986,7 +992,7 @@ fn record_task_refactor_rename() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -1030,7 +1036,7 @@ fn record_task_create_with_tests() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -1080,7 +1086,7 @@ fn record_task_long_file_handling() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
@@ -1112,7 +1118,7 @@ fn record_task_json_schema_output() {
     shannon()
         .env("SHANNON_API_KEY", &api_key)
         .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", "anthropic")
+        .env("SHANNON_PROVIDER", &record_provider())
         .env_remove("OPENAI_API_KEY")
         .current_dir(workspace.path())
         .args([
