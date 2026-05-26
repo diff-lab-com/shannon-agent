@@ -27,11 +27,14 @@ lint:
     cargo clippy --workspace
 
 # 录制真实 API fixture (需要 SHANNON_API_KEY)
+# 默认 anthropic，可改用其他 provider:
+#   SHANNON_RECORD_PROVIDER=minimax just record
+#   SHANNON_RECORD_PROVIDER=openai just record
 record:
     #!/usr/bin/bash
     if [ -z "$SHANNON_API_KEY" ]; then echo "Set SHANNON_API_KEY first"; exit 1; fi
     SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    cargo test --test live_tests -- --ignored --test-threads=1
+    cargo test --test live_tests -- --ignored --test-threads=1 record_task
 
 # 回放录制的 fixture (不需要 API key)
 replay:
