@@ -93,10 +93,18 @@ fn create_workspace(name: &str) -> tempfile::TempDir {
 }
 
 fn require_api_key() -> String {
-    std::env::var("SHANNON_API_KEY").unwrap_or_else(|_| {
-        eprintln!("Skipping: set SHANNON_API_KEY to run recording tests");
-        std::process::exit(0);
-    })
+    if let Ok(key) = std::env::var("SHANNON_API_KEY") {
+        return key;
+    }
+    // Fallback to provider-specific key
+    let provider = record_provider();
+    if let Some(key_env) = provider_key_env(&provider) {
+        if let Ok(key) = std::env::var(key_env) {
+            return key;
+        }
+    }
+    eprintln!("Skipping: set SHANNON_API_KEY to run recording tests");
+    std::process::exit(0);
 }
 
 fn require_record_dir() -> PathBuf {
@@ -113,6 +121,14 @@ fn require_record_dir() -> PathBuf {
 /// Supports any OpenAI-compatible provider: anthropic, minimax, deepseek, openai, etc.
 fn record_provider() -> String {
     std::env::var("SHANNON_RECORD_PROVIDER").unwrap_or_else(|_| "anthropic".to_string())
+}
+
+/// Optional base URL override for recording: SHANNON_RECORD_BASE_URL.
+/// Falls back to SHANNON_BASE_URL, then None (use provider default).
+fn record_base_url() -> Option<String> {
+    std::env::var("SHANNON_RECORD_BASE_URL")
+        .ok()
+        .or_else(|| std::env::var("SHANNON_BASE_URL").ok())
 }
 
 /// Provider-specific API key env var name.
@@ -136,7 +152,12 @@ fn shannon_record(api_key: &str, record_dir: &PathBuf, workspace: &tempfile::Tem
         .env("SHANNON_RECORD_DIR", record_dir)
         .env("SHANNON_PROVIDER", &provider)
         .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN")
         .current_dir(workspace.path());
+    if let Some(base_url) = record_base_url() {
+        cmd.env("SHANNON_BASE_URL", base_url);
+    }
     if let Some(key_env) = provider_key_env(&provider) {
         cmd.env(key_env, api_key);
     }

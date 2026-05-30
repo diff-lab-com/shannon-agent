@@ -442,12 +442,19 @@ impl From<ShannonConfig> for LlmClientConfig {
 
         // --- Resolve api_key ------------------------------------------------
         // --- Resolve base_url -----------------------------------------------
+        // Track whether base_url came from a provider-specific env var so we
+        // can discard it when the provider is explicitly set to something else.
+        let shannon_base_url = std::env::var("SHANNON_BASE_URL").ok();
+        let anthropic_base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
+        let openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
+        let has_explicit_base_url_env = shannon_base_url.is_some();
+
         let base_url = cfg
             .base_url
             .clone()
-            .or_else(|| std::env::var("SHANNON_BASE_URL").ok())
-            .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
-            .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
+            .or(shannon_base_url)
+            .or(anthropic_base_url.clone())
+            .or(openai_base_url.clone())
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());
 
         // --- Resolve model --------------------------------------------------
@@ -490,6 +497,27 @@ impl From<ShannonConfig> for LlmClientConfig {
             }
         } else {
             LlmProvider::from_base_url(&base_url)
+        };
+
+        // --- Fix base_url when provider is explicitly set but base_url came ---
+        // --- from a different provider's env var (e.g. ANTHROPIC_BASE_URL  ---
+        // --- when SHANNON_PROVIDER=zhipu).                                   ---
+        let base_url = if !has_explicit_base_url && !has_explicit_base_url_env {
+            let provider_default = provider.default_base_url().to_string();
+            // If base_url matches a non-target provider's env var, use provider default
+            let came_from_anthropic = anthropic_base_url.as_deref() == Some(&base_url);
+            let came_from_openai = openai_base_url.as_deref() == Some(&base_url);
+            let is_anthropic_provider = matches!(provider, LlmProvider::Anthropic);
+            let is_openai_provider = matches!(provider, LlmProvider::OpenAI);
+            if (came_from_anthropic && !is_anthropic_provider)
+                || (came_from_openai && !is_openai_provider)
+            {
+                provider_default
+            } else {
+                base_url
+            }
+        } else {
+            base_url
         };
 
         // --- Resolve API key (provider-aware) --------------------------------
