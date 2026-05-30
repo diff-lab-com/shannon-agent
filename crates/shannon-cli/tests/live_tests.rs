@@ -1156,3 +1156,123 @@ fn replay_workspace_creation_works() {
         "replay"
     );
 }
+
+// ── Unit tests for test helpers ───────────────────────────────────────
+
+#[test]
+fn test_write_file_creates_nested_dirs() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("src/deep/nested/lib.rs");
+    write_file(&path, "fn main() {}");
+    assert!(path.exists());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "fn main() {}");
+}
+
+#[test]
+fn test_write_file_flat_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("README.md");
+    write_file(&path, "# hello");
+    assert!(path.exists());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "# hello");
+}
+
+#[test]
+fn test_write_file_content_roundtrip() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("special.txt");
+    let content = "line1\nline2\n\ttabs & ampersands\n\"quotes\"\n";
+    write_file(&path, content);
+    assert_eq!(fs::read_to_string(&path).unwrap(), content);
+}
+
+#[test]
+fn test_write_file_empty_content() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("empty.txt");
+    write_file(&path, "");
+    assert!(path.exists());
+    assert_eq!(fs::read_to_string(&path).unwrap(), "");
+}
+
+#[test]
+fn test_write_file_overwrites_existing() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("file.txt");
+    write_file(&path, "first");
+    write_file(&path, "second");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+}
+
+#[test]
+fn test_provider_key_env_all_providers() {
+    assert_eq!(provider_key_env("zhipu"), Some("ZHIPU_API_KEY"));
+    assert_eq!(provider_key_env("zhipu-cn"), Some("ZHIPU_API_KEY"));
+    assert_eq!(provider_key_env("zhipu-intl"), Some("ZHIPU_INTL_API_KEY"));
+    assert_eq!(
+        provider_key_env("zhipu-international"),
+        Some("ZHIPU_INTL_API_KEY")
+    );
+    assert_eq!(provider_key_env("minimax"), Some("MINIMAX_API_KEY"));
+    assert_eq!(provider_key_env("moonshot"), Some("MOONSHOT_API_KEY"));
+    assert_eq!(provider_key_env("kimi"), Some("MOONSHOT_API_KEY"));
+    assert_eq!(provider_key_env("deepseek"), Some("DEEPSEEK_API_KEY"));
+    assert_eq!(provider_key_env("dashscope"), Some("DASHSCOPE_API_KEY"));
+    assert_eq!(provider_key_env("qwen"), Some("DASHSCOPE_API_KEY"));
+}
+
+#[test]
+fn test_provider_key_env_unknown_returns_none() {
+    assert_eq!(provider_key_env("anthropic"), None);
+    assert_eq!(provider_key_env("openai"), None);
+    assert_eq!(provider_key_env("ollama"), None);
+    assert_eq!(provider_key_env(""), None);
+}
+
+#[test]
+fn test_record_provider_default() {
+    // Without SHANNON_RECORD_PROVIDER set, defaults to "anthropic"
+    // (We can't easily test the env-var override without isolating env,
+    //  but we can verify the function exists and returns a string)
+    let provider = record_provider();
+    assert!(!provider.is_empty());
+}
+
+#[test]
+fn test_create_workspace_unique_paths() {
+    let ws1 = create_workspace("test_a");
+    let ws2 = create_workspace("test_b");
+    assert_ne!(ws1.path(), ws2.path());
+    assert!(ws1.path().exists());
+    assert!(ws2.path().exists());
+}
+
+#[test]
+fn test_create_workspace_subdir_exists() {
+    let ws = create_workspace("my_test");
+    let subdir = ws.path().join("my_test");
+    assert!(subdir.exists());
+    assert!(subdir.is_dir());
+}
+
+#[test]
+fn test_all_nested_writes_use_helper() {
+    // Self-check: ensure no fs::write with nested paths (src/foo, bar/baz)
+    // outside the write_file() helper itself. Prevents "NotFound" errors
+    // when parent directories don't exist.
+    let source = include_str!("live_tests.rs");
+    for (i, line) in source.lines().enumerate() {
+        let line_num = i + 1;
+        // Skip lines inside the write_file() helper (~line 151)
+        if line_num >= 147 && line_num <= 152 {
+            continue;
+        }
+        // Any fs::write to a nested path (contains "/" in the join arg)
+        // should use write_file() instead
+        if line.contains("fs::write(") && line.contains(".join(\"") && line.contains("/") {
+            panic!(
+                "line {line_num}: fs::write with nested path found — use write_file() instead:\n  {line}"
+            );
+        }
+    }
+}
