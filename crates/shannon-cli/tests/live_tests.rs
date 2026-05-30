@@ -641,11 +641,10 @@ fn record_task_read_and_edit_anthropic() {
     let workspace = create_workspace("real_read_edit");
 
     // Create a file to edit
-    fs::write(
-        workspace.path().join("src/lib.rs"),
+    write_file(
+        &workspace.path().join("src/lib.rs"),
         "pub fn add(a: i32, b: i32) -> i32 { a + b }",
-    )
-    .expect("write src/lib.rs");
+    );
 
     shannon_record(&api_key, &record_dir, &workspace)
         .args([
@@ -673,11 +672,10 @@ fn record_task_code_search_anthropic() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_code_search");
 
-    fs::write(
-        workspace.path().join("src/lib.rs"),
+    write_file(
+        &workspace.path().join("src/lib.rs"),
         "pub fn add(a: i32, b: i32) -> i32 { a + b }",
-    )
-    .expect("write src/lib.rs");
+    );
 
     let output = shannon_record(&api_key, &record_dir, &workspace)
         .args([
@@ -704,11 +702,10 @@ fn record_task_multi_turn_anthropic() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_multi_turn");
 
-    fs::write(
-        workspace.path().join("src/main.rs"),
+    write_file(
+        &workspace.path().join("src/main.rs"),
         "fn main() {\n    println!(\"Hello, World!\");\n}\n",
-    )
-    .expect("write src/main.rs");
+    );
 
     shannon_record(&api_key, &record_dir, &workspace)
         .args([
@@ -774,11 +771,10 @@ fn record_task_search_read_edit() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_search_read_edit");
 
-    fs::write(
-        workspace.path().join("src/lib.rs"),
+    write_file(
+        &workspace.path().join("src/lib.rs"),
         "pub fn calculate(x: i32, y: i32) -> i32 {\n    x + y\n}\n",
-    )
-    .expect("write src/lib.rs");
+    );
 
     shannon_record(&api_key, &record_dir, &workspace)
         .args([
@@ -837,11 +833,10 @@ fn record_task_error_recovery() {
     let workspace = create_workspace("real_error_recovery");
 
     // Create a file with a syntax error for the LLM to find and fix
-    fs::write(
-        workspace.path().join("src/main.rs"),
+    write_file(
+        &workspace.path().join("src/main.rs"),
         "fn main() {\n    let x = 1 + ;\n    println!(\"{}\", x);\n}\n",
-    )
-    .expect("write src/main.rs");
+    );
 
     shannon_record(&api_key, &record_dir, &workspace)
         .args([
@@ -907,21 +902,18 @@ fn record_task_multi_file_edit() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_multi_file");
 
-    fs::write(
-        workspace.path().join("src/types.rs"),
+    write_file(
+        &workspace.path().join("src/types.rs"),
         "pub struct User {\n    pub name: String,\n    pub age: u32,\n}\n",
-    )
-    .expect("write types.rs");
-    fs::write(
-        workspace.path().join("src/api.rs"),
+    );
+    write_file(
+        &workspace.path().join("src/api.rs"),
         "use crate::types::User;\n\npub fn get_user() -> User {\n    User { name: \"Alice\".into(), age: 30 }\n}\n",
-    )
-    .expect("write api.rs");
-    fs::write(
-        workspace.path().join("src/main.rs"),
+    );
+    write_file(
+        &workspace.path().join("src/main.rs"),
         "use crate::api::get_user;\n\nfn main() {\n    let user = get_user();\n    println!(\"Name: {}\", user.name);\n}\n",
-    )
-    .expect("write main.rs");
+    );
 
     shannon_record(&api_key, &record_dir, &workspace)
         .args([
@@ -959,16 +951,14 @@ fn record_task_refactor_rename() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_refactor_rename");
 
-    fs::write(
-        workspace.path().join("src/lib.rs"),
+    write_file(
+        &workspace.path().join("src/lib.rs"),
         "pub fn process_data(data: &str) -> String {\n    data.to_uppercase()\n}\n",
-    )
-    .expect("write lib.rs");
-    fs::write(
-        workspace.path().join("src/main.rs"),
+    );
+    write_file(
+        &workspace.path().join("src/main.rs"),
         "use crate::lib::process_data;\n\nfn main() {\n    let result = process_data(\"hello\");\n    println!(\"{}\", result);\n}\n",
-    )
-    .expect("write main.rs");
+    );
 
     shannon_record(&api_key, &record_dir, &workspace)
         .args([
