@@ -115,6 +115,42 @@ fn record_provider() -> String {
     std::env::var("SHANNON_RECORD_PROVIDER").unwrap_or_else(|_| "anthropic".to_string())
 }
 
+/// Provider-specific API key env var name.
+fn provider_key_env(provider: &str) -> Option<&'static str> {
+    match provider {
+        "zhipu" | "zhipu-cn" => Some("ZHIPU_API_KEY"),
+        "zhipu-intl" | "zhipu-international" => Some("ZHIPU_INTL_API_KEY"),
+        "minimax" => Some("MINIMAX_API_KEY"),
+        "moonshot" | "kimi" => Some("MOONSHOT_API_KEY"),
+        "deepseek" => Some("DEEPSEEK_API_KEY"),
+        "dashscope" | "qwen" => Some("DASHSCOPE_API_KEY"),
+        _ => None,
+    }
+}
+
+/// Create a shannon command with all recording env vars set.
+fn shannon_record(api_key: &str, record_dir: &PathBuf, workspace: &tempfile::TempDir) -> Command {
+    let provider = record_provider();
+    let mut cmd = shannon();
+    cmd.env("SHANNON_API_KEY", api_key)
+        .env("SHANNON_RECORD_DIR", record_dir)
+        .env("SHANNON_PROVIDER", &provider)
+        .env_remove("OPENAI_API_KEY")
+        .current_dir(workspace.path());
+    if let Some(key_env) = provider_key_env(&provider) {
+        cmd.env(key_env, api_key);
+    }
+    cmd
+}
+
+/// Write a file, creating parent directories as needed.
+fn write_file(path: &std::path::Path, content: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create parent dir");
+    }
+    fs::write(path, content).expect(&format!("write {}", path.display()));
+}
+
 /// Check if replay fixtures exist for a given test name. Skip if not found.
 fn has_fixture(prefix: &str) -> bool {
     let dir = fixtures_dir();
@@ -543,12 +579,7 @@ fn record_task_create_file_anthropic() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_create_file");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Create a file called hello.txt with the content 'world'",
@@ -584,12 +615,7 @@ fn record_task_bash_command_anthropic() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_bash_cmd");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Run the command: echo hello_shannon > output.txt",
@@ -621,12 +647,7 @@ fn record_task_read_and_edit_anthropic() {
     )
     .expect("write src/lib.rs");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Read src/lib.rs and add a doc comment above the add function",
@@ -658,12 +679,7 @@ fn record_task_code_search_anthropic() {
     )
     .expect("write src/lib.rs");
 
-    let output = shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    let output = shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Find where the add function is defined",
@@ -694,12 +710,7 @@ fn record_task_multi_turn_anthropic() {
     )
     .expect("write src/main.rs");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Read src/main.rs, then change the greeting from 'Hello, World!' to 'Hello, Shannon!'",
@@ -733,12 +744,7 @@ fn record_task_edit_precise_match() {
     )
     .expect("write config.toml");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Read config.toml and change the name from 'old_name' to 'new_name' using an exact string replacement",
@@ -774,12 +780,7 @@ fn record_task_search_read_edit() {
     )
     .expect("write src/lib.rs");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Search for 'calculate' in the codebase, read the file where it's defined, and rename the function to 'add_numbers'",
@@ -805,12 +806,7 @@ fn record_task_bash_verify() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_bash_verify");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Create a directory called 'build', then create a file build/output.txt with the content 'build successful', then verify the file exists by reading it",
@@ -847,12 +843,7 @@ fn record_task_error_recovery() {
     )
     .expect("write src/main.rs");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Read src/main.rs — it has a syntax error. Find and fix it so the code compiles correctly.",
@@ -881,17 +872,12 @@ fn record_task_glob_pattern() {
 
     // Create multiple files with different extensions
     fs::create_dir_all(workspace.path().join("src")).expect("create src");
-    fs::write(workspace.path().join("src/main.rs"), "fn main() {}").expect("write main.rs");
-    fs::write(workspace.path().join("src/lib.rs"), "pub fn lib() {}").expect("write lib.rs");
-    fs::write(workspace.path().join("src/utils.rs"), "pub fn utils() {}").expect("write utils.rs");
+    write_file(&workspace.path().join("src/main.rs"), "fn main() {}");
+    write_file(&workspace.path().join("src/lib.rs"), "pub fn lib() {}");
+    write_file(&workspace.path().join("src/utils.rs"), "pub fn utils() {}");
     fs::write(workspace.path().join("README.md"), "# test").expect("write README");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Find all .rs files in the src/ directory using glob patterns, read each one, and add a comment '// documented' at the top of each file",
@@ -937,12 +923,7 @@ fn record_task_multi_file_edit() {
     )
     .expect("write main.rs");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Read all three source files (src/types.rs, src/api.rs, src/main.rs). Add an 'email: String' field to the User struct in types.rs, update the get_user() function in api.rs to include email, and update the println in main.rs to also print the email.",
@@ -989,12 +970,7 @@ fn record_task_refactor_rename() {
     )
     .expect("write main.rs");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Rename the function 'process_data' to 'transform_input' across all files. Make sure to update both the definition in src/lib.rs and all usages in src/main.rs.",
@@ -1033,12 +1009,7 @@ fn record_task_create_with_tests() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_create_tests");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Create a Rust library crate with cargo init. Then create src/math.rs with a function 'pub fn multiply(a: i32, b: i32) -> i32' that returns a * b. Add 'mod math;' to src/lib.rs. Then create tests/test_math.rs with a test that verifies multiply(3, 4) == 12.",
@@ -1081,14 +1052,9 @@ fn record_task_long_file_handling() {
         content.push_str(&format!("pub fn function_{}() -> i32 {{ {} }}\n\n", i, i));
     }
 
-    fs::write(workspace.path().join("src/lib.rs"), &content).expect("write lib.rs");
+    write_file(&workspace.path().join("src/lib.rs"), &content);
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "Read src/lib.rs and add a new function 'pub fn function_50() -> i32 { 50 }' at the end of the file, after function_49.",
@@ -1115,12 +1081,7 @@ fn record_task_json_schema_output() {
     let record_dir = require_record_dir();
     let workspace = create_workspace("real_json_schema");
 
-    shannon()
-        .env("SHANNON_API_KEY", &api_key)
-        .env("SHANNON_RECORD_DIR", &record_dir)
-        .env("SHANNON_PROVIDER", &record_provider())
-        .env_remove("OPENAI_API_KEY")
-        .current_dir(workspace.path())
+    shannon_record(&api_key, &record_dir, &workspace)
         .args([
             "--prompt",
             "List the top 3 programming languages by popularity",
