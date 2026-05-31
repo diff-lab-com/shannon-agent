@@ -920,10 +920,18 @@ pub struct ApiKeyGuard {
 impl ApiKeyGuard {
     /// Create a new guard by removing API key variables and storing their original values.
     pub fn remove() -> Self {
+        let anthropic = std::env::var_os("ANTHROPIC_API_KEY");
+        let claude = std::env::var_os("CLAUDE_API_KEY");
+        let shannon = std::env::var_os("SHANNON_API_KEY");
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+            std::env::remove_var("CLAUDE_API_KEY");
+            std::env::remove_var("SHANNON_API_KEY");
+        }
         Self {
-            anthropic: std::env::var_os("ANTHROPIC_API_KEY"),
-            claude: std::env::var_os("CLAUDE_API_KEY"),
-            shannon: std::env::var_os("SHANNON_API_KEY"),
+            anthropic,
+            claude,
+            shannon,
         }
     }
 }
