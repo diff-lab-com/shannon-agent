@@ -1236,6 +1236,410 @@ fn record_task_multi_step_reasoning() {
     );
 }
 
+// ── Tier 4: Core feature recordings ────────────────────────────────────────
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_session_resume() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_session_resume");
+
+    // First turn: create a file
+    shannon_record(&api_key, &record_dir, &workspace, "session_resume_turn1")
+        .args([
+            "--prompt",
+            "Create a file called colors.txt with the content: red, blue, green",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    assert!(
+        workspace.path().join("colors.txt").exists(),
+        "colors.txt should be created in first turn"
+    );
+
+    // Find the session file
+    let sessions_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".shannon")
+        .join("sessions");
+    let latest_session = std::fs::read_dir(&sessions_dir).ok().and_then(|entries| {
+        entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|e| {
+                let metadata = e.metadata().ok()?;
+                let modified = metadata.modified().ok()?;
+                Some((modified, e.path()))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .max_by_key(|(m, _)| *m)
+            .map(|(_, p)| p)
+    });
+
+    if let Some(session_path) = latest_session {
+        let session_id = session_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        // Second turn: resume and add to the file
+        shannon_record(&api_key, &record_dir, &workspace, "session_resume_turn2")
+            .args([
+                "--resume",
+                &session_id,
+                "--prompt",
+                "Read colors.txt and add 'yellow' to the list of colors",
+                "--output-format",
+                "json",
+            ])
+            .timeout(std::time::Duration::from_secs(120))
+            .assert()
+            .success();
+
+        let content = fs::read_to_string(workspace.path().join("colors.txt")).unwrap();
+        assert!(
+            content.contains("yellow"),
+            "colors.txt should contain 'yellow' after resume, got: {content}"
+        );
+    }
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_claude_md_context() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_claude_md");
+
+    // Create CLAUDE.md with specific instructions
+    write_file(
+        &workspace.path().join("CLAUDE.md"),
+        "# Project Rules\n\n- Always add a doc comment with the format: `/// Calculates X`\n- Never use unwrap() in production code\n",
+    );
+
+    write_file(
+        &workspace.path().join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    );
+
+    shannon_record(&api_key, &record_dir, &workspace, "claude_md_context")
+        .args([
+            "--prompt",
+            "Read src/lib.rs and add documentation comments following the project rules in CLAUDE.md",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
+    assert!(
+        content.contains("///") || content.contains("Calculates"),
+        "lib.rs should have doc comments per CLAUDE.md rules, got: {content}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_git_operations() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_git_ops");
+
+    // Initialize a git repo with history
+    let git_init = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(workspace.path())
+        .output()
+        .expect("git init");
+    assert!(git_init.status.success(), "git init should succeed");
+
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.email", "test@shannon.dev"])
+        .current_dir(workspace.path())
+        .output();
+
+    let _ = std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(workspace.path())
+        .output();
+
+    write_file(
+        &workspace.path().join("src/lib.rs"),
+        "pub fn greet() -> String { \"hello\".to_string() }\n",
+    );
+
+    let _ = std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(workspace.path())
+        .output();
+
+    let _ = std::process::Command::new("git")
+        .args(["commit", "-m", "Initial commit"])
+        .current_dir(workspace.path())
+        .output();
+
+    shannon_record(&api_key, &record_dir, &workspace, "git_operations")
+        .args([
+            "--prompt",
+            "Run git log to see the commit history, then modify src/lib.rs to change 'hello' to 'hello world', then run git diff to see the changes",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(180))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
+    assert!(
+        content.contains("hello world") || content.contains("hello_world"),
+        "lib.rs should be updated, got: {content}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_delete_file() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_delete_file");
+
+    // Create files to be deleted
+    write_file(
+        &workspace.path().join("keep.txt"),
+        "This file should remain",
+    );
+    write_file(
+        &workspace.path().join("delete_me.txt"),
+        "This file should be deleted",
+    );
+    write_file(
+        &workspace.path().join("also_delete.txt"),
+        "This should also go",
+    );
+
+    shannon_record(&api_key, &record_dir, &workspace, "delete_file")
+        .args([
+            "--prompt",
+            "Delete the files called delete_me.txt and also_delete.txt, but keep keep.txt",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    assert!(
+        workspace.path().join("keep.txt").exists(),
+        "keep.txt should still exist"
+    );
+    assert!(
+        !workspace.path().join("delete_me.txt").exists(),
+        "delete_me.txt should be deleted"
+    );
+    assert!(
+        !workspace.path().join("also_delete.txt").exists(),
+        "also_delete.txt should be deleted"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_ndjson_streaming() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_ndjson");
+
+    let output = shannon_record(&api_key, &record_dir, &workspace, "ndjson_streaming")
+        .args([
+            "--prompt",
+            "Create a file called info.txt with the text 'streaming test ok'",
+            "--output-format",
+            "ndjson",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .output()
+        .expect("shannon should run");
+
+    // Verify NDJSON output: each line should be valid JSON
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parsed_count = 0;
+    for line in stdout.lines() {
+        if !line.trim().is_empty() {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(line).is_ok(),
+                "each NDJSON line should be valid JSON, got: {line}"
+            );
+            parsed_count += 1;
+        }
+    }
+    assert!(parsed_count > 0, "should produce at least one NDJSON line");
+
+    assert!(
+        workspace.path().join("info.txt").exists(),
+        "info.txt should be created"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_multi_provider() {
+    // This test records using the provider specified by SHANNON_RECORD_PROVIDER.
+    // When that env var is set to e.g. "deepseek", it records a deepseek fixture.
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_multi_provider");
+
+    let provider = record_provider();
+
+    write_file(&workspace.path().join("hello.txt"), "Hello from recording");
+
+    shannon_record(&api_key, &record_dir, &workspace, "multi_provider")
+        .args([
+            "--prompt",
+            "Read hello.txt and tell me what it says",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    // Verify recording was saved with the correct provider
+    let qualified_session = format!("{}_{}_{}", provider, record_model(), "multi_provider");
+    let fixture_path = record_dir.join(format!("{qualified_session}.jsonl"));
+    assert!(
+        fixture_path.exists(),
+        "fixture should exist for provider '{provider}' at {}",
+        fixture_path.display()
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_permission_request() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_permission");
+
+    write_file(
+        &workspace.path().join("data.txt"),
+        "sensitive data that should not be deleted",
+    );
+
+    // Use --prompt with FullAuto to allow the operation but still record
+    // the permission interaction in the fixture
+    shannon_record(&api_key, &record_dir, &workspace, "permission_request")
+        .args([
+            "--prompt",
+            "Read data.txt, then try to run: cat /etc/shadow. If that fails due to permissions, just read data.txt again and report its contents.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(180))
+        .assert()
+        .success();
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_large_workspace() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_large_workspace");
+
+    // Create a workspace with 20+ files across multiple directories
+    for dir in &["src", "src/models", "src/api", "src/utils", "tests"] {
+        fs::create_dir_all(workspace.path().join(dir)).expect("create dir");
+    }
+
+    write_file(
+        &workspace.path().join("src/lib.rs"),
+        "pub mod models;\npub mod api;\npub mod utils;\n",
+    );
+
+    write_file(
+        &workspace.path().join("src/models/user.rs"),
+        "pub struct User { pub name: String, pub age: u32, pub email: String }\n",
+    );
+    write_file(
+        &workspace.path().join("src/models/post.rs"),
+        "pub struct Post { pub title: String, pub body: String, pub author: String }\n",
+    );
+    write_file(
+        &workspace.path().join("src/models/comment.rs"),
+        "pub struct Comment { pub text: String, pub user: String }\n",
+    );
+
+    write_file(
+        &workspace.path().join("src/api/handler.rs"),
+        "pub fn handle_request() -> String { \"ok\".to_string() }\n",
+    );
+    write_file(
+        &workspace.path().join("src/api/routes.rs"),
+        "pub fn routes() -> Vec<&'static str> { vec![\"/api/users\", \"/api/posts\"] }\n",
+    );
+
+    write_file(
+        &workspace.path().join("src/utils/helpers.rs"),
+        "pub fn trim(s: &str) -> String { s.trim().to_string() }\n",
+    );
+    write_file(
+        &workspace.path().join("src/utils/format.rs"),
+        "pub fn format_user(name: &str, age: u32) -> String { format!(\"{name} (age {age})\") }\n",
+    );
+
+    for i in 0..12 {
+        write_file(
+            &workspace.path().join(format!("tests/test_{i:02}.rs")),
+            &format!("#[test]\nfn test_{i:02}() {{ assert!(true); }}\n"),
+        );
+    }
+
+    write_file(
+        &workspace.path().join("README.md"),
+        "# Test Project\n\nA project with many files.\n",
+    );
+    write_file(
+        &workspace.path().join("Cargo.toml"),
+        "[package]\nname = \"testproj\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    );
+
+    shannon_record(&api_key, &record_dir, &workspace, "large_workspace")
+        .args([
+            "--prompt",
+            "Explore this project. Find all .rs files, read the main modules, and add a 'pub fn new()' constructor to each struct in src/models/ that initializes with default values. Also update src/lib.rs to include a doc comment for each module.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(300))
+        .assert()
+        .success();
+
+    // Verify at least one struct was updated
+    let user_content = fs::read_to_string(workspace.path().join("src/models/user.rs")).unwrap();
+    assert!(
+        user_content.contains("fn new") || user_content.contains("fn default"),
+        "at least one model struct should have a constructor, got: {user_content}"
+    );
+}
+
 // ── Replay tests (no API key needed, use recorded fixtures) ───────────────
 
 #[tokio::test]
