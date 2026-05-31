@@ -957,12 +957,13 @@ impl QueryEngine {
         };
 
         // Inject the working directory so the model knows where to write files.
-        if let Some(ref mut prompt) = system_prompt {
-            if let Ok(cwd) = std::env::current_dir() {
-                prompt.push_str(&format!(
-                    "\n\n## Environment\n\nWorking directory: {}",
-                    cwd.display()
-                ));
+        if let Ok(cwd) = std::env::current_dir() {
+            let cwd_text = format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            if let Some(ref mut prompt) = system_prompt {
+                prompt.push_str(&cwd_text);
+            }
+            if let Some(ref mut blocks) = system_blocks_opt {
+                blocks.push(crate::api::types::SystemContentBlock::text(cwd_text));
             }
         }
 
