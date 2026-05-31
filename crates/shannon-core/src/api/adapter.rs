@@ -96,7 +96,7 @@ fn serialize_request_inner(
             // support Anthropic prompt caching (api.anthropic.com, Bedrock).
             // Third-party Anthropic-compatible endpoints may reject the
             // `cache_control` field and return HTTP 500.
-            let should_cache = base_url.map_or(true, |url| {
+            let should_cache = base_url.is_none_or(|url| {
                 url.contains("api.anthropic.com")
                     || url.contains("bedrock-runtime.")
                     || url.contains("amazonaws.com")
