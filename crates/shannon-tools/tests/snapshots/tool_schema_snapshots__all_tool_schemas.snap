@@ -1,0 +1,1730 @@
+---
+source: crates/shannon-tools/tests/tool_schema_snapshots.rs
+assertion_line: 38
+expression: output
+---
+## Agent
+{
+  "properties": {
+    "agent_id": {
+      "description": "Agent ID or name for operations",
+      "type": "string"
+    },
+    "agent_type": {
+      "description": "Agent type to spawn",
+      "type": "string"
+    },
+    "agents": {
+      "description": "Agent types to pre-spawn in team",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "allowed_tools": {
+      "description": "Optional tool allowlist. Only these tools will be available to the sub-agent (e.g. ['Read', 'Bash', 'Grep'])",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "context": {
+      "description": "Optional context (can include 'team' for team assignment)",
+      "type": "object"
+    },
+    "description": {
+      "description": "Team description",
+      "type": "string"
+    },
+    "force": {
+      "description": "Force shutdown",
+      "type": "boolean"
+    },
+    "message": {
+      "description": "Message content",
+      "type": "string"
+    },
+    "model": {
+      "description": "Optional model override for the sub-agent (e.g. 'claude-sonnet-4-6', 'gpt-4o')",
+      "type": "string"
+    },
+    "operation": {
+      "description": "Operation type",
+      "enum": [
+        "Spawn",
+        "SendMessage",
+        "CreateTeam",
+        "Shutdown"
+      ],
+      "type": "string"
+    },
+    "reason": {
+      "description": "Reason for shutdown",
+      "type": "string"
+    },
+    "task": {
+      "description": "Task description",
+      "type": "string"
+    },
+    "team_name": {
+      "description": "Team name",
+      "type": "string"
+    }
+  },
+  "required": [
+    "operation"
+  ],
+  "type": "object"
+}
+
+## AnalyzeImage
+{
+  "properties": {
+    "file_path": {
+      "description": "Absolute path to the image file to analyze. Either file_path or url must be provided.",
+      "type": "string"
+    },
+    "prompt": {
+      "description": "What to analyze or describe about the image",
+      "type": "string"
+    },
+    "url": {
+      "description": "URL of the image to analyze. Either file_path or url must be provided.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "prompt"
+  ],
+  "type": "object"
+}
+
+## Bash
+{
+  "properties": {
+    "command": {
+      "description": "The bash command to execute",
+      "type": "string"
+    },
+    "cwd": {
+      "description": "Optional working directory",
+      "type": "string"
+    },
+    "env": {
+      "description": "Optional environment variables",
+      "type": "object"
+    },
+    "timeout": {
+      "description": "Optional timeout in milliseconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "command"
+  ],
+  "type": "object"
+}
+
+## Brief
+{
+  "properties": {
+    "content": {
+      "description": "Content to summarize (use if no messages provided)",
+      "type": "string"
+    },
+    "format": {
+      "default": "markdown",
+      "description": "Output format",
+      "enum": [
+        "plain",
+        "markdown"
+      ],
+      "type": "string"
+    },
+    "max_length": {
+      "description": "Maximum summary length in characters (default: 500)",
+      "maximum": 5000,
+      "minimum": 50,
+      "type": "integer"
+    },
+    "messages": {
+      "description": "Conversation messages to summarize",
+      "items": {
+        "properties": {
+          "content": {
+            "description": "Message content",
+            "type": "string"
+          },
+          "role": {
+            "description": "Message role ('user' or 'assistant')",
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "type": "object"
+}
+
+## Config
+{
+  "properties": {
+    "action": {
+      "description": "The configuration action to perform",
+      "oneOf": [
+        {
+          "properties": {
+            "get": {
+              "properties": {
+                "key": {
+                  "description": "Config key to get",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "get"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "set": {
+              "properties": {
+                "key": {
+                  "description": "Config key to set",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "Value to set"
+                }
+              },
+              "required": [
+                "key",
+                "value"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "set"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "list": {
+              "properties": {
+                "prefix": {
+                  "description": "Optional key prefix filter",
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "list"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "delete": {
+              "properties": {
+                "key": {
+                  "description": "Config key to delete",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "delete"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "reset": {
+              "properties": {
+                "key": {
+                  "description": "Config key to reset to default",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "reset"
+          ],
+          "type": "object"
+        }
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "type": "object"
+}
+
+## Cron
+{
+  "properties": {
+    "cron": {
+      "description": "Cron expression (5 fields: M H DoM Mon DoW)",
+      "type": "string"
+    },
+    "durable": {
+      "description": "Persist to disk (default: false)",
+      "type": "boolean"
+    },
+    "id": {
+      "description": "Job ID",
+      "type": "string"
+    },
+    "operation": {
+      "description": "Operation type",
+      "enum": [
+        "Create",
+        "Delete",
+        "List"
+      ],
+      "type": "string"
+    },
+    "prompt": {
+      "description": "Prompt to enqueue",
+      "type": "string"
+    },
+    "recurring": {
+      "description": "Recurring job (default: true)",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "operation"
+  ],
+  "type": "object"
+}
+
+## Edit
+{
+  "properties": {
+    "file_path": {
+      "description": "Absolute path to the file",
+      "type": "string"
+    },
+    "new_string": {
+      "description": "Replacement text",
+      "type": "string"
+    },
+    "old_string": {
+      "description": "Text to replace",
+      "type": "string"
+    },
+    "replace_all": {
+      "description": "Replace all occurrences (default: false)",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "file_path",
+    "old_string",
+    "new_string"
+  ],
+  "type": "object"
+}
+
+## GitBranch
+{
+  "properties": {
+    "action": {
+      "description": "Branch operation to perform",
+      "enum": [
+        "list",
+        "create",
+        "switch",
+        "delete"
+      ],
+      "type": "string"
+    },
+    "checkout": {
+      "description": "Switch to the new branch after creating (create action only)",
+      "type": "boolean"
+    },
+    "force": {
+      "description": "Force delete (delete action only, warns instead of executing)",
+      "type": "boolean"
+    },
+    "name": {
+      "description": "Branch name (required for create, switch, delete)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "type": "object"
+}
+
+## GitDiff
+{
+  "properties": {
+    "commit_range": {
+      "description": "Commit range to diff, e.g. 'abc123..def456'",
+      "type": "string"
+    },
+    "context_lines": {
+      "description": "Number of context lines around changes (default: 3)",
+      "type": "integer"
+    },
+    "file": {
+      "description": "Specific file path to diff",
+      "type": "string"
+    },
+    "ignore_whitespace": {
+      "description": "Ignore whitespace changes (default: false)",
+      "type": "boolean"
+    },
+    "staged": {
+      "description": "Show staged changes only (default: false)",
+      "type": "boolean"
+    },
+    "stat": {
+      "description": "Show diffstat summary instead of full diff (default: false)",
+      "type": "boolean"
+    }
+  },
+  "type": "object"
+}
+
+## GitLog
+{
+  "properties": {
+    "author": {
+      "description": "Filter by author name or email",
+      "type": "string"
+    },
+    "branch": {
+      "description": "Show log for a specific branch",
+      "type": "string"
+    },
+    "count": {
+      "description": "Number of commits to show (default: 10, max: 100)",
+      "type": "integer"
+    },
+    "file": {
+      "description": "Show history for a specific file only",
+      "type": "string"
+    },
+    "oneline": {
+      "description": "Show compact one-line format per commit (default: false)",
+      "type": "boolean"
+    },
+    "patch": {
+      "description": "Include diffs for each commit (default: false)",
+      "type": "boolean"
+    },
+    "since": {
+      "description": "Filter commits since a date (e.g. '2 weeks ago', '2024-01-01')",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## GitSafety
+{
+  "properties": {
+    "command": {
+      "description": "The git command to safety-check (e.g. 'push --force origin main')",
+      "type": "string"
+    }
+  },
+  "required": [
+    "command"
+  ],
+  "type": "object"
+}
+
+## GitStash
+{
+  "properties": {
+    "action": {
+      "description": "Stash operation to perform",
+      "enum": [
+        "list",
+        "push",
+        "pop",
+        "drop",
+        "apply"
+      ],
+      "type": "string"
+    },
+    "include_untracked": {
+      "description": "Include untracked files in the stash (push action only, default: false)",
+      "type": "boolean"
+    },
+    "index": {
+      "description": "Stash index to pop/drop/apply (default: 0)",
+      "type": "integer"
+    },
+    "message": {
+      "description": "Stash message (push action only)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "type": "object"
+}
+
+## Glob
+{
+  "properties": {
+    "pattern": {
+      "description": "File pattern to match (e.g., *.rs, src/**/*.py)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "pattern"
+  ],
+  "type": "object"
+}
+
+## Grep
+{
+  "properties": {
+    "case_insensitive": {
+      "description": "Perform case-insensitive search",
+      "type": "boolean"
+    },
+    "context_after": {
+      "description": "Number of context lines after each match",
+      "type": "integer"
+    },
+    "context_before": {
+      "description": "Number of context lines before each match",
+      "type": "integer"
+    },
+    "exclude": {
+      "description": "Glob pattern to exclude files (e.g., \"target/**\")",
+      "type": "string"
+    },
+    "include": {
+      "description": "Glob pattern to include files (e.g., \"*.rs\")",
+      "type": "string"
+    },
+    "line_number": {
+      "description": "Show line numbers (default: true)",
+      "type": "boolean"
+    },
+    "max_results": {
+      "description": "Maximum number of matches to return (default: 1000)",
+      "type": "integer"
+    },
+    "output_mode": {
+      "description": "Output mode: content (matching lines), files (filenames only), count (match counts per file)",
+      "enum": [
+        "content",
+        "files",
+        "count"
+      ],
+      "type": "string"
+    },
+    "path": {
+      "description": "Directory or file to search in. Defaults to current directory.",
+      "type": "string"
+    },
+    "pattern": {
+      "description": "The regular expression pattern to search for",
+      "type": "string"
+    }
+  },
+  "required": [
+    "pattern"
+  ],
+  "type": "object"
+}
+
+## McpAuth
+{
+  "properties": {
+    "action": {
+      "description": "Auth action to perform",
+      "enum": [
+        "Authorize",
+        "Token",
+        "Refresh",
+        "List",
+        "Revoke"
+      ],
+      "type": "string"
+    },
+    "code": {
+      "description": "Authorization code (for Token action)",
+      "type": "string"
+    },
+    "scopes": {
+      "description": "Requested OAuth scopes",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "server_name": {
+      "description": "MCP server name",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "type": "object"
+}
+
+## McpResource
+{
+  "properties": {
+    "operation": {
+      "description": "Operation type",
+      "enum": [
+        "Read",
+        "List"
+      ],
+      "type": "string"
+    },
+    "server": {
+      "description": "MCP server name",
+      "type": "string"
+    },
+    "uri": {
+      "description": "Resource URI",
+      "type": "string"
+    }
+  },
+  "required": [
+    "operation"
+  ],
+  "type": "object"
+}
+
+## MergeResolve
+{
+  "properties": {
+    "file_path": {
+      "description": "Path to the file containing conflict markers",
+      "type": "string"
+    },
+    "resolutions": {
+      "description": "Resolution for each conflict in order: 'ours' or 'theirs'",
+      "items": {
+        "enum": [
+          "ours",
+          "theirs"
+        ],
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "file_path",
+    "resolutions"
+  ],
+  "type": "object"
+}
+
+## MultiEdit
+{
+  "properties": {
+    "edits": {
+      "description": "List of edit operations to apply atomically",
+      "items": {
+        "properties": {
+          "file_path": {
+            "description": "Absolute path to the file",
+            "type": "string"
+          },
+          "new_string": {
+            "description": "Replacement text",
+            "type": "string"
+          },
+          "old_string": {
+            "description": "Text to replace",
+            "type": "string"
+          },
+          "replace_all": {
+            "description": "Replace all occurrences (default: false)",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "file_path",
+          "old_string",
+          "new_string"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "edits"
+  ],
+  "type": "object"
+}
+
+## NotebookEdit
+{
+  "properties": {
+    "cell_id": {
+      "description": "Cell ID to edit",
+      "type": "string"
+    },
+    "cell_type": {
+      "description": "Cell type (code or markdown)",
+      "type": "string"
+    },
+    "new_source": {
+      "description": "New cell content",
+      "type": "string"
+    },
+    "notebook_path": {
+      "description": "Path to .ipynb file",
+      "type": "string"
+    }
+  },
+  "required": [
+    "notebook_path"
+  ],
+  "type": "object"
+}
+
+## PowerShell
+{
+  "properties": {
+    "command": {
+      "description": "The PowerShell command to execute",
+      "type": "string"
+    },
+    "cwd": {
+      "description": "Optional working directory",
+      "type": "string"
+    },
+    "env": {
+      "description": "Optional environment variables",
+      "type": "object"
+    },
+    "timeout": {
+      "description": "Optional timeout in milliseconds",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "command"
+  ],
+  "type": "object"
+}
+
+## REPL
+{
+  "properties": {
+    "command": {
+      "description": "The REPL command to execute",
+      "type": "string"
+    },
+    "cwd": {
+      "description": "Optional working directory",
+      "type": "string"
+    },
+    "env": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Optional environment variables",
+      "type": "object"
+    }
+  },
+  "required": [
+    "command"
+  ],
+  "type": "object"
+}
+
+## Read
+{
+  "properties": {
+    "file_path": {
+      "description": "Absolute path to the file",
+      "type": "string"
+    },
+    "limit": {
+      "description": "Optional line limit",
+      "type": "integer"
+    },
+    "offset": {
+      "description": "Optional line offset for reading specific ranges",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "file_path"
+  ],
+  "type": "object"
+}
+
+## ScheduleWakeup
+{
+  "properties": {
+    "delay_seconds": {
+      "description": "Seconds from now to wait. Clamped to [60, 3600].",
+      "maximum": 3600,
+      "minimum": 60,
+      "type": "integer"
+    },
+    "id": {
+      "description": "Wakeup ID (for Cancel)",
+      "type": "string"
+    },
+    "operation": {
+      "description": "Operation type",
+      "enum": [
+        "Schedule",
+        "List",
+        "Cancel"
+      ],
+      "type": "string"
+    },
+    "prompt": {
+      "description": "Prompt to enqueue on wake-up. Use '<<autonomous-loop-dynamic>>' for autonomous loop ticks.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "delay_seconds",
+    "prompt"
+  ],
+  "type": "object"
+}
+
+## SendMessage
+{
+  "properties": {
+    "message": {
+      "description": "Message content",
+      "type": "string"
+    },
+    "summary": {
+      "description": "Optional summary shown as a preview in the UI",
+      "type": "string"
+    },
+    "to": {
+      "description": "Recipient: teammate name, or '*' for broadcast to all teammates",
+      "type": "string"
+    }
+  },
+  "required": [
+    "to",
+    "message"
+  ],
+  "type": "object"
+}
+
+## Skill
+{
+  "properties": {
+    "args": {
+      "description": "Optional arguments for the skill",
+      "type": "string"
+    },
+    "skill": {
+      "description": "Skill name (e.g., 'commit', 'review-pr')",
+      "type": "string"
+    }
+  },
+  "required": [
+    "skill"
+  ],
+  "type": "object"
+}
+
+## Sleep
+{
+  "properties": {
+    "duration_ms": {
+      "description": "Duration to sleep in milliseconds (max 3600000 = 1 hour)",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "duration_ms"
+  ],
+  "type": "object"
+}
+
+## StructuredOutput
+{
+  "properties": {
+    "data": {
+      "description": "The structured output data matching the requested schema",
+      "type": "object"
+    }
+  },
+  "required": [
+    "data"
+  ],
+  "type": "object"
+}
+
+## Task
+{
+  "properties": {
+    "description": {
+      "description": "Task description",
+      "type": "string"
+    },
+    "filter": {
+      "description": "Filter tasks by status",
+      "type": "string"
+    },
+    "operation": {
+      "description": "Operation type",
+      "enum": [
+        "Create",
+        "Update",
+        "Get",
+        "List"
+      ],
+      "type": "string"
+    },
+    "status": {
+      "description": "Task status",
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed"
+      ],
+      "type": "string"
+    },
+    "subject": {
+      "description": "Task subject",
+      "type": "string"
+    },
+    "task_id": {
+      "description": "Task ID",
+      "type": "string"
+    }
+  },
+  "required": [
+    "operation"
+  ],
+  "type": "object"
+}
+
+## TaskCreate
+{
+  "properties": {
+    "active_form": {
+      "description": "Active form for display (e.g., 'Implementing feature')",
+      "type": "string"
+    },
+    "description": {
+      "description": "Detailed description of the task",
+      "type": "string"
+    },
+    "metadata": {
+      "description": "Optional metadata as JSON object",
+      "type": "object"
+    },
+    "subject": {
+      "description": "Task subject/title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "subject",
+    "description"
+  ],
+  "type": "object"
+}
+
+## TaskGet
+{
+  "properties": {
+    "task_id": {
+      "description": "Task ID to fetch",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "type": "object"
+}
+
+## TaskList
+{
+  "properties": {
+    "status_filter": {
+      "description": "Filter tasks by status",
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed"
+      ],
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## TaskOutput
+{
+  "properties": {
+    "block": {
+      "description": "Whether to block until output is available (default true)",
+      "type": "boolean"
+    },
+    "task_id": {
+      "description": "Task ID to get output from",
+      "type": "string"
+    },
+    "timeout": {
+      "description": "Timeout in milliseconds for blocking wait (default 30000)",
+      "maximum": 300000,
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "type": "object"
+}
+
+## TaskStop
+{
+  "properties": {
+    "task_id": {
+      "description": "Task ID to stop/cancel",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "type": "object"
+}
+
+## TaskUpdate
+{
+  "properties": {
+    "description": {
+      "description": "New description",
+      "type": "string"
+    },
+    "status": {
+      "description": "New status",
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed"
+      ],
+      "type": "string"
+    },
+    "subject": {
+      "description": "New subject/title",
+      "type": "string"
+    },
+    "task_id": {
+      "description": "Task ID to update",
+      "type": "string"
+    }
+  },
+  "required": [
+    "task_id"
+  ],
+  "type": "object"
+}
+
+## TeamDelete
+{
+  "properties": {
+    "team_name": {
+      "description": "Name of the team to delete",
+      "type": "string"
+    }
+  },
+  "required": [
+    "team_name"
+  ],
+  "type": "object"
+}
+
+## TodoWrite
+{
+  "properties": {
+    "todos": {
+      "description": "List of todo items",
+      "items": {
+        "properties": {
+          "content": {
+            "description": "Todo description",
+            "type": "string"
+          },
+          "id": {
+            "description": "Todo ID",
+            "type": "string"
+          },
+          "status": {
+            "description": "Todo status",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "todos"
+  ],
+  "type": "object"
+}
+
+## WebFetch
+{
+  "properties": {
+    "max_length": {
+      "default": 5000,
+      "description": "Maximum number of characters to return",
+      "type": "integer"
+    },
+    "raw": {
+      "description": "Return raw HTML instead of simplified content",
+      "type": "boolean"
+    },
+    "start_index": {
+      "description": "Start index for pagination",
+      "type": "integer"
+    },
+    "url": {
+      "description": "URL to fetch",
+      "type": "string"
+    }
+  },
+  "required": [
+    "url"
+  ],
+  "type": "object"
+}
+
+## WebSearch
+{
+  "properties": {
+    "include_images": {
+      "description": "Include images in results",
+      "type": "boolean"
+    },
+    "include_raw_content": {
+      "description": "Include raw content",
+      "type": "boolean"
+    },
+    "max_results": {
+      "default": 10,
+      "description": "Maximum number of results (1-20)",
+      "type": "integer"
+    },
+    "query": {
+      "description": "Search query",
+      "type": "string"
+    },
+    "search_depth": {
+      "default": "basic",
+      "description": "Search depth: 'basic' or 'advanced'",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "type": "object"
+}
+
+## Worktree
+{
+  "properties": {
+    "action": {
+      "description": "Exit action",
+      "type": "string"
+    },
+    "branch": {
+      "description": "Branch name",
+      "type": "string"
+    },
+    "name": {
+      "description": "Worktree name",
+      "type": "string"
+    },
+    "operation": {
+      "description": "Operation type",
+      "enum": [
+        "Enter",
+        "Exit"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "operation"
+  ],
+  "type": "object"
+}
+
+## Write
+{
+  "properties": {
+    "content": {
+      "description": "Content to write",
+      "type": "string"
+    },
+    "file_path": {
+      "description": "Absolute path to the file",
+      "type": "string"
+    }
+  },
+  "required": [
+    "file_path",
+    "content"
+  ],
+  "type": "object"
+}
+
+## ask_user_question
+{
+  "properties": {
+    "questions": {
+      "description": "The questions to present to the user.",
+      "items": {
+        "properties": {
+          "header": {
+            "description": "Short label/chip (max 12 chars).",
+            "type": "string"
+          },
+          "multi_select": {
+            "default": false,
+            "description": "Allow multiple selections.",
+            "type": "boolean"
+          },
+          "options": {
+            "description": "Selectable options. If empty, accepts free-form text.",
+            "items": {
+              "properties": {
+                "description": {
+                  "description": "Longer description of the option.",
+                  "type": "string"
+                },
+                "label": {
+                  "description": "Short display label.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "question": {
+            "description": "The question text displayed to the user.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "questions"
+  ],
+  "type": "object"
+}
+
+## auto_commit
+{
+  "properties": {
+    "add_all": {
+      "default": true,
+      "description": "Stage all tracked changes before committing.",
+      "type": "boolean"
+    },
+    "co_author": {
+      "description": "Optional co-author trailer, e.g. 'Claude <noreply@anthropic.com>'",
+      "type": "string"
+    },
+    "dry_run": {
+      "default": false,
+      "description": "Show what would be committed without committing.",
+      "type": "boolean"
+    },
+    "files": {
+      "description": "Specific files to stage (relative paths). Overrides add_all if non-empty.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "message": {
+      "description": "Commit message. Auto-generated from diff if omitted.",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## code_actions
+{
+  "properties": {
+    "end_character": {
+      "description": "0-based end character",
+      "type": "integer"
+    },
+    "end_line": {
+      "description": "0-based end line",
+      "type": "integer"
+    },
+    "file_path": {
+      "description": "Absolute path to the file",
+      "type": "string"
+    },
+    "start_character": {
+      "description": "0-based start character",
+      "type": "integer"
+    },
+    "start_line": {
+      "description": "0-based start line",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "file_path",
+    "start_line",
+    "start_character",
+    "end_line",
+    "end_character"
+  ],
+  "type": "object"
+}
+
+## document_symbol
+{
+  "properties": {
+    "file_path": {
+      "description": "Absolute path to the file",
+      "type": "string"
+    }
+  },
+  "required": [
+    "file_path"
+  ],
+  "type": "object"
+}
+
+## enter_plan_mode
+{
+  "properties": {
+    "reason": {
+      "description": "Optional reason for entering plan mode",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## exit_plan_mode
+{
+  "properties": {
+    "approved": {
+      "description": "Whether the plan was approved by the user (default: false)",
+      "type": "boolean"
+    },
+    "plan_content": {
+      "description": "Optional plan content to save before exiting plan mode",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## find_references
+{
+  "properties": {
+    "character": {
+      "description": "0-based character offset on the line",
+      "type": "integer"
+    },
+    "file_path": {
+      "description": "Absolute path to the file",
+      "type": "string"
+    },
+    "include_declaration": {
+      "description": "Whether to include the declaration itself (default: true)",
+      "type": "boolean"
+    },
+    "line": {
+      "description": "0-based line number",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "file_path",
+    "line",
+    "character"
+  ],
+  "type": "object"
+}
+
+## get_mcp_prompt
+{
+  "properties": {
+    "arguments": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Optional arguments for the prompt.",
+      "type": "object"
+    },
+    "prompt_name": {
+      "description": "Name of the prompt to get.",
+      "type": "string"
+    },
+    "server_name": {
+      "description": "Name of the MCP server.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "server_name",
+    "prompt_name"
+  ],
+  "type": "object"
+}
+
+## get_plan_status
+{
+  "properties": {},
+  "type": "object"
+}
+
+## gh_issue_list
+{
+  "properties": {
+    "assignee": {
+      "description": "Filter by assignee username",
+      "type": "string"
+    },
+    "labels": {
+      "description": "Filter by labels (comma-separated)",
+      "type": "string"
+    },
+    "limit": {
+      "default": 30,
+      "description": "Number of issues to return (default: 30)",
+      "type": "integer"
+    },
+    "state": {
+      "default": "open",
+      "description": "Filter by state: open, closed, all",
+      "enum": [
+        "open",
+        "closed",
+        "all"
+      ],
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## gh_issue_view
+{
+  "properties": {
+    "include_comments": {
+      "default": true,
+      "description": "Include comments (default: true)",
+      "type": "boolean"
+    },
+    "number": {
+      "description": "Issue number",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "number"
+  ],
+  "type": "object"
+}
+
+## gh_pr_create
+{
+  "properties": {
+    "assignees": {
+      "description": "Add assignees (comma-separated)",
+      "type": "string"
+    },
+    "base": {
+      "description": "Branch to merge into (default: repository default branch)",
+      "type": "string"
+    },
+    "body": {
+      "description": "Pull request description",
+      "type": "string"
+    },
+    "draft": {
+      "default": false,
+      "description": "Create as draft PR",
+      "type": "boolean"
+    },
+    "head": {
+      "description": "Branch to create PR from (default: current branch)",
+      "type": "string"
+    },
+    "labels": {
+      "description": "Add labels (comma-separated)",
+      "type": "string"
+    },
+    "title": {
+      "description": "Pull request title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title"
+  ],
+  "type": "object"
+}
+
+## gh_pr_list
+{
+  "properties": {
+    "author": {
+      "description": "Filter by author username",
+      "type": "string"
+    },
+    "limit": {
+      "default": 30,
+      "description": "Number of PRs to return (default: 30)",
+      "type": "integer"
+    },
+    "state": {
+      "default": "open",
+      "description": "Filter by state: open, closed, merged, all",
+      "enum": [
+        "open",
+        "closed",
+        "merged",
+        "all"
+      ],
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## gh_pr_view
+{
+  "properties": {
+    "include_diff": {
+      "default": false,
+      "description": "Include diff in output (default: false)",
+      "type": "boolean"
+    },
+    "number": {
+      "description": "Pull request number",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "number"
+  ],
+  "type": "object"
+}
+
+## go_to_definition
+{
+  "properties": {
+    "character": {
+      "description": "0-based character offset on the line",
+      "type": "integer"
+    },
+    "file_path": {
+      "description": "Absolute path to the file",
+      "type": "string"
+    },
+    "line": {
+      "description": "0-based line number",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "file_path",
+    "line",
+    "character"
+  ],
+  "type": "object"
+}
+
+## hover
+{
+  "properties": {
+    "character": {
+      "description": "0-based character offset on the line",
+      "type": "integer"
+    },
+    "file_path": {
+      "description": "Absolute path to the file",
+      "type": "string"
+    },
+    "line": {
+      "description": "0-based line number",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "file_path",
+    "line",
+    "character"
+  ],
+  "type": "object"
+}
+
+## list_mcp_prompts
+{
+  "properties": {
+    "server_name": {
+      "description": "Optional MCP server name to filter prompts by.",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## list_mcp_resources
+{
+  "properties": {
+    "server_name": {
+      "description": "Optional MCP server name to filter resources by. When omitted, resources from all connected servers are returned.",
+      "type": "string"
+    }
+  },
+  "type": "object"
+}
+
+## read_mcp_resource
+{
+  "properties": {
+    "server_name": {
+      "description": "Name of the MCP server that hosts the resource.",
+      "type": "string"
+    },
+    "uri": {
+      "description": "URI of the resource to read.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "server_name",
+    "uri"
+  ],
+  "type": "object"
+}
+
+## rename_symbol
+{
+  "properties": {
+    "character": {
+      "description": "0-based character offset on the line",
+      "type": "integer"
+    },
+    "file_path": {
+      "description": "Absolute path to the file containing the symbol",
+      "type": "string"
+    },
+    "line": {
+      "description": "0-based line number of the symbol",
+      "type": "integer"
+    },
+    "new_name": {
+      "description": "The new name for the symbol",
+      "type": "string"
+    }
+  },
+  "required": [
+    "file_path",
+    "line",
+    "character",
+    "new_name"
+  ],
+  "type": "object"
+}
+
+## workspace_symbol
+{
+  "properties": {
+    "file_path": {
+      "description": "Optional file path to determine which language server to use",
+      "type": "string"
+    },
+    "query": {
+      "description": "Search query — symbol name or pattern to find",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query"
+  ],
+  "type": "object"
+}
