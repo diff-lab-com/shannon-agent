@@ -23,7 +23,6 @@
 //! request/response pairs. Replay loads those fixtures via mockito.
 
 use assert_cmd::Command;
-use mockito::Server;
 use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
@@ -200,48 +199,6 @@ fn write_file(path: &std::path::Path, content: &str) {
         fs::create_dir_all(parent).expect("create parent dir");
     }
     fs::write(path, content).expect(&format!("write {}", path.display()));
-}
-
-/// Discover all providers that have recorded fixtures.
-fn available_providers() -> Vec<String> {
-    use std::collections::HashSet;
-    let dir = fixtures_dir();
-    if !dir.exists() {
-        return Vec::new();
-    }
-    let mut providers = HashSet::new();
-    let Ok(entries) = fs::read_dir(&dir) else {
-        return Vec::new();
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if let Some(provider) = name.split('_').next() {
-            providers.insert(provider.to_string());
-        }
-    }
-    let mut result: Vec<String> = providers.into_iter().collect();
-    result.sort();
-    result
-}
-
-/// Mount all recorded fixtures onto a mockito server for replay.
-fn mount_fixtures(server: &mut Server, provider: &str) -> Vec<mockito::Mock> {
-    use shannon_core::testing::record_replay::ReplayHarness;
-    let harness = ReplayHarness::from_dir(fixtures_dir());
-    let mut mocks = Vec::new();
-    for fixture in &harness.fixtures {
-        if fixture.provider != provider {
-            continue;
-        }
-        let mock = server
-            .mock("POST", fixture.request.path.as_str())
-            .with_status(fixture.response_status_usize())
-            .with_body(&fixture.response.body)
-            .expect_at_least(1)
-            .create();
-        mocks.push(mock);
-    }
-    mocks
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1112,7 +1069,6 @@ async fn replay_fixtures_load_successfully() {
     }
     use shannon_core::testing::record_replay::ReplayHarness;
     let harness = ReplayHarness::from_dir(&dir);
-    // If no fixtures yet, that's fine — this test just verifies loading works
     for fixture in &harness.fixtures {
         assert!(!fixture.provider.is_empty(), "provider should not be empty");
         assert!(!fixture.request_hash.is_empty(), "hash should not be empty");
@@ -1123,38 +1079,73 @@ async fn replay_fixtures_load_successfully() {
     }
 }
 
-#[tokio::test]
+/// Validate a single recorded session: loadable, non-empty, no secrets leaked.
+fn validate_session(path: &std::path::Path) -> Result<String, String> {
+    let name = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    use shannon_core::testing::record_replay::RecordedExchange;
+    let exchanges =
+        RecordedExchange::load_jsonl(path).map_err(|e| format!("{name}: load failed: {e}"))?;
+
+    if exchanges.is_empty() {
+        return Err(format!("{name}: no exchanges in session"));
+    }
+
+    // Verify no secrets leaked in response headers
+    for (i, ex) in exchanges.iter().enumerate() {
+        for (hdr, value) in &ex.response.headers {
+            let lower = hdr.to_lowercase();
+            let is_sensitive = ["authorization", "x-api-key", "api-key", "cookie"]
+                .contains(&lower.as_str())
+                || lower.contains("token")
+                || lower.contains("secret");
+            if is_sensitive && value != "***REDACTED***" {
+                return Err(format!("{name} exchange {i}: leaked secret in '{hdr}'"));
+            }
+        }
+    }
+
+    Ok(name)
+}
+
+#[test]
 #[serial]
-async fn replay_recorded_fixtures_via_mockito() {
-    let providers = available_providers();
-    if providers.is_empty() {
-        eprintln!("Skipping: no recorded fixtures found");
+fn replay_each_recorded_session() {
+    let dir = fixtures_dir();
+    if !dir.exists() {
         return;
     }
 
-    for provider in &providers {
-        let mut server = Server::new_async().await;
-        let mocks = mount_fixtures(&mut server, provider);
-        if mocks.is_empty() {
+    let mut tested = Vec::new();
+    let mut errors = Vec::new();
+
+    for entry in fs::read_dir(&dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
             continue;
         }
-
-        let resp = reqwest::Client::new()
-            .post(format!("{}/v1/messages", server.url()))
-            .header("content-type", "application/json")
-            .header("anthropic-version", "2023-06-01")
-            .body(r#"{"model":"test","messages":[]}"#)
-            .send()
-            .await;
-
-        if let Ok(resp) = resp {
-            assert_eq!(
-                resp.status(),
-                200,
-                "mock for provider '{provider}' should return 200"
-            );
+        match validate_session(&path) {
+            Ok(name) => tested.push(name),
+            Err(e) => errors.push(e),
         }
     }
+
+    if tested.is_empty() && errors.is_empty() {
+        eprintln!("No recorded sessions found in {}", dir.display());
+        return;
+    }
+
+    assert!(
+        errors.is_empty(),
+        "{} of {} sessions failed:\n  {}",
+        errors.len(),
+        tested.len() + errors.len(),
+        errors.join("\n  ")
+    );
 }
 
 #[test]
