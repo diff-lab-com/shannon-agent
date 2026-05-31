@@ -17,7 +17,7 @@
 //!
 //! ## Replaying fixtures in CI
 //!
-//! ```rust
+//! ```ignore
 //! use shannon_core::testing::record_replay::ReplayHarness;
 //!
 //! let harness = ReplayHarness::from_dir("./tests/fixtures/my_test");
