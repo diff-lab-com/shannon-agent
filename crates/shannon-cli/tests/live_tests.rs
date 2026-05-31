@@ -1058,6 +1058,178 @@ fn record_task_json_schema_output() {
     }
 }
 
+// ── Additional recording scenarios ─────────────────────────────────────────
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_tool_error_recovery() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_tool_error");
+
+    shannon_record(&api_key, &record_dir, &workspace, "tool_error_recovery")
+        .args([
+            "--prompt",
+            "Try to read a file called nonexistent_file_xyz.txt. When that fails, create it with the content 'recovered'.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(180))
+        .assert()
+        .success();
+
+    // The LLM should have recovered from the error and created the file
+    assert!(
+        workspace.path().join("nonexistent_file_xyz.txt").exists(),
+        "LLM should recover from read error by creating the file"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_code_generation() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_code_gen");
+
+    shannon_record(&api_key, &record_dir, &workspace, "code_generation")
+        .args([
+            "--prompt",
+            "Create a Python file called fib.py that implements a fibonacci(n) function, then run it with python3 to verify fibonacci(10) == 55",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(180))
+        .assert()
+        .success();
+
+    assert!(
+        workspace.path().join("fib.py").exists(),
+        "fib.py should be created"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_nested_directory_write() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_nested_write");
+
+    shannon_record(&api_key, &record_dir, &workspace, "nested_directory_write")
+        .args([
+            "--prompt",
+            "Create the directory structure src/models/ and write a file src/models/user.rs containing: pub struct User { pub name: String, pub id: u64, }",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    assert!(
+        workspace.path().join("src/models/user.rs").exists(),
+        "src/models/user.rs should be created"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_overwrite_existing_file() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_overwrite");
+
+    // Pre-create a file
+    write_file(
+        &workspace.path().join("config.toml"),
+        "version = 1\nname = \"old\"",
+    );
+
+    shannon_record(&api_key, &record_dir, &workspace, "overwrite_existing_file")
+        .args([
+            "--prompt",
+            "The file config.toml exists. Update it to have version = 2 and name = \"new\"",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("config.toml")).unwrap();
+    assert!(
+        content.contains("version = 2")
+            || content.contains("version=2")
+            || content.contains("version=\"2\""),
+        "config.toml should be updated to version 2, got: {content}"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_context_compaction() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_compaction");
+
+    // Create multiple files to generate a long conversation
+    for i in 0..5 {
+        write_file(
+            &workspace.path().join(format!("file_{i}.txt")),
+            &format!("Content of file {i}: {}", "x".repeat(100)),
+        );
+    }
+
+    shannon_record(&api_key, &record_dir, &workspace, "context_compaction")
+        .args([
+            "--prompt",
+            "Read all files file_0.txt through file_4.txt. After reading all of them, tell me which file has the most 'x' characters.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(240))
+        .assert()
+        .success();
+}
+
+#[test]
+#[serial]
+#[ignore]
+fn record_task_multi_step_reasoning() {
+    let api_key = require_api_key();
+    let record_dir = require_record_dir();
+    let workspace = create_workspace("real_multi_step");
+
+    // Create a file with a bug
+    write_file(
+        &workspace.path().join("calc.rs"),
+        "pub fn multiply(a: i32, b: i32) -> i32 { a + b } // BUG: should be a * b",
+    );
+
+    shannon_record(&api_key, &record_dir, &workspace, "multi_step_reasoning")
+        .args([
+            "--prompt",
+            "Read calc.rs, identify the bug in the multiply function, fix it, and verify the fix by explaining what was wrong.",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(180))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("calc.rs")).unwrap();
+    assert!(
+        content.contains("a * b") || content.contains("a*b"),
+        "multiply should be fixed to use multiplication, got: {content}"
+    );
+}
+
 // ── Replay tests (no API key needed, use recorded fixtures) ───────────────
 
 #[tokio::test]

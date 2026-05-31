@@ -4965,6 +4965,7 @@ dependencies = [
  "glob",
  "globset",
  "ignore",
+ "insta",
  "mockito",
  "portable-pty",
  "proptest",
