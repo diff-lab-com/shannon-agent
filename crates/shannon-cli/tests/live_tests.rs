@@ -109,7 +109,12 @@ fn require_api_key() -> String {
 
 fn require_record_dir() -> PathBuf {
     match std::env::var("SHANNON_RECORD_DIR") {
-        Ok(dir) => PathBuf::from(dir),
+        Ok(dir) => {
+            let path = PathBuf::from(&dir);
+            // Auto-create the record directory if it doesn't exist.
+            let _ = fs::create_dir_all(&path);
+            path
+        }
         Err(_) => {
             eprintln!("Skipping: set SHANNON_RECORD_DIR to record fixtures");
             std::process::exit(0);
