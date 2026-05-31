@@ -956,6 +956,16 @@ impl QueryEngine {
             Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
         };
 
+        // Inject the working directory so the model knows where to write files.
+        if let Some(ref mut prompt) = system_prompt {
+            if let Ok(cwd) = std::env::current_dir() {
+                prompt.push_str(&format!(
+                    "\n\n## Environment\n\nWorking directory: {}",
+                    cwd.display()
+                ));
+            }
+        }
+
         // Clone existing conversation to preserve multi-turn context
         let mut conversation = self.conversation.clone();
         tracing::debug!(

@@ -54,6 +54,14 @@ async fn validate_path(sandbox: &PathSandbox, path: &str) -> ToolResult<PathBuf>
         .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))
 }
 
+/// Validate a path for writing (allows non-existent target files).
+async fn validate_write_path(sandbox: &PathSandbox, path: &str) -> ToolResult<PathBuf> {
+    sandbox
+        .validate_for_write(Path::new(path))
+        .await
+        .map_err(|e| ToolError::InvalidInput(format!("Path sandbox: {e}")))
+}
+
 /// Read tool implementation
 pub struct ReadTool {
     description: String,
@@ -189,7 +197,7 @@ impl Tool for WriteTool {
         let write_input: write::WriteInput = serde_json::from_value(input)
             .map_err(|e| ToolError::InvalidInput(format!("Invalid write input: {e}")))?;
 
-        let canonical = validate_path(&self.sandbox, &write_input.file_path).await?;
+        let canonical = validate_write_path(&self.sandbox, &write_input.file_path).await?;
         let mut input = write_input;
         input.file_path = canonical.to_string_lossy().to_string();
 
