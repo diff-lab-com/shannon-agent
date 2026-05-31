@@ -311,7 +311,11 @@ impl LlmClient {
             reasoning_effort: self.config.reasoning_effort,
         };
 
-        let serialized = super::adapter::serialize_request(&request_body, &self.config.provider);
+        let serialized = super::adapter::serialize_request_with_base_url(
+            &request_body,
+            &self.config.provider,
+            &self.config.base_url,
+        );
 
         // ── Replay mode: return saved fixture ──
         if let Some(stream) = self.try_replay(&serialized, &self.config.provider) {
@@ -449,7 +453,11 @@ impl LlmClient {
             request = request.header(k.as_str(), v.as_str());
         }
 
-        let body = super::adapter::serialize_request(&request_body, &self.config.provider);
+        let body = super::adapter::serialize_request_with_base_url(
+            &request_body,
+            &self.config.provider,
+            &self.config.base_url,
+        );
         request = request.json(&body);
 
         let response = request.send().await.map_err(|e| match e.status() {
@@ -528,9 +536,10 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(
+            .json(&super::adapter::serialize_request_with_base_url(
                 &request_body,
                 &self.config.provider,
+                &self.config.base_url,
             ));
 
         for (key, value) in headers {
@@ -612,9 +621,10 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(
+            .json(&super::adapter::serialize_request_with_base_url(
                 &request_body,
                 &self.config.provider,
+                &self.config.base_url,
             ));
 
         for (key, value) in headers {
