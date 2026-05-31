@@ -18,6 +18,10 @@ dev:
 test:
     cargo nextest run --workspace --config-file .config/nextest.toml
 
+# 完整测试 (nextest + doctests)
+test-all: test
+    cargo test --workspace --doc
+
 # 快速类型检查
 check:
     cargo check --workspace

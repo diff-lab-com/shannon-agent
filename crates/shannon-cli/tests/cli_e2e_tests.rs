@@ -1514,6 +1514,9 @@ async fn test_openai_still_sends_tools_by_default() {
 // ════════════════════════════════════════════════════════════════════════
 // Section: Multi-turn conversation tests
 // ════════════════════════════════════════════════════════════════════════
+// #[ignore] 原因: 需要 compiled binary + session 文件 I/O (非 API key 问题)
+// 已使用 mockito mock API，不需要真实 API
+// 已知问题: session 持久化与 HOME 覆盖导致 binary 启动失败 (空 stdout)
 
 static SESSION_TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -1913,6 +1916,8 @@ async fn test_multiturn_deepseek_resume_context() {
 // ════════════════════════════════════════════════════════════════════════
 // Section: Ultra-long conversation tests (pre-populated sessions)
 // ════════════════════════════════════════════════════════════════════════
+// #[ignore] 原因: 同上 — session 持久化问题 + 超长对话耗时长
+// 测试内容: 验证系统能加载和处理 5-500 轮对话的大型 session 文件
 
 async fn run_long_conversation_test(n_turns: usize) {
     let home = session_home_dir();
