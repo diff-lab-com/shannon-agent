@@ -3404,6 +3404,7 @@ mod tests {
             api_key: "test-key".to_string(),
             base_url: "http://localhost:11434".to_string(),
             model: "test-model".to_string(),
+            provider: LlmProvider::Ollama,
             ..Default::default()
         };
         LlmClient::new(config)
