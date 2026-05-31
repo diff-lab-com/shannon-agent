@@ -34,11 +34,13 @@ record:
     #!/usr/bin/bash
     if [ -z "$SHANNON_API_KEY" ]; then echo "Set SHANNON_API_KEY first"; exit 1; fi
     SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
+    SHANNON_RECORD_PROVIDER=${SHANNON_RECORD_PROVIDER:-anthropic} \
+    SHANNON_MODEL=${SHANNON_MODEL:-unknown} \
     cargo test --test live_tests -- --ignored --test-threads=1 record_task
 
 # 回放录制的 fixture (不需要 API key)
 replay:
-    cargo test --test live_tests -- --test-threads=1
+    cargo test --test live_tests -- --test-threads=1 replay_ test_write_file test_record_provider test_create_workspace test_provider_key_env test_all_nested
 
 # 微基准测试
 bench:

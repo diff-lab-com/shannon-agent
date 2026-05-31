@@ -95,7 +95,6 @@ impl RecordedExchange {
     }
 
     /// Create a mockito mock configuration from this exchange.
-    /// Callers use this with their own mockito ServerGuard.
     ///
     /// Example:
     /// ```ignore
@@ -108,6 +107,73 @@ impl RecordedExchange {
     pub fn response_status_usize(&self) -> usize {
         self.response.status as usize
     }
+
+    /// Header names that should be stripped from recordings to avoid leaking secrets.
+    const SENSITIVE_HEADERS: &'static [&'static str] = &[
+        "authorization",
+        "x-api-key",
+        "api-key",
+        "cookie",
+        "set-cookie",
+        "anthropic-api-key", // Alias used by some SDKs
+    ];
+
+    /// Return a copy with sensitive headers redacted.
+    pub fn strip_secrets(mut self) -> Self {
+        self.response.headers = self
+            .response
+            .headers
+            .into_iter()
+            .map(|(name, value)| {
+                let lower = name.to_lowercase();
+                let is_sensitive = Self::SENSITIVE_HEADERS.iter().any(|h| *h == lower)
+                    || lower.contains("token")
+                    || lower.contains("secret");
+                if is_sensitive {
+                    (name, "***REDACTED***".to_string())
+                } else {
+                    (name, value)
+                }
+            })
+            .collect();
+        self
+    }
+
+    /// Append this exchange as a single JSON line to a JSONL file.
+    /// Creates the file (and parent directories) if they don't exist.
+    pub fn save_jsonl(&self, path: &Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create dir {}: {e}", parent.display()))?;
+        }
+        let mut line =
+            serde_json::to_string(self).map_err(|e| format!("serialize for jsonl: {e}"))?;
+        line.push('\n');
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| format!("open jsonl {}: {e}", path.display()))?;
+        file.write_all(line.as_bytes())
+            .map_err(|e| format!("write jsonl {}: {e}", path.display()))?;
+        Ok(())
+    }
+
+    /// Load all exchanges from a JSONL file (one JSON object per line).
+    pub fn load_jsonl(path: &Path) -> Result<Vec<Self>, String> {
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+        content
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .enumerate()
+            .map(|(i, line)| {
+                serde_json::from_str(line)
+                    .map_err(|e| format!("parse {} line {}: {e}", path.display(), i + 1))
+            })
+            .collect()
+    }
 }
 
 /// Harness for loading and replaying recorded fixtures.
@@ -117,7 +183,7 @@ pub struct ReplayHarness {
 }
 
 impl ReplayHarness {
-    /// Load all fixtures from a directory.
+    /// Load all fixtures from a directory (supports both `.json` and `.jsonl` files).
     pub fn from_dir(dir: impl AsRef<Path>) -> Self {
         let dir = dir.as_ref().to_path_buf();
         let mut fixtures = Vec::new();
@@ -126,10 +192,19 @@ impl ReplayHarness {
             if let Ok(entries) = std::fs::read_dir(&dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().is_some_and(|ext| ext == "json") {
-                        if let Ok(exchange) = RecordedExchange::load(&path) {
-                            fixtures.push(exchange);
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    match ext {
+                        "json" => {
+                            if let Ok(exchange) = RecordedExchange::load(&path) {
+                                fixtures.push(exchange);
+                            }
                         }
+                        "jsonl" => {
+                            if let Ok(exchanges) = RecordedExchange::load_jsonl(&path) {
+                                fixtures.extend(exchanges);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -164,6 +239,9 @@ pub struct RecordingSession {
     pub fixture_dir: PathBuf,
     pub provider: String,
     pub model: String,
+    /// Optional session name for JSONL mode. When set, exchanges are appended
+    /// to `{fixture_dir}/{session_name}.jsonl` instead of individual files.
+    pub session_name: Option<String>,
 }
 
 impl RecordingSession {
@@ -173,7 +251,44 @@ impl RecordingSession {
             fixture_dir: fixture_dir.as_ref().to_path_buf(),
             provider: provider.to_string(),
             model: model.to_string(),
+            session_name: None,
         }
+    }
+
+    /// Create a session that writes to a JSONL file.
+    pub fn new_jsonl(
+        fixture_dir: impl AsRef<Path>,
+        provider: &str,
+        model: &str,
+        session_name: &str,
+    ) -> Self {
+        RecordingSession {
+            fixture_dir: fixture_dir.as_ref().to_path_buf(),
+            provider: provider.to_string(),
+            model: model.to_string(),
+            session_name: Some(session_name.to_string()),
+        }
+    }
+
+    /// Create from environment variables. Uses JSONL mode when
+    /// `SHANNON_RECORD_SESSION` is set, otherwise falls back to per-file mode.
+    pub fn from_env() -> Option<Self> {
+        let dir = std::env::var("SHANNON_RECORD_DIR")
+            .ok()
+            .map(PathBuf::from)?;
+        let provider = std::env::var("SHANNON_PROVIDER")
+            .or_else(|_| std::env::var("ANTHROPIC_PROVIDER"))
+            .unwrap_or_else(|_| "anthropic".to_string());
+        let model = std::env::var("SHANNON_MODEL")
+            .or_else(|_| std::env::var("ANTHROPIC_MODEL"))
+            .unwrap_or_else(|_| "unknown".to_string());
+        let session_name = std::env::var("SHANNON_RECORD_SESSION").ok();
+        Some(RecordingSession {
+            fixture_dir: dir,
+            provider,
+            model,
+            session_name,
+        })
     }
 
     /// Record an API exchange.
@@ -199,8 +314,16 @@ impl RecordingSession {
                 headers: response_headers,
                 body: response_body.to_string(),
             },
-        };
-        exchange.save(&self.fixture_dir)
+        }
+        .strip_secrets();
+
+        if let Some(ref name) = self.session_name {
+            let path = self.fixture_dir.join(format!("{name}.jsonl"));
+            exchange.save_jsonl(&path)?;
+            Ok(path)
+        } else {
+            exchange.save(&self.fixture_dir)
+        }
     }
 
     /// Check if recording is enabled (SHANNON_RECORD_DIR is set).
@@ -312,5 +435,156 @@ mod tests {
         assert!(harness.find_by_provider("anthropic").is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_jsonl_roundtrip() {
+        let dir = std::env::temp_dir().join("shannon-rr-jsonl");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+
+        let exchange1 = RecordedExchange {
+            request_hash: "hash1111".to_string(),
+            provider: "anthropic".to_string(),
+            model: "glm-5.1".to_string(),
+            request: RecordedRequest {
+                method: "POST".to_string(),
+                path: "/v1/messages".to_string(),
+                body: r#"{"model":"glm-5.1"}"#.to_string(),
+            },
+            response: RecordedResponse {
+                status: 200,
+                headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
+                body: "data: {\"type\":\"message_start\"}\n\n".to_string(),
+            },
+        };
+
+        let exchange2 = RecordedExchange {
+            request_hash: "hash2222".to_string(),
+            provider: "anthropic".to_string(),
+            model: "glm-5.1".to_string(),
+            request: RecordedRequest {
+                method: "POST".to_string(),
+                path: "/v1/messages".to_string(),
+                body: r#"{"model":"glm-5.1","messages":[...]}"#.to_string(),
+            },
+            response: RecordedResponse {
+                status: 200,
+                headers: vec![],
+                body: "data: {\"type\":\"content_block_delta\"}\n\n".to_string(),
+            },
+        };
+
+        exchange1.save_jsonl(&path).unwrap();
+        exchange2.save_jsonl(&path).unwrap();
+
+        let loaded = RecordedExchange::load_jsonl(&path).unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].request_hash, "hash1111");
+        assert_eq!(loaded[1].request_hash, "hash2222");
+        assert_eq!(loaded[0].model, "glm-5.1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_strip_secrets() {
+        let exchange = RecordedExchange {
+            request_hash: "test".to_string(),
+            provider: "anthropic".to_string(),
+            model: "test".to_string(),
+            request: RecordedRequest {
+                method: "POST".to_string(),
+                path: "/v1/messages".to_string(),
+                body: "{}".to_string(),
+            },
+            response: RecordedResponse {
+                status: 200,
+                headers: vec![
+                    ("content-type".to_string(), "text/event-stream".to_string()),
+                    (
+                        "authorization".to_string(),
+                        "Bearer sk-secret-key".to_string(),
+                    ),
+                    ("x-api-key".to_string(), "my-api-key".to_string()),
+                    ("x-request-id".to_string(), "req-123".to_string()),
+                    ("x-token-refresh".to_string(), "token-value".to_string()),
+                ],
+                body: "{}".to_string(),
+            },
+        };
+
+        let stripped = exchange.strip_secrets();
+
+        // Safe headers preserved
+        assert_eq!(
+            stripped.response.headers[0],
+            ("content-type".to_string(), "text/event-stream".to_string())
+        );
+        assert_eq!(
+            stripped.response.headers[3],
+            ("x-request-id".to_string(), "req-123".to_string())
+        );
+
+        // Sensitive headers redacted
+        assert_eq!(
+            stripped.response.headers[1],
+            ("authorization".to_string(), "***REDACTED***".to_string())
+        );
+        assert_eq!(
+            stripped.response.headers[2],
+            ("x-api-key".to_string(), "***REDACTED***".to_string())
+        );
+        // "token" in header name triggers redaction
+        assert_eq!(
+            stripped.response.headers[4],
+            ("x-token-refresh".to_string(), "***REDACTED***".to_string())
+        );
+    }
+
+    #[test]
+    fn test_replay_harness_loads_jsonl() {
+        let dir = std::env::temp_dir().join("shannon-rr-jsonl-harness");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let exchange = RecordedExchange {
+            request_hash: "jsonl_test".to_string(),
+            provider: "anthropic".to_string(),
+            model: "glm-5.1".to_string(),
+            request: RecordedRequest {
+                method: "POST".to_string(),
+                path: "/v1/messages".to_string(),
+                body: "{}".to_string(),
+            },
+            response: RecordedResponse {
+                status: 200,
+                headers: vec![],
+                body: "data: {}\n\n".to_string(),
+            },
+        };
+
+        exchange
+            .save_jsonl(&dir.join("test_session.jsonl"))
+            .unwrap();
+
+        let harness = ReplayHarness::from_dir(&dir);
+        assert_eq!(harness.fixtures.len(), 1);
+        assert_eq!(harness.fixtures[0].request_hash, "jsonl_test");
+        assert_eq!(harness.fixtures[0].model, "glm-5.1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_session_from_env_fallback() {
+        // Without SHANNON_RECORD_DIR set, returns None.
+        // We can't safely remove env vars in edition 2024, so just verify
+        // the method exists and handles the "not set" case.
+        // In practice, CI won't have SHANNON_RECORD_DIR set.
+        if std::env::var("SHANNON_RECORD_DIR").is_err() {
+            assert!(RecordingSession::from_env().is_none());
+        }
     }
 }
