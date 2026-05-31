@@ -4315,6 +4315,40 @@ mod tests {
         assert!(prompt.contains("Section B."));
     }
 
+    #[test]
+    fn test_system_prompt_default_has_no_cwd() {
+        let engine = create_test_engine();
+        let prompt = engine.system_prompt().unwrap();
+        assert!(
+            !prompt.contains("Working directory"),
+            "Default system prompt should NOT contain CWD (it is injected at query time): {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_cwd_injection_appends_to_system_prompt() {
+        let engine = create_test_engine();
+        let mut prompt = engine.system_prompt().unwrap();
+
+        // Simulate the CWD injection that process_query does
+        if let Ok(cwd) = std::env::current_dir() {
+            prompt.push_str(&format!(
+                "\n\n## Environment\n\nWorking directory: {}",
+                cwd.display()
+            ));
+        }
+
+        assert!(
+            prompt.contains("Working directory"),
+            "After CWD injection, prompt should contain 'Working directory'"
+        );
+        let cwd = std::env::current_dir().unwrap();
+        assert!(
+            prompt.contains(&*cwd.to_string_lossy()),
+            "After CWD injection, prompt should contain the actual CWD path"
+        );
+    }
+
     // ── Memory store tests ──────────────────────────────────────────
 
     #[test]
