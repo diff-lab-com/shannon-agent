@@ -41,7 +41,7 @@ lint:
 
 # 性能阈值测试 (检测明显性能退化)
 perf:
-    cargo nextest run --workspace --config-file .config/nextest.toml -E 'test(test_perf_)'
+    cargo nextest run --workspace --config-file .config/nextest.toml -E 'test(compaction_100_turns) + test(session_load) + test(tool_chain) + test(streaming_parse) + test(snapshot_render) + test(token_estimation) + test(cache_hit_rate) + test(cache_accumulation) + test(single_turn) + test(five_turn) + test(sse_round_trip) + test(message_serialization)'
 
 # YAML 场景测试
 scenarios:
