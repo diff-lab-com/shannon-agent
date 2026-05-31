@@ -647,4 +647,116 @@ mod tests {
         assert_send_sync::<MultiEditTool>();
         assert_send_sync::<GlobTool>();
     }
+
+    // ── Write tool: new file creation via sandbox ────────────────────
+
+    #[tokio::test]
+    async fn test_write_tool_creates_new_file_in_sandbox() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sandbox = PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+            allowed_roots: vec![dir.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+        let tool = WriteTool::with_sandbox(sandbox);
+
+        let new_path = dir.path().join("new_file.txt");
+        assert!(!new_path.exists(), "File should not exist before write");
+
+        let input = serde_json::json!({
+            "file_path": new_path.to_string_lossy(),
+            "content": "hello world"
+        });
+        let result = tool.execute(input).await;
+        assert!(
+            result.is_ok(),
+            "Write should succeed for new file: {:?}",
+            result
+        );
+
+        let content = std::fs::read_to_string(&new_path).unwrap();
+        assert_eq!(content, "hello world");
+    }
+
+    #[tokio::test]
+    async fn test_write_tool_creates_nested_new_file_in_sandbox() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Pre-create the nested directory
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+        let sandbox = PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+            allowed_roots: vec![dir.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+        let tool = WriteTool::with_sandbox(sandbox);
+
+        let new_path = dir.path().join("src/lib.rs");
+        assert!(!new_path.exists());
+
+        let input = serde_json::json!({
+            "file_path": new_path.to_string_lossy(),
+            "content": "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+        });
+        let result = tool.execute(input).await;
+        assert!(
+            result.is_ok(),
+            "Write should succeed for nested new file: {:?}",
+            result
+        );
+
+        let content = std::fs::read_to_string(&new_path).unwrap();
+        assert!(content.contains("pub fn add"));
+    }
+
+    #[tokio::test]
+    async fn test_write_tool_rejects_path_outside_sandbox() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sandbox = PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+            allowed_roots: vec![dir.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+        let tool = WriteTool::with_sandbox(sandbox);
+
+        let outside = std::env::temp_dir().join("outside_sandbox_test.txt");
+        let input = serde_json::json!({
+            "file_path": outside.to_string_lossy(),
+            "content": "should not be written"
+        });
+        let result = tool.execute(input).await;
+        assert!(result.is_err(), "Write should reject path outside sandbox");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("sandbox") || err.contains("allowed"),
+            "Error should mention sandbox or allowed roots: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_tool_overwrites_existing_file_in_sandbox() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let existing = dir.path().join("existing.txt");
+        std::fs::write(&existing, "old content").unwrap();
+
+        let sandbox = PathSandbox::with_config(crate::file::sandbox::SandboxConfig {
+            allowed_roots: vec![dir.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+        let tool = WriteTool::with_sandbox(sandbox);
+
+        let input = serde_json::json!({
+            "file_path": existing.to_string_lossy(),
+            "content": "new content"
+        });
+        let result = tool.execute(input).await;
+        assert!(
+            result.is_ok(),
+            "Write should succeed overwriting existing file"
+        );
+
+        let content = std::fs::read_to_string(&existing).unwrap();
+        assert_eq!(content, "new content");
+    }
 }
