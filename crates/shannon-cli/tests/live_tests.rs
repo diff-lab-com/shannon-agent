@@ -204,6 +204,9 @@ fn write_file(path: &std::path::Path, content: &str) {
 // ══════════════════════════════════════════════════════════════════════════
 // ── Live Provider Tests ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════
+// #[ignore] 原因: 需要运行中的 Ollama/DeepSeek 实例
+// 目的: 验证真实 API 连通性、响应解析、流式行为
+// 不适合 record/replay: 这些测试验证的是网络连通性，不是对话行为
 
 // ── Live Ollama queries ──────────────────────────────────────────────────
 
@@ -582,6 +585,9 @@ fn test_live_ollama_tool_calls_empty_by_default() {
 // ══════════════════════════════════════════════════════════════════════════
 // ── Record/Replay Tests ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════
+// #[ignore] 原因: 录制端需 API key (SHANNON_API_KEY + SHANNON_RECORD_DIR)
+// 回放端不需要 key — 使用 `just replay` 运行
+// 录制/回放机制: LlmClient 拦截请求/响应 → JSONL fixture → mockito mock
 
 // ── Recording tests (require API key + SHANNON_RECORD_DIR, #[ignore]) ────
 
