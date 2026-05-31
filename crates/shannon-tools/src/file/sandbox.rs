@@ -200,6 +200,57 @@ impl PathSandbox {
         Ok(canonical)
     }
 
+    /// Validate a path for writing, handling non-existent target files.
+    ///
+    /// Unlike `validate()`, this method handles the case where the target file
+    /// does not exist yet. It canonicalizes the parent directory and appends
+    /// the filename, allowing the Write tool to create new files.
+    pub async fn validate_for_write(&self, path: &Path) -> Result<PathBuf, SandboxError> {
+        if path.as_os_str().is_empty() {
+            return Err(SandboxError::InvalidPath);
+        }
+
+        let path_str = path.to_string_lossy().to_string();
+        self.check_raw_traversal(&path_str)?;
+
+        // Try canonicalizing the full path first (works for existing files)
+        if let Ok(canonical) = tokio::fs::canonicalize(path).await {
+            self.check_denied_patterns(&canonical.to_string_lossy())?;
+            if self.config.strict_mode {
+                self.check_allowed_roots(&canonical)?;
+            }
+            self.check_home_boundary(&canonical)?;
+            return Ok(canonical);
+        }
+
+        // File doesn't exist — canonicalize parent and append filename
+        let parent = path.parent().ok_or_else(|| {
+            SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': no parent"))
+        })?;
+
+        let canonical_parent = tokio::fs::canonicalize(parent).await.map_err(|e| {
+            SandboxError::ResolutionFailed(format!(
+                "Cannot resolve parent directory '{}': {e}",
+                parent.display()
+            ))
+        })?;
+
+        let file_name = path.file_name().ok_or_else(|| {
+            SandboxError::ResolutionFailed(format!("Cannot resolve path '{path_str}': no filename"))
+        })?;
+
+        let canonical = canonical_parent.join(file_name);
+        let canonical_str = canonical.to_string_lossy().to_string();
+
+        self.check_denied_patterns(&canonical_str)?;
+        if self.config.strict_mode {
+            self.check_allowed_roots(&canonical)?;
+        }
+        self.check_home_boundary(&canonical)?;
+
+        Ok(canonical)
+    }
+
     /// Check for raw `..` traversal components before canonicalization.
     ///
     /// This provides a more descriptive error message. Even if this check
@@ -1015,5 +1066,102 @@ mod tests {
             result.is_err(),
             "Sync validate should reject path outside allowed root"
         );
+    }
+
+    // --- validate_for_write tests ---
+
+    #[tokio::test]
+    async fn test_validate_for_write_existing_file() {
+        let td = TestDir::new();
+        td.create_file("existing.txt", "content");
+
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![td.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+
+        let result = sandbox.validate_for_write(&td.file("existing.txt")).await;
+        assert!(result.is_ok(), "Should allow writing to existing file");
+    }
+
+    #[tokio::test]
+    async fn test_validate_for_write_new_file_in_allowed_root() {
+        let td = TestDir::new();
+        // Only create the directory, not the file
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![td.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+
+        let new_file = td.file("brand_new_file.txt");
+        assert!(!new_file.exists(), "File should not exist yet");
+
+        let result = sandbox.validate_for_write(&new_file).await;
+        assert!(
+            result.is_ok(),
+            "Should allow creating new file in allowed root: {:?}",
+            result
+        );
+        let canonical = result.unwrap();
+        assert!(
+            canonical.ends_with("brand_new_file.txt"),
+            "Canonical path should preserve filename: {:?}",
+            canonical
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_for_write_new_file_in_subdirectory() {
+        let td = TestDir::new();
+        td.create_file("src/.gitkeep", ""); // create src/ dir
+
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![td.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+
+        let new_file = td.file("src/lib.rs");
+        assert!(!new_file.exists(), "File should not exist yet");
+
+        let result = sandbox.validate_for_write(&new_file).await;
+        assert!(
+            result.is_ok(),
+            "Should allow creating new file in existing subdir: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_for_write_rejects_outside_allowed_root() {
+        let td = TestDir::new();
+
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![td.path().to_path_buf()],
+            denied_patterns: vec![],
+            strict_mode: true,
+        });
+
+        let outside = PathBuf::from("/tmp/outside_sandbox_test.txt");
+        let result = sandbox.validate_for_write(&outside).await;
+        assert!(result.is_err(), "Should reject file outside allowed root");
+    }
+
+    #[tokio::test]
+    async fn test_validate_for_write_rejects_denied_pattern() {
+        let _td = TestDir::new();
+
+        let sandbox = PathSandbox::with_config(SandboxConfig {
+            allowed_roots: vec![PathBuf::from("/")],
+            denied_patterns: vec!["/etc/".to_string()],
+            strict_mode: true,
+        });
+
+        let result = sandbox
+            .validate_for_write(Path::new("/etc/new_file.txt"))
+            .await;
+        assert!(result.is_err(), "Should reject file in denied pattern area");
     }
 }
