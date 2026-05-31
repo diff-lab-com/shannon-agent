@@ -249,6 +249,8 @@ impl LlmClient {
     }
 
     /// Record a request/response exchange to the fixture directory.
+    /// Uses JSONL mode when SHANNON_RECORD_SESSION is set, otherwise per-file.
+    /// Strips sensitive headers before saving.
     fn record_exchange(
         &self,
         serialized_body: &serde_json::Value,
@@ -272,8 +274,24 @@ impl LlmClient {
                     headers: response_headers,
                     body: response_body.to_string(),
                 },
-            };
-            if let Err(e) = exchange.save(&dir) {
+            }
+            .strip_secrets();
+
+            // JSONL mode: append to session file
+            if let Ok(session) = std::env::var("SHANNON_RECORD_SESSION") {
+                let jsonl_path = dir.join(format!("{session}.jsonl"));
+                match exchange.save_jsonl(&jsonl_path) {
+                    Ok(_) => {
+                        tracing::info!(
+                            "Recorded to session {}: {}_{}",
+                            session,
+                            exchange.provider,
+                            exchange.request_hash
+                        );
+                    }
+                    Err(e) => tracing::warn!("Failed to save recording: {e}"),
+                }
+            } else if let Err(e) = exchange.save(&dir) {
                 tracing::warn!("Failed to save recording: {e}");
             } else {
                 tracing::info!(
@@ -492,6 +510,24 @@ impl LlmClient {
                 status,
                 &error_text,
             ));
+        }
+
+        // ── Record mode: buffer full response, save fixture ──
+        if Self::record_dir().is_some() {
+            let status = response.status().as_u16();
+            let resp_headers: Vec<(String, String)> = response
+                .headers()
+                .iter()
+                .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.to_string(), s.to_string())))
+                .collect();
+            let resp_body = response.text().await.map_err(|e| {
+                ApiError::InvalidResponse(format!("Failed to read response for recording: {e}"))
+            })?;
+            let provider_path = self.config.provider.endpoint().to_string();
+            self.record_exchange(&body, &provider_path, status, resp_headers, &resp_body);
+
+            let events = Self::parse_raw_body(&resp_body, &self.config.provider);
+            return Ok(Box::pin(futures::stream::iter(events)));
         }
 
         Ok(super::streaming::sse_stream_from_response(
