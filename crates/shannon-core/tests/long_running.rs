@@ -243,7 +243,7 @@ fn build_debugging_responses(n: usize) -> Vec<MockResponse> {
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[test]
-#[ignore] // Run via test-release.sh only
+
 fn test_100_turn_refactoring_session() {
     let config = QueryEngineConfig {
         max_context_tokens: Some(50_000),
@@ -305,7 +305,7 @@ fn test_100_turn_refactoring_session() {
 }
 
 #[test]
-#[ignore] // Long-running stress test (50+ turns) — run via `scripts/test-release.sh` or `cargo test -- --ignored`
+
 fn test_50_turn_debugging_session() {
     let config = QueryEngineConfig {
         max_context_tokens: Some(40_000),
@@ -379,7 +379,7 @@ fn test_50_turn_debugging_session() {
 }
 
 #[test]
-#[ignore] // Long-running stress test (80 turns) — run via `scripts/test-release.sh` or `cargo test -- --ignored`
+// Long-running stress test (80 turns) — run via `scripts/test-release.sh` if needed
 fn test_80_turn_feature_development() {
     let config = QueryEngineConfig {
         max_context_tokens: Some(60_000),
@@ -480,7 +480,7 @@ fn test_80_turn_feature_development() {
 }
 
 #[test]
-#[ignore] // Long-running stress test (50 turns, memory stability) — run via `scripts/test-release.sh` or `cargo test -- --ignored`
+#[ignore] // Requires real compaction behavior — run via `scripts/test-release.sh`
 fn test_memory_stability_50_turns() {
     // Test that snapshot sizes (as a proxy for memory usage) don't grow linearly
     // over 50 turns with compaction enabled.
@@ -540,7 +540,7 @@ fn test_memory_stability_50_turns() {
 }
 
 #[test]
-#[ignore] // Long-running stress test (30 turns, compaction quality) — run via `scripts/test-release.sh` or `cargo test -- --ignored`
+#[ignore] // Requires real compaction behavior — run via `scripts/test-release.sh`
 fn test_compaction_quality_long_session() {
     // Build a 30-turn session with specific file names and tool results,
     // trigger compaction, then verify key information is preserved.
