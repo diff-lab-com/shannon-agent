@@ -339,7 +339,7 @@ struct Cli {
     model: Option<String>,
 
     /// LLM provider (anthropic, openai, ollama, custom)
-    #[arg(short, long)]
+    #[arg(long)]
     provider: Option<String>,
 
     /// Set language/locale (e.g., en, zh)
@@ -393,8 +393,8 @@ struct Cli {
 
     /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
     /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
-    /// Example: shannon --prompt "fix the bug" --allowed-tools Read,Edit,Bash --output-format json
-    #[arg(long = "prompt")]
+    /// Example: shannon -p "fix the bug" --allowed-tools Read,Edit,Bash --output-format json
+    #[arg(short = 'p', long = "prompt")]
     headless_prompt: Option<String>,
 
     // NOTE: `--allowed-tools` is defined above as `team_allowed_tools` (shared
@@ -452,7 +452,7 @@ enum Commands {
         model: Option<String>,
 
         /// LLM provider (anthropic, openai, ollama, custom)
-        #[arg(short, long)]
+        #[arg(long)]
         provider: Option<String>,
 
         /// Maximum tokens for the response (default: 8192)
@@ -503,7 +503,7 @@ enum Commands {
         model: Option<String>,
 
         /// LLM provider (anthropic, openai, ollama, custom)
-        #[arg(short, long)]
+        #[arg(long)]
         provider: Option<String>,
 
         /// Maximum tokens for response
@@ -2868,15 +2868,24 @@ mod tests {
 
     #[test]
     fn test_cli_bare_prompt_with_provider() {
-        let cli = Cli::try_parse_from(["shannon", "-p", "anthropic", "test query"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["shannon", "--provider", "anthropic", "test query"]).unwrap();
         assert_eq!(cli.prompt.as_deref(), Some("test query"));
         assert_eq!(cli.provider.as_deref(), Some("anthropic"));
         assert!(cli.command.is_none());
     }
 
     #[test]
+    fn test_cli_prompt_short_flag() {
+        let cli = Cli::try_parse_from(["shannon", "-p", "fix the bug", "--output-format", "json"])
+            .unwrap();
+        assert_eq!(cli.headless_prompt.as_deref(), Some("fix the bug"));
+    }
+
+    #[test]
     fn test_cli_bare_prompt_with_model_and_provider() {
-        let cli = Cli::try_parse_from(["shannon", "-m", "gpt-4o", "-p", "openai", "你好"]).unwrap();
+        let cli = Cli::try_parse_from(["shannon", "-m", "gpt-4o", "--provider", "openai", "你好"])
+            .unwrap();
         assert_eq!(cli.prompt.as_deref(), Some("你好"));
         assert_eq!(cli.model.as_deref(), Some("gpt-4o"));
         assert_eq!(cli.provider.as_deref(), Some("openai"));
@@ -2931,7 +2940,7 @@ mod tests {
 
     #[test]
     fn test_cli_parse_repl_with_provider_short() {
-        let cli = Cli::try_parse_from(["shannon", "repl", "-p", "anthropic"]).unwrap();
+        let cli = Cli::try_parse_from(["shannon", "repl", "--provider", "anthropic"]).unwrap();
         match cli.command {
             Some(Commands::Repl { provider, .. }) => {
                 assert_eq!(provider.as_deref(), Some("anthropic"));
@@ -3024,7 +3033,7 @@ mod tests {
             "repl",
             "-m",
             "claude-3-5-sonnet-20241022",
-            "-p",
+            "--provider",
             "anthropic",
             "--max-tokens",
             "16384",
@@ -3163,7 +3172,8 @@ mod tests {
 
     #[test]
     fn test_cli_parse_query_with_provider() {
-        let cli = Cli::try_parse_from(["shannon", "query", "-p", "anthropic", "test"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["shannon", "query", "--provider", "anthropic", "test"]).unwrap();
         match cli.command {
             Some(Commands::Query {
                 query, provider, ..
@@ -3263,7 +3273,7 @@ mod tests {
             "query",
             "-m",
             "claude-sonnet-4",
-            "-p",
+            "--provider",
             "anthropic",
             "--max-tokens",
             "4096",
@@ -3466,7 +3476,7 @@ mod tests {
             "query",
             "-m",
             "gpt-4o",
-            "-p",
+            "--provider",
             "openai",
             "--max-tokens",
             "4096",
