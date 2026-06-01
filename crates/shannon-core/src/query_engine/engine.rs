@@ -270,6 +270,9 @@ pub struct QueryEngine {
     pub(crate) session_id: Uuid,
     /// Hook manager for lifecycle events (pre/post tool use, session start/end)
     pub(crate) hook_manager: Arc<tokio::sync::RwLock<crate::hooks::HookManager>>,
+    /// Triggered routines registry for hook-event-driven automation
+    pub(crate) triggered_routines:
+        Arc<tokio::sync::RwLock<crate::triggered_routines::TriggeredRoutineRegistry>>,
     /// Context injector for project instructions and preference memory.
     pub(crate) context_injector: Option<Arc<ContextInjector>>,
     /// Shared flag set by `PlanManager` (in `shannon-tools`) to signal that
@@ -417,6 +420,9 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            triggered_routines: Arc::new(tokio::sync::RwLock::new(
+                crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
+            )),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
@@ -463,6 +469,9 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            triggered_routines: Arc::new(tokio::sync::RwLock::new(
+                crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
+            )),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
@@ -498,6 +507,9 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            triggered_routines: Arc::new(tokio::sync::RwLock::new(
+                crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
+            )),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
@@ -607,6 +619,13 @@ impl QueryEngine {
     /// Access the hook manager for firing lifecycle events (SessionStart, SessionEnd, etc.)
     pub fn hook_manager(&self) -> Arc<tokio::sync::RwLock<crate::hooks::HookManager>> {
         self.hook_manager.clone()
+    }
+
+    /// Access the triggered routines registry.
+    pub fn triggered_routines(
+        &self,
+    ) -> Arc<tokio::sync::RwLock<crate::triggered_routines::TriggeredRoutineRegistry>> {
+        self.triggered_routines.clone()
     }
 
     /// Restore conversation from a previously saved session
@@ -837,6 +856,7 @@ impl QueryEngine {
         let session_id_for_save = self.session_id;
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
+        let triggered_routines = self.triggered_routines.clone();
         let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
         let checkpoint_manager = self.checkpoint_manager.clone();
@@ -2197,6 +2217,40 @@ impl QueryEngine {
                                                                                     .await;
                                                                             }
 
+                                                                            // Execute matching triggered routines (non-blocking)
+                                                                            {
+                                                                                let routines =
+                                                                                    triggered_routines
+                                                                                        .clone();
+                                                                                let tool =
+                                                                                    tool_name
+                                                                                        .clone();
+                                                                                tokio::spawn(
+                                                                                    async move {
+                                                                                        let reg =
+                                                                                            routines
+                                                                                                .read()
+                                                                                                .await;
+                                                                                        let results = reg
+                                                                                            .execute_matching(
+                                                                                                &crate::HookEventType::PostToolUse,
+                                                                                                &tool,
+                                                                                                None,
+                                                                                            )
+                                                                                            .await;
+                                                                                        for r in
+                                                                                            &results
+                                                                                        {
+                                                                                            if r.success() {
+                                                                                                tracing::info!(name = %r.name, "Triggered routine completed");
+                                                                                            } else {
+                                                                                                tracing::warn!(name = %r.name, stderr = %r.stderr, "Triggered routine failed");
+                                                                                            }
+                                                                                        }
+                                                                                    },
+                                                                                );
+                                                                            }
+
                                                                             // Emit progress: tool completed
                                                                             send_event!(tx, QueryEvent::ToolProgress {
                                                                                 query_id,
@@ -2340,6 +2394,31 @@ impl QueryEngine {
                                                                     let _ = hm
                                                                         .run_hooks(&post_event)
                                                                         .await;
+                                                                }
+
+                                                                // Execute matching triggered routines (non-blocking)
+                                                                {
+                                                                    let routines =
+                                                                        triggered_routines.clone();
+                                                                    let tool = tool_name.clone();
+                                                                    tokio::spawn(async move {
+                                                                        let reg =
+                                                                            routines.read().await;
+                                                                        let results = reg
+                                                                                .execute_matching(
+                                                                                    &crate::HookEventType::PostToolUse,
+                                                                                    &tool,
+                                                                                    None,
+                                                                                )
+                                                                                .await;
+                                                                        for r in &results {
+                                                                            if r.success() {
+                                                                                tracing::info!(name = %r.name, "Triggered routine completed");
+                                                                            } else {
+                                                                                tracing::warn!(name = %r.name, stderr = %r.stderr, "Triggered routine failed");
+                                                                            }
+                                                                        }
+                                                                    });
                                                                 }
 
                                                                 // Emit progress: tool completed

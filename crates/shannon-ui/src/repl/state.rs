@@ -106,6 +106,8 @@ pub struct ReplState {
     pub completion_suggestions: Vec<String>,
     /// Scheduled routine manager for recurring tasks
     pub routine_manager: shannon_core::scheduled_routines::RoutineManager,
+    /// Triggered routines registry (hook-event-driven automation)
+    pub triggered_routines: shannon_core::TriggeredRoutineRegistry,
     /// Cron-based scheduler for /schedule command
     pub cron_tool: shannon_tools::CronTool,
     /// Index of the currently highlighted completion suggestion
@@ -444,6 +446,7 @@ impl Default for ReplState {
             theme_picker: None,
             completion_suggestions: Vec::new(),
             routine_manager: shannon_core::scheduled_routines::RoutineManager::new(),
+            triggered_routines: shannon_core::TriggeredRoutineRegistry::load_from_dirs(),
             cron_tool: if std::env::var("SHANNON_DISABLE_CRON").is_ok() {
                 shannon_tools::CronTool::new()
             } else {

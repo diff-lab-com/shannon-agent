@@ -292,14 +292,13 @@ mod tests {
         let path = dir.path().join("routines.json");
 
         let mut mgr = RoutineManager::new();
-        mgr.add(ScheduledRoutine::new("test".into(), "hello".into(), 60));
+        let id = mgr.add(ScheduledRoutine::new("test".into(), "hello".into(), 60));
         mgr.save_to_file(&path).unwrap();
 
         let loaded = RoutineManager::load_from_file(&path).unwrap();
         assert_eq!(loaded.routines.len(), 1);
-        assert!(
-            loaded.get("test").is_some() || loaded.routines.keys().any(|k| k.starts_with("test"))
-        );
+        assert!(loaded.get(&id).is_some());
+        assert_eq!(loaded.get(&id).unwrap().name, "test");
     }
 
     #[test]
