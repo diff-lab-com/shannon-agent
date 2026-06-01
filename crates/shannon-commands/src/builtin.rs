@@ -35,6 +35,7 @@ mod monitor;
 mod pdf;
 mod plan;
 mod preset;
+mod profile;
 mod review;
 mod review_pr;
 mod search;
@@ -92,6 +93,7 @@ pub fn all_commands() -> Vec<Command> {
         outline::command(),
         context::command(),
         preset::command(),
+        profile::command(),
         session::command(),
         team::command(),
     ];
