@@ -9,7 +9,10 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use shannon_agents::{AgentConfig, AgentMessage, MessageContent, ProtocolMessage, TeamContext};
+use shannon_agents::{
+    AgentConfig, AgentDefinitionRegistry, AgentMessage, MessageContent, ProtocolMessage,
+    TeamContext,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -160,6 +163,8 @@ pub struct AgentTool {
     description: String,
     /// Shared context injected after construction. None until inject_context() is called.
     context: Arc<Mutex<Option<AgentToolContext>>>,
+    /// Cached agent definition registry (lazy-loaded from disk).
+    agent_defs: Arc<Mutex<Option<AgentDefinitionRegistry>>>,
 }
 
 impl Default for AgentTool {
@@ -174,7 +179,17 @@ impl AgentTool {
             description: "Spawn and manage AI agent teammates for collaborative problem-solving"
                 .to_string(),
             context: Arc::new(Mutex::new(None)),
+            agent_defs: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Lazily load and cache the agent definition registry.
+    fn get_agent_defs(&self) -> AgentDefinitionRegistry {
+        let mut guard = self.agent_defs.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            *guard = Some(AgentDefinitionRegistry::load_from_dirs());
+        }
+        guard.as_ref().unwrap().clone()
     }
 
     /// Get a clone of the context Arc for injection from external code.
@@ -258,6 +273,9 @@ impl AgentTool {
         let agent_id = format!("agent_{}", uuid::Uuid::new_v4());
         let agent_type = input.agent_type.clone();
 
+        // Look up persisted agent definition (if any)
+        let agent_def = self.get_agent_defs().get(&agent_type).cloned();
+
         if let Some(ctx) = self.get_team_context() {
             // 1. Register in coordinator for team coordination
             let team = input.context.as_ref().and_then(|c| {
@@ -266,25 +284,55 @@ impl AgentTool {
                     .map(|s| s.to_string())
             });
 
+            // Resolve config from definition, with explicit input overriding
+            let resolved_model = input
+                .model
+                .clone()
+                .or_else(|| agent_def.as_ref().and_then(|d| d.model.clone()))
+                .unwrap_or_else(|| ctx.client_config.model.clone());
+
+            let resolved_prompt = agent_def
+                .as_ref()
+                .and_then(|d| d.system_prompt.clone())
+                .unwrap_or_else(|| {
+                    format!(
+                        "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."
+                    )
+                });
+
+            let resolved_tools = input
+                .allowed_tools
+                .clone()
+                .or_else(|| {
+                    agent_def
+                        .as_ref()
+                        .filter(|d| !d.allowed_tools.is_empty())
+                        .map(|d| d.allowed_tools.clone())
+                })
+                .unwrap_or_default();
+
             let config = AgentConfig {
-                name: format!("{}-{}", &agent_type, &agent_id[6..14]), // readable name
-                model: input
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| ctx.client_config.model.clone()),
-                system_prompt: format!(
-                    "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."
-                ),
-                tools: input.allowed_tools.clone().unwrap_or_default(),
+                name: format!("{}-{}", &agent_type, &agent_id[6..14]),
+                model: resolved_model,
+                system_prompt: resolved_prompt,
+                tools: resolved_tools,
                 working_directory: input
                     .context
                     .as_ref()
                     .and_then(|c| c.get("working_directory").and_then(|v| v.as_str()))
                     .map(std::path::PathBuf::from)
                     .unwrap_or_else(|| std::path::PathBuf::from(".")),
-                max_turns: 50,
+                max_turns: agent_def
+                    .as_ref()
+                    .map(|d| d.max_concurrent_tasks as u32)
+                    .unwrap_or(50),
                 team,
             };
+
+            // Capture values before moving config into spawn
+            let resolved_model_for_subagent = config.model.clone();
+            let resolved_prompt_for_subagent = config.system_prompt.clone();
+            let parent_model = ctx.client_config.model.clone();
 
             // Spawn in the registry (creates team if needed, adds teammate)
             let agent =
@@ -297,8 +345,8 @@ impl AgentTool {
 
             // 2. Execute task via real QueryEngine
             let mut subagent_config = ctx.client_config.clone();
-            if let Some(ref model) = input.model {
-                subagent_config.model = model.clone();
+            if resolved_model_for_subagent != parent_model {
+                subagent_config.model = resolved_model_for_subagent;
             }
             let result = self
                 .execute_subagent(
@@ -306,6 +354,7 @@ impl AgentTool {
                     agent_type.clone(),
                     input,
                     subagent_config,
+                    Some(resolved_prompt_for_subagent),
                 )
                 .await?;
 
@@ -337,7 +386,8 @@ impl AgentTool {
 
             match client_config {
                 Some(client_config) => {
-                    self.execute_subagent(agent_id, agent_type, input, client_config)
+                    let prompt = agent_def.as_ref().and_then(|d| d.system_prompt.clone());
+                    self.execute_subagent(agent_id, agent_type, input, client_config, prompt)
                         .await
                 }
                 None => Ok(AgentSpawnOutput {
@@ -361,6 +411,7 @@ impl AgentTool {
         agent_type: String,
         input: AgentSpawnInput,
         client_config: shannon_core::api::LlmClientConfig,
+        resolved_system_prompt: Option<String>,
     ) -> Result<AgentSpawnOutput, ToolError> {
         use shannon_core::query_engine::{QueryContext, QueryEvent, QueryMetadata};
         use uuid::Uuid;
@@ -397,8 +448,10 @@ impl AgentTool {
             .map(|wd| format!("\n\nIMPORTANT: You are working in an isolated worktree at '{wd}'. All file operations must be relative to this directory. Use `cd {wd}` before running any commands."))
             .unwrap_or_default();
 
+        let base_prompt = resolved_system_prompt
+            .unwrap_or_else(|| format!("You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely."));
         let system_hint = format!(
-            "You are a sub-agent of type '{agent_type}'. Focus on completing the assigned task concisely.{working_dir_hint}\n\nTask: {task}",
+            "{base_prompt}{working_dir_hint}\n\nTask: {task}",
             task = input.task,
         );
         let user_message = match &input.context {
@@ -539,19 +592,27 @@ impl AgentTool {
                 .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create team: {e}")))?;
 
             // Optionally pre-spawn agents for the specified agent types
+            let agent_defs = self.get_agent_defs();
             let mut agent_ids = Vec::new();
             for agent_type in &input.agents {
-                let config = AgentConfig {
-                    name: format!("{}-{}", agent_type, uuid::Uuid::new_v4().as_simple()),
-                    model: ctx.client_config.model.clone(),
-                    system_prompt: format!(
-                        "You are a {agent_type} agent. Focus on your specialty."
-                    ),
-                    tools: Vec::new(),
-                    working_directory: std::path::PathBuf::from("."),
-                    max_turns: 50,
-                    team: Some(team_name.clone()),
-                };
+                let def = agent_defs.get(agent_type);
+                let config =
+                    AgentConfig {
+                        name: format!("{}-{}", agent_type, uuid::Uuid::new_v4().as_simple()),
+                        model: def
+                            .and_then(|d| d.model.clone())
+                            .unwrap_or_else(|| ctx.client_config.model.clone()),
+                        system_prompt: def.and_then(|d| d.system_prompt.clone()).unwrap_or_else(
+                            || format!("You are a {agent_type} agent. Focus on your specialty."),
+                        ),
+                        tools: def
+                            .filter(|d| !d.allowed_tools.is_empty())
+                            .map(|d| d.allowed_tools.clone())
+                            .unwrap_or_default(),
+                        working_directory: std::path::PathBuf::from("."),
+                        max_turns: def.map(|d| d.max_concurrent_tasks as u32).unwrap_or(50),
+                        team: Some(team_name.clone()),
+                    };
                 let agent = ctx.registry.spawn(config).await.map_err(|e| {
                     ToolError::ExecutionFailed(format!("Failed to spawn {agent_type}: {e}"))
                 })?;
@@ -1149,5 +1210,76 @@ mod tests {
         assert_send_sync::<CreateTeamInput>();
         assert_send_sync::<ShutdownInput>();
         assert_send_sync::<AgentOperation>();
+    }
+
+    // ── Agent definition registry integration ────────────────────────────
+
+    #[test]
+    fn test_agent_defs_loads_builtin_definitions() {
+        let tool = AgentTool::new();
+        let defs = tool.get_agent_defs();
+        // Built-in definitions should always be present
+        assert!(defs.get("explorer").is_some());
+        assert!(defs.get("planner").is_some());
+        assert!(defs.get("code-reviewer").is_some());
+        assert!(defs.get("security-reviewer").is_some());
+        assert!(defs.get("backend-architect").is_some());
+        assert!(defs.get("frontend-architect").is_some());
+        assert!(defs.get("test-engineer").is_some());
+    }
+
+    #[test]
+    fn test_agent_defs_builtin_has_system_prompts() {
+        let tool = AgentTool::new();
+        let defs = tool.get_agent_defs();
+
+        let explorer = defs.get("explorer").unwrap();
+        assert!(explorer.system_prompt.is_some());
+        assert!(
+            explorer
+                .system_prompt
+                .as_ref()
+                .unwrap()
+                .contains("code explorer")
+        );
+
+        let reviewer = defs.get("code-reviewer").unwrap();
+        assert!(reviewer.system_prompt.is_some());
+        assert!(
+            reviewer
+                .system_prompt
+                .as_ref()
+                .unwrap()
+                .contains("code reviewer")
+        );
+    }
+
+    #[test]
+    fn test_agent_defs_builtin_has_allowed_tools() {
+        let tool = AgentTool::new();
+        let defs = tool.get_agent_defs();
+
+        let explorer = defs.get("explorer").unwrap();
+        assert!(!explorer.allowed_tools.is_empty());
+        assert!(explorer.allowed_tools.contains(&"Read".to_string()));
+
+        // Explorer should not have write tools
+        assert!(!explorer.allowed_tools.contains(&"Write".to_string()));
+    }
+
+    #[test]
+    fn test_agent_defs_caches_result() {
+        let tool = AgentTool::new();
+        let defs1 = tool.get_agent_defs();
+        let defs2 = tool.get_agent_defs();
+        // Both should return the same built-in count
+        assert_eq!(defs1.list_names().len(), defs2.list_names().len());
+    }
+
+    #[test]
+    fn test_agent_defs_unknown_type_returns_none() {
+        let tool = AgentTool::new();
+        let defs = tool.get_agent_defs();
+        assert!(defs.get("nonexistent-agent-type-xyz").is_none());
     }
 }
