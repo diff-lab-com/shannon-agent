@@ -511,7 +511,7 @@ impl From<ShannonConfig> for LlmClientConfig {
 
         // --- Fix base_url when provider is explicitly set but base_url came ---
         // --- from a different provider's env var (e.g. ANTHROPIC_BASE_URL  ---
-        // --- when SHANNON_PROVIDER=zhipu).                                   ---
+        // --- when SHANNON_PROVIDER=zhipu), or from the hardcoded default.   ---
         let base_url = if !has_explicit_base_url && !has_explicit_base_url_env {
             let provider_default = provider.default_base_url().to_string();
             // If base_url matches a non-target provider's env var, use provider default
@@ -519,8 +519,12 @@ impl From<ShannonConfig> for LlmClientConfig {
             let came_from_openai = openai_base_url.as_deref() == Some(&base_url);
             let is_anthropic_provider = matches!(provider, LlmProvider::Anthropic);
             let is_openai_provider = matches!(provider, LlmProvider::OpenAI);
+            let no_env_base_url = anthropic_base_url.is_none() && openai_base_url.is_none();
             if (came_from_anthropic && !is_anthropic_provider)
                 || (came_from_openai && !is_openai_provider)
+                // No provider-specific env var set and base_url is the hardcoded
+                // default — use the explicitly-set provider's default instead.
+                || (no_env_base_url && base_url != provider_default)
             {
                 provider_default
             } else {
