@@ -154,7 +154,7 @@ fn record_base_url() -> Option<String> {
 /// Provider-specific API key env var name.
 fn provider_key_env(provider: &str) -> Option<&'static str> {
     match provider {
-        "zhipu" | "zhipu-cn" => Some("ZHIPU_API_KEY"),
+        "zhipu" | "zhipu-cn" | "zhipu-coding" | "zhipu-anthropic" => Some("ZHIPU_API_KEY"),
         "zhipu-intl" | "zhipu-international" => Some("ZHIPU_INTL_API_KEY"),
         "minimax" => Some("MINIMAX_API_KEY"),
         "moonshot" | "kimi" => Some("MOONSHOT_API_KEY"),
@@ -183,6 +183,7 @@ fn shannon_record(
         .env_remove("OPENAI_API_KEY")
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_AUTH_TOKEN")
+        .env_remove("SHANNON_BASE_URL")
         .current_dir(workspace.path());
     if let Some(base_url) = record_base_url() {
         cmd.env("SHANNON_BASE_URL", base_url);

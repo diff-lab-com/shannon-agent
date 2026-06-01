@@ -81,6 +81,8 @@ pub enum LlmProvider {
     Zhipu,
     /// Zhipu International / BigModel (open.international.bigmodel.cn)
     ZhipuInternational,
+    /// Zhipu Coding Plan (Anthropic-compatible wire format at open.bigmodel.cn/api/anthropic)
+    ZhipuCoding,
     /// Moonshot / Kimi (api.moonshot.cn)
     Moonshot,
     /// MiniMax (api.minimax.chat)
@@ -141,6 +143,8 @@ impl LlmProvider {
             LlmProvider::SiliconFlow
         } else if url.contains("international.bigmodel.cn") {
             LlmProvider::ZhipuInternational
+        } else if url.contains("bigmodel.cn/api/anthropic") {
+            LlmProvider::ZhipuCoding
         } else if url.contains("bigmodel.cn") || url.contains("zhipuai.cn") {
             LlmProvider::Zhipu
         } else if url.contains("moonshot.cn") || url.contains("kimi") {
@@ -181,6 +185,7 @@ impl LlmProvider {
             LlmProvider::SiliconFlow => "/v1/chat/completions",
             LlmProvider::Zhipu => "/api/paas/v4/chat/completions",
             LlmProvider::ZhipuInternational => "/api/paas/v4/chat/completions",
+            LlmProvider::ZhipuCoding => "/v1/messages",
             LlmProvider::Moonshot => "/v1/chat/completions",
             LlmProvider::Minimax => "/v1/text/chatcompletion_v2",
             LlmProvider::DashScope => "/compatible-mode/v1/chat/completions",
@@ -211,6 +216,7 @@ impl LlmProvider {
             LlmProvider::SiliconFlow => "https://api.siliconflow.cn",
             LlmProvider::Zhipu => "https://open.bigmodel.cn",
             LlmProvider::ZhipuInternational => "https://open.international.bigmodel.cn",
+            LlmProvider::ZhipuCoding => "https://open.bigmodel.cn/api/anthropic",
             LlmProvider::Moonshot => "https://api.moonshot.cn",
             LlmProvider::Minimax => "https://api.minimax.chat",
             LlmProvider::DashScope => "https://dashscope.aliyuncs.com",
@@ -225,7 +231,9 @@ impl LlmProvider {
     /// Return the wire protocol format for this provider.
     pub fn wire_format(&self) -> WireFormat {
         match self {
-            Self::Anthropic | Self::Custom | Self::Bedrock => WireFormat::Anthropic,
+            Self::Anthropic | Self::Custom | Self::Bedrock | Self::ZhipuCoding => {
+                WireFormat::Anthropic
+            }
             Self::OpenAI
             | Self::Azure
             | Self::Mistral
@@ -279,7 +287,7 @@ impl LlmProvider {
             Self::Xai => Some("XAI_API_KEY"),
             Self::Ai21 => Some("AI21_API_KEY"),
             Self::SiliconFlow => Some("SILICONFLOW_API_KEY"),
-            Self::Zhipu => Some("ZHIPU_API_KEY"),
+            Self::Zhipu | Self::ZhipuCoding => Some("ZHIPU_API_KEY"),
             Self::ZhipuInternational => Some("ZHIPU_INTL_API_KEY"),
             Self::Moonshot => Some("MOONSHOT_API_KEY"),
             Self::Minimax => Some("MINIMAX_API_KEY"),
@@ -328,6 +336,7 @@ impl std::fmt::Display for LlmProvider {
             LlmProvider::SiliconFlow => write!(f, "siliconflow"),
             LlmProvider::Zhipu => write!(f, "zhipu"),
             LlmProvider::ZhipuInternational => write!(f, "zhipu-international"),
+            LlmProvider::ZhipuCoding => write!(f, "zhipu-coding"),
             LlmProvider::Moonshot => write!(f, "moonshot"),
             LlmProvider::Minimax => write!(f, "minimax"),
             LlmProvider::DashScope => write!(f, "dashscope"),
@@ -488,6 +497,7 @@ impl From<ShannonConfig> for LlmClientConfig {
                 "siliconflow" => LlmProvider::SiliconFlow,
                 "zhipu" | "zhipu-cn" => LlmProvider::Zhipu,
                 "zhipu-international" | "zhipu-intl" => LlmProvider::ZhipuInternational,
+                "zhipu-coding" | "zhipu-anthropic" => LlmProvider::ZhipuCoding,
                 "moonshot" | "kimi" => LlmProvider::Moonshot,
                 "minimax" => LlmProvider::Minimax,
                 "dashscope" | "qwen" => LlmProvider::DashScope,
