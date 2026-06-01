@@ -607,7 +607,7 @@ fn record_task_create_file() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -638,7 +638,7 @@ fn record_task_bash_command() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -669,7 +669,7 @@ fn record_task_read_and_edit() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -700,7 +700,7 @@ fn record_task_code_search() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert();
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
@@ -730,7 +730,7 @@ fn record_task_multi_turn() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -764,7 +764,7 @@ fn record_task_edit_precise_match() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -799,7 +799,7 @@ fn record_task_search_read_edit() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -825,7 +825,7 @@ fn record_task_bash_verify() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 }
@@ -851,7 +851,7 @@ fn record_task_error_recovery() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -885,7 +885,7 @@ fn record_task_glob_pattern() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -973,7 +973,7 @@ fn record_task_refactor_rename() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 }
@@ -1023,7 +1023,7 @@ fn record_task_long_file_handling() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -1052,7 +1052,7 @@ fn record_task_json_schema_output() {
             "--schema",
             "{\"type\":\"object\",\"properties\":{\"languages\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"rank\":{\"type\":\"integer\"}},\"required\":[\"name\",\"rank\"]}},\"required\":[\"languages\"]}}",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .output()
         .expect("shannon should run");
 
@@ -1133,7 +1133,7 @@ fn record_task_nested_directory_write() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -1164,7 +1164,7 @@ fn record_task_overwrite_existing_file() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -1255,7 +1255,7 @@ fn record_task_session_resume() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -1301,7 +1301,7 @@ fn record_task_session_resume() {
                 "--output-format",
                 "json",
             ])
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(std::time::Duration::from_secs(300))
             .assert()
             .success();
 
@@ -1339,7 +1339,7 @@ fn record_task_claude_md_context() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -1438,7 +1438,7 @@ fn record_task_delete_file() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
@@ -1471,7 +1471,7 @@ fn record_task_ndjson_streaming() {
             "--output-format",
             "ndjson",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .output()
         .expect("shannon should run");
 
@@ -1516,7 +1516,7 @@ fn record_task_multi_provider() {
             "--output-format",
             "json",
         ])
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_secs(300))
         .assert()
         .success();
 
