@@ -387,6 +387,11 @@ struct Cli {
     #[arg(short = 'r', long, value_name = "UUID", num_args = 0..=1)]
     resume: Option<String>,
 
+    /// Resume a specific session by UUID (explicit alternative to --resume <UUID>).
+    /// Example: shannon --resume-id 550e8400-e29b-41d4-a716-446655440000
+    #[arg(long = "resume-id", value_name = "UUID")]
+    resume_id: Option<String>,
+
     /// Continue the most recent session (alias for --resume).
     #[arg(short = 'c', long, alias = "cont")]
     r#continue: bool,
@@ -2217,9 +2222,14 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     }
 
     // Determine if session resume is requested (used by multiple code paths below)
-    let should_resume = cli.resume.is_some() || cli.r#continue;
-    // Normalize empty string from bare --resume (no UUID) to None
-    let resume_session_id: Option<&str> = cli.resume.as_deref().filter(|s| !s.is_empty());
+    // Precedence: --resume-id > --resume <UUID> > --resume / --continue (most recent)
+    let should_resume = cli.resume.is_some() || cli.r#continue || cli.resume_id.is_some();
+    // Use --resume-id if provided, otherwise fall back to --resume value.
+    // Normalize empty string from bare --resume (no UUID) to None.
+    let resume_session_id: Option<&str> = cli
+        .resume_id
+        .as_deref()
+        .or_else(|| cli.resume.as_deref().filter(|s| !s.is_empty()));
 
     // ── CI/CD Headless mode: --prompt flag ──
     // Takes priority over bare prompt and pipe mode.
@@ -2912,6 +2922,215 @@ mod tests {
             }
             _ => panic!("Expected Repl command"),
         }
+    }
+
+    // ── Resume flag tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_cli_resume_bare_flag() {
+        // shannon --resume (no UUID) should set resume to Some("")
+        let cli = Cli::try_parse_from(["shannon", "--resume"]).unwrap();
+        assert!(cli.resume.is_some());
+        assert!(cli.resume.as_deref() == Some(""));
+        assert!(!cli.r#continue);
+        assert!(cli.resume_id.is_none());
+    }
+
+    #[test]
+    fn test_cli_resume_with_uuid() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cli = Cli::try_parse_from(["shannon", "--resume", uuid]).unwrap();
+        assert_eq!(cli.resume.as_deref(), Some(uuid));
+        assert!(cli.resume_id.is_none());
+    }
+
+    #[test]
+    fn test_cli_resume_short_flag() {
+        let cli = Cli::try_parse_from(["shannon", "-r"]).unwrap();
+        assert!(cli.resume.is_some());
+    }
+
+    #[test]
+    fn test_cli_continue_flag() {
+        let cli = Cli::try_parse_from(["shannon", "--continue"]).unwrap();
+        assert!(cli.r#continue);
+        assert!(cli.resume.is_none());
+        assert!(cli.resume_id.is_none());
+    }
+
+    #[test]
+    fn test_cli_continue_short_flag() {
+        let cli = Cli::try_parse_from(["shannon", "-c"]).unwrap();
+        assert!(cli.r#continue);
+    }
+
+    #[test]
+    fn test_cli_resume_id_flag() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cli = Cli::try_parse_from(["shannon", "--resume-id", uuid]).unwrap();
+        assert_eq!(cli.resume_id.as_deref(), Some(uuid));
+        assert!(cli.resume.is_none());
+        assert!(!cli.r#continue);
+    }
+
+    #[test]
+    fn test_cli_resume_id_takes_precedence_over_resume() {
+        // When both --resume-id and --resume are provided, --resume-id wins
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let other_uuid = "12345678-1234-1234-1234-123456789012";
+        let cli =
+            Cli::try_parse_from(["shannon", "--resume-id", uuid, "--resume", other_uuid]).unwrap();
+        assert_eq!(cli.resume_id.as_deref(), Some(uuid));
+        assert_eq!(cli.resume.as_deref(), Some(other_uuid));
+
+        // In run_with_cli, --resume-id takes precedence
+        let resolved: Option<&str> = cli
+            .resume_id
+            .as_deref()
+            .or_else(|| cli.resume.as_deref().filter(|s| !s.is_empty()));
+        assert_eq!(resolved, Some(uuid));
+    }
+
+    #[test]
+    fn test_cli_resume_with_prompt() {
+        // --resume should work alongside a bare prompt
+        let cli = Cli::try_parse_from(["shannon", "--resume", "fix the bug"]).unwrap();
+        assert!(cli.resume.is_some());
+        // The second positional arg is the prompt
+        // Actually, "fix the bug" is consumed by --resume as its value (num_args 0..=1)
+        // Use --resume bare (no value) + prompt separately via -p
+        let cli2 = Cli::try_parse_from(["shannon", "--resume", "-p", "fix the bug"]).unwrap();
+        assert!(cli2.resume.is_some());
+        assert_eq!(cli2.headless_prompt.as_deref(), Some("fix the bug"));
+    }
+
+    // ── load_resume_session tests ────────────────────────────────────────
+
+    #[test]
+    fn test_load_resume_session_with_valid_uuid() {
+        use shannon_core::state::{SessionData, SessionPersistMetadata, StateManager};
+        use std::fs;
+
+        // Create a temp sessions directory
+        let temp_dir = std::env::temp_dir().join(format!("shannon-test-resume-{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let state_mgr = StateManager::with_sessions_dir(temp_dir.clone()).unwrap();
+        let session_id = Uuid::new_v4();
+        let messages = vec![
+            shannon_core::api::Message {
+                role: "user".into(),
+                content: shannon_core::api::MessageContent::Text("Hello".into()),
+            },
+            shannon_core::api::Message {
+                role: "assistant".into(),
+                content: shannon_core::api::MessageContent::Text("Hi there!".into()),
+            },
+        ];
+        let metadata = SessionPersistMetadata {
+            model: "test-model".to_string(),
+            ..Default::default()
+        };
+        state_mgr
+            .save_session(&session_id, &messages, &metadata)
+            .unwrap();
+
+        // Load via load_resume_session using the specific UUID
+        let result = load_resume_session(Some(&session_id.to_string()));
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let data = result.unwrap();
+        assert_eq!(data.session_id, session_id);
+        assert_eq!(data.messages.len(), 2);
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_resume_session_invalid_uuid() {
+        let result = load_resume_session(Some("not-a-valid-uuid"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid session UUID"),
+            "Expected invalid UUID error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_resume_session_nonexistent_uuid() {
+        let uuid = Uuid::new_v4();
+        let result = load_resume_session(Some(&uuid.to_string()));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "Expected 'not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_resume_session_most_recent() {
+        use shannon_core::state::{SessionData, SessionPersistMetadata, StateManager};
+        use std::fs;
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("shannon-test-resume-recent-{}", Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let state_mgr = StateManager::with_sessions_dir(temp_dir.clone()).unwrap();
+
+        // Create an older session
+        let old_id = Uuid::new_v4();
+        let mut old_metadata = SessionPersistMetadata {
+            model: "old-model".to_string(),
+            ..Default::default()
+        };
+        old_metadata.updated_at = chrono::Utc::now() - chrono::Duration::hours(2);
+        state_mgr
+            .save_session(
+                &old_id,
+                &[shannon_core::api::Message {
+                    role: "user".into(),
+                    content: shannon_core::api::MessageContent::Text("Old session".into()),
+                }],
+                &old_metadata,
+            )
+            .unwrap();
+
+        // Create a newer session
+        let recent_id = Uuid::new_v4();
+        state_mgr
+            .save_session(
+                &recent_id,
+                &[shannon_core::api::Message {
+                    role: "user".into(),
+                    content: shannon_core::api::MessageContent::Text("Recent session".into()),
+                }],
+                &SessionPersistMetadata {
+                    model: "recent-model".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // Load with None (should get the most recent)
+        let result = load_resume_session(None);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let data = result.unwrap();
+        assert_eq!(data.session_id, recent_id);
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_load_resume_session_no_sessions() {
+        // With an empty default sessions dir, should return an error
+        let result = load_resume_session(None);
+        // This may succeed or fail depending on whether there are sessions
+        // in the default dir. We just verify it doesn't panic.
+        let _ = result;
     }
 
     // ── New REPL options tests ────────────────────────────────────────────

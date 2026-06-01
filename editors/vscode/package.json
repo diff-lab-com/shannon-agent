@@ -27,6 +27,22 @@
       {
         "command": "shannon.stopGeneration",
         "title": "Shannon: Stop Generation"
+      },
+      {
+        "command": "shannon.showPendingChanges",
+        "title": "Shannon: Show Pending Changes"
+      },
+      {
+        "command": "shannon.acceptAllChanges",
+        "title": "Shannon: Accept All Changes"
+      },
+      {
+        "command": "shannon.rejectAllChanges",
+        "title": "Shannon: Reject All Changes"
+      },
+      {
+        "command": "shannon.openSettings",
+        "title": "Shannon: Open Settings"
       }
     ],
     "configuration": {
