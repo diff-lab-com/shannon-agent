@@ -79,7 +79,7 @@ record: (_build) (_check-api-key)
     SHANNON_RECORD_PROVIDER=anthropic \
     SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "unknown" } }} \
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 -E 'test(record_task_)'
+        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
 
 # 录制: DeepSeek
 record-deepseek: (_build) (_check-api-key)
@@ -88,7 +88,7 @@ record-deepseek: (_build) (_check-api-key)
     SHANNON_RECORD_PROVIDER=deepseek \
     SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "deepseek-chat" } }} \
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 -E 'test(record_task_)'
+        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
 
 # 录制: OpenAI (可选参数: model, 默认 gpt-4o)
 record-openai model="gpt-4o": (_build) (_check-api-key)
@@ -97,7 +97,7 @@ record-openai model="gpt-4o": (_build) (_check-api-key)
     SHANNON_RECORD_PROVIDER=openai \
     SHANNON_MODEL={{ model }} \
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 -E 'test(record_task_)'
+        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
 
 # 录制: MiniMax
 record-minimax: (_build) (_check-api-key)
@@ -106,7 +106,7 @@ record-minimax: (_build) (_check-api-key)
     SHANNON_RECORD_PROVIDER=minimax \
     SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "MiniMax-Text-01" } }} \
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 -E 'test(record_task_)'
+        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
 
 # 录制: Moonshot/Kimi
 record-moonshot: (_build) (_check-api-key)
@@ -115,7 +115,7 @@ record-moonshot: (_build) (_check-api-key)
     SHANNON_RECORD_PROVIDER=moonshot \
     SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "moonshot-v1-8k" } }} \
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 -E 'test(record_task_)'
+        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
 
 # 录制: Zhipu/GLM (标准 OpenAI 兼容 API)
 record-zhipu: (_build) (_check-api-key)
@@ -124,7 +124,7 @@ record-zhipu: (_build) (_check-api-key)
     SHANNON_RECORD_PROVIDER=zhipu \
     SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "glm-4-flash" } }} \
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 -E 'test(record_task_)'
+        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
 
 # 录制: Zhipu/GLM Coding Plan (Anthropic 兼容 API)
 record-zhipu-coding: (_build) (_check-api-key)
@@ -133,7 +133,7 @@ record-zhipu-coding: (_build) (_check-api-key)
     SHANNON_RECORD_PROVIDER=zhipu-coding \
     SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "glm-5.1" } }} \
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 -E 'test(record_task_)'
+        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
 
 # 录制: 任意 provider + model
 # 用法: just record-with <provider> <model>
@@ -146,7 +146,7 @@ record-with provider model: (_build) (_check-api-key)
     SHANNON_RECORD_PROVIDER={{ provider }} \
     SHANNON_MODEL={{ model }} \
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 -E 'test(record_task_)'
+        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
 
 # 回放录制的 fixture (不需要 API key)
 replay:
