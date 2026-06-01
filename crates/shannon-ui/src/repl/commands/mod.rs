@@ -92,6 +92,11 @@ pub fn submit_input(repl: &mut Repl, mut terminal: Option<&mut super::query::Ter
         return Ok(());
     }
 
+    // Detect URLs in input for potential @-reference expansion
+    if let Some(_url) = crate::repl::at_reference::detect_url_in_input(&raw_input) {
+        tracing::debug!(url = %_url, "URL detected in input");
+    }
+
     // Expand pasted text references: [Pasted Text #N X lines] -> actual content
     let expanded = expand_pasted_texts(&raw_input, &mut repl.state.pasted_texts);
 

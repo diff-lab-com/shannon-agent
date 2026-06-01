@@ -203,7 +203,7 @@ pub use oauth::{OAuthClient, OAuthError, OAuthService, OAuthToken, TokenEncrypti
 pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
 pub use permissions::{ApprovalMode, Permission, PermissionLevel, PermissionManager};
 pub use policy_limits::{PolicyCheckResult, PolicyError, PolicyLimits, PolicyLimitsManager};
-pub use query_engine::{QueryContext, QueryEngine, QueryEvent};
+pub use query_engine::{QueryContext, QueryEngine, QueryEvent, teammate_instructions};
 pub use rate_limit::{
     ExponentialBackoff, RateLimitConfig, RateLimitResult, RateLimiter, TokenBucket,
 };

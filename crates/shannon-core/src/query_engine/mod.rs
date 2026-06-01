@@ -11,6 +11,7 @@ mod types;
 // Re-export all public types to maintain the same public API as the original flat file.
 pub use context_injector::ContextInjector;
 pub use engine::QueryEngine;
+pub use team_prompt::teammate_instructions;
 pub use types::{
     CompressionStrategy, ConversationStats, CostEstimate, CostTracker, PermissionRequest,
     QueryContext, QueryEngineConfig, QueryError, QueryEvent, QueryMetadata, QueryStream,
