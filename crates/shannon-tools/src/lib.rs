@@ -37,6 +37,7 @@ pub mod ask_user;
 pub mod brief;
 pub mod config;
 pub mod cron;
+pub mod docs_query;
 pub mod file;
 pub mod git;
 pub mod github;
@@ -79,6 +80,7 @@ pub use cron::{
     CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput,
     CronListOutput, CronTool,
 };
+pub use docs_query::{DocsQueryInput, DocsQueryOutput, DocsQueryTool};
 pub use file::diff_renderer::{
     ColorScheme, DiffHunk as DiffRenderHunk, DiffLine, DiffLineType, DiffRenderer, DiffStats,
 };
@@ -205,6 +207,7 @@ pub fn register_default_tools(
     // ── Web operations ─────────────────────────────────────────────────
     registry.register(Box::new(WebFetchTool::new()))?;
     registry.register(Box::new(WebSearchTool::new()))?;
+    registry.register(Box::new(DocsQueryTool::new()))?;
 
     // ── Search ─────────────────────────────────────────────────────────
     registry.register(Box::new(GrepTool::new()))?;
@@ -343,6 +346,7 @@ pub fn register_default_tools_with_project_dir(
     // ── Web operations ─────────────────────────────────────────────────
     registry.register(Box::new(WebFetchTool::new()))?;
     registry.register(Box::new(WebSearchTool::new()))?;
+    registry.register(Box::new(DocsQueryTool::new()))?;
 
     // ── Agent & team ───────────────────────────────────────────────────
     let agent_tool = AgentTool::new();
@@ -489,6 +493,7 @@ pub fn register_default_tools_with_project_dir_ex(
     // ── Web operations ─────────────────────────────────────────────────
     registry.register(Box::new(WebFetchTool::new()))?;
     registry.register(Box::new(WebSearchTool::new()))?;
+    registry.register(Box::new(DocsQueryTool::new()))?;
 
     // ── Agent & team ───────────────────────────────────────────────────
     let agent_tool = AgentTool::new();

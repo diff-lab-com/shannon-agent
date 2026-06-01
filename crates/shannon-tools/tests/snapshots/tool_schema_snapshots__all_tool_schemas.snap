@@ -332,6 +332,28 @@ expression: output
   "type": "object"
 }
 
+## DocsQuery
+{
+  "properties": {
+    "library": {
+      "description": "Library or package name to look up (e.g. 'react', 'serde', 'numpy', 'express')",
+      "type": "string"
+    },
+    "query": {
+      "description": "Optional specific question about the library (e.g. 'how to use useEffect cleanup')",
+      "type": "string"
+    },
+    "version": {
+      "description": "Optional version constraint (e.g. '18', '1.0'). Currently informational only.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "library"
+  ],
+  "type": "object"
+}
+
 ## Edit
 {
   "properties": {
