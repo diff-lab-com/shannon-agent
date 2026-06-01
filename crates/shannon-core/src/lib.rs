@@ -94,6 +94,7 @@ pub mod api_server;
 pub mod auto_dream_consolidation;
 pub mod billing;
 pub mod credential_manager;
+pub mod custom_profiles;
 pub mod doctor;
 pub mod enhanced_suggestions;
 pub mod feature_flags;
