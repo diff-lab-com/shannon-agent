@@ -84,6 +84,9 @@ out/
 # 测试
 tests/integration/tmp/
 
+# 录制 fixtures (按需生成，不提交)
+tests/fixtures/real_tasks/*.jsonl
+
 # Claude/Anthropic 相关
 .claude/
 .shannon/
