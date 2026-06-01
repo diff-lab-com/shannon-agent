@@ -1,5 +1,9 @@
 /**
  * ChatPanel — WebView panel for Shannon Code conversation UI.
+ *
+ * Renders the chat interface and communicates with the Shannon CLI
+ * via the ShannonClient. Handles all NDJSON message types including
+ * text_delta, tool_use, tool_result, error, and done.
  */
 
 import * as vscode from 'vscode';
@@ -65,7 +69,10 @@ export class ChatPanel {
   }
 
   /** Handle messages from the WebView. */
-  private handleWebviewMessage(msg: { command: string; text?: string }): void {
+  private handleWebviewMessage(msg: {
+    command: string;
+    text?: string;
+  }): void {
     switch (msg.command) {
       case 'sendPrompt':
         if (msg.text) {
@@ -78,38 +85,78 @@ export class ChatPanel {
     }
   }
 
-  /** Handle messages from the Shannon CLI. */
+  /** Handle messages from the Shannon CLI NDJSON stream. */
   private handleShannonMessage(msg: ShannonMessage): void {
     switch (msg.type) {
-      case 'assistant':
+      case 'text_delta':
+        // Streaming text from the LLM
         if (typeof msg.content === 'string') {
           this.appendAssistant(msg.content);
         }
         break;
+
       case 'tool_use':
+        // Tool invocation — show in chat
         this.appendSystem(
-          `Tool: ${msg.tool_name || 'unknown'}`
+          `Tool: ${msg.name || 'unknown'}${
+            msg.input
+              ? ' — ' +
+                this.truncate(
+                  typeof msg.input === 'string'
+                    ? msg.input
+                    : JSON.stringify(msg.input),
+                  200
+                )
+              : ''
+          }`
         );
         break;
+
       case 'tool_result':
-        if (msg.content && typeof msg.content === 'string') {
-          this.appendSystem(`Result: ${msg.content.substring(0, 200)}`);
+        // Tool result — show summary
+        if (msg.output && typeof msg.output === 'string') {
+          const prefix = msg.is_error ? 'Error: ' : '';
+          this.appendSystem(
+            `Result: ${prefix}${this.truncate(msg.output, 300)}`
+          );
         }
         break;
+
       case 'error':
-        this.appendSystem(`Error: ${msg.error || 'unknown error'}`);
+        this.appendSystem(
+          `Error: ${msg.message || msg.error || 'unknown error'}`
+        );
+        break;
+
+      case 'done':
+        this.appendSystem(
+          msg.exit_code === 0
+            ? 'Done.'
+            : `Done (exit code ${msg.exit_code}).`
+        );
         break;
     }
+  }
+
+  /** Truncate a string for display. */
+  private truncate(text: string, maxLength: number): string {
+    if (text.length <= maxLength) {
+      return text;
+    }
+    return text.substring(0, maxLength) + '...';
   }
 
   /** Send a user prompt and display it. */
   private sendPrompt(text: string): void {
     this.messages.push({ role: 'user', content: text });
     this.panel.webview.postMessage({ command: 'userMessage', text });
+    if (!this.client.isRunning()) {
+      this.client.start();
+    }
     this.client.sendPrompt(text);
   }
 
-  /** Append assistant text. */
+  /** Append assistant text (supports streaming accumulation). */
   private appendAssistant(text: string): void {
     const last = this.messages[this.messages.length - 1];
     if (last?.role === 'assistant') {
@@ -135,9 +182,6 @@ export class ChatPanel {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="${this.panel.webview.asWebviewUri(
-    vscode.Uri.file('')
-  )}media/chat.css">
   <title>Shannon Code</title>
   <style>
     body { font-family: var(--vscode-font-family); margin: 0; padding: 12px; color: var(--vscode-foreground); }
