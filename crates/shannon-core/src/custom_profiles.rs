@@ -344,4 +344,148 @@ auto_approve = ["Read", "Write"]
         assert!(summary.contains("test"));
         assert!(summary.contains("Test profile"));
     }
+
+    // ── Additional edge case tests ────────────────────────────────────────
+
+    #[test]
+    fn serialization_roundtrip() {
+        let def = CustomProfileDef {
+            name: "roundtrip".to_string(),
+            description: "Test roundtrip".to_string(),
+            auto_approve: vec!["Read".to_string(), "Glob".to_string()],
+            confirm: vec!["Edit".to_string()],
+            deny: vec!["Bash".to_string()],
+        };
+        let json = serde_json::to_string(&def).unwrap();
+        let back: CustomProfileDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, "roundtrip");
+        assert_eq!(back.auto_approve.len(), 2);
+        assert_eq!(back.confirm.len(), 1);
+        assert_eq!(back.deny.len(), 1);
+    }
+
+    #[test]
+    fn toml_roundtrip() {
+        let def = CustomProfileDef {
+            name: "full".to_string(),
+            description: "Full profile".to_string(),
+            auto_approve: vec!["Read".to_string()],
+            confirm: vec!["Write".to_string()],
+            deny: vec!["Bash".to_string()],
+        };
+        let toml_str = toml::to_string(&def).unwrap();
+        let back: CustomProfileDef = toml::from_str(&toml_str).unwrap();
+        assert_eq!(back.name, def.name);
+        assert_eq!(back.description, def.description);
+        assert_eq!(back.auto_approve, def.auto_approve);
+    }
+
+    #[test]
+    fn duplicate_tools_in_same_category() {
+        let toml = r#"
+name = "dupes"
+auto_approve = ["Read", "Read", "Glob"]
+"#;
+        let def: CustomProfileDef = toml::from_str(toml).unwrap();
+        assert_eq!(def.auto_approve.len(), 3); // TOML allows duplicates
+    }
+
+    #[test]
+    fn tool_in_multiple_categories() {
+        // A tool can appear in multiple categories — that's user responsibility
+        let toml = r#"
+name = "conflict"
+auto_approve = ["Read"]
+deny = ["Read"]
+"#;
+        let def: CustomProfileDef = toml::from_str(toml).unwrap();
+        assert!(def.auto_approve.contains(&"Read".to_string()));
+        assert!(def.deny.contains(&"Read".to_string()));
+    }
+
+    #[test]
+    fn empty_arrays_default() {
+        let toml = r#"name = "empty""#;
+        let def: CustomProfileDef = toml::from_str(toml).unwrap();
+        assert!(def.auto_approve.is_empty());
+        assert!(def.confirm.is_empty());
+        assert!(def.deny.is_empty());
+    }
+
+    #[test]
+    fn list_names_returns_all() {
+        let mut registry = CustomProfileRegistry::new();
+        registry.profiles.insert(
+            "alpha".to_string(),
+            CustomProfileDef {
+                name: "alpha".to_string(),
+                description: String::new(),
+                auto_approve: vec![],
+                confirm: vec![],
+                deny: vec![],
+            },
+        );
+        registry.profiles.insert(
+            "beta".to_string(),
+            CustomProfileDef {
+                name: "beta".to_string(),
+                description: String::new(),
+                auto_approve: vec![],
+                confirm: vec![],
+                deny: vec![],
+            },
+        );
+        let mut names = registry.list_names();
+        names.sort();
+        assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn error_display_messages() {
+        let err = CustomProfileError::Io(
+            PathBuf::from("/tmp/test.toml"),
+            std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+        );
+        assert!(err.to_string().contains("/tmp/test.toml"));
+        assert!(err.to_string().contains("missing"));
+
+        let err = CustomProfileError::Parse(PathBuf::from("bad.toml"), "invalid key".to_string());
+        assert!(err.to_string().contains("bad.toml"));
+        assert!(err.to_string().contains("invalid key"));
+
+        let err = CustomProfileError::Validation(PathBuf::from("x.toml"), "no name".to_string());
+        assert!(err.to_string().contains("no name"));
+    }
+
+    #[test]
+    fn get_nonexistent_returns_none() {
+        let registry = CustomProfileRegistry::new();
+        assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn is_empty_new_registry() {
+        let registry = CustomProfileRegistry::new();
+        assert!(registry.is_empty());
+    }
+
+    #[test]
+    fn load_from_dir_with_bad_toml_doesnt_block_others() {
+        let dir = tempfile::tempdir().unwrap();
+        // Bad file
+        fs::write(dir.path().join("bad.toml"), "not valid").unwrap();
+        // Good file
+        fs::write(
+            dir.path().join("good.toml"),
+            r#"name = "good"
+description = "Valid"
+"#,
+        )
+        .unwrap();
+
+        let mut registry = CustomProfileRegistry::new();
+        registry.load_from_dir(dir.path());
+        assert!(registry.get("good").is_some());
+        assert_eq!(registry.all().len(), 1);
+    }
 }

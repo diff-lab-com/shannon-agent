@@ -169,4 +169,36 @@ mod tests {
         assert!(instructions.contains("completed"));
         assert!(instructions.contains("SendMessage"));
     }
+
+    #[test]
+    fn test_empty_tool_list() {
+        assert!(team_coordination_prompt(&[]).is_none());
+    }
+
+    #[test]
+    fn test_team_task_list_triggers() {
+        let tools = vec!["TeamTaskList".to_string()];
+        assert!(team_coordination_prompt(&tools).is_some());
+    }
+
+    #[test]
+    fn test_mixed_tools_with_team() {
+        let tools = vec![
+            "Bash".to_string(),
+            "Read".to_string(),
+            "TeamCreate".to_string(),
+            "Write".to_string(),
+        ];
+        let prompt = team_coordination_prompt(&tools);
+        assert!(prompt.is_some());
+    }
+
+    #[test]
+    fn test_duplicate_team_tools() {
+        let tools = vec!["TeamCreate".to_string(), "TeamCreate".to_string()];
+        let prompt = team_coordination_prompt(&tools);
+        assert!(prompt.is_some());
+        // Should only return one prompt, not concatenated
+        assert_eq!(prompt.unwrap().matches("Team Coordination").count(), 1);
+    }
 }
