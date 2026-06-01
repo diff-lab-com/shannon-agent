@@ -704,4 +704,273 @@ command = "cargo check --all-targets"
         };
         assert!(!failed.success());
     }
+
+    // ── Error path tests ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn execute_not_found() {
+        let registry = TriggeredRoutineRegistry::new();
+        let result = registry.execute("nonexistent").await;
+        assert!(matches!(result, Err(TriggeredRoutineError::NotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn execute_disabled() {
+        let mut registry = TriggeredRoutineRegistry::new();
+        registry.routines.insert(
+            "disabled".to_string(),
+            TriggeredRoutineDef {
+                name: "disabled".to_string(),
+                trigger: "Stop".to_string(),
+                matcher: None,
+                pattern: None,
+                command: "echo hello".to_string(),
+                enabled: false,
+                timeout: 10,
+                background: true,
+                description: None,
+            },
+        );
+        let result = registry.execute("disabled").await;
+        assert!(matches!(result, Err(TriggeredRoutineError::Disabled(_))));
+    }
+
+    #[tokio::test]
+    async fn execute_success_command() {
+        let mut registry = TriggeredRoutineRegistry::new();
+        registry.routines.insert(
+            "echo-test".to_string(),
+            TriggeredRoutineDef {
+                name: "echo-test".to_string(),
+                trigger: "Stop".to_string(),
+                matcher: None,
+                pattern: None,
+                command: "echo hello-world".to_string(),
+                enabled: true,
+                timeout: 10,
+                background: true,
+                description: None,
+            },
+        );
+        let result = registry.execute("echo-test").await.unwrap();
+        assert!(result.success());
+        assert!(result.stdout.contains("hello-world"));
+    }
+
+    #[tokio::test]
+    async fn execute_failing_command() {
+        let mut registry = TriggeredRoutineRegistry::new();
+        registry.routines.insert(
+            "fail-test".to_string(),
+            TriggeredRoutineDef {
+                name: "fail-test".to_string(),
+                trigger: "Stop".to_string(),
+                matcher: None,
+                pattern: None,
+                command: "exit 42".to_string(),
+                enabled: true,
+                timeout: 10,
+                background: true,
+                description: None,
+            },
+        );
+        let result = registry.execute("fail-test").await.unwrap();
+        assert!(!result.success());
+        assert_eq!(result.exit_code, 42);
+    }
+
+    #[tokio::test]
+    async fn execute_timeout() {
+        let mut registry = TriggeredRoutineRegistry::new();
+        registry.routines.insert(
+            "slow".to_string(),
+            TriggeredRoutineDef {
+                name: "slow".to_string(),
+                trigger: "Stop".to_string(),
+                matcher: None,
+                pattern: None,
+                command: "sleep 60".to_string(),
+                enabled: true,
+                timeout: 1,
+                background: true,
+                description: None,
+            },
+        );
+        let result = registry.execute("slow").await;
+        assert!(matches!(result, Err(TriggeredRoutineError::Timeout { .. })));
+    }
+
+    #[tokio::test]
+    async fn execute_matching_filters_by_event() {
+        let mut registry = TriggeredRoutineRegistry::new();
+        registry.routines.insert(
+            "lint".to_string(),
+            TriggeredRoutineDef {
+                name: "lint".to_string(),
+                trigger: "PostToolUse".to_string(),
+                matcher: Some("Edit".to_string()),
+                pattern: None,
+                command: "echo lint-ran".to_string(),
+                enabled: true,
+                timeout: 10,
+                background: true,
+                description: None,
+            },
+        );
+        // Should not match Stop event
+        let results = registry
+            .execute_matching(&HookEventType::Stop, "", None)
+            .await;
+        assert!(results.is_empty());
+
+        // Should match PostToolUse with Edit
+        let results = registry
+            .execute_matching(&HookEventType::PostToolUse, "Edit", None)
+            .await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success());
+    }
+
+    // ── Edge cases ────────────────────────────────────────────────────────
+
+    #[test]
+    fn wildcard_matcher_matches_all() {
+        let mut registry = TriggeredRoutineRegistry::new();
+        registry.routines.insert(
+            "all".to_string(),
+            TriggeredRoutineDef {
+                name: "all".to_string(),
+                trigger: "PostToolUse".to_string(),
+                matcher: Some("*".to_string()),
+                pattern: None,
+                command: "echo".to_string(),
+                enabled: true,
+                timeout: 10,
+                background: true,
+                description: None,
+            },
+        );
+        // Matches any subject
+        assert_eq!(
+            registry
+                .matching_routines(&HookEventType::PostToolUse, "Bash")
+                .len(),
+            1
+        );
+        assert_eq!(
+            registry
+                .matching_routines(&HookEventType::PostToolUse, "Edit")
+                .len(),
+            1
+        );
+        // Doesn't match different event
+        assert!(
+            registry
+                .matching_routines(&HookEventType::Stop, "Bash")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn multiple_routines_same_trigger() {
+        let mut registry = TriggeredRoutineRegistry::new();
+        for name in ["lint", "format", "test"] {
+            registry.routines.insert(
+                name.to_string(),
+                TriggeredRoutineDef {
+                    name: name.to_string(),
+                    trigger: "PostToolUse".to_string(),
+                    matcher: Some("Edit".to_string()),
+                    pattern: None,
+                    command: format!("echo {name}"),
+                    enabled: true,
+                    timeout: 10,
+                    background: true,
+                    description: None,
+                },
+            );
+        }
+        let matching = registry.matching_routines(&HookEventType::PostToolUse, "Edit");
+        assert_eq!(matching.len(), 3);
+    }
+
+    #[test]
+    fn serialization_roundtrip() {
+        let def = TriggeredRoutineDef {
+            name: "test".to_string(),
+            trigger: "FileChanged".to_string(),
+            matcher: Some("*.rs".to_string()),
+            pattern: Some("src/**".to_string()),
+            command: "cargo check".to_string(),
+            enabled: true,
+            timeout: 120,
+            background: false,
+            description: Some("Check on file change".to_string()),
+        };
+        let json = serde_json::to_string(&def).unwrap();
+        let back: TriggeredRoutineDef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.name, def.name);
+        assert_eq!(back.trigger, def.trigger);
+        assert_eq!(back.command, def.command);
+        assert_eq!(back.timeout, 120);
+        assert!(!back.background);
+    }
+
+    #[test]
+    fn error_display_messages() {
+        let err = TriggeredRoutineError::NotFound("test".to_string());
+        assert!(err.to_string().contains("test"));
+
+        let err = TriggeredRoutineError::Disabled("my-routine".to_string());
+        assert!(err.to_string().contains("my-routine"));
+
+        let err = TriggeredRoutineError::Timeout {
+            name: "slow".to_string(),
+            timeout: 30,
+        };
+        assert!(err.to_string().contains("30"));
+        assert!(err.to_string().contains("slow"));
+
+        let err = TriggeredRoutineError::Execution {
+            name: "bad".to_string(),
+            error: "permission denied".to_string(),
+        };
+        assert!(err.to_string().contains("permission denied"));
+    }
+
+    #[test]
+    fn list_names_returns_all() {
+        let mut registry = TriggeredRoutineRegistry::new();
+        registry.routines.insert(
+            "a".to_string(),
+            TriggeredRoutineDef {
+                name: "a".to_string(),
+                trigger: "Stop".to_string(),
+                matcher: None,
+                pattern: None,
+                command: "echo a".to_string(),
+                enabled: true,
+                timeout: 10,
+                background: true,
+                description: None,
+            },
+        );
+        registry.routines.insert(
+            "b".to_string(),
+            TriggeredRoutineDef {
+                name: "b".to_string(),
+                trigger: "Stop".to_string(),
+                matcher: None,
+                pattern: None,
+                command: "echo b".to_string(),
+                enabled: true,
+                timeout: 10,
+                background: true,
+                description: None,
+            },
+        );
+        let mut names = registry.list_names();
+        names.sort();
+        assert_eq!(names, vec!["a", "b"]);
+    }
 }

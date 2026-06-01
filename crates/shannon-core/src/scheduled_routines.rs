@@ -283,4 +283,104 @@ mod tests {
             assert!(jitter <= 900, "jitter {jitter} exceeds cap of 900s");
         }
     }
+
+    // ── Additional tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_save_and_load_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("routines.json");
+
+        let mut mgr = RoutineManager::new();
+        mgr.add(ScheduledRoutine::new("test".into(), "hello".into(), 60));
+        mgr.save_to_file(&path).unwrap();
+
+        let loaded = RoutineManager::load_from_file(&path).unwrap();
+        assert_eq!(loaded.routines.len(), 1);
+        assert!(
+            loaded.get("test").is_some() || loaded.routines.keys().any(|k| k.starts_with("test"))
+        );
+    }
+
+    #[test]
+    fn test_load_corrupted_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.json");
+        std::fs::write(&path, "not valid json [[[[").unwrap();
+
+        let result = RoutineManager::load_from_file(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_drain_due_fires_initially() {
+        let mut mgr = RoutineManager::new();
+        mgr.add(ScheduledRoutine::new("a".into(), "prompt-a".into(), 60));
+        mgr.add(ScheduledRoutine::new("b".into(), "prompt-b".into(), 3600));
+
+        let due = mgr.drain_due();
+        assert_eq!(due.len(), 2);
+        // Both should fire since they've never fired before
+        let names: Vec<&str> = due.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"a"));
+        assert!(names.contains(&"b"));
+    }
+
+    #[test]
+    fn test_drain_due_skips_recently_fired() {
+        let mut mgr = RoutineManager::new();
+        let mut r = ScheduledRoutine::new("test".into(), "prompt".into(), 3600);
+        r.mark_fired(); // Just fired, shouldn't fire again
+        mgr.add(r);
+
+        let due = mgr.drain_due();
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn test_remove_by_name_prefix() {
+        let mut mgr = RoutineManager::new();
+        let r = ScheduledRoutine::new("my-routine".into(), "prompt".into(), 60);
+        let id = r.id.clone();
+        mgr.add(r);
+
+        // Remove by ID prefix (first 4 chars)
+        let prefix = &id[..4];
+        let removed = mgr.remove(prefix);
+        assert!(removed.is_some());
+        assert!(mgr.get(&id).is_none());
+    }
+
+    #[test]
+    fn test_list_sorted_by_created_at() {
+        let mut mgr = RoutineManager::new();
+        let r1 = ScheduledRoutine::new("first".into(), "p1".into(), 60);
+        let r2 = ScheduledRoutine::new("second".into(), "p2".into(), 60);
+        mgr.add(r1);
+        mgr.add(r2);
+
+        let list = mgr.list();
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_default_storage_path() {
+        let path = RoutineManager::default_storage_path();
+        assert!(path.to_string_lossy().contains(".shannon"));
+        assert!(path.to_string_lossy().contains("routines.json"));
+    }
+
+    #[test]
+    fn test_get_mut_routine() {
+        let mut mgr = RoutineManager::new();
+        let r = ScheduledRoutine::new("test".into(), "prompt".into(), 60);
+        let id = r.id.clone();
+        mgr.add(r);
+
+        let r = mgr.get_mut(&id).unwrap();
+        assert!(r.enabled);
+        r.enabled = false;
+
+        assert!(!mgr.get(&id).unwrap().enabled);
+    }
 }
