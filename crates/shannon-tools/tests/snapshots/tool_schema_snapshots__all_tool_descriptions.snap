@@ -9,6 +9,7 @@ Bash: Executes bash commands and returns output
 Brief: Generate a concise task summary from conversation history or content
 Config: Manage runtime configuration with get, set, list, delete, and reset operations
 Cron: Schedule recurring or one-shot prompts for time-based task execution
+DocsQuery: Fetch up-to-date documentation for libraries and frameworks. Resolves package names via docs.rs (Rust), npm (JavaScript/TypeScript), and PyPI (Python). Returns documentation snippets useful for writing correct code.
 Edit: Perform exact string replacements in files
 GitBranch: List, create, switch, and delete git branches
 GitDiff: Show git diffs with support for staged, unstaged, and commit range diffs
