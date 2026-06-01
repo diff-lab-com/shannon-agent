@@ -119,6 +119,7 @@ pub mod webhook;
 pub mod testing;
 
 pub mod i18n;
+pub mod triggered_routines;
 
 // Re-export key types for convenience
 pub use ai_limits::{AiLimitType, AiLimitsTracker, AiUsageRecord, LimitStatus};
@@ -280,6 +281,9 @@ pub use session_transcript::{
 pub use team_memory_sync::{
     SecretMatch, SecretRule, SecretScanner, SyncResult, TeamMemoryConfig, TeamMemoryGuard,
     TeamMemorySync, TeamMemorySyncError,
+};
+pub use triggered_routines::{
+    RoutineExecResult, TriggeredRoutineDef, TriggeredRoutineError, TriggeredRoutineRegistry,
 };
 
 pub use enhanced_suggestions::{

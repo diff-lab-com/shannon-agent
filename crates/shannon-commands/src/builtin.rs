@@ -50,6 +50,7 @@ mod outline;
 mod plugin;
 mod repl;
 mod repomap;
+mod routine;
 mod session;
 
 /// Register all built-in commands
@@ -94,6 +95,7 @@ pub fn all_commands() -> Vec<Command> {
         context::command(),
         preset::command(),
         profile::command(),
+        routine::command(),
         session::command(),
         team::command(),
     ];
