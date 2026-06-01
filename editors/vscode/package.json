@@ -1,0 +1,70 @@
+{
+  "name": "shannon-code",
+  "displayName": "Shannon Code",
+  "description": "AI-powered code assistant powered by Shannon Code CLI",
+  "version": "0.1.0",
+  "publisher": "shannon",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Chat",
+    "Programming Languages",
+    "Machine Learning"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "shannon.openChat",
+        "title": "Shannon: Open Chat"
+      },
+      {
+        "command": "shannon.sendPrompt",
+        "title": "Shannon: Send Prompt"
+      },
+      {
+        "command": "shannon.stopGeneration",
+        "title": "Shannon: Stop Generation"
+      }
+    ],
+    "configuration": {
+      "title": "Shannon Code",
+      "properties": {
+        "shannon.cliPath": {
+          "type": "string",
+          "default": "shannon",
+          "description": "Path to the Shannon Code CLI binary"
+        },
+        "shannon.provider": {
+          "type": "string",
+          "enum": ["anthropic", "openai", "ollama", "deepseek"],
+          "default": "anthropic",
+          "description": "LLM provider to use"
+        },
+        "shannon.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model override (empty = provider default)"
+        },
+        "shannon.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key (or set SHANNON_API_KEY env var)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
