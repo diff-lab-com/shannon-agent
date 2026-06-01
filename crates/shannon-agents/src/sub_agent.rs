@@ -233,7 +233,11 @@ impl SubAgentRegistry {
             max_concurrent_tasks: 3,
             plan_mode_required: false,
             model: Some(config.model.clone()),
-            system_prompt: Some(config.system_prompt.clone()),
+            system_prompt: Some(format!(
+                "{}\n\n{}",
+                config.system_prompt,
+                shannon_core::query_engine::teammate_instructions()
+            )),
             temperature: None,
             is_lead: false,
             allowed_tools: vec![],

@@ -23,7 +23,6 @@ pub fn team_coordination_prompt(tool_names: &[String]) -> Option<String> {
 }
 
 /// Returns the teammate-specific instructions for spawned agents.
-#[allow(dead_code)] // KEEP: used by teammate spawning in shannon-agents
 pub fn teammate_instructions() -> &'static str {
     TEAMMATE_INSTRUCTIONS
 }
