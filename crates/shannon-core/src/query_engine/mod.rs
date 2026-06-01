@@ -5,6 +5,7 @@
 mod context_injector;
 mod engine;
 mod streaming;
+mod team_prompt;
 mod types;
 
 // Re-export all public types to maintain the same public API as the original flat file.

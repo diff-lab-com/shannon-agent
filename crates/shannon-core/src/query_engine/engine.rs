@@ -928,6 +928,21 @@ impl QueryEngine {
             system_blocks.extend(extra_blocks);
         }
 
+        // Inject team coordination instructions when team tools are present
+        {
+            let tool_names = tools.list();
+            if let Some(team_text) =
+                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
+            {
+                let block = if use_cache {
+                    SystemContentBlock::cached(team_text)
+                } else {
+                    SystemContentBlock::text(team_text)
+                };
+                system_blocks.push(block);
+            }
+        }
+
         // Inject focus area from /focus command into system prompt
         if let Some(ref focus) = config.focus_area {
             let focus_text = format!(
