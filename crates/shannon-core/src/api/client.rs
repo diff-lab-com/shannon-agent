@@ -11,6 +11,43 @@ use super::streaming::MessageStream;
 use super::types::*;
 use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
 
+/// Generate a JWT token for Zhipu API authentication.
+///
+/// Zhipu API keys have the format `{id}.{secret}`. The v4 API accepts either
+/// the raw key or a JWT signed with HMAC-SHA256. Some keys / models require
+/// the JWT form, so we always generate it when the key matches the `id.secret`
+/// pattern. If the key doesn't contain a `.`, we fall back to the raw key.
+fn generate_zhipu_jwt(api_key: &str) -> Option<String> {
+    let (id, secret) = api_key.split_once('.')?;
+    if id.is_empty() || secret.is_empty() {
+        return None;
+    }
+
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","sign_type":"SIGN"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(format!(
+        r#"{{"api_key":"{id}","exp":{},"timestamp":{}}}"#,
+        now + 3600 * 1000,
+        now,
+    ));
+
+    let message = format!("{header}.{payload}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(message.as_bytes());
+    let sig = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+
+    Some(format!("{message}.{sig}"))
+}
+
 /// LLM API client with multi-provider and streaming support
 #[derive(Clone)]
 pub struct LlmClient {
@@ -116,8 +153,6 @@ impl LlmClient {
             | LlmProvider::Xai
             | LlmProvider::Ai21
             | LlmProvider::SiliconFlow
-            | LlmProvider::Zhipu
-            | LlmProvider::ZhipuInternational
             | LlmProvider::Moonshot
             | LlmProvider::Minimax
             | LlmProvider::DashScope
@@ -127,6 +162,15 @@ impl LlmClient {
                     "Authorization".to_string(),
                     format!("Bearer {}", self.config.api_key),
                 ));
+            }
+            LlmProvider::Zhipu | LlmProvider::ZhipuInternational => {
+                let token = generate_zhipu_jwt(&self.config.api_key)
+                    .unwrap_or_else(|| self.config.api_key.clone());
+                headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+            }
+            LlmProvider::ZhipuCoding => {
+                headers.push(("x-api-key".to_string(), self.config.api_key.clone()));
+                headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
             }
             LlmProvider::Custom => {
                 // Use extra_headers for custom provider auth
@@ -1295,5 +1339,64 @@ mod tests {
     fn test_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<LlmClient>();
+    }
+
+    // ── Zhipu JWT ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_zhipu_jwt_generation() {
+        let jwt = generate_zhipu_jwt("mykeyid.mysecret").unwrap();
+        let parts: Vec<&str> = jwt.split('.').collect();
+        assert_eq!(parts.len(), 3, "JWT should have 3 parts");
+
+        use base64::Engine;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let header: serde_json::Value =
+            serde_json::from_slice(URL_SAFE_NO_PAD.decode(parts[0]).unwrap().as_slice()).unwrap();
+        assert_eq!(header["alg"], "HS256");
+        assert_eq!(header["sign_type"], "SIGN");
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(URL_SAFE_NO_PAD.decode(parts[1]).unwrap().as_slice()).unwrap();
+        assert_eq!(payload["api_key"], "mykeyid");
+        assert!(payload["exp"].as_u64().unwrap() > payload["timestamp"].as_u64().unwrap());
+    }
+
+    #[test]
+    fn test_zhipu_jwt_no_dot_returns_none() {
+        assert!(generate_zhipu_jwt("nodot").is_none());
+    }
+
+    #[test]
+    fn test_zhipu_jwt_empty_parts_returns_none() {
+        assert!(generate_zhipu_jwt(".secret").is_none());
+        assert!(generate_zhipu_jwt("id.").is_none());
+    }
+
+    #[test]
+    fn test_zhipu_auth_headers_use_jwt() {
+        let config = LlmClientConfig {
+            provider: LlmProvider::Zhipu,
+            api_key: "testid.testsecret".to_string(),
+            model: "glm-4-flash".to_string(),
+            base_url: "https://open.bigmodel.cn".to_string(),
+            max_tokens: 4096,
+            api_version: String::new(),
+            timeout_seconds: 30,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+        };
+        let client = LlmClient::new(config);
+        let headers = client.auth_headers();
+        let auth = headers.iter().find(|(k, _)| k == "Authorization").unwrap();
+        let token = auth.1.strip_prefix("Bearer ").unwrap();
+        // Should be a JWT (3 dot-separated parts), not the raw key
+        assert_eq!(token.split('.').count(), 3);
+        assert_ne!(token, "testid.testsecret");
     }
 }
