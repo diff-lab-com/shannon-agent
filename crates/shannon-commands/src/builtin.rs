@@ -40,6 +40,7 @@ mod review_pr;
 mod search;
 mod security_review;
 mod status;
+mod team;
 mod theme;
 // Plugin management commands — scaffolded for future use
 mod context;
@@ -92,6 +93,7 @@ pub fn all_commands() -> Vec<Command> {
         context::command(),
         preset::command(),
         session::command(),
+        team::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds
