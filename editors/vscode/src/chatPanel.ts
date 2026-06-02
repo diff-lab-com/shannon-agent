@@ -34,7 +34,6 @@ export class ChatPanel {
       this.dispose();
     });
 
-    // Listen for Shannon CLI messages
     this.client.on('message', (msg: ShannonMessage) => {
       this.handleShannonMessage(msg);
     });
@@ -89,43 +88,41 @@ export class ChatPanel {
   private handleShannonMessage(msg: ShannonMessage): void {
     switch (msg.type) {
       case 'text_delta':
-        // Streaming text from the LLM
         if (typeof msg.content === 'string') {
           this.appendAssistant(msg.content);
         }
         break;
 
       case 'tool_use':
-        // Tool invocation — show in chat
-        this.appendSystem(
-          `Tool: ${msg.name || 'unknown'}${
-            msg.input
-              ? ' — ' +
-                this.truncate(
-                  typeof msg.input === 'string'
-                    ? msg.input
-                    : JSON.stringify(msg.input),
-                  200
-                )
-              : ''
-          }`
-        );
+        this.panel.webview.postMessage({
+          command: 'toolUse',
+          name: msg.name || 'unknown',
+          input: msg.input
+            ? this.truncate(
+                typeof msg.input === 'string'
+                  ? msg.input
+                  : JSON.stringify(msg.input, null, 2),
+                500
+              )
+            : '',
+        });
         break;
 
       case 'tool_result':
-        // Tool result — show summary
         if (msg.output && typeof msg.output === 'string') {
-          const prefix = msg.is_error ? 'Error: ' : '';
-          this.appendSystem(
-            `Result: ${prefix}${this.truncate(msg.output, 300)}`
-          );
+          this.panel.webview.postMessage({
+            command: 'toolResult',
+            output: this.truncate(msg.output, 2000),
+            isError: !!msg.is_error,
+          });
         }
         break;
 
       case 'error':
-        this.appendSystem(
-          `Error: ${msg.message || msg.error || 'unknown error'}`
-        );
+        this.panel.webview.postMessage({
+          command: 'errorMessage',
+          text: `Error: ${msg.message || msg.error || 'unknown error'}`,
+        });
         break;
 
       case 'done':
@@ -185,12 +182,25 @@ export class ChatPanel {
   <title>Shannon Code</title>
   <style>
     body { font-family: var(--vscode-font-family); margin: 0; padding: 12px; color: var(--vscode-foreground); }
-    #messages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+    #messages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 60px; }
     .msg { padding: 8px 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
     .msg.user { background: var(--vscode-input-background); align-self: flex-end; max-width: 80%; }
     .msg.assistant { background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); }
     .msg.system { background: var(--vscode-textBlockQuote-background); font-size: 0.9em; opacity: 0.8; }
-    #input-area { display: flex; gap: 8px; }
+    .msg.error { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100); }
+    .tool-block { background: var(--vscode-textBlockQuote-background); border-radius: 6px; overflow: hidden; font-size: 0.9em; margin: 2px 0; }
+    .tool-header { padding: 6px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+      background: var(--vscode-list-hoverBackground, rgba(128,128,128,0.1)); user-select: none; }
+    .tool-header:hover { background: var(--vscode-list-activeSelectionBackground, rgba(128,128,128,0.2)); }
+    .tool-header .arrow { font-size: 0.8em; transition: transform 0.15s; display: inline-block; }
+    .tool-header .arrow.open { transform: rotate(90deg); }
+    .tool-header .tool-name { font-weight: 600; }
+    .tool-body { padding: 6px 12px; border-top: 1px solid var(--vscode-panel-border); }
+    .tool-body.collapsed { display: none; }
+    .tool-body pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family); font-size: 0.9em; }
+    .tool-result.error-result { color: var(--vscode-errorForeground, #f48771); }
+    #input-area { position: fixed; bottom: 0; left: 0; right: 0; display: flex; gap: 8px;
+      padding: 12px; background: var(--vscode-sideBar-background); border-top: 1px solid var(--vscode-panel-border); }
     #prompt-input { flex: 1; padding: 8px; border: 1px solid var(--vscode-input-border);
       background: var(--vscode-input-background); color: var(--vscode-input-foreground);
       border-radius: 4px; font-family: var(--vscode-editor-font-family); resize: vertical; min-height: 40px; }
@@ -214,12 +224,16 @@ export class ChatPanel {
     const messages = document.getElementById('messages');
     const input = document.getElementById('prompt-input');
 
+    function scrollToBottom() {
+      messages.scrollTop = messages.scrollHeight;
+    }
+
     function addMessage(role, text) {
       const div = document.createElement('div');
       div.className = 'msg ' + role;
       div.textContent = text;
       messages.appendChild(div);
-      messages.scrollTop = messages.scrollHeight;
+      scrollToBottom();
     }
 
     function appendToLast(role, text) {
@@ -227,9 +241,81 @@ export class ChatPanel {
       if (msgs.length > 0) {
         const last = msgs[msgs.length - 1];
         last.textContent += text;
-        messages.scrollTop = messages.scrollHeight;
+        scrollToBottom();
       }
     }
+
+    let toolCounter = 0;
+
+    function addToolBlock(name, inputText) {
+      const id = 'tool-' + (++toolCounter);
+      const block = document.createElement('div');
+      block.className = 'tool-block';
+      block.id = id;
+
+      const header = document.createElement('div');
+      header.className = 'tool-header';
+      const arrow = document.createElement('span');
+      arrow.className = 'arrow';
+      arrow.textContent = '\u25B6';
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'tool-name';
+      nameSpan.textContent = name;
+      header.appendChild(arrow);
+      header.appendChild(nameSpan);
+
+      const body = document.createElement('div');
+      body.className = 'tool-body collapsed';
+      body.id = id + '-body';
+
+      if (inputText) {
+        const pre = document.createElement('pre');
+        pre.textContent = inputText;
+        body.appendChild(pre);
+      }
+
+      header.addEventListener('click', () => {
+        const arrow = header.querySelector('.arrow');
+        const isCollapsed = body.classList.contains('collapsed');
+        if (isCollapsed) {
+          body.classList.remove('collapsed');
+          arrow.classList.add('open');
+        } else {
+          body.classList.add('collapsed');
+          arrow.classList.remove('open');
+        }
+      });
+
+      block.appendChild(header);
+      block.appendChild(body);
+      messages.appendChild(block);
+      scrollToBottom();
+      return id;
+    }
+
+    function appendToolResult(toolId, output, isError) {
+      const block = document.getElementById(toolId);
+      if (!block) { return; }
+      const body = block.querySelector('.tool-body');
+      if (!body) { return; }
+
+      const resultDiv = document.createElement('div');
+      resultDiv.className = 'tool-result' + (isError ? ' error-result' : '');
+      const pre = document.createElement('pre');
+      pre.textContent = (isError ? '[Error] ' : '') + output;
+      resultDiv.appendChild(pre);
+      body.appendChild(resultDiv);
+
+      // Auto-expand on error
+      if (isError) {
+        body.classList.remove('collapsed');
+        const arrow = block.querySelector('.arrow');
+        if (arrow) { arrow.classList.add('open'); }
+      }
+      scrollToBottom();
+    }
+
+    let lastToolId = null;
 
     window.addEventListener('message', (event) => {
       const msg = event.data;
@@ -238,6 +324,12 @@ export class ChatPanel {
         case 'assistantMessage': addMessage('assistant', msg.text); break;
         case 'appendAssistant': appendToLast('assistant', msg.text); break;
         case 'systemMessage': addMessage('system', msg.text); break;
+        case 'errorMessage': addMessage('error', msg.text); break;
+        case 'toolUse': lastToolId = addToolBlock(msg.name, msg.input); break;
+        case 'toolResult':
+          if (lastToolId) { appendToolResult(lastToolId, msg.output, msg.isError); lastToolId = null; }
+          else { addMessage('system', (msg.isError ? '[Error] ' : '') + msg.output); }
+          break;
       }
     });
 
