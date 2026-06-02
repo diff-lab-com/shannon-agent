@@ -280,7 +280,11 @@ impl TaskBoard {
         Ok(())
     }
 
-    /// Mark a task as completed
+    /// Mark a task as completed and auto-unblock dependents.
+    ///
+    /// When a task completes, all tasks that depend on it have the completed
+    /// task's ID removed from their `blocked_by` vector, potentially making
+    /// them ready to claim.
     pub async fn complete_task(&self, task_id: Uuid) -> Result<(), AgentError> {
         let agent = self
             .assignments
@@ -291,6 +295,24 @@ impl TaskBoard {
 
         self.update_task_status(task_id, TaskStatus::Completed)
             .await?;
+
+        // Auto-unblock: remove completed task from dependents' blocked_by
+        let dependents: Vec<Uuid> = {
+            let reverse_deps = self.reverse_dependencies.read().await;
+            reverse_deps
+                .get(&task_id)
+                .map(|s| s.iter().copied().collect())
+                .unwrap_or_default()
+        };
+
+        if !dependents.is_empty() {
+            let mut tasks = self.tasks.write().await;
+            for dep_id in &dependents {
+                if let Some(dep_task) = tasks.get_mut(dep_id) {
+                    dep_task.blocked_by.retain(|id| *id != task_id);
+                }
+            }
+        }
 
         if let Some(agent) = agent {
             if let Err(e) = self
@@ -899,5 +921,145 @@ mod tests {
         assert!(next.is_some());
         let task = next.unwrap();
         assert!(task.subject == "Task 1" || task.subject == "Task 2");
+    }
+
+    // ── Auto-unblocking tests ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn completing_task_unblocks_dependent() {
+        let board = TaskBoard::new();
+        let t1 = AgentTask::new(
+            "Blocker".into(),
+            "Must finish first".into(),
+            TaskPriority::High,
+        );
+        let t2 = AgentTask::new(
+            "Blocked".into(),
+            "Waits for t1".into(),
+            TaskPriority::Medium,
+        );
+        let t1_id = t1.id;
+        let t2_id = t2.id;
+
+        board.add_task(t1).await.unwrap();
+        board.add_task(t2).await.unwrap();
+        board.add_dependency(t2_id, t1_id).await.unwrap();
+
+        // t2 is blocked
+        let t2_data = board.get_task(t2_id).await.unwrap();
+        assert!(!t2_data.is_ready());
+        assert!(t2_data.blocked_by.contains(&t1_id));
+
+        // Complete t1
+        board
+            .assign_task(t1_id, "worker".to_string())
+            .await
+            .unwrap();
+        board.complete_task(t1_id).await.unwrap();
+
+        // t2 should now be unblocked
+        let t2_data = board.get_task(t2_id).await.unwrap();
+        assert!(t2_data.blocked_by.is_empty());
+        assert!(t2_data.is_ready());
+    }
+
+    #[tokio::test]
+    async fn completing_middle_of_chain_unblocks_next() {
+        let board = TaskBoard::new();
+        let t1 = AgentTask::new("A".into(), "First".into(), TaskPriority::High);
+        let t2 = AgentTask::new("B".into(), "Second".into(), TaskPriority::Medium);
+        let t3 = AgentTask::new("C".into(), "Third".into(), TaskPriority::Low);
+        let t1_id = t1.id;
+        let t2_id = t2.id;
+        let t3_id = t3.id;
+
+        board.add_task(t1).await.unwrap();
+        board.add_task(t2).await.unwrap();
+        board.add_task(t3).await.unwrap();
+        // A → B → C
+        board.add_dependency(t2_id, t1_id).await.unwrap();
+        board.add_dependency(t3_id, t2_id).await.unwrap();
+
+        // Only A is ready
+        let ready = board.list_ready_tasks().await;
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, t1_id);
+
+        // Complete A → B becomes ready
+        board
+            .assign_task(t1_id, "worker".to_string())
+            .await
+            .unwrap();
+        board.complete_task(t1_id).await.unwrap();
+
+        let t2_data = board.get_task(t2_id).await.unwrap();
+        assert!(t2_data.is_ready());
+
+        // C is still blocked by B
+        let t3_data = board.get_task(t3_id).await.unwrap();
+        assert!(!t3_data.is_ready());
+    }
+
+    #[tokio::test]
+    async fn completing_task_with_no_dependents_is_ok() {
+        let board = TaskBoard::new();
+        let task = AgentTask::new("Solo".into(), "No deps".into(), TaskPriority::Medium);
+        let task_id = task.id;
+        board.add_task(task).await.unwrap();
+        board
+            .assign_task(task_id, "worker".to_string())
+            .await
+            .unwrap();
+        board.complete_task(task_id).await.unwrap();
+        let data = board.get_task(task_id).await.unwrap();
+        assert_eq!(data.status, TaskStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn completing_one_blocker_keeps_other_blockers() {
+        let board = TaskBoard::new();
+        let t1 = AgentTask::new("Blocker1".into(), "D1".into(), TaskPriority::High);
+        let t2 = AgentTask::new("Blocker2".into(), "D2".into(), TaskPriority::High);
+        let t3 = AgentTask::new(
+            "Dependent".into(),
+            "Blocked by both".into(),
+            TaskPriority::Medium,
+        );
+        let t1_id = t1.id;
+        let t2_id = t2.id;
+        let t3_id = t3.id;
+
+        board.add_task(t1).await.unwrap();
+        board.add_task(t2).await.unwrap();
+        board.add_task(t3).await.unwrap();
+        board.add_dependency(t3_id, t1_id).await.unwrap();
+        board.add_dependency(t3_id, t2_id).await.unwrap();
+
+        // t3 blocked by both
+        let t3_data = board.get_task(t3_id).await.unwrap();
+        assert_eq!(t3_data.blocked_by.len(), 2);
+
+        // Complete t1 → t3 still blocked by t2
+        board
+            .assign_task(t1_id, "worker".to_string())
+            .await
+            .unwrap();
+        board.complete_task(t1_id).await.unwrap();
+
+        let t3_data = board.get_task(t3_id).await.unwrap();
+        assert_eq!(t3_data.blocked_by.len(), 1);
+        assert!(t3_data.blocked_by.contains(&t2_id));
+        assert!(!t3_data.is_ready());
+
+        // Complete t2 → t3 fully unblocked
+        board
+            .assign_task(t2_id, "worker".to_string())
+            .await
+            .unwrap();
+        board.complete_task(t2_id).await.unwrap();
+
+        let t3_data = board.get_task(t3_id).await.unwrap();
+        assert!(t3_data.blocked_by.is_empty());
+        assert!(t3_data.is_ready());
     }
 }
