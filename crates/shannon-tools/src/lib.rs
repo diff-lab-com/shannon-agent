@@ -35,6 +35,7 @@ use std::sync::Arc;
 pub mod agent;
 pub mod ask_user;
 pub mod brief;
+pub mod computer_use;
 pub mod config;
 pub mod cron;
 pub mod docs_query;
@@ -75,6 +76,10 @@ pub use ask_user::{
     TerminalQuestionHandler,
 };
 pub use brief::{BriefFormat, BriefInput, BriefMessage, BriefTool};
+pub use computer_use::{
+    ComputerAction, ComputerUseConfig, ComputerUseInput, ComputerUseTool, REFERENCE_HEIGHT,
+    REFERENCE_WIDTH, ScrollDirection,
+};
 pub use config::{ConfigAction, ConfigInput, ConfigManager, ConfigTool, SharedConfigManager};
 pub use cron::{
     CronCreateInput, CronCreateOutput, CronDeleteInput, CronDeleteOutput, CronListInput,
@@ -278,6 +283,9 @@ pub fn register_default_tools(
     registry.register(Box::new(StructuredOutputTool::new()))?;
     registry.register(Box::new(McpAuthTool::new()))?;
 
+    // ── Computer Use (desktop automation) ────────────────────────────────
+    registry.register(Box::new(ComputerUseTool::new()))?;
+
     // ── MCP resource tools ─────────────────────────────────────────────
     registry.register(Box::new(McpResourceTool::new()))?;
     let mcp_manager = Arc::new(shannon_mcp::McpResourceManager::new());
@@ -409,6 +417,9 @@ pub fn register_default_tools_with_project_dir(
     registry.register(Box::new(BriefTool::new()))?;
     registry.register(Box::new(StructuredOutputTool::new()))?;
     registry.register(Box::new(McpAuthTool::new()))?;
+
+    // ── Computer Use (desktop automation) ────────────────────────────────
+    registry.register(Box::new(ComputerUseTool::new()))?;
 
     // ── MCP resource tools ─────────────────────────────────────────────
     registry.register(Box::new(McpResourceTool::new()))?;
@@ -556,6 +567,9 @@ pub fn register_default_tools_with_project_dir_ex(
     registry.register(Box::new(BriefTool::new()))?;
     registry.register(Box::new(StructuredOutputTool::new()))?;
     registry.register(Box::new(McpAuthTool::new()))?;
+
+    // ── Computer Use (desktop automation) ────────────────────────────────
+    registry.register(Box::new(ComputerUseTool::new()))?;
 
     // ── MCP resource tools ─────────────────────────────────────────────
     registry.register(Box::new(McpResourceTool::new()))?;

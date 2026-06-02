@@ -1381,6 +1381,74 @@ expression: output
   "type": "object"
 }
 
+## computer
+{
+  "properties": {
+    "action": {
+      "description": "The action to perform",
+      "enum": [
+        "screenshot",
+        "click",
+        "type",
+        "scroll",
+        "key_press",
+        "wait",
+        "mouse_move",
+        "left_click_drag"
+      ],
+      "type": "string"
+    },
+    "coordinate": {
+      "description": "[x, y] coordinates in reference space (0-1024, 0-768)",
+      "items": {
+        "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "duration": {
+      "description": "Seconds to wait (for 'wait' action, default 1.0)",
+      "type": "number"
+    },
+    "key": {
+      "description": "Key or key combination, e.g. 'Return', 'ctrl+a', 'alt+F4'",
+      "type": "string"
+    },
+    "scroll_amount": {
+      "description": "Number of scroll ticks (default 3)",
+      "type": "integer"
+    },
+    "scroll_direction": {
+      "description": "Direction to scroll (for 'scroll' action)",
+      "enum": [
+        "up",
+        "down",
+        "left",
+        "right"
+      ],
+      "type": "string"
+    },
+    "start_coordinate": {
+      "description": "Start [x, y] for drag operations",
+      "items": {
+        "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+    },
+    "text": {
+      "description": "Text to type (for 'type' action)",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action"
+  ],
+  "type": "object"
+}
+
 ## document_symbol
 {
   "properties": {

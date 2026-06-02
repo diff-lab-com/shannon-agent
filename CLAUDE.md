@@ -135,8 +135,10 @@ Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensio
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output, `--schema` for JSON schema validation, and `StructuredOutputConfig` for programmatic use.
 - **VS Code extension**: Scaffolded extension with WebView chat panel, NDJSON subprocess communication with `shannon --prompt`.
 
+- **Computer use**: `ComputerUseTool` with Anthropic-compatible `computer` tool schema (screenshot, click, type, scroll, key_press, wait, mouse_move, left_click_drag). Feature-gated behind `computer-use = ["xcap", "enigo", "image"]`. Without the feature, tool registers but returns helpful error messages. Coordinate scaling from 1024x768 reference resolution to actual screen resolution. Browser control system prompt injection when Playwright/Chrome DevTools MCP tools detected (`browser_control_prompt`).
+
 ### Tier 3 — Quality of Life
-Computer use.
+Computer use (desktop automation via `computer-use` feature flag). Browser automation via MCP Playwright integration.
 
 ## Gotchas
 
