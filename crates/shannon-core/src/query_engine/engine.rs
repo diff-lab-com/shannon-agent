@@ -283,6 +283,9 @@ pub struct QueryEngine {
     pub(crate) checkpoint_manager: crate::checkpoint::CheckpointManager,
     /// Effective maximum context tokens — resolved from user config > Ollama num_ctx > model registry.
     pub(crate) effective_max_context_tokens: usize,
+    /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
+    pub(crate) custom_profiles:
+        Arc<tokio::sync::RwLock<crate::custom_profiles::CustomProfileRegistry>>,
 }
 
 impl QueryEngine {
@@ -429,6 +432,9 @@ impl QueryEngine {
                 &session_id.to_string(),
             ),
             effective_max_context_tokens,
+            custom_profiles: Arc::new(tokio::sync::RwLock::new(
+                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+            )),
         }
     }
 
@@ -478,6 +484,9 @@ impl QueryEngine {
                 &session_id.to_string(),
             ),
             effective_max_context_tokens,
+            custom_profiles: Arc::new(tokio::sync::RwLock::new(
+                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+            )),
         }
     }
 
@@ -516,6 +525,9 @@ impl QueryEngine {
                 &session_id.to_string(),
             ),
             effective_max_context_tokens,
+            custom_profiles: Arc::new(tokio::sync::RwLock::new(
+                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+            )),
         }
     }
 
@@ -652,6 +664,13 @@ impl QueryEngine {
     /// Get a reference to the tool registry
     pub fn tools(&self) -> &ToolRegistry {
         &self.tools
+    }
+
+    /// Access the custom permission profiles registry.
+    pub fn custom_profiles(
+        &self,
+    ) -> &Arc<tokio::sync::RwLock<crate::custom_profiles::CustomProfileRegistry>> {
+        &self.custom_profiles
     }
 
     /// Add a user message to the conversation

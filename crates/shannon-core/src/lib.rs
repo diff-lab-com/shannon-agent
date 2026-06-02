@@ -257,6 +257,7 @@ pub use credential_manager::{
     Credential, CredentialError, CredentialFileDescriptor, CredentialFileFormat, CredentialManager,
     CredentialSummary, ImportResult, PortableCredential, PortableCredentialBundle,
 };
+pub use custom_profiles::{CustomProfileDef, CustomProfileError, CustomProfileRegistry};
 pub use housekeeping::{
     CacheRefreshTask, Housekeeper, HousekeepingConfig, HousekeepingError, HousekeepingTask,
     LogRotationTask, OldSessionPruneTask, TaskResult, TempFileCleanupTask,
