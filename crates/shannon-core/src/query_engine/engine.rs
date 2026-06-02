@@ -948,6 +948,19 @@ impl QueryEngine {
             system_blocks.extend(extra_blocks);
         }
 
+        // Inject browser control instructions when browser MCP tools are present
+        {
+            let tool_names = tools.list();
+            if let Some(browser_text) = crate::query_engine::browser_control_prompt(&tool_names) {
+                let block = if use_cache {
+                    SystemContentBlock::cached(browser_text)
+                } else {
+                    SystemContentBlock::text(browser_text)
+                };
+                system_blocks.push(block);
+            }
+        }
+
         // Inject team coordination instructions when team tools are present
         {
             let tool_names = tools.list();

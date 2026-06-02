@@ -26,6 +26,8 @@ jobs:
           tool: cargo-nextest
       - name: Build
         run: cargo build --workspace
+      - name: Build with computer-use feature
+        run: cargo build -p shannon-tools --features computer-use
       - name: Compile tests
         run: cargo test --workspace --no-run
       - name: Test
