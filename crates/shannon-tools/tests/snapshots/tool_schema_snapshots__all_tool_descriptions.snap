@@ -47,6 +47,7 @@ Write: Write content to a file, overwriting if it exists
 ask_user_question: Ask the user a question during execution. Supports single-select, multi-select, and free-text input. Use this when you need confirmation, option selection, or information from the user.
 auto_commit: Smart git commit tool. Stages changes (all or specific files), generates semantic commit messages from diffs, and creates commits. Supports dry-run preview and co-author trailers. Shows git status and diff stats before committing.
 code_actions: Get available code actions (quick fixes, refactorings) for a range in a file. Uses the language server to suggest fixes for diagnostics and available refactorings.
+computer: Interact with the computer desktop: take screenshots, click, type, scroll, and press keys. Coordinates are in [0-1024, 0-768] range and scaled to actual screen resolution.
 document_symbol: List all symbols (functions, classes, methods, variables, etc.) in a file. Uses the language server to provide a hierarchical view of the document's symbol structure.
 enter_plan_mode: Enter plan mode for read-only analysis and planning. File modifications will be disabled.
 exit_plan_mode: Exit plan mode and return to normal editing mode.
