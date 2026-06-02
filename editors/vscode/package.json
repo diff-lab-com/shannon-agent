@@ -48,6 +48,24 @@
         "title": "Shannon: Open Settings"
       }
     ],
+    "keybindings": [
+      {
+        "command": "shannon.openChat",
+        "key": "ctrl+shift+s",
+        "mac": "cmd+shift+s",
+        "when": "!terminalFocus"
+      },
+      {
+        "command": "shannon.sendPrompt",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter"
+      },
+      {
+        "command": "shannon.stopGeneration",
+        "key": "escape",
+        "when": "shannon.generating"
+      }
+    ],
     "configuration": {
       "title": "Shannon Code",
       "properties": {

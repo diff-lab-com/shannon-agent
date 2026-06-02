@@ -1373,15 +1373,11 @@ mod tests {
         assert!(ready.iter().any(|t| t.id == id_a));
         assert!(!ready.iter().any(|t| t.id == id_b));
 
-        // Complete A -> B becomes ready
+        // Complete A -> B becomes unblocked (auto-unblocked)
         board.complete_task(id_a).await.unwrap();
         let task_b = board.get_task(id_b).await.unwrap();
-        // B is still Pending (not blocked anymore in our model since blocked_by
-        // is set but is_ready checks blocked_by.is_empty)
-        // Actually we need to update blocked_by when A completes
-        // That is handled by the board's add_dependency / remove_dependency
-        // For now verify the dependency was added correctly
-        assert!(task_b.blocked_by.contains(&id_a));
+        assert!(task_b.blocked_by.is_empty());
+        assert!(task_b.is_ready());
     }
 
     #[tokio::test]

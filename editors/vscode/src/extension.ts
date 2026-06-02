@@ -6,6 +6,7 @@
  * - Diff viewer for reviewing file changes (accept/reject)
  * - File apply for writing accepted changes to disk
  * - Config sync between VS Code settings and Shannon CLI env vars
+ * - Status bar indicator for connection state
  */
 
 import * as vscode from 'vscode';
@@ -16,6 +17,7 @@ import { DiffViewer, DiffContentProvider } from './diffViewer';
 
 let client: ShannonClient;
 let diffViewer: DiffViewer;
+let statusBarItem: vscode.StatusBarItem;
 
 export function activate(context: vscode.ExtensionContext): void {
   const config = getConfig();
@@ -24,6 +26,20 @@ export function activate(context: vscode.ExtensionContext): void {
   // Output channel for extension logging
   const outputChannel = vscode.window.createOutputChannel('Shannon Code');
   context.subscriptions.push(outputChannel);
+
+  // Status bar indicator
+  statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    100
+  );
+  statusBarItem.command = 'shannon.openChat';
+  updateStatusBar('disconnected');
+  statusBarItem.show();
+  context.subscriptions.push(statusBarItem);
+
+  // Track client lifecycle for status bar
+  client.on('close', () => updateStatusBar('disconnected'));
+  client.on('error', () => updateStatusBar('error'));
 
   // Diff viewer for reviewing file changes
   diffViewer = new DiffViewer(outputChannel);
@@ -53,10 +69,21 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
+  // Track working state from messages
+  client.on('message', (msg) => {
+    const msgType = (msg as { type?: string }).type;
+    if (msgType === 'text_delta' || msgType === 'tool_use') {
+      updateStatusBar('working');
+    } else if (msgType === 'done') {
+      updateStatusBar('connected');
+    }
+  });
+
   // --- Commands ---
 
   const openChat = vscode.commands.registerCommand('shannon.openChat', () => {
     ChatPanel.show(client);
+    updateStatusBar('connected');
   });
 
   const sendPrompt = vscode.commands.registerCommand(
@@ -68,6 +95,7 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (prompt) {
         ChatPanel.show(client);
+        updateStatusBar('working');
         await client.start();
         client.sendPrompt(prompt);
       }
@@ -78,6 +106,7 @@ export function activate(context: vscode.ExtensionContext): void {
     'shannon.stopGeneration',
     () => {
       client.stop();
+      updateStatusBar('connected');
       vscode.window.showInformationMessage('Shannon: Generation stopped.');
     }
   );
@@ -186,6 +215,49 @@ export function activate(context: vscode.ExtensionContext): void {
     openSettings,
     client
   );
+
+  // Welcome message on first activation
+  const shownKey = 'shannon.welcomeShown';
+  const welcomeShown = context.globalState.get<boolean>(shownKey, false);
+  if (!welcomeShown) {
+    vscode.window.showInformationMessage(
+      'Shannon Code is ready. Open the chat with the status bar icon or run "Shannon: Open Chat" from the command palette.',
+      'Open Chat',
+      'Dismiss'
+    ).then((action) => {
+      if (action === 'Open Chat') {
+        vscode.commands.executeCommand('shannon.openChat');
+      }
+    });
+    context.globalState.update(shownKey, true);
+  }
+}
+
+function updateStatusBar(state: 'disconnected' | 'connected' | 'working' | 'error'): void {
+  switch (state) {
+    case 'disconnected':
+      statusBarItem.text = '$(plug) Shannon';
+      statusBarItem.tooltip = 'Shannon Code — Click to open chat';
+      statusBarItem.backgroundColor = undefined;
+      break;
+    case 'connected':
+      statusBarItem.text = '$(check) Shannon';
+      statusBarItem.tooltip = 'Shannon Code — Connected';
+      statusBarItem.backgroundColor = undefined;
+      break;
+    case 'working':
+      statusBarItem.text = '$(loading~spin) Shannon';
+      statusBarItem.tooltip = 'Shannon Code — Working...';
+      statusBarItem.backgroundColor = undefined;
+      break;
+    case 'error':
+      statusBarItem.text = '$(error) Shannon';
+      statusBarItem.tooltip = 'Shannon Code — Error (click to retry)';
+      statusBarItem.backgroundColor = new vscode.ThemeColor(
+        'statusBarItem.errorBackground'
+      );
+      break;
+  }
 }
 
 export function deactivate(): void {
