@@ -1267,6 +1267,47 @@ impl PermissionManager {
         self.active_profile = Some(profile);
     }
 
+    /// Apply a custom profile definition loaded from `.shannon/profiles/*.toml`.
+    ///
+    /// Unlike `apply_profile` which maps built-in profiles to approval modes,
+    /// this method uses the per-tool auto_approve/confirm/deny lists directly.
+    pub fn apply_custom_profile_def(&mut self, def: &crate::custom_profiles::CustomProfileDef) {
+        // Determine approval mode based on what's auto-approved
+        let auto_approves_read = def
+            .auto_approve
+            .iter()
+            .any(|t| t == "Read" || t == "Glob" || t == "Grep" || t == "LS");
+        let auto_approves_write = def
+            .auto_approve
+            .iter()
+            .any(|t| t == "Edit" || t == "Write" || t == "MultiEdit");
+        let auto_approves_bash = def.auto_approve.iter().any(|t| t == "Bash");
+
+        let mode = if auto_approves_read && auto_approves_write && auto_approves_bash {
+            ApprovalMode::AutoEdit
+        } else if auto_approves_read && !auto_approves_write && !auto_approves_bash {
+            ApprovalMode::Suggest
+        } else {
+            ApprovalMode::Suggest
+        };
+
+        // Register denied tools
+        for tool_name in &def.deny {
+            self.destructive_tools.insert(tool_name.clone());
+        }
+
+        tracing::info!(
+            name = %def.name,
+            ?mode,
+            auto = ?def.auto_approve,
+            deny = ?def.deny,
+            "Applied custom permission profile"
+        );
+
+        self.approval_mode = mode;
+        self.active_profile = Some(PermissionProfile::Custom(def.name.clone()));
+    }
+
     /// Approve the plan for a session (enables auto-approve in Plan mode).
     pub fn approve_plan(&mut self, session_id: uuid::Uuid) {
         self.plan_approved_sessions.insert(session_id);

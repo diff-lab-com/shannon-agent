@@ -12,7 +12,10 @@
     "Programming Languages",
     "Machine Learning"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:shannon.openChat",
+    "onCommand:shannon.sendPrompt"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -76,7 +79,8 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "test": "npm run compile && node out/test/suite/shannonClient.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

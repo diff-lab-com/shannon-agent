@@ -8,8 +8,89 @@
 
 import { ChildProcess, spawn } from 'child_process';
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { buildEnv, ShannonConfig, getConfig } from './config';
+
+/**
+ * Search for the Shannon CLI binary.
+ *
+ * Checks in order:
+ * 1. User-configured `shannon.cliPath` (absolute or relative)
+ * 2. `shannon` in PATH (via `which`/`where`)
+ * 3. Common install locations
+ *
+ * Returns the resolved path or null if not found.
+ */
+export async function findShannonBinary(configuredPath: string): Promise<string | null> {
+  // 1. Try the configured path
+  if (configuredPath && configuredPath !== 'shannon') {
+    if (fs.existsSync(configuredPath)) {
+      return configuredPath;
+    }
+    // Try resolving relative to workspace
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders) {
+      const resolved = path.join(workspaceFolders[0].uri.fsPath, configuredPath);
+      if (fs.existsSync(resolved)) {
+        return resolved;
+      }
+    }
+  }
+
+  // 2. Try `shannon` in PATH
+  const pathResult = await checkPath('shannon');
+  if (pathResult) {
+    return pathResult;
+  }
+
+  // 3. Common install locations
+  const commonPaths = [
+    path.join(process.env.HOME || '', '.cargo', 'bin', 'shannon'),
+    '/usr/local/bin/shannon',
+    '/usr/bin/shannon',
+  ];
+  for (const p of commonPaths) {
+    if (fs.existsSync(p)) {
+      return p;
+    }
+  }
+
+  return null;
+}
+
+/** Check if a binary is available in PATH. */
+function checkPath(binary: string): Promise<string | null> {
+  const cmd = process.platform === 'win32' ? 'where' : 'which';
+  return new Promise((resolve) => {
+    const child = spawn(cmd, [binary], { stdio: 'pipe' });
+    let output = '';
+    child.stdout?.on('data', (data: Buffer) => {
+      output += data.toString();
+    });
+    child.on('close', (code) => {
+      if (code === 0 && output.trim()) {
+        resolve(output.trim().split('\n')[0]);
+      } else {
+        resolve(null);
+      }
+    });
+    child.on('error', () => resolve(null));
+  });
+}
+
+/** Show an error message when the Shannon CLI binary cannot be found. */
+export function showBinaryNotFound(): void {
+  vscode.window.showErrorMessage(
+    'Shannon CLI not found. Install with `cargo install shannon-code` or set the path in Settings.',
+    'Open Settings'
+  ).then((action) => {
+    if (action === 'Open Settings') {
+      vscode.commands.executeCommand('workbench.action.openSettings', 'shannon.cliPath');
+    }
+  });
+}
 
 /** Typed Shannon NDJSON message — matches the OutputEvent enum from shannon-cli. */
 export interface ShannonMessage {
@@ -83,7 +164,7 @@ export class ShannonClient extends EventEmitter {
   }
 
   /** Start the Shannon CLI subprocess. */
-  start(): void {
+  async start(): Promise<void> {
     if (this.running) {
       return;
     }
@@ -91,7 +172,12 @@ export class ShannonClient extends EventEmitter {
     // Re-read config to pick up any VS Code settings changes
     this.config = getConfig();
 
-    const cliPath = this.config.cliPath;
+    const cliPath = await findShannonBinary(this.config.cliPath);
+    if (!cliPath) {
+      showBinaryNotFound();
+      return;
+    }
+
     const provider = this.config.provider;
     const model = this.config.model;
 
@@ -104,15 +190,19 @@ export class ShannonClient extends EventEmitter {
     }
 
     // Build env from VS Code settings — this is the config sync mechanism.
-    // VS Code settings for apiKey, provider, model are passed as
-    // SHANNON_API_KEY, SHANNON_PROVIDER, SHANNON_MODEL env vars,
-    // which the Shannon CLI reads with priority: env vars > config files.
     const shannonEnv = buildEnv(this.config);
 
-    this.process = spawn(cliPath, args, {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, ...shannonEnv },
-    });
+    try {
+      this.process = spawn(cliPath, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, ...shannonEnv },
+      });
+    } catch (err) {
+      vscode.window.showErrorMessage(
+        `Shannon: Failed to start CLI: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return;
+    }
 
     this.running = true;
 
@@ -134,6 +224,17 @@ export class ShannonClient extends EventEmitter {
       this.running = false;
       this.process = null;
       this.emit('error', err);
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        showBinaryNotFound();
+      } else if ((err as NodeJS.ErrnoException).code === 'EACCES') {
+        vscode.window.showErrorMessage(
+          `Shannon: Permission denied executing ${cliPath}. Check file permissions.`
+        );
+      } else {
+        vscode.window.showErrorMessage(
+          `Shannon: CLI error: ${err.message}`
+        );
+      }
     });
   }
 
