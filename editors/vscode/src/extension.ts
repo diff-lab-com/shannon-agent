@@ -68,7 +68,7 @@ export function activate(context: vscode.ExtensionContext): void {
       });
       if (prompt) {
         ChatPanel.show(client);
-        client.start();
+        await client.start();
         client.sendPrompt(prompt);
       }
     }
