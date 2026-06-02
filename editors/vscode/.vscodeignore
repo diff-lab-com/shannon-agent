@@ -3,3 +3,9 @@ node_modules/**
 tsconfig.json
 .gitignore
 **/*.map
+**/*.ts
+test/**
+out/test/**
+media/chat.css
+package-lock.json
+.omc/**
