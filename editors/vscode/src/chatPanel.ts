@@ -4,6 +4,12 @@
  * Renders the chat interface and communicates with the Shannon CLI
  * via the ShannonClient. Handles all NDJSON message types including
  * text_delta, tool_use, tool_result, error, and done.
+ *
+ * Features:
+ * - Markdown rendering with syntax highlighting
+ * - Conversation persistence via workspaceState
+ * - '/' command autocomplete
+ * - Session management (new chat, clear history)
  */
 
 import * as vscode from 'vscode';
@@ -14,15 +20,46 @@ interface ChatMessage {
   content: string;
 }
 
+const STORAGE_KEY = 'shannon.messages';
+
+/** Built-in commands for autocomplete. */
+const BUILTIN_COMMANDS = [
+  { name: '/help', description: 'Show available commands' },
+  { name: '/config', description: 'View or change configuration' },
+  { name: '/profile', description: 'Switch permission profile' },
+  { name: '/model', description: 'Change active model' },
+  { name: '/clear', description: 'Clear conversation history' },
+  { name: '/compact', description: 'Compact conversation context' },
+  { name: '/commit', description: 'Create a git commit' },
+  { name: '/review', description: 'Review code changes' },
+  { name: '/batch', description: 'Run parallel worktree tasks' },
+  { name: '/team', description: 'Manage agent teams' },
+  { name: '/routine', description: 'Manage routines' },
+  { name: '/mcp', description: 'Manage MCP servers' },
+  { name: '/doctor', description: 'Check Shannon installation' },
+];
+
 export class ChatPanel {
   public static currentPanel: ChatPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
   private messages: ChatMessage[] = [];
   private client: ShannonClient;
+  private context: vscode.ExtensionContext;
 
-  private constructor(panel: vscode.WebviewPanel, client: ShannonClient) {
+  private constructor(
+    panel: vscode.WebviewPanel,
+    client: ShannonClient,
+    context: vscode.ExtensionContext
+  ) {
     this.panel = panel;
     this.client = client;
+    this.context = context;
+
+    // Restore persisted messages
+    const saved = this.context.workspaceState.get<ChatMessage[]>(STORAGE_KEY);
+    if (saved && saved.length > 0) {
+      this.messages = saved;
+    }
 
     this.panel.webview.html = this.getHtml();
 
@@ -41,10 +78,24 @@ export class ChatPanel {
     this.client.on('text', (text: string) => {
       this.appendAssistant(text);
     });
+
+    // Send restored messages to WebView
+    if (this.messages.length > 0) {
+      for (const m of this.messages) {
+        this.panel.webview.postMessage({
+          command: 'restoreMessage',
+          role: m.role,
+          text: m.content,
+        });
+      }
+    }
   }
 
   /** Show or create the chat panel. */
-  public static show(client: ShannonClient): void {
+  public static show(
+    client: ShannonClient,
+    context: vscode.ExtensionContext
+  ): void {
     const column = vscode.window.activeTextEditor
       ? vscode.window.activeTextEditor.viewColumn
       : undefined;
@@ -64,7 +115,19 @@ export class ChatPanel {
       }
     );
 
-    ChatPanel.currentPanel = new ChatPanel(panel, client);
+    ChatPanel.currentPanel = new ChatPanel(panel, client, context);
+  }
+
+  /** Clear chat history from both the UI and persisted state. */
+  public clearHistory(): void {
+    this.messages = [];
+    this.context.workspaceState.update(STORAGE_KEY, undefined);
+    this.panel.webview.postMessage({ command: 'clearMessages' });
+  }
+
+  /** Persist current messages to workspaceState. */
+  private persistMessages(): void {
+    this.context.workspaceState.update(STORAGE_KEY, this.messages);
   }
 
   /** Handle messages from the WebView. */
@@ -80,6 +143,9 @@ export class ChatPanel {
         break;
       case 'stop':
         this.client.stop();
+        break;
+      case 'newChat':
+        this.clearHistory();
         break;
     }
   }
@@ -151,6 +217,7 @@ export class ChatPanel {
       this.client.start();
     }
     this.client.sendPrompt(text);
+    this.persistMessages();
   }
 
   /** Append assistant text (supports streaming accumulation). */
@@ -163,16 +230,21 @@ export class ChatPanel {
       this.messages.push({ role: 'assistant', content: text });
       this.panel.webview.postMessage({ command: 'assistantMessage', text });
     }
+    this.persistMessages();
   }
 
   /** Append a system message. */
   private appendSystem(text: string): void {
     this.messages.push({ role: 'system', content: text });
     this.panel.webview.postMessage({ command: 'systemMessage', text });
+    this.persistMessages();
   }
 
   /** Get the WebView HTML. */
   private getHtml(): string {
+    const commandsJson = JSON.stringify(
+      BUILTIN_COMMANDS.map((c) => c.name + ' — ' + c.description)
+    );
     return /* html */ `
 <!DOCTYPE html>
 <html lang="en">
@@ -186,6 +258,8 @@ export class ChatPanel {
     integrity="sha384-BE+nmfgoK1j3fBxbLI64Jzf52Mx/QAyw+4O7GyPYevJnAyrljCoRtQkYNfCfuWPF" crossorigin="anonymous">
   <style>
     body { font-family: var(--vscode-font-family); margin: 0; padding: 12px; color: var(--vscode-foreground); }
+    #toolbar { display: flex; gap: 6px; margin-bottom: 8px; }
+    #toolbar button { font-size: 0.85em; padding: 4px 10px; }
     #messages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 60px; }
     .msg { padding: 8px 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
     .msg.user { background: var(--vscode-input-background); align-self: flex-end; max-width: 80%; }
@@ -219,8 +293,10 @@ export class ChatPanel {
     .tool-body.collapsed { display: none; }
     .tool-body pre { margin: 0; white-space: pre-wrap; word-break: break-all; font-family: var(--vscode-editor-font-family); font-size: 0.9em; }
     .tool-result.error-result { color: var(--vscode-errorForeground, #f48771); }
-    #input-area { position: fixed; bottom: 0; left: 0; right: 0; display: flex; gap: 8px;
-      padding: 12px; background: var(--vscode-sideBar-background); border-top: 1px solid var(--vscode-panel-border); }
+    #input-area { position: fixed; bottom: 0; left: 0; right: 0;
+      padding: 0 12px 12px 12px; background: var(--vscode-sideBar-background);
+      border-top: 1px solid var(--vscode-panel-border); }
+    #input-row { display: flex; gap: 8px; }
     #prompt-input { flex: 1; padding: 8px; border: 1px solid var(--vscode-input-border);
       background: var(--vscode-input-background); color: var(--vscode-input-foreground);
       border-radius: 4px; font-family: var(--vscode-editor-font-family); resize: vertical; min-height: 40px; }
@@ -230,14 +306,29 @@ export class ChatPanel {
     button.secondary { background: var(--vscode-button-secondaryBackground);
       color: var(--vscode-button-secondaryForeground); }
     button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+    #autocomplete { display: none; position: absolute; bottom: 100%; left: 0; right: 0;
+      background: var(--vscode-editorSuggestWidget-background, #252526);
+      border: 1px solid var(--vscode-editorSuggestWidget-border, #454545);
+      border-radius: 4px; max-height: 200px; overflow-y: auto; z-index: 100; }
+    #autocomplete.visible { display: block; }
+    .ac-item { padding: 4px 10px; cursor: pointer; font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em; color: var(--vscode-editorSuggestWidget-foreground); }
+    .ac-item:hover, .ac-item.selected { background: var(--vscode-editorSuggestWidget-selectedBackground, #04395e); }
+    .ac-item .ac-desc { color: var(--vscode-descriptionForeground); margin-left: 8px; font-size: 0.85em; }
   </style>
 </head>
 <body>
+  <div id="toolbar">
+    <button id="new-chat-btn" class="secondary">New Chat</button>
+  </div>
   <div id="messages"></div>
   <div id="input-area">
-    <textarea id="prompt-input" placeholder="Ask Shannon..." rows="2"></textarea>
-    <button id="send-btn">Send</button>
-    <button id="stop-btn" class="secondary">Stop</button>
+    <div id="autocomplete"></div>
+    <div id="input-row">
+      <textarea id="prompt-input" placeholder="Ask Shannon... (type / for commands)" rows="2"></textarea>
+      <button id="send-btn">Send</button>
+      <button id="stop-btn" class="secondary">Stop</button>
+    </div>
   </div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"
     integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
@@ -247,6 +338,9 @@ export class ChatPanel {
     const vscode = acquireVsCodeApi();
     const messages = document.getElementById('messages');
     const input = document.getElementById('prompt-input');
+    const ac = document.getElementById('autocomplete');
+    const COMMANDS = ${commandsJson};
+    let acIndex = -1;
     const md = window.markdownit({ html: false, linkify: true, breaks: true,
       highlight: function(str, lang) {
         if (lang && hljs.getLanguage(lang)) { try { return hljs.highlight(str, { language: lang }).value; } catch(e) {} }
@@ -256,7 +350,6 @@ export class ChatPanel {
     });
 
     function scrollToBottom() { messages.scrollTop = messages.scrollHeight; }
-
     function renderMarkdown(text) { return md.render(text); }
 
     function addMessage(role, text) {
@@ -286,7 +379,6 @@ export class ChatPanel {
       const block = document.createElement('div');
       block.className = 'tool-block';
       block.id = id;
-
       const header = document.createElement('div');
       header.className = 'tool-header';
       const arrow = document.createElement('span');
@@ -297,23 +389,19 @@ export class ChatPanel {
       nameSpan.textContent = name;
       header.appendChild(arrow);
       header.appendChild(nameSpan);
-
       const body = document.createElement('div');
       body.className = 'tool-body collapsed';
       body.id = id + '-body';
-
       if (inputText) {
         const pre = document.createElement('pre');
         pre.textContent = inputText;
         body.appendChild(pre);
       }
-
       header.addEventListener('click', () => {
         const isCollapsed = body.classList.contains('collapsed');
         if (isCollapsed) { body.classList.remove('collapsed'); arrow.classList.add('open'); }
         else { body.classList.add('collapsed'); arrow.classList.remove('open'); }
       });
-
       block.appendChild(header);
       block.appendChild(body);
       messages.appendChild(block);
@@ -326,14 +414,12 @@ export class ChatPanel {
       if (!block) { return; }
       const body = block.querySelector('.tool-body');
       if (!body) { return; }
-
       const resultDiv = document.createElement('div');
       resultDiv.className = 'tool-result' + (isError ? ' error-result' : '');
       const pre = document.createElement('pre');
       pre.textContent = (isError ? '[Error] ' : '') + output;
       resultDiv.appendChild(pre);
       body.appendChild(resultDiv);
-
       if (isError) {
         body.classList.remove('collapsed');
         const arrowEl = block.querySelector('.arrow');
@@ -342,6 +428,50 @@ export class ChatPanel {
       scrollToBottom();
     }
 
+    // ── Autocomplete ─────────────────────────────────────────────────────
+    function showAutocomplete(prefix) {
+      if (!prefix.startsWith('/')) { ac.classList.remove('visible'); return; }
+      const matches = COMMANDS.filter(c => c.toLowerCase().startsWith(prefix.toLowerCase()));
+      if (matches.length === 0 || (matches.length === 1 && matches[0].split(' ')[0] === prefix)) {
+        ac.classList.remove('visible'); return;
+      }
+      ac.innerHTML = '';
+      matches.forEach((m, i) => {
+        const parts = m.split(' — ');
+        const div = document.createElement('div');
+        div.className = 'ac-item' + (i === 0 ? ' selected' : '');
+        div.innerHTML = '<strong>' + parts[0] + '</strong><span class="ac-desc">' + (parts[1] || '') + '</span>';
+        div.addEventListener('click', () => {
+          input.value = parts[0] + ' ';
+          ac.classList.remove('visible');
+          input.focus();
+        });
+        ac.appendChild(div);
+      });
+      acIndex = 0;
+      ac.classList.add('visible');
+    }
+
+    function navigateAc(dir) {
+      const items = ac.querySelectorAll('.ac-item');
+      if (items.length === 0) { return; }
+      items[acIndex]?.classList.remove('selected');
+      acIndex = (acIndex + dir + items.length) % items.length;
+      items[acIndex]?.classList.add('selected');
+      items[acIndex]?.scrollIntoView({ block: 'nearest' });
+    }
+
+    function acceptAc() {
+      const items = ac.querySelectorAll('.ac-item');
+      if (acIndex >= 0 && acIndex < items.length) {
+        const text = items[acIndex].querySelector('strong')?.textContent || '';
+        input.value = text + ' ';
+      }
+      ac.classList.remove('visible');
+      input.focus();
+    }
+
+    // ── Events ───────────────────────────────────────────────────────────
     let lastToolId = null;
 
     window.addEventListener('message', (event) => {
@@ -364,6 +494,8 @@ export class ChatPanel {
           if (lastToolId) { appendToolResult(lastToolId, msg.output, msg.isError); lastToolId = null; }
           else { addMessage('system', (msg.isError ? '[Error] ' : '') + msg.output); }
           break;
+        case 'restoreMessage': addMessage(msg.role, msg.text); break;
+        case 'clearMessages': messages.innerHTML = ''; break;
       }
     });
 
@@ -376,7 +508,24 @@ export class ChatPanel {
       vscode.postMessage({ command: 'stop' });
     });
 
+    document.getElementById('new-chat-btn').addEventListener('click', () => {
+      vscode.postMessage({ command: 'newChat' });
+    });
+
+    input.addEventListener('input', () => {
+      const val = input.value;
+      const cursorPos = input.selectionStart;
+      const lineStart = val.lastIndexOf('\n', cursorPos - 1) + 1;
+      const currentLine = val.substring(lineStart, cursorPos);
+      showAutocomplete(currentLine);
+    });
+
     input.addEventListener('keydown', (e) => {
+      const acVisible = ac.classList.contains('visible');
+      if (acVisible && e.key === 'ArrowDown') { e.preventDefault(); navigateAc(1); return; }
+      if (acVisible && e.key === 'ArrowUp') { e.preventDefault(); navigateAc(-1); return; }
+      if (acVisible && (e.key === 'Tab' || e.key === 'Enter')) { e.preventDefault(); acceptAc(); return; }
+      if (acVisible && e.key === 'Escape') { ac.classList.remove('visible'); return; }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         document.getElementById('send-btn').click();

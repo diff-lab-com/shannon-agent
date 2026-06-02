@@ -695,3 +695,169 @@ async fn new_task_discovered_after_idle_notification() {
     assert_eq!(available.len(), 1);
     assert_eq!(available[0].subject, "New task");
 }
+
+// ── Message edge cases ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn broadcast_to_single_member_team_returns_one() {
+    let (_dir, coord) = setup().await;
+    coord
+        .create_team("solo".into(), "Solo team".into())
+        .await
+        .unwrap();
+    coord
+        .add_teammate("solo", "lone".into(), teammate("lone"))
+        .await
+        .unwrap();
+
+    // Broadcast to a team with 1 member (the sender is lead, not counted as recipient)
+    let msgs = coord
+        .broadcast_to_team("solo", "lone", "Hello self".into())
+        .await
+        .unwrap();
+    // The sender is not included in broadcast recipients
+    assert_eq!(msgs.len(), 0);
+}
+
+#[tokio::test]
+async fn dm_with_structured_content() {
+    let (_dir, coord) = setup().await;
+    coord
+        .create_team("struct".into(), "Structured messages".into())
+        .await
+        .unwrap();
+    coord
+        .add_teammate("struct", "sender".into(), teammate("sender"))
+        .await
+        .unwrap();
+    coord
+        .add_teammate("struct", "receiver".into(), teammate("receiver"))
+        .await
+        .unwrap();
+
+    let structured = MessageContent::Structured(serde_json::json!({
+        "type": "task_update",
+        "task_id": "abc-123",
+        "progress": 0.75
+    }));
+
+    // Structured content is accepted and processed (extracted to string for chat handler)
+    let dm = coord
+        .send_direct_message("struct", "sender", "receiver", structured)
+        .await
+        .unwrap();
+
+    assert_eq!(dm.from, "receiver");
+    assert_eq!(dm.to, "sender");
+    // Response is always Text (chat handler extracts structured content)
+    assert!(matches!(dm.content, MessageContent::Text(_)));
+}
+
+#[tokio::test]
+async fn broadcast_content_response_from_workers() {
+    let (_dir, coord) = setup().await;
+    coord
+        .create_team("bcast".into(), "Broadcast content".into())
+        .await
+        .unwrap();
+    coord
+        .add_teammate("bcast", "lead".into(), lead("lead"))
+        .await
+        .unwrap();
+    coord
+        .add_teammate("bcast", "worker".into(), teammate("worker"))
+        .await
+        .unwrap();
+
+    let msgs = coord
+        .broadcast_to_team("bcast", "lead", "Status check".into())
+        .await
+        .unwrap();
+    // Responses are from workers back to lead
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].from, "worker");
+    assert_eq!(msgs[0].to, "lead");
+    assert!(matches!(msgs[0].content, MessageContent::Text(_)));
+}
+
+#[tokio::test]
+async fn task_completion_auto_unblocks_multiple_dependents() {
+    let (_dir, coord) = setup().await;
+    coord
+        .create_team("multi-dep".into(), "Multi-dependents".into())
+        .await
+        .unwrap();
+    coord
+        .add_teammate("multi-dep", "worker".into(), teammate("worker"))
+        .await
+        .unwrap();
+
+    // One root task, three tasks blocked by it
+    let root = coord
+        .add_task(
+            "multi-dep",
+            "Root".into(),
+            "Must finish first".into(),
+            TaskPriority::High,
+        )
+        .await
+        .unwrap();
+    let dep1 = coord
+        .add_task_with_deps(
+            "multi-dep",
+            "Dep 1".into(),
+            "Blocked by root".into(),
+            TaskPriority::Medium,
+            vec![root],
+        )
+        .await
+        .unwrap();
+    let dep2 = coord
+        .add_task_with_deps(
+            "multi-dep",
+            "Dep 2".into(),
+            "Also blocked".into(),
+            TaskPriority::Medium,
+            vec![root],
+        )
+        .await
+        .unwrap();
+    let dep3 = coord
+        .add_task_with_deps(
+            "multi-dep",
+            "Dep 3".into(),
+            "Also blocked".into(),
+            TaskPriority::Low,
+            vec![root],
+        )
+        .await
+        .unwrap();
+
+    // Only root is ready
+    let ready = coord.task_board().list_ready_tasks().await;
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0].id, root);
+
+    // Complete root — all three should be unblocked
+    coord
+        .self_claim_task("multi-dep", "worker", root)
+        .await
+        .unwrap();
+    coord
+        .complete_task(root, "multi-dep", "worker")
+        .await
+        .unwrap();
+
+    // Verify all dependents are now unblocked
+    for dep_id in &[dep1, dep2, dep3] {
+        let task = coord.task_board().get_task(*dep_id).await.unwrap();
+        assert!(
+            task.blocked_by.is_empty(),
+            "dependent should have no blockers"
+        );
+        assert!(task.is_ready(), "dependent should be ready");
+    }
+
+    let ready_after = coord.task_board().list_ready_tasks().await;
+    assert_eq!(ready_after.len(), 3);
+}
