@@ -21,6 +21,8 @@ use std::collections::HashMap;
 
 #[cfg(feature = "computer-use")]
 use base64::Engine;
+#[cfg(feature = "computer-use")]
+use enigo::{Axis, Direction, Keyboard, Mouse};
 
 /// Reference resolution for coordinate scaling (XGA).
 /// The LLM operates on a downscaled view; coordinates must be scaled to actual resolution.
@@ -169,6 +171,46 @@ impl ComputerUseTool {
     /// "ctrl+a" → ["ctrl", "a"], "alt+F4" → ["alt", "F4"]
     pub fn parse_key_combination(key: &str) -> Vec<String> {
         key.split('+').map(|s| s.trim().to_string()).collect()
+    }
+
+    /// Convert a key name string to an enigo Key enum value.
+    #[cfg(feature = "computer-use")]
+    fn str_to_key(name: &str) -> enigo::Key {
+        match name.to_lowercase().as_str() {
+            "ctrl" | "control" => enigo::Key::Control,
+            "alt" => enigo::Key::Alt,
+            "shift" => enigo::Key::Shift,
+            "meta" | "cmd" | "command" | "super" | "win" => enigo::Key::Meta,
+            "return" | "enter" => enigo::Key::Return,
+            "tab" => enigo::Key::Tab,
+            "space" => enigo::Key::Space,
+            "backspace" | "back" => enigo::Key::Backspace,
+            "delete" | "del" => enigo::Key::Delete,
+            "escape" | "esc" => enigo::Key::Escape,
+            "up" => enigo::Key::UpArrow,
+            "down" => enigo::Key::DownArrow,
+            "left" => enigo::Key::LeftArrow,
+            "right" => enigo::Key::RightArrow,
+            "home" => enigo::Key::Home,
+            "end" => enigo::Key::End,
+            "pageup" | "page_up" => enigo::Key::PageUp,
+            "pagedown" | "page_down" => enigo::Key::PageDown,
+            "capslock" | "caps_lock" => enigo::Key::CapsLock,
+            "f1" => enigo::Key::F1,
+            "f2" => enigo::Key::F2,
+            "f3" => enigo::Key::F3,
+            "f4" => enigo::Key::F4,
+            "f5" => enigo::Key::F5,
+            "f6" => enigo::Key::F6,
+            "f7" => enigo::Key::F7,
+            "f8" => enigo::Key::F8,
+            "f9" => enigo::Key::F9,
+            "f10" => enigo::Key::F10,
+            "f11" => enigo::Key::F11,
+            "f12" => enigo::Key::F12,
+            c if c.len() == 1 => enigo::Key::Unicode(c.chars().next().unwrap()),
+            _ => enigo::Key::Unicode(name.chars().next().unwrap_or('\0')),
+        }
     }
 
     fn build_input_schema() -> serde_json::Value {
@@ -402,11 +444,11 @@ impl ComputerUseTool {
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
 
         enigo
-            .button(enigo::Button::Left, enigo::Press)
+            .button(enigo::Button::Left, Direction::Press)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse press failed: {e}")))?;
 
         enigo
-            .button(enigo::Button::Left, enigo::Release)
+            .button(enigo::Button::Left, Direction::Release)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse release failed: {e}")))?;
 
         Ok(ToolOutput {
@@ -495,18 +537,16 @@ impl ComputerUseTool {
                 .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
         }
 
-        let scroll_dir = match direction {
-            ScrollDirection::Up => 1,
-            ScrollDirection::Down => -1,
-            ScrollDirection::Left => 2,
-            ScrollDirection::Right => -2,
+        let (scroll_len, scroll_axis) = match direction {
+            ScrollDirection::Up => (amount, Axis::Vertical),
+            ScrollDirection::Down => (-amount, Axis::Vertical),
+            ScrollDirection::Left => (amount, Axis::Horizontal),
+            ScrollDirection::Right => (-amount, Axis::Horizontal),
         };
 
-        for _ in 0..amount {
-            enigo
-                .scroll(scroll_dir)
-                .map_err(|e| ToolError::ExecutionFailed(format!("Scroll failed: {e}")))?;
-        }
+        enigo
+            .scroll(scroll_len, scroll_axis)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Scroll failed: {e}")))?;
 
         Ok(ToolOutput {
             content: format!("Scrolled {:?} x{}", direction, amount),
@@ -546,24 +586,22 @@ impl ComputerUseTool {
             .map_err(|e| ToolError::ExecutionFailed(format!("Input init failed: {e}")))?;
 
         let keys = Self::parse_key_combination(key);
-        // For simple single keys, use text input
-        if keys.len() == 1 {
+        let enigo_keys: Vec<enigo::Key> = keys.iter().map(|k| Self::str_to_key(k)).collect();
+        // For simple single keys, click directly
+        if enigo_keys.len() == 1 {
             enigo
-                .key(&keys[0], enigo::Press)
+                .key(enigo_keys[0].clone(), Direction::Click)
                 .map_err(|e| ToolError::ExecutionFailed(format!("Key press failed: {e}")))?;
-            enigo
-                .key(&keys[0], enigo::Release)
-                .map_err(|e| ToolError::ExecutionFailed(format!("Key release failed: {e}")))?;
         } else {
             // Press modifiers first, then the main key, then release in reverse
-            for k in &keys {
+            for k in &enigo_keys {
                 enigo
-                    .key(k, enigo::Press)
+                    .key(k.clone(), Direction::Press)
                     .map_err(|e| ToolError::ExecutionFailed(format!("Key press failed: {e}")))?;
             }
-            for k in keys.iter().rev() {
+            for k in enigo_keys.iter().rev() {
                 enigo
-                    .key(k, enigo::Release)
+                    .key(k.clone(), Direction::Release)
                     .map_err(|e| ToolError::ExecutionFailed(format!("Key release failed: {e}")))?;
             }
         }
@@ -675,7 +713,7 @@ impl ComputerUseTool {
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
 
         enigo
-            .button(enigo::Button::Left, enigo::Press)
+            .button(enigo::Button::Left, Direction::Press)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse press failed: {e}")))?;
 
         enigo
@@ -683,7 +721,7 @@ impl ComputerUseTool {
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse move failed: {e}")))?;
 
         enigo
-            .button(enigo::Button::Left, enigo::Release)
+            .button(enigo::Button::Left, Direction::Release)
             .map_err(|e| ToolError::ExecutionFailed(format!("Mouse release failed: {e}")))?;
 
         Ok(ToolOutput {
