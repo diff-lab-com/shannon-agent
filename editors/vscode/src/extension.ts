@@ -82,7 +82,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // --- Commands ---
 
   const openChat = vscode.commands.registerCommand('shannon.openChat', () => {
-    ChatPanel.show(client);
+    ChatPanel.show(client, context);
     updateStatusBar('connected');
   });
 
@@ -94,7 +94,7 @@ export function activate(context: vscode.ExtensionContext): void {
         placeHolder: 'What would you like to do?',
       });
       if (prompt) {
-        ChatPanel.show(client);
+        ChatPanel.show(client, context);
         updateStatusBar('working');
         await client.start();
         client.sendPrompt(prompt);
@@ -205,6 +205,23 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   );
 
+  const newChat = vscode.commands.registerCommand('shannon.newChat', () => {
+    ChatPanel.show(client, context);
+    ChatPanel.currentPanel?.clearHistory();
+    updateStatusBar('connected');
+  });
+
+  const clearHistory = vscode.commands.registerCommand(
+    'shannon.clearHistory',
+    () => {
+      context.workspaceState.update('shannon.messages', undefined);
+      if (ChatPanel.currentPanel) {
+        ChatPanel.currentPanel.clearHistory();
+      }
+      vscode.window.showInformationMessage('Shannon: Chat history cleared.');
+    }
+  );
+
   context.subscriptions.push(
     openChat,
     sendPrompt,
@@ -213,6 +230,8 @@ export function activate(context: vscode.ExtensionContext): void {
     acceptAllChanges,
     rejectAllChanges,
     openSettings,
+    newChat,
+    clearHistory,
     client
   );
 

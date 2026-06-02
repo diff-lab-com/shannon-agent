@@ -33,6 +33,21 @@ jobs:
       - name: Test
         run: cargo nextest run --workspace --config-file .config/nextest.toml
 
+  vscode:
+    name: VS Code Extension
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: cd editors/vscode && npm install
+      - name: Compile
+        run: cd editors/vscode && npm run compile
+      - name: Test
+        run: cd editors/vscode && npm test
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

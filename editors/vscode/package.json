@@ -70,6 +70,14 @@
       {
         "command": "shannon.openSettings",
         "title": "Shannon: Open Settings"
+      },
+      {
+        "command": "shannon.newChat",
+        "title": "Shannon: New Chat"
+      },
+      {
+        "command": "shannon.clearHistory",
+        "title": "Shannon: Clear History"
       }
     ],
     "keybindings": [
@@ -122,7 +130,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "test": "npm run compile && node out/test/suite/shannonClient.test.js"
+    "test": "npm run compile && node out/test/suite/shannonClient.test.js && node out/test/suite/extension.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
