@@ -179,13 +179,33 @@ export class ChatPanel {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline' https://cdnjs.cloudflare.com; font-src https://cdnjs.cloudflare.com;">
   <title>Shannon Code</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/vs2015.min.css"
+    integrity="sha384-BE+nmfgoK1j3fBxbLI64Jzf52Mx/QAyw+4O7GyPYevJnAyrljCoRtQkYNfCfuWPF" crossorigin="anonymous">
   <style>
     body { font-family: var(--vscode-font-family); margin: 0; padding: 12px; color: var(--vscode-foreground); }
     #messages { display: flex; flex-direction: column; gap: 8px; margin-bottom: 60px; }
     .msg { padding: 8px 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
     .msg.user { background: var(--vscode-input-background); align-self: flex-end; max-width: 80%; }
     .msg.assistant { background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); }
+    .msg.assistant p { margin: 0.4em 0; }
+    .msg.assistant p:first-child { margin-top: 0; }
+    .msg.assistant p:last-child { margin-bottom: 0; }
+    .msg.assistant pre { background: var(--vscode-textCodeBlock-background, #1e1e1e); border-radius: 4px; padding: 8px 12px; overflow-x: auto; margin: 0.5em 0; }
+    .msg.assistant code { font-family: var(--vscode-editor-font-family, 'Cascadia Code', 'Fira Code', monospace); font-size: 0.9em; }
+    .msg.assistant code:not([class*="hljs"]) { background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.15)); padding: 1px 4px; border-radius: 3px; }
+    .msg.assistant ul, .msg.assistant ol { margin: 0.4em 0; padding-left: 1.5em; }
+    .msg.assistant li { margin: 0.15em 0; }
+    .msg.assistant h1, .msg.assistant h2, .msg.assistant h3, .msg.assistant h4 { margin: 0.6em 0 0.3em; font-weight: 600; }
+    .msg.assistant h1 { font-size: 1.3em; } .msg.assistant h2 { font-size: 1.15em; } .msg.assistant h3 { font-size: 1.05em; }
+    .msg.assistant blockquote { border-left: 3px solid var(--vscode-panel-border); margin: 0.5em 0; padding-left: 0.8em; opacity: 0.85; }
+    .msg.assistant a { color: var(--vscode-textLink-foreground); }
+    .msg.assistant table { border-collapse: collapse; margin: 0.5em 0; }
+    .msg.assistant th, .msg.assistant td { border: 1px solid var(--vscode-panel-border); padding: 4px 8px; }
+    .msg.assistant th { background: var(--vscode-editor-background); font-weight: 600; }
+    .msg.assistant hr { border: none; border-top: 1px solid var(--vscode-panel-border); margin: 0.8em 0; }
     .msg.system { background: var(--vscode-textBlockQuote-background); font-size: 0.9em; opacity: 0.8; }
     .msg.error { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100); }
     .tool-block { background: var(--vscode-textBlockQuote-background); border-radius: 6px; overflow: hidden; font-size: 0.9em; margin: 2px 0; }
@@ -219,19 +239,31 @@ export class ChatPanel {
     <button id="send-btn">Send</button>
     <button id="stop-btn" class="secondary">Stop</button>
   </div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"
+    integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/markdown-it/14.0.0/markdown-it.min.js"
+    integrity="sha384-ZSs6LKr2GoUPDyHrN+rCQgyHL1yUyok5xMniSrgeRG7rUvA6vTmxronM1eZOfjgz" crossorigin="anonymous"></script>
   <script>
     const vscode = acquireVsCodeApi();
     const messages = document.getElementById('messages');
     const input = document.getElementById('prompt-input');
+    const md = window.markdownit({ html: false, linkify: true, breaks: true,
+      highlight: function(str, lang) {
+        if (lang && hljs.getLanguage(lang)) { try { return hljs.highlight(str, { language: lang }).value; } catch(e) {} }
+        try { return hljs.highlightAuto(str).value; } catch(e) {}
+        return '';
+      }
+    });
 
-    function scrollToBottom() {
-      messages.scrollTop = messages.scrollHeight;
-    }
+    function scrollToBottom() { messages.scrollTop = messages.scrollHeight; }
+
+    function renderMarkdown(text) { return md.render(text); }
 
     function addMessage(role, text) {
       const div = document.createElement('div');
       div.className = 'msg ' + role;
-      div.textContent = text;
+      if (role === 'assistant') { div.innerHTML = renderMarkdown(text); }
+      else { div.textContent = text; }
       messages.appendChild(div);
       scrollToBottom();
     }
@@ -240,7 +272,9 @@ export class ChatPanel {
       const msgs = messages.querySelectorAll('.msg.' + role);
       if (msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        last.textContent += text;
+        const raw = (last.dataset.raw || '') + text;
+        last.dataset.raw = raw;
+        last.innerHTML = renderMarkdown(raw);
         scrollToBottom();
       }
     }
@@ -275,15 +309,9 @@ export class ChatPanel {
       }
 
       header.addEventListener('click', () => {
-        const arrow = header.querySelector('.arrow');
         const isCollapsed = body.classList.contains('collapsed');
-        if (isCollapsed) {
-          body.classList.remove('collapsed');
-          arrow.classList.add('open');
-        } else {
-          body.classList.add('collapsed');
-          arrow.classList.remove('open');
-        }
+        if (isCollapsed) { body.classList.remove('collapsed'); arrow.classList.add('open'); }
+        else { body.classList.add('collapsed'); arrow.classList.remove('open'); }
       });
 
       block.appendChild(header);
@@ -306,11 +334,10 @@ export class ChatPanel {
       resultDiv.appendChild(pre);
       body.appendChild(resultDiv);
 
-      // Auto-expand on error
       if (isError) {
         body.classList.remove('collapsed');
-        const arrow = block.querySelector('.arrow');
-        if (arrow) { arrow.classList.add('open'); }
+        const arrowEl = block.querySelector('.arrow');
+        if (arrowEl) { arrowEl.classList.add('open'); }
       }
       scrollToBottom();
     }
@@ -321,7 +348,14 @@ export class ChatPanel {
       const msg = event.data;
       switch (msg.command) {
         case 'userMessage': addMessage('user', msg.text); break;
-        case 'assistantMessage': addMessage('assistant', msg.text); break;
+        case 'assistantMessage':
+          const div = document.createElement('div');
+          div.className = 'msg assistant';
+          div.dataset.raw = msg.text;
+          div.innerHTML = renderMarkdown(msg.text);
+          messages.appendChild(div);
+          scrollToBottom();
+          break;
         case 'appendAssistant': appendToLast('assistant', msg.text); break;
         case 'systemMessage': addMessage('system', msg.text); break;
         case 'errorMessage': addMessage('error', msg.text); break;

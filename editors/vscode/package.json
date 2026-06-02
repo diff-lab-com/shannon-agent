@@ -1,9 +1,33 @@
 {
   "name": "shannon-code",
   "displayName": "Shannon Code",
-  "description": "AI-powered code assistant powered by Shannon Code CLI",
+  "description": "AI-powered code assistant with multi-provider LLM support, MCP extensions, and intelligent tool use",
   "version": "0.1.0",
-  "publisher": "shannon",
+  "publisher": "diffLab",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shannon-agent/shannon-code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shannon-agent/shannon-code/issues"
+  },
+  "homepage": "https://github.com/shannon-agent/shannon-code#readme",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
+  "keywords": [
+    "ai",
+    "chat",
+    "code assistant",
+    "llm",
+    "anthropic",
+    "openai",
+    "mcp",
+    "multi-provider"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
