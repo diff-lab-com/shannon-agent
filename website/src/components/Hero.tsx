@@ -29,7 +29,7 @@ export default function Hero({ lang }: HeroProps) {
         alignItems: 'center',
         gap: 8,
         padding: '6px 16px',
-        background: 'var(--paper)',
+        background: 'var(--bg-soft)',
         border: '1px solid var(--line)',
         borderRadius: 'var(--radius-pill)',
         fontFamily: 'var(--font-mono)',
@@ -42,7 +42,7 @@ export default function Hero({ lang }: HeroProps) {
           height: 7,
           borderRadius: '50%',
           background: 'var(--ok)',
-          boxShadow: '0 0 0 3px rgba(28, 154, 99, 0.15)',
+          boxShadow: '0 0 0 3px rgba(52, 211, 153, 0.15)',
         }} />
         {t.hero.badge}
       </div>
@@ -72,7 +72,7 @@ export default function Hero({ lang }: HeroProps) {
         margin: '0 auto 24px',
         background: 'var(--paper)',
         borderRadius: 'var(--radius-lg)',
-        boxShadow: 'var(--shadow-card)',
+        border: '1px solid var(--line)',
         overflow: 'hidden',
       }}>
         {/* Tabs */}
@@ -84,7 +84,7 @@ export default function Hero({ lang }: HeroProps) {
               style={{
                 flex: 1,
                 padding: '12px 0',
-                background: activeTab === tab ? 'var(--ink)' : 'transparent',
+                background: activeTab === tab ? 'var(--accent)' : 'transparent',
                 color: activeTab === tab ? 'white' : 'var(--muted)',
                 border: 'none',
                 fontFamily: 'var(--font-mono)',
@@ -119,7 +119,7 @@ export default function Hero({ lang }: HeroProps) {
           <button
             onClick={copyCommand}
             style={{
-              background: copied ? 'rgba(28, 154, 99, 0.1)' : 'transparent',
+              background: copied ? 'rgba(52, 211, 153, 0.1)' : 'transparent',
               border: `1px solid ${copied ? 'var(--ok)' : 'var(--line)'}`,
               borderRadius: 'var(--radius-sm)',
               padding: '6px 14px',

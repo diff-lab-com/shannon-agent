@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { type Lang, setStoredLang, getTranslations } from '../i18n';
+import { type Lang, setStoredLang, getTranslations, BASE } from '../i18n';
 
 interface NavbarProps {
   lang: Lang;
@@ -37,7 +37,7 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
       height: 'var(--nav-height)',
       display: 'flex',
       alignItems: 'center',
-      background: scrolled ? 'rgba(250, 249, 247, 0.92)' : 'var(--bg)',
+      background: scrolled ? 'rgba(15, 15, 20, 0.92)' : 'var(--bg)',
       backdropFilter: scrolled ? 'saturate(1.4) blur(12px)' : 'none',
       borderBottom: scrolled ? '1px solid var(--line)' : '1px solid transparent',
       transition: 'background 0.2s, border-color 0.2s, backdrop-filter 0.2s',
@@ -51,7 +51,7 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
         alignItems: 'center',
         justifyContent: 'space-between',
       }}>
-        <a href="/" style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink)', textDecoration: 'none' }}>
+        <a href={BASE} style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--ink)', textDecoration: 'none' }}>
           <div style={{
             width: 28,
             height: 28,
@@ -74,7 +74,7 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
           gap: 24,
         }}>
           <a href="#features" style={navLinkStyle} onClick={() => setMenuOpen(false)}>{t.nav.features}</a>
-          <a href="/docs" style={navLinkStyle} onClick={() => setMenuOpen(false)}>{t.nav.docs}</a>
+          <a href={BASE + 'docs'} style={navLinkStyle} onClick={() => setMenuOpen(false)}>{t.nav.docs}</a>
           <button
             onClick={toggleLang}
             style={{

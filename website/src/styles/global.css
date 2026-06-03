@@ -1,19 +1,19 @@
 :root {
-  /* Shannon brand colors — Rust orange accent */
-  --bg: #faf9f7;
-  --bg-soft: #f5f3f0;
-  --paper: #ffffff;
-  --ink: #1a1a2e;
-  --body: #3b3d44;
-  --muted: #6b7280;
-  --faint: #9ca3af;
-  --line: #e5e2dc;
-  --line-2: #d6d3cc;
-  --accent: #ce412b;
-  --accent-soft: #fef1ef;
-  --accent-hover: #b53824;
-  --ok: #1c9a63;
-  --code-bg: #1e1e2e;
+  /* Shannon brand — Dark theme */
+  --bg: #0f0f14;
+  --bg-soft: #181820;
+  --paper: #1a1a24;
+  --ink: #e8e8ed;
+  --body: #c0c0cc;
+  --muted: #8b8b9e;
+  --faint: #5e5e72;
+  --line: #2a2a38;
+  --line-2: #363648;
+  --accent: #f97316;
+  --accent-soft: rgba(249, 115, 22, 0.1);
+  --accent-hover: #fb923c;
+  --ok: #34d399;
+  --code-bg: #11111b;
   --code-text: #cdd6f4;
   --brand-gradient: linear-gradient(135deg, #f97316, #ce412b 50%, #7c3aed);
 
@@ -31,9 +31,9 @@
   --radius-pill: 999px;
 
   /* Shadows */
-  --shadow-card: 0 2px 4px rgba(20, 22, 40, 0.05), 0 32px 64px -30px rgba(34, 46, 104, 0.28);
-  --shadow-terminal: 0 1px rgba(255, 255, 255, 0.5), 0 40px 80px -44px rgba(24, 26, 52, 0.55), 0 0 0 1px rgba(20, 22, 40, 0.04);
-  --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-card: 0 2px 4px rgba(0, 0, 0, 0.3), 0 32px 64px -30px rgba(0, 0, 0, 0.5);
+  --shadow-terminal: 0 40px 80px -44px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --shadow-button: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 /* Reset */
@@ -101,7 +101,7 @@ code, pre {
   align-items: center;
   gap: 8px;
   padding: 10px 22px;
-  background: var(--ink);
+  background: var(--accent);
   color: white;
   border: none;
   border-radius: var(--radius-sm);
@@ -115,7 +115,7 @@ code, pre {
 
 .btn-primary:hover {
   transform: translateY(-1px);
-  background: #2a2a42;
+  background: var(--accent-hover);
 }
 
 .btn-secondary {
@@ -146,7 +146,6 @@ code, pre {
   h1 { font-size: clamp(32px, 8vw, 52px); }
   h2 { font-size: clamp(24px, 5vw, 34px); }
 
-  /* Navbar: hide desktop links, show hamburger */
   .nav-links { display: none !important; }
   .nav-hamburger { display: flex !important; }
 
@@ -164,13 +163,11 @@ code, pre {
     box-shadow: var(--shadow-card);
   }
 
-  /* Comparison table: scroll on mobile */
   .comparison-table-wrapper {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Stats grid: 2 columns */
   .stats-grid {
     grid-template-columns: repeat(2, 1fr) !important;
   }

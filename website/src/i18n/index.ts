@@ -12,7 +12,7 @@ const translations = {
     hero: {
       badge: 'v0.1.0 · Rust · Apache-2.0',
       title: ['The ', { text: 'open-source', italic: true }, ' AI coding assistant'],
-      subtitle: 'Works with any LLM provider — Anthropic, OpenAI, Ollama, or any OpenAI-compatible endpoint. Written in Rust for performance and safety.',
+      subtitle: 'Works with any LLM provider — Anthropic, OpenAI, DeepSeek, Ollama, or any OpenAI-compatible endpoint. Written in Rust for performance and safety.',
       installTabs: {
         cargo: 'Cargo',
         curl: 'curl',
@@ -31,7 +31,7 @@ const translations = {
       lines: [
         { type: 'prompt', text: '$ shannon' },
         { type: 'output', text: 'Shannon Code v0.1.0 · Rust · Multi-provider' },
-        { type: 'output', text: 'Connected to claude-sonnet-4-20250514 (Anthropic)' },
+        { type: 'output', text: 'Connected to deepseek-chat (DeepSeek)' },
         { type: 'prompt', text: '> Fix the auth bug in src/login.rs' },
         { type: 'tool', text: '✓ Read src/login.rs (42 lines)' },
         { type: 'tool', text: '✓ Edit src/login.rs — fix token validation' },
@@ -43,12 +43,14 @@ const translations = {
     features: {
       title: 'Features',
       items: [
-        { num: '01', title: 'Multi-Provider LLM', desc: 'Connect to Anthropic, OpenAI, Ollama, DeepSeek, or any OpenAI-compatible endpoint with a single config.' },
-        { num: '02', title: 'MCP Extensions', desc: 'Full Model Context Protocol support — Claude Code compatible. Dynamic tool discovery with fuzzy search.' },
-        { num: '03', title: 'Multi-Agent Teams', desc: 'Coordinate multiple AI agents with worktree isolation, per-agent model config, and parallel task dispatch.' },
-        { num: '04', title: 'Permission System', desc: 'Rule-based + LLM auto-classifier with 4-tier precedence. Strict, balanced, permissive, or custom profiles.' },
-        { num: '05', title: 'Session & Memory', desc: 'Persistent sessions, context compression, memory extraction, checkpoint/undo with diff preview.' },
-        { num: '06', title: 'VS Code Extension', desc: 'WebView chat panel with Markdown rendering, diff viewer, and NDJSON subprocess communication.' },
+        { num: '01', title: 'Multi-Provider LLM', desc: 'Connect to Anthropic, OpenAI, DeepSeek, Ollama, or any OpenAI-compatible endpoint with a single config.' },
+        { num: '02', title: 'Claude Code Compatible', desc: 'Drop-in compatible with Claude Code ecosystem: CLAUDE.md, .claude/ agents, hooks, MCP servers, and settings. Your existing configs work out of the box.' },
+        { num: '03', title: 'MCP Extensions', desc: 'Full Model Context Protocol support. Dynamic tool discovery with fuzzy search. Works with all Claude Code MCP servers.' },
+        { num: '04', title: 'Multi-Agent Teams', desc: 'Coordinate multiple AI agents with worktree isolation, per-agent model config, and parallel task dispatch.' },
+        { num: '05', title: 'Permission System', desc: 'Rule-based + LLM auto-classifier with 4-tier precedence. Strict, balanced, permissive, or custom profiles.' },
+        { num: '06', title: 'Session & Memory', desc: 'Persistent sessions, context compression, memory extraction, checkpoint/undo with diff preview.' },
+        { num: '07', title: 'VS Code Extension', desc: 'WebView chat panel with Markdown rendering, diff viewer, and NDJSON subprocess communication.' },
+        { num: '08', title: 'Open Source', desc: 'Apache-2.0 licensed, 7,889 tests, every source file covered. No hidden fees, no vendor lock-in. Fully auditable codebase.' },
       ],
     },
     comparison: {
@@ -60,7 +62,7 @@ const translations = {
         { value: '12', label: 'Modular Crates' },
       ],
       rows: [
-        { feature: 'LLM Providers', shannon: 'Anthropic, OpenAI, Ollama, any compatible', other: 'Single vendor' },
+        { feature: 'LLM Providers', shannon: 'Anthropic, OpenAI, DeepSeek, Ollama, any compatible', other: 'Single vendor' },
         { feature: 'Cost Transparency', shannon: 'No hidden fees, no cache manipulation', other: 'Dynamic billing headers inflate costs 10-20x' },
         { feature: 'Test Coverage', shannon: '7,889 tests, every file covered', other: 'Often zero tests' },
         { feature: 'Extensibility', shannon: 'MCP protocol, plugins, skills, hooks', other: 'Limited or closed' },
@@ -73,7 +75,7 @@ const translations = {
       button: 'Read the Docs',
     },
     footer: {
-      copyright: '© 2026 Shannon Code Contributors.',
+      copyright: '\u00a9 2026 Shannon Code Contributors.',
       license: 'Apache-2.0',
     },
   },
@@ -88,7 +90,7 @@ const translations = {
     hero: {
       badge: 'v0.1.0 · Rust · Apache-2.0',
       title: ['开源的', { text: 'AI 编程助手', italic: true }, ''],
-      subtitle: '支持任何 LLM 提供商 — Anthropic、OpenAI、Ollama 或任何 OpenAI 兼容端点。使用 Rust 编写，高性能且安全。',
+      subtitle: '支持任何 LLM 提供商 — Anthropic、OpenAI、DeepSeek、Ollama 或任何 OpenAI 兼容端点。使用 Rust 编写，高性能且安全。',
       installTabs: {
         cargo: 'Cargo',
         curl: 'curl',
@@ -107,7 +109,7 @@ const translations = {
       lines: [
         { type: 'prompt', text: '$ shannon' },
         { type: 'output', text: 'Shannon Code v0.1.0 · Rust · 多提供商支持' },
-        { type: 'output', text: '已连接 claude-sonnet-4-20250514 (Anthropic)' },
+        { type: 'output', text: '已连接 deepseek-chat (DeepSeek)' },
         { type: 'prompt', text: '> 修复 src/login.rs 中的认证 bug' },
         { type: 'tool', text: '✓ 读取 src/login.rs（42 行）' },
         { type: 'tool', text: '✓ 编辑 src/login.rs — 修复 token 验证逻辑' },
@@ -119,12 +121,14 @@ const translations = {
     features: {
       title: '功能特性',
       items: [
-        { num: '01', title: '多提供商 LLM', desc: '连接 Anthropic、OpenAI、Ollama、DeepSeek 或任何 OpenAI 兼容端点，一个配置即可。' },
-        { num: '02', title: 'MCP 扩展', desc: '完整的模型上下文协议支持 — 兼容 Claude Code 生态。动态工具发现与模糊搜索。' },
-        { num: '03', title: '多 Agent 团队', desc: '协调多个 AI Agent，工作树隔离，每 Agent 独立模型配置，并行任务调度。' },
-        { num: '04', title: '权限系统', desc: '基于规则 + LLM 自动分类，4 级优先级。严格、均衡、宽松或自定义配置。' },
-        { num: '05', title: '会话与记忆', desc: '持久化会话、上下文压缩、记忆提取、检查点/撤销与 Diff 预览。' },
-        { num: '06', title: 'VS Code 扩展', desc: 'WebView 聊天面板，Markdown 渲染，Diff 查看器，NDJSON 子进程通信。' },
+        { num: '01', title: '多提供商 LLM', desc: '连接 Anthropic、OpenAI、DeepSeek、Ollama 或任何 OpenAI 兼容端点，一个配置即可。' },
+        { num: '02', title: '兼容 Claude Code', desc: '与 Claude Code 生态完全兼容：CLAUDE.md、.claude/ 代理、钩子、MCP 服务器和设置。现有配置开箱即用。' },
+        { num: '03', title: 'MCP 扩展', desc: '完整的模型上下文协议支持。动态工具发现与模糊搜索。兼容所有 Claude Code MCP 服务器。' },
+        { num: '04', title: '多 Agent 团队', desc: '协调多个 AI Agent，工作树隔离，每 Agent 独立模型配置，并行任务调度。' },
+        { num: '05', title: '权限系统', desc: '基于规则 + LLM 自动分类，4 级优先级。严格、均衡、宽松或自定义配置。' },
+        { num: '06', title: '会话与记忆', desc: '持久化会话、上下文压缩、记忆提取、检查点/撤销与 Diff 预览。' },
+        { num: '07', title: 'VS Code 扩展', desc: 'WebView 聊天面板，Markdown 渲染，Diff 查看器，NDJSON 子进程通信。' },
+        { num: '08', title: '完全开源', desc: 'Apache-2.0 许可，7,889 个测试，每个源文件均有覆盖。无隐藏费用，无供应商锁定。代码完全可审计。' },
       ],
     },
     comparison: {
@@ -136,7 +140,7 @@ const translations = {
         { value: '12', label: '模块化 Crate' },
       ],
       rows: [
-        { feature: 'LLM 提供商', shannon: 'Anthropic、OpenAI、Ollama、任何兼容端点', other: '单一供应商' },
+        { feature: 'LLM 提供商', shannon: 'Anthropic、OpenAI、DeepSeek、Ollama、任何兼容端点', other: '单一供应商' },
         { feature: '成本透明', shannon: '无隐藏费用，不操纵缓存', other: '动态计费头使成本膨胀 10-20 倍' },
         { feature: '测试覆盖', shannon: '7,889 个测试，每个文件均有覆盖', other: '通常零测试' },
         { feature: '可扩展性', shannon: 'MCP 协议、插件、技能、钩子', other: '有限或封闭' },
@@ -149,7 +153,7 @@ const translations = {
       button: '阅读文档',
     },
     footer: {
-      copyright: '© 2026 Shannon Code 贡献者。',
+      copyright: '\u00a9 2026 Shannon Code 贡献者。',
       license: 'Apache-2.0',
     },
   },
@@ -181,3 +185,6 @@ export function setStoredLang(lang: Lang): void {
     localStorage.setItem('shannon-lang', lang);
   }
 }
+
+/** Base URL with trailing slash (Astro replaces at build time) */
+export const BASE = import.meta.env.BASE_URL as string;

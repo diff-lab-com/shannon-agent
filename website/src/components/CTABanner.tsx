@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { type Lang, getTranslations } from '../i18n';
+import { type Lang, getTranslations, BASE } from '../i18n';
 
 interface CTABannerProps {
   lang: Lang;
@@ -66,7 +66,7 @@ export default function CTABanner({ lang }: CTABannerProps) {
           </button>
         </div>
         <br />
-        <a href="/docs" style={{
+        <a href={BASE + 'docs'} style={{
           display: 'inline-flex',
           alignItems: 'center',
           gap: 8,

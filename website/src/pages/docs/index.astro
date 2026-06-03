@@ -9,7 +9,7 @@ import DocsLayout from '../../layouts/DocsLayout.astro';
   </p>
 
   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
-    <a href="/docs/getting-started" style={{
+    <a href={import.meta.env.BASE_URL + 'docs/getting-started'} style={{
       display: 'block',
       padding: '24px',
       background: 'var(--paper)',
@@ -21,7 +21,7 @@ import DocsLayout from '../../layouts/DocsLayout.astro';
       <h3 style={{ marginBottom: 8 }}>Getting Started</h3>
       <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Install, configure, and run Shannon Code in 30 seconds.</p>
     </a>
-    <a href="/docs/architecture" style={{
+    <a href={import.meta.env.BASE_URL + 'docs/architecture'} style={{
       display: 'block',
       padding: '24px',
       background: 'var(--paper)',
@@ -33,7 +33,7 @@ import DocsLayout from '../../layouts/DocsLayout.astro';
       <h3 style={{ marginBottom: 8 }}>Architecture</h3>
       <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Crate structure, data flow, and key design patterns.</p>
     </a>
-    <a href="/docs/configuration" style={{
+    <a href={import.meta.env.BASE_URL + 'docs/configuration'} style={{
       display: 'block',
       padding: '24px',
       background: 'var(--paper)',
@@ -45,7 +45,7 @@ import DocsLayout from '../../layouts/DocsLayout.astro';
       <h3 style={{ marginBottom: 8 }}>Configuration</h3>
       <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Providers, MCP extensions, permissions, and CLI flags.</p>
     </a>
-    <a href="/docs/testing" style={{
+    <a href={import.meta.env.BASE_URL + 'docs/testing'} style={{
       display: 'block',
       padding: '24px',
       background: 'var(--paper)',

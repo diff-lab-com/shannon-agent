@@ -118,3 +118,5 @@ vendor/
 .serena/
 claudedocs/
 docs-mdbook/book/
+
+.astro/
