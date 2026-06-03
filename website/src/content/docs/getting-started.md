@@ -1,79 +1,67 @@
 ---
 title: Getting Started
-order: 1
-section: introduction
+order: 2
+section: getting-started
 ---
 
 # Getting Started
 
-## Install
+## Prerequisites
 
-Choose one of the following methods:
+- **Rust** 1.88+ (edition 2024)
+- **Git**
+- An LLM API key (Anthropic, OpenAI, or a local Ollama instance)
 
-### Cargo (recommended)
-
-```bash
-cargo install --git https://github.com/shannon-agent/shannon-code.git
-```
-
-### curl
+## Build
 
 ```bash
-curl -fsSL https://github.com/shannon-agent/shannon-code/releases/latest/download/install.sh | sh
+git clone https://github.com/ericdong/shannon-code.git
+cd shannon-code
+cargo build --release
 ```
 
-### Homebrew
-
-```bash
-brew install shannon-agent/tap/shannon
-```
+The binary is at `target/release/shannon`.
 
 ## Configure
 
-Shannon Code works with any OpenAI-compatible LLM provider. Create a config file:
+Create `~/.shannon/config.toml`:
 
-```bash
-mkdir -p ~/.shannon
-cat > ~/.shannon/config.toml << 'EOF'
-[llm]
+```toml
 provider = "anthropic"
-model = "claude-sonnet-4-20250514"
-api_key_env = "SHANNON_API_KEY"
-EOF
+api_key = "sk-ant-..."
+model = "claude-sonnet-4"
 ```
 
-Set your API key:
+Or use environment variables:
 
 ```bash
 export SHANNON_API_KEY="sk-ant-..."
+export SHANNON_MODEL="claude-sonnet-4"
+export SHANNON_PROVIDER="anthropic"
 ```
 
-### Other Providers
-
-| Provider | `provider` value | Default model |
-|----------|-----------------|---------------|
-| Anthropic | `anthropic` | `claude-sonnet-4-20250514` |
-| OpenAI | `openai` | `gpt-4o` |
-| Ollama | `ollama` | `codellama` |
-| DeepSeek | `deepseek` | `deepseek-coder` |
-| Custom | `custom` | — |
-
-For custom endpoints, set `base_url` in the `[llm]` section.
+See [Configuration](../configuration/) for all options.
 
 ## Run
 
 ```bash
+# Interactive REPL
 shannon
+
+# One-shot prompt (headless mode)
+shannon --prompt "explain this codebase"
+
+# Resume last session
+shannon --resume
+
+# Resume specific session
+shannon --resume <session-uuid>
 ```
 
-This opens the interactive terminal UI. For non-interactive mode:
+## Verify
 
 ```bash
-shannon --prompt "Fix the auth bug in src/login.rs"
+cargo test --workspace -- --test-threads=1
 ```
 
-## Next Steps
-
-- Read the [Architecture](../architecture/) overview
-- Configure [MCP extensions](../configuration/#mcp-extensions)
-- Set up [permission profiles](../configuration/#permission-profiles)
+All tests should pass. Use `--test-threads=1` because some tests share environment variables.
