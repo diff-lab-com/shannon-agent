@@ -445,7 +445,7 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
         "init" => Some(
             CommandHelpEntry::new(
                 "init".to_string(),
-                "Initialize project configuration (CLAUDE.md, detect git)".to_string(),
+                "Initialize project configuration (AGENTS.md, detect git)".to_string(),
                 HelpCategory::System,
             )
             .with_aliases(vec!["initialize"])

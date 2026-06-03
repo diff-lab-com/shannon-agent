@@ -92,7 +92,7 @@ pub fn init_command() -> Command {
         base: CommandBase {
             name: "init".to_string(),
             aliases: vec!["initialize".to_string()],
-            description: "Initialize project configuration (CLAUDE.md, detect git)".to_string(),
+            description: "Initialize project configuration (AGENTS.md, detect git)".to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],
             source: CommandSource::Builtin,
