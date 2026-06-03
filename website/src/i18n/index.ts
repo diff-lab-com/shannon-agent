@@ -188,5 +188,5 @@ export function setStoredLang(lang: Lang): void {
   }
 }
 
-/** Base URL with trailing slash (Astro replaces at build time) */
-export const BASE = import.meta.env.BASE_URL as string;
+/** Base URL with trailing slash */
+export const BASE = (import.meta.env.BASE_URL as string).replace(/\/?$/, '/');
