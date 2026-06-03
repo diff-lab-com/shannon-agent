@@ -7,7 +7,19 @@
 
 //! Shannon Terminal UI
 //!
-//! Terminal-based user interface for Shannon using Ratatui.
+//! Terminal-based user interface for Shannon Code using Ratatui.
+//!
+//! ## Components
+//! - **REPL**: Interactive read-eval-print loop with command history and search
+//! - **Widgets**: Markdown rendering, diff viewer, token counter, context bar, agent dashboard
+//! - **Rendering**: Virtual scroll, progress indicators, syntax highlighting
+//! - **Vim mode**: Modal editing support in the input area
+//!
+//! ## Key modules
+//! - `app` — Application state and event handling
+//! - `repl` — REPL logic, input processing, command dispatch
+//! - `widgets` — UI components (chat, diff, status bar, etc.)
+//! - `render` — Frame rendering and layout
 
 // Initialize i18n translations — path is relative to this crate's src/ dir
 rust_i18n::i18n!("../../locales", fallback = "en");

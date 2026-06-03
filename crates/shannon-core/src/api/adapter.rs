@@ -16,12 +16,30 @@ use super::types::{
 
 /// Convert a unified `MessageRequest` into a provider-specific JSON body.
 pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Value {
+    serialize_request_inner(request, provider, None)
+}
+
+/// Convert a unified `MessageRequest` into a provider-specific JSON body,
+/// with base URL context for conditional features (e.g. prompt caching).
+pub fn serialize_request_with_base_url(
+    request: &MessageRequest,
+    provider: &LlmProvider,
+    base_url: &str,
+) -> Value {
+    serialize_request_inner(request, provider, Some(base_url))
+}
+
+fn serialize_request_inner(
+    request: &MessageRequest,
+    provider: &LlmProvider,
+    base_url: Option<&str>,
+) -> Value {
     match provider.wire_format() {
         WireFormat::Anthropic => {
             // Anthropic API only accepts `user` and `assistant` roles in the
             // messages array.  Compression / context-reinjection may inject
             // `role: "system"` messages.  Extract them and merge into the
-            // top-level `system` / `system_blocks` field instead.
+            // top-level `system` field instead.
             let mut req = request.clone();
             let mut system_texts: Vec<String> = Vec::new();
             req.messages.retain(|msg| {
@@ -63,42 +81,53 @@ pub fn serialize_request(request: &MessageRequest, provider: &LlmProvider) -> Va
                 serde_json::json!({})
             });
 
-            // Inject prompt-caching breakpoints for Anthropic.
-            //
-            // The system prompt breakpoint is already handled via
-            // SystemContentBlock::cached() at build time.  Here we add:
-            // 1. A breakpoint on the last tool definition (tools are static)
-            // 2. A breakpoint on the last user message's last content block so
-            //    that the conversation prefix (system + tools + earlier turns) is cached.
-            //
-            // Only inject message breakpoints when there are at least 2 user
-            // messages -- caching a single-message conversation provides negligible benefit.
-
-            // 1. Cache the last tool definition.
-            if let Some(tools) = val.get_mut("tools").and_then(|t| t.as_array_mut()) {
-                if let Some(last_tool) = tools.last_mut() {
-                    if let Some(obj) = last_tool.as_object_mut() {
-                        obj.insert(
-                            "cache_control".to_string(),
-                            serde_json::json!({"type": "ephemeral"}),
-                        );
+            // Rename `system_blocks` → `system` (Anthropic API expects the
+            // `system` field as either a string or array of content blocks).
+            if let Some(obj) = val.as_object_mut() {
+                if let Some(blocks) = obj.remove("system_blocks") {
+                    // Only set if there's no existing string `system` value.
+                    if obj.get("system").is_none() {
+                        obj.insert("system".to_string(), blocks);
                     }
                 }
             }
 
-            // 2. Cache the last user message's last content block.
-            if let Some(messages) = val.get_mut("messages").and_then(|m| m.as_array_mut()) {
-                let user_msg_count = messages
-                    .iter()
-                    .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
-                    .count();
+            // Inject prompt-caching breakpoints — only for endpoints that
+            // support Anthropic prompt caching (api.anthropic.com, Bedrock).
+            // Third-party Anthropic-compatible endpoints may reject the
+            // `cache_control` field and return HTTP 500.
+            let should_cache = base_url.is_none_or(|url| {
+                url.contains("api.anthropic.com")
+                    || url.contains("bedrock-runtime.")
+                    || url.contains("amazonaws.com")
+            });
 
-                if user_msg_count >= 2 {
-                    // Walk backwards to find the last user message
-                    for msg in messages.iter_mut().rev() {
-                        if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
-                            inject_cache_control_on_last_block(msg);
-                            break;
+            if should_cache {
+                // 1. Cache the last tool definition.
+                if let Some(tools) = val.get_mut("tools").and_then(|t| t.as_array_mut()) {
+                    if let Some(last_tool) = tools.last_mut() {
+                        if let Some(obj) = last_tool.as_object_mut() {
+                            obj.insert(
+                                "cache_control".to_string(),
+                                serde_json::json!({"type": "ephemeral"}),
+                            );
+                        }
+                    }
+                }
+
+                // 2. Cache the last user message's last content block.
+                if let Some(messages) = val.get_mut("messages").and_then(|m| m.as_array_mut()) {
+                    let user_msg_count = messages
+                        .iter()
+                        .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                        .count();
+
+                    if user_msg_count >= 2 {
+                        for msg in messages.iter_mut().rev() {
+                            if msg.get("role").and_then(|r| r.as_str()) == Some("user") {
+                                inject_cache_control_on_last_block(msg);
+                                break;
+                            }
                         }
                     }
                 }
@@ -981,7 +1010,10 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
     }
 
     if let Some(ref msg) = chunk.message {
-        // Tool calls — return ALL events (start + stop for each)
+        // Tool calls — emit ContentBlockStart with empty input, then
+        // InputJsonDelta with the full arguments, then ContentBlockStop.
+        // This matches Anthropic's incremental pattern so the engine's
+        // ContentBlockStop handler naturally finalizes the tool input.
         if let Some(ref tool_calls) = msg.tool_calls {
             let mut events = Vec::new();
             for (idx, tc) in tool_calls.iter().enumerate() {
@@ -990,7 +1022,13 @@ fn normalize_ollama_event(json_str: &str) -> Vec<Result<StreamEvent, ApiError>> 
                     content_block: ContentBlock::ToolUse {
                         id: format!("call_{idx}"),
                         name: tc.function.name.clone(),
-                        input: tc.function.arguments.clone(),
+                        input: serde_json::Value::Object(Default::default()),
+                    },
+                });
+                events.push(StreamEvent::ContentBlockDelta {
+                    index: idx,
+                    delta: ContentDelta::InputJsonDelta {
+                        partial_json: tc.function.arguments.to_string(),
                     },
                 });
                 events.push(StreamEvent::ContentBlockStop { index: idx });
@@ -1557,8 +1595,8 @@ mod tests {
         };
         let val = serialize_request(&req, &LlmProvider::Anthropic);
 
-        // system_blocks should have 2 entries (base + extracted)
-        let blocks = val["system_blocks"].as_array().unwrap();
+        // system should have 2 block entries (base + extracted) after rename from system_blocks
+        let blocks = val["system"].as_array().unwrap();
         assert_eq!(blocks.len(), 2);
         let combined: String = blocks
             .iter()
@@ -1837,11 +1875,11 @@ mod tests {
     fn test_ollama_multiple_tool_calls() {
         let chunk_json = r#"{"message":{"role":"assistant","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}},{"function":{"name":"read","arguments":{"path":"foo.rs"}}}]}}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        // 2 tool calls × (start + stop) = 4 events
+        // 2 tool calls × (start + delta + stop) = 6 events
         assert_eq!(
             result.len(),
-            4,
-            "Expected 4 events for 2 Ollama tool calls, got {}",
+            6,
+            "Expected 6 events for 2 Ollama tool calls, got {}",
             result.len()
         );
     }
@@ -2054,7 +2092,7 @@ mod tests {
         let chunk_json =
             r#"{"message":{"tool_calls":[{"function":{"name":"bash","arguments":{}}}]}}"#;
         let result = normalize_sse_event(chunk_json, &LlmProvider::Ollama, &mut fresh_state());
-        assert_eq!(result.len(), 2); // start + stop
+        assert_eq!(result.len(), 3); // start + delta + stop
         match &result[0] {
             Ok(StreamEvent::ContentBlockStart { content_block, .. }) => match content_block {
                 ContentBlock::ToolUse { input, .. } => {
@@ -2063,6 +2101,15 @@ mod tests {
                 _ => panic!("Expected ToolUse"),
             },
             _ => panic!("Expected ContentBlockStart"),
+        }
+        match &result[1] {
+            Ok(StreamEvent::ContentBlockDelta { delta, .. }) => match delta {
+                ContentDelta::InputJsonDelta { partial_json } => {
+                    assert_eq!(partial_json, "{}");
+                }
+                _ => panic!("Expected InputJsonDelta"),
+            },
+            _ => panic!("Expected ContentBlockDelta"),
         }
     }
 
@@ -3178,11 +3225,157 @@ mod tests {
         };
 
         let val = serialize_request(&req, &LlmProvider::Anthropic);
-        let sys_blocks = val["system_blocks"].as_array().unwrap();
+        let sys_blocks = val["system"].as_array().unwrap();
         assert_eq!(sys_blocks[0]["cache_control"]["type"], "ephemeral");
         let messages = val["messages"].as_array().unwrap();
         let last_content = messages[1]["content"].as_array().unwrap();
         assert_eq!(last_content[0]["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn test_system_blocks_renamed_to_system_in_output() {
+        // system_blocks must be renamed to "system" (Anthropic API format)
+        let req = MessageRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 1024,
+            system: None,
+            system_blocks: Some(vec![
+                crate::api::types::SystemContentBlock::text("Block one".to_string()),
+                crate::api::types::SystemContentBlock::text("Block two".to_string()),
+            ]),
+            messages: vec![Message {
+                role: "user".to_string(),
+                content: crate::api::types::MessageContent::Text("Hi".to_string()),
+            }],
+            tools: None,
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let val = serialize_request(&req, &LlmProvider::Anthropic);
+        assert!(
+            val.get("system_blocks").is_none(),
+            "system_blocks should be renamed to system"
+        );
+        let blocks = val["system"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["text"], "Block one");
+        assert_eq!(blocks[1]["text"], "Block two");
+    }
+
+    #[test]
+    fn test_cache_control_skipped_for_third_party_endpoint() {
+        // Third-party Anthropic-compatible endpoints should NOT get cache_control
+        let req = MessageRequest {
+            model: "glm-5.1".to_string(),
+            max_tokens: 1024,
+            system: Some("System prompt".to_string()),
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Text("Ok".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Second".to_string()),
+                },
+            ],
+            tools: Some(vec![ToolDefinition {
+                name: "bash".to_string(),
+                description: "Run command".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                cache_control: None,
+                strict: None,
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let val = serialize_request_with_base_url(
+            &req,
+            &LlmProvider::Anthropic,
+            "https://open.bigmodel.cn/api/anthropic",
+        );
+        // No cache_control on tools
+        let tools = val["tools"].as_array().unwrap();
+        assert!(
+            tools[0].get("cache_control").is_none(),
+            "cache_control should NOT be injected for third-party endpoints"
+        );
+        // No cache_control on messages
+        let messages = val["messages"].as_array().unwrap();
+        for msg in messages {
+            if let Some(content) = msg.get("content").and_then(|c| c.as_array()) {
+                for block in content {
+                    assert!(
+                        block.get("cache_control").is_none(),
+                        "cache_control should NOT be on message blocks for third-party endpoints"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_cache_control_injected_for_real_anthropic() {
+        // Real Anthropic API should still get cache_control
+        let req = MessageRequest {
+            model: "claude-3".to_string(),
+            max_tokens: 1024,
+            system: Some("System".to_string()),
+            system_blocks: None,
+            messages: vec![
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("First".to_string()),
+                },
+                Message {
+                    role: "assistant".to_string(),
+                    content: crate::api::types::MessageContent::Text("Ok".to_string()),
+                },
+                Message {
+                    role: "user".to_string(),
+                    content: crate::api::types::MessageContent::Text("Second".to_string()),
+                },
+            ],
+            tools: Some(vec![ToolDefinition {
+                name: "bash".to_string(),
+                description: "Run command".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                cache_control: None,
+                strict: None,
+            }]),
+            stream: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            stop_sequences: None,
+            budget_tokens: None,
+            thinking_budget: None,
+            reasoning_effort: None,
+        };
+        let val = serialize_request_with_base_url(
+            &req,
+            &LlmProvider::Anthropic,
+            "https://api.anthropic.com",
+        );
+        let tools = val["tools"].as_array().unwrap();
+        assert_eq!(tools[0]["cache_control"]["type"], "ephemeral");
     }
 
     #[test]

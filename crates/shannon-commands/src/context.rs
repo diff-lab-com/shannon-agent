@@ -195,3 +195,75 @@ impl Default for CommandContext {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_permission_context_default() {
+        let ctx = ToolPermissionContext::default();
+        assert!(ctx.always_allow_rules.is_empty());
+        assert!(ctx.blocked_rules.is_empty());
+        assert_eq!(ctx.approval_mode, ApprovalMode::Manual);
+    }
+
+    #[test]
+    fn tool_use_context_default() {
+        let ctx = ToolUseContext::default();
+        assert!(ctx.cwd.exists() || ctx.cwd.as_os_str().is_empty());
+        assert!(ctx.env.is_empty());
+        assert!(ctx.git_info.is_none());
+        assert!(ctx.current_branch.is_none());
+        assert!(ctx.default_branch.is_none());
+    }
+
+    #[test]
+    fn command_context_default() {
+        let ctx = CommandContext::default();
+        assert!(ctx.messages.is_empty());
+        assert!(ctx.options.model.is_none());
+        assert!(!ctx.options.stream);
+    }
+
+    #[test]
+    fn approval_mode_serde_roundtrip() {
+        for mode in [
+            ApprovalMode::Auto,
+            ApprovalMode::Manual,
+            ApprovalMode::Smart,
+        ] {
+            let json = serde_json::to_string(&mode).unwrap();
+            let back: ApprovalMode = serde_json::from_str(&json).unwrap();
+            assert_eq!(mode, back);
+        }
+    }
+
+    #[test]
+    fn message_content_text_serde() {
+        let msg = Message {
+            role: MessageRole::User,
+            content: MessageContent::Text("hello".into()),
+            is_meta: false,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let back: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg.role, back.role);
+        assert!(!back.is_meta);
+    }
+
+    #[test]
+    fn git_info_serde_roundtrip() {
+        let info = GitInfo {
+            is_repo: true,
+            branch: Some("dev".into()),
+            default_branch: Some("main".into()),
+            head: Some("abc123".into()),
+            remote: Some("origin".into()),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: GitInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(info.branch, back.branch);
+        assert_eq!(info.head, back.head);
+    }
+}

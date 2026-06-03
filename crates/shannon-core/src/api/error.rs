@@ -106,7 +106,7 @@ impl ApiError {
         // Try to parse provider-specific JSON.
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
             match provider {
-                LlmProvider::Anthropic | LlmProvider::Custom => {
+                LlmProvider::Anthropic | LlmProvider::Custom | LlmProvider::ZhipuCoding => {
                     // Anthropic: { "error": { "type": "...", "message": "..." } }
                     if let Some(err_obj) = val.get("error").and_then(|e| e.as_object()) {
                         let error_type = err_obj

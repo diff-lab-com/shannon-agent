@@ -1,0 +1,11 @@
+// MCP Browser Configuration Template
+// Copy to your project as .mcp.json to enable browser automation
+// Requires: npx @anthropic-ai/mcp-server-playwright (or equivalent Playwright MCP server)
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@anthropic-ai/mcp-server-playwright"]
+    }
+  }
+}

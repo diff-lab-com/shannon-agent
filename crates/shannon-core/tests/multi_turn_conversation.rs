@@ -578,7 +578,7 @@ fn test_empty_conversation() {
 
 /// Verify conversation history accumulation across many turns stays consistent.
 #[test]
-#[ignore] // performance test — run with `cargo test -- --ignored`
+
 fn test_large_conversation_history_accumulation() {
     let mut state = TestConversation::default();
     let num_turns = 500;
@@ -624,7 +624,7 @@ fn test_large_conversation_history_accumulation() {
 
 /// Verify token estimation scales linearly with conversation size.
 #[test]
-#[ignore] // performance test — run with `cargo test -- --ignored`
+
 fn test_token_estimation_scaling() {
     let mut state = TestConversation::default();
 
@@ -680,7 +680,7 @@ fn test_token_estimation_scaling() {
 
 /// Verify context compression works correctly at scale.
 #[test]
-#[ignore] // performance test — run with `cargo test -- --ignored`
+
 fn test_large_conversation_compression_summarize() {
     let mut state = TestConversation::default();
     let config = QueryEngineConfig {
@@ -728,7 +728,7 @@ fn test_large_conversation_compression_summarize() {
 
 /// Verify truncation strategy handles large conversations efficiently.
 #[test]
-#[ignore] // performance test — run with `cargo test -- --ignored`
+
 fn test_large_conversation_compression_truncate() {
     let mut state = TestConversation::default();
     let config = QueryEngineConfig {
@@ -764,7 +764,7 @@ fn test_large_conversation_compression_truncate() {
 
 /// Verify repeated compression cycles don't lose data.
 #[test]
-#[ignore] // performance test — run with `cargo test -- --ignored`
+
 fn test_repeated_compression_cycles() {
     let mut state = TestConversation::default();
     let config = QueryEngineConfig {
@@ -813,7 +813,7 @@ fn test_repeated_compression_cycles() {
 
 /// Simulate realistic multi-turn with tool use interleaving.
 #[test]
-#[ignore] // performance test — run with `cargo test -- --ignored`
+
 fn test_large_conversation_with_tool_interleaving() {
     let mut state = TestConversation::default();
 
@@ -872,7 +872,7 @@ fn test_large_conversation_with_tool_interleaving() {
 
 /// Verify compression with tool-interleaved conversations preserves tool pairing.
 #[test]
-#[ignore] // performance test — run with `cargo test -- --ignored`
+
 fn test_compression_preserves_tool_pairing() {
     let mut state = TestConversation::default();
     let config = QueryEngineConfig {
@@ -940,7 +940,7 @@ fn test_compression_preserves_tool_pairing() {
 
 /// Benchmark: conversation operations should complete in reasonable time.
 #[test]
-#[ignore] // performance test — run with `cargo test -- --ignored`
+
 fn test_conversation_operations_performance() {
     use std::time::Instant;
 

@@ -1,0 +1,30 @@
+name: multi_tool
+description: "Multiple tool calls in a single turn"
+prompt: "Read both src/lib.rs and src/main.rs, then summarize them"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/lib.rs
+      content: "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+    - path: src/main.rs
+      content: "fn main() { println!(\"{}\", crate::add(1, 2)); }"
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Read
+      tool_id: toolu_1
+      input: { "path": "src/lib.rs" }
+  - response:
+      type: tool_use
+      tool: Read
+      tool_id: toolu_2
+      input: { "path": "src/main.rs" }
+  - response:
+      type: text
+      content: "lib.rs has an add function, main.rs calls it with 1 and 2."
+
+validate:
+  - rule: exit_code
+    value: success

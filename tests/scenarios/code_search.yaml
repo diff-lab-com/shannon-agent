@@ -1,0 +1,23 @@
+name: code_search
+description: "Search for a pattern in the codebase"
+prompt: "Find where the add function is defined"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/lib.rs
+      content: "pub fn add(a: i32, b: i32) -> i32 { a + b }"
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Grep
+      tool_id: toolu_1
+      input: { "pattern": "fn add" }
+  - response:
+      type: text
+      content: "The add function is defined in src/lib.rs."
+
+validate:
+  - rule: exit_code
+    value: success

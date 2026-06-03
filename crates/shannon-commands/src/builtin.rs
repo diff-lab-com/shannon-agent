@@ -35,11 +35,13 @@ mod monitor;
 mod pdf;
 mod plan;
 mod preset;
+mod profile;
 mod review;
 mod review_pr;
 mod search;
 mod security_review;
 mod status;
+mod team;
 mod theme;
 // Plugin management commands — scaffolded for future use
 mod context;
@@ -48,6 +50,7 @@ mod outline;
 mod plugin;
 mod repl;
 mod repomap;
+mod routine;
 mod session;
 
 /// Register all built-in commands
@@ -91,7 +94,10 @@ pub fn all_commands() -> Vec<Command> {
         outline::command(),
         context::command(),
         preset::command(),
+        profile::command(),
+        routine::command(),
         session::command(),
+        team::command(),
     ];
     cmds.extend(repl::all_commands());
     cmds
@@ -235,4 +241,53 @@ pub mod plugin_utils {
         format_search_results, get_info, install_from_source, list_installed,
         parse_plugin_subcommand, search_index, uninstall, update_plugins,
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_commands_returns_nonempty() {
+        let cmds = all_commands();
+        assert!(!cmds.is_empty());
+    }
+
+    #[test]
+    fn all_commands_no_duplicate_names() {
+        let cmds = all_commands();
+        let names: Vec<&str> = cmds.iter().map(|c| c.name()).collect();
+        let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(names.len(), unique.len());
+    }
+
+    #[test]
+    fn all_commands_includes_key_commands() {
+        let cmds = all_commands();
+        let names: std::collections::HashSet<&str> = cmds.iter().map(|c| c.name()).collect();
+        assert!(names.contains("commit"));
+        assert!(names.contains("help"));
+        assert!(names.contains("status"));
+        assert!(names.contains("diff"));
+        assert!(names.contains("config"));
+        assert!(names.contains("pdf"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn register_all_populates_registry() {
+        let registry = CommandRegistry::new();
+        register_all(&registry);
+        let count = registry.count().await;
+        assert_eq!(count, all_commands().len());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn register_all_key_commands_lookup() {
+        let registry = CommandRegistry::new();
+        register_all(&registry);
+        assert!(registry.contains("commit").await);
+        assert!(registry.contains("help").await);
+        assert!(registry.contains("status").await);
+        assert!(registry.contains("clear").await);
+    }
 }

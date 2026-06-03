@@ -94,6 +94,7 @@ pub mod api_server;
 pub mod auto_dream_consolidation;
 pub mod billing;
 pub mod credential_manager;
+pub mod custom_profiles;
 pub mod doctor;
 pub mod enhanced_suggestions;
 pub mod feature_flags;
@@ -118,6 +119,7 @@ pub mod webhook;
 pub mod testing;
 
 pub mod i18n;
+pub mod triggered_routines;
 
 // Re-export key types for convenience
 pub use ai_limits::{AiLimitType, AiLimitsTracker, AiUsageRecord, LimitStatus};
@@ -201,7 +203,9 @@ pub use oauth::{OAuthClient, OAuthError, OAuthService, OAuthToken, TokenEncrypti
 pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
 pub use permissions::{ApprovalMode, Permission, PermissionLevel, PermissionManager};
 pub use policy_limits::{PolicyCheckResult, PolicyError, PolicyLimits, PolicyLimitsManager};
-pub use query_engine::{QueryContext, QueryEngine, QueryEvent};
+pub use query_engine::{
+    QueryContext, QueryEngine, QueryEvent, browser_control_prompt, teammate_instructions,
+};
 pub use rate_limit::{
     ExponentialBackoff, RateLimitConfig, RateLimitResult, RateLimiter, TokenBucket,
 };
@@ -253,6 +257,7 @@ pub use credential_manager::{
     Credential, CredentialError, CredentialFileDescriptor, CredentialFileFormat, CredentialManager,
     CredentialSummary, ImportResult, PortableCredential, PortableCredentialBundle,
 };
+pub use custom_profiles::{CustomProfileDef, CustomProfileError, CustomProfileRegistry};
 pub use housekeeping::{
     CacheRefreshTask, Housekeeper, HousekeepingConfig, HousekeepingError, HousekeepingTask,
     LogRotationTask, OldSessionPruneTask, TaskResult, TempFileCleanupTask,
@@ -279,6 +284,9 @@ pub use session_transcript::{
 pub use team_memory_sync::{
     SecretMatch, SecretRule, SecretScanner, SyncResult, TeamMemoryConfig, TeamMemoryGuard,
     TeamMemorySync, TeamMemorySyncError,
+};
+pub use triggered_routines::{
+    RoutineExecResult, TriggeredRoutineDef, TriggeredRoutineError, TriggeredRoutineRegistry,
 };
 
 pub use enhanced_suggestions::{

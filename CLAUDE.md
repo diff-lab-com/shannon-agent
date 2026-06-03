@@ -7,11 +7,12 @@ Rust-based AI code assistant (like Claude Code) with multi-provider LLM support,
 ```bash
 cargo build                    # Build workspace
 cargo check --workspace        # Fast type-check
-cargo test --workspace -- --test-threads=1  # Run all tests (threading avoids env contention)
+just test                      # Run all tests (nextest, faster than cargo test)
+just dev                       # check + lint + test, run before commits
 cargo clippy --workspace       # Lint
 ```
 
-Tests use `--test-threads=1` because some tests share environment variables and file paths.
+Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` handles per-crate thread limits.
 
 ## Architecture
 
@@ -45,11 +46,55 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 
 ## Testing Guidelines
 
-- **Always use `--test-threads=1`** for workspace tests (shared env vars, file paths).
+- **Use `just test` (nextest)** for running tests. nextest isolates each test in its own process. Config in `.config/nextest.toml` handles per-crate thread limits (shannon-core and shannon-commands run single-threaded).
+- **Fallback**: `cargo test --workspace -- --test-threads=1` works without nextest but is slower.
 - **Inline tests**: Most crates use `#[cfg(test)] mod tests` within source files. Tests near the code they test.
 - **Integration tests**: `crates/shannon-*/tests/` directories for cross-module testing.
 - **Mockito**: For HTTP API tests. Server matchers are order-dependent with `.expect(N)`.
 - **Test helpers**: `CollectingSender` (progress sender), `tempfile::TempDir` (file tests), `mockito::Server` (HTTP tests).
+
+### Test Commands (justfile)
+
+`just test` runs everything without API keys. Install: `cargo install just`.
+
+| Command | What | Needs key? |
+|---------|------|-----------|
+| `just test` | All unit + mock tests | No |
+| `just scenarios` | YAML scenario tests | No |
+| `just perf` | Performance regression | No |
+| `just bench` | Criterion benchmarks | No |
+| `just record` | Record real API fixtures | Yes |
+| `just replay` | Replay recorded fixtures | No |
+| `just ci` | Full CI suite (no key) | No |
+
+### Test File Map
+
+**shannon-core/tests/** (component-level):
+- `api_integration.rs` — mockito HTTP tests
+- `multi_turn_conversation.rs` — multi-turn mockito conversations
+- `streaming_stress.rs` — streaming stress tests
+- `snapshot_regression.rs` — insta snapshot tests
+- `perf_tests.rs` — performance thresholds + E2E latency
+- `scenario_tests.rs` — YAML scenario parser/validator/runner
+
+**shannon-cli/tests/** (CLI-level):
+- `cli_args_tests.rs` — argument parsing
+- `cli_interactive_tests.rs` — interactive mode
+- `cli_e2e_tests.rs` — comprehensive provider mock tests
+- `cli_mock_tests.rs` — tool pipeline + provider scenario mocks
+- `live_tests.rs` — real API tests (Ollama/DeepSeek/Anthropic) + record/replay
+
+**YAML scenarios**: `tests/scenarios/*.yaml` — 10 declarative test scenarios
+
+### Recording Real API Fixtures
+
+```bash
+# Record (local, needs API key):
+SHANNON_API_KEY=sk-ant-... just record
+
+# Replay (CI, no key needed):
+just replay
+```
 
 ## Known Gaps (vs Claude Code / Codex CLI / OpenCode)
 
@@ -58,39 +103,45 @@ Tests use `--test-threads=1` because some tests share environment variables and 
 - **Permission auto-mode**: 9 `ApprovalMode` variants with `PermissionClassifier` (2928 lines) wired into `PermissionRuleChecker`. `LlmPermissionClassifier` wraps the rule-based classifier with async LLM fallback for ambiguous cases (confidence < 0.7, Medium+ risk). 4-tier precedence: hard_deny > soft_deny > allow > explicit intent. LLM classification disabled by default, enabled via `with_llm()`.
 - **Non-interactive/CI mode**: `--prompt` flag with FullAuto permissions (auto-approve non-critical, deny critical). NDJSON streaming, tool restrictions, exit codes. `--schema` flag accepts file path or inline JSON Schema for structured output validation. Deep link support via `shannon://prompt?text=<encoded>` and `shannon://resume?id=<uuid>` URL scheme with `--register-url-scheme`/`--unregister-url-scheme` commands.
 - **MCP tool search**: `tools/list` works with deferred schema loading. MCP webhook/channel support with `WebhookRegistry` (HMAC-SHA256 signing, event filtering, persistence), `EventPublisher` (non-blocking delivery, retry with exponential backoff), and event firing from `McpProcessPool` (ServerConnected/Disconnected, ToolCallStarted/Completed, NotificationReceived).
-- **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. 32 event types fully wired: SubagentStart/Stop, WorktreeCreate/Remove, PreCompact/PostCompact, ConfigChange, TaskCreated/TaskCompleted, plus all original events. Non-blocking `fire_hook()` pattern via `tokio::spawn`.
+- **Hook system**: `HookManager` with `HookEvent`/`HookEventType`. 32 event types fully wired: SubagentStart/Stop, WorktreeCreate/Remove, PreCompact/PostCompact, ConfigChange, TaskCreated/TaskCompleted, plus all original events. Hook events automatically trigger matching routines via `TriggeredRoutineRegistry`.
 - **LSP integration**: 6 LSP tools + `DiagnosticRegistry` + two client implementations. `DiagnosticStore.mark_stale()` called on source file changes. Background `cargo check` diagnostics auto-run via `DiagnosticWatcher` when source files change — debounce, parse, display in UI.
 - **Plugin system**: `PluginRegistry` with manifest parsing. Tool plugins fully wired (MCP discovery). Command plugins register as `PromptCommand` in `CommandRegistry` (source: `Plugin`). Skill plugins register as `PromptCommand` with trigger as slash command name and entry file as template. Loading in both REPL (`new()`) and CLI headless mode.
 - **Desktop app**: Scaffolded Tauri app with TODO stubs.
-- **Agent creation flow**: `AgentTool` spawns sub-processes with optional model override via `AgentSpawnInput.model`, tool restriction via `AgentSpawnInput.allowed_tools`, and worktree isolation via `context.working_directory`. `/batch` command orchestrates parallel worktree-isolated PR creation.
 
 ### MEDIUM — Quality-of-life gaps
 
-- **Multi-surface**: Claude Code runs on CLI, VS Code, JetBrains, web, desktop. Shannon has CLI + scaffolded Tauri desktop app.
 - **Computer use**: Claude Code can click, type, see screen on macOS. Shannon has no equivalent.
 
 (Resolved features moved to [CHANGELOG.md](CHANGELOG.md).)
 
 ### Test Coverage
 
-9181 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
+~7889 total tests across all crates (58 e2e require API access). Every source file (`src/**/*.rs`) in every crate has at least one `#[test]`. E2e tests (`shannon-cli/tests/cli_e2e_tests.rs`) need Ollama/Anthropic — run with `--skip test_long_conversation --skip test_multiturn` to skip them. Performance benchmarks in `crates/shannon-*/benches/` run via `cargo bench`.
 
 ## Competitor Feature Tiers
 
 ### Tier 1 — Table Stakes (Shannon has most)
 Multi-provider LLM, tool use, file read/write/edit, bash execution, MCP extensions, streaming output, session persistence, context compaction, config files, i18n, skills/commands system.
 
-### Tier 2 — Differentiators (Shannon partially has)
-- **Subagent system**: Claude Code has 4 agent mechanisms. Shannon has teammate coordination with per-agent model/tool/worktree config, `/batch` for parallel worktree PRs, and agent view dashboard (`AgentBarWidget`, `AgentsPanel`).
+### Tier 2 — Differentiators (Shannon has)
+- **Subagent system**: Claude Code has 4 agent mechanisms. Shannon has teammate coordination with per-agent model/tool/worktree config, `/batch` for parallel worktree PRs, and agent view dashboard (`AgentBarWidget`, `AgentsPanel`). Agent definitions loaded from `.shannon/agents/*.toml` and `.claude/agents/*.md` with local-overrides-global priority.
+- **Agent Teams**: Full team coordination via `TeamCreate`, `SendMessage`, `TaskCreate/Update/List`. Team prompt injection when team tools detected. `/team` REPL command for team management. Teammates self-claim tasks and auto-notify on idle.
 - **Worktree isolation**: `context.working_directory` passes worktree paths to sub-agents. `/batch` creates worktrees automatically. System prompt includes isolation instructions.
-- **OS sandbox**: Codex uses macOS Seatbelt/AppArmor/Docker. Shannon uses project-dir sandboxing only.
 - **Auto-permission classifier**: Claude Code uses LLM-based 4-tier classification. Shannon has `LlmPermissionClassifier` wired into `PermissionManager` with async `classify_and_check_with_llm()`. Rule-based by default, LLM fallback for ambiguous cases when enabled via `with_llm_classifier()`.
+- **Permission profiles**: Named presets loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml` with local-overrides-global. `/profile` command to switch presets. `CustomProfileRegistry` with auto_approve/confirm/deny lists.
 - **LSP integration**: Shannon has 6 LSP tools plus automatic background `cargo check` diagnostics on source changes. OpenCode runs `gopls`/`tsc` automatically.
-- **Hook system**: Claude Code has 18+ hook events. Shannon has 32 hook events (more coverage).
+- **Hook system**: Claude Code has 18+ hook events. Shannon has 32 hook events (more coverage). Hook events auto-execute matching routines from `.shannon/routines.toml`.
+- **Routines**: Triggered routines (hook-event-driven, e.g., auto-lint after edits) and scheduled routines (interval-based, cron-like). `TriggeredRoutineRegistry` wired into PostToolUse hook pipeline. `/routine` command for management.
 - **Non-interactive/CI mode**: Claude Code `claude -p` with structured outputs. Shannon has `--prompt` with NDJSON output, `--schema` for JSON schema validation, and `StructuredOutputConfig` for programmatic use.
+- **VS Code extension**: Scaffolded extension with WebView chat panel, NDJSON subprocess communication with `shannon --prompt`.
+
+- **Computer use**: `ComputerUseTool` with Anthropic-compatible `computer` tool schema (screenshot, click, type, scroll, key_press, wait, mouse_move, left_click_drag). Feature-gated behind `computer-use = ["xcap", "enigo", "image"]`. Without the feature, tool registers but returns helpful error messages. Coordinate scaling from 1024x768 reference resolution to actual screen resolution. Browser control system prompt injection when Playwright/Chrome DevTools MCP tools detected (`browser_control_prompt`).
 
 ### Tier 3 — Quality of Life
-Multi-surface (web/desktop/CLI/IDE), computer use.
+Computer use (desktop automation via `computer-use` feature flag). Browser automation via MCP Playwright integration.
+
+### Future Considerations
+- **macOS Accessibility API computer use**: OpenAI Codex desktop app implements background parallel control via macOS Accessibility API (from Sky acquisition). This provides precise UI element targeting (no screenshots needed), independent virtual cursors per agent (no focus stealing), and lock-screen protected execution. Trade-offs: macOS-only, conflicts with Shannon's cross-platform positioning, significant engineering effort (~8-12 weeks). Codex CLI itself doesn't have this yet (GitHub Issue #20851). Evaluate ROI after P1/P2 adoption data.
 
 ## Gotchas
 

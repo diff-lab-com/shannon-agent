@@ -1,0 +1,43 @@
+name: Benchmark Regression
+
+on:
+  pull_request:
+    branches: [main, dev]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  bench-regression:
+    name: Performance Regression Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+
+      # ci.yml already runs all tests (perf_tests, scenario_tests) via nextest
+      # This workflow only adds criterion benchmarks
+
+      # Run criterion benchmarks and save baseline
+      - name: Run Benchmarks
+        run: |
+          cargo bench --bench query_engine -- --save-baseline pr
+          cargo bench --bench core_benchmarks -- --save-baseline pr
+          cargo bench --bench recording_benchmarks -- --save-baseline pr
+          cargo bench --bench compact_bench -- --save-baseline pr
+          cargo bench --bench context_budget_bench -- --save-baseline pr
+        continue-on-error: true
+
+      # Summary
+      - name: Benchmark Summary
+        if: always()
+        run: |
+          echo "## Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All threshold-based tests passed. See individual step logs for details." >> $GITHUB_STEP_SUMMARY

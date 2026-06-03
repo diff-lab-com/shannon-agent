@@ -7,13 +7,20 @@ use crate::command::{
 const REVIEW_PROMPT: &str = r##"
 You are an expert code reviewer. Analyze local code changes and provide a structured review.
 
+Target: {args}
+
 ## Steps
 
 1. Run `git diff --stat` to see what files changed.
 2. Run `git diff` to get the full diff of unstaged changes.
 3. Run `git diff --cached` to get staged changes.
 4. If no changes found, run `git diff HEAD~1` to review the last commit.
-5. Analyze all changes and provide a structured code review.
+5. If a target is specified (branch, file path, or PR number), focus the review on that target:
+   - For a branch: run `git diff <branch>...HEAD` to compare against the branch.
+   - For a file/path: run `git diff -- <path>` to scope the diff.
+   - For a PR number: run `gh pr diff <number>` to fetch the PR diff.
+6. Use Grep and Glob to explore surrounding code for context when needed.
+7. Analyze all changes and provide a structured code review.
 
 ## Review Categories
 
@@ -60,8 +67,9 @@ pub fn command() -> Command {
     Command::Prompt(Box::new(PromptCommand {
         base: CommandBase {
             name: "review".to_string(),
-            aliases: vec!["code-review".to_string()],
-            description: "Review local code changes with AI analysis".to_string(),
+            aliases: vec!["pr-review".to_string(), "code-review".to_string()],
+            description: "Review code changes for quality, security, and best practices"
+                .to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],
             source: CommandSource::Builtin,
@@ -86,7 +94,10 @@ pub fn command() -> Command {
             "Bash(git diff --cached:*)".to_string(),
             "Bash(git log:*)".to_string(),
             "Bash(git status:*)".to_string(),
+            "Bash(gh pr diff:*)".to_string(),
             "Read".to_string(),
+            "Glob".to_string(),
+            "Grep".to_string(),
         ],
         model: None,
         hooks: std::collections::HashMap::new(),
@@ -106,11 +117,33 @@ mod tests {
         let cmd = command();
         assert_eq!(cmd.name(), "review");
         assert!(cmd.aliases().contains(&"code-review".to_string()));
+        assert!(cmd.aliases().contains(&"pr-review".to_string()));
     }
 
     #[test]
     fn test_review_command_structure() {
         let cmd = command();
         assert!(!cmd.description().is_empty());
+    }
+
+    #[test]
+    fn test_review_prompt_contains_keywords() {
+        let prompt = REVIEW_PROMPT;
+        assert!(prompt.contains("{args}"));
+        assert!(prompt.contains("git diff"));
+        assert!(prompt.contains("Security"));
+        assert!(prompt.contains("CRITICAL"));
+    }
+
+    #[test]
+    fn test_review_allowed_tools() {
+        let cmd = command();
+        let prompt = match cmd {
+            Command::Prompt(p) => p,
+            _ => panic!("Expected PromptCommand"),
+        };
+        assert!(prompt.allowed_tools.contains(&"Read".to_string()));
+        assert!(prompt.allowed_tools.contains(&"Glob".to_string()));
+        assert!(prompt.allowed_tools.contains(&"Grep".to_string()));
     }
 }
