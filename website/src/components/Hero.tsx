@@ -58,12 +58,24 @@ export default function Hero({ lang }: HeroProps) {
       {/* Subtitle */}
       <p style={{
         maxWidth: 600,
-        margin: '0 auto 48px',
+        margin: '0 auto 16px',
         color: 'var(--muted)',
         fontSize: 18,
         lineHeight: 1.6,
       }}>
         {t.hero.subtitle}
+      </p>
+
+      {/* Cost comparison */}
+      <p style={{
+        maxWidth: 600,
+        margin: '0 auto 48px',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 13,
+        color: 'var(--ok)',
+        opacity: 0.85,
+      }}>
+        {t.hero.costHint}
       </p>
 
       {/* Install panel */}
