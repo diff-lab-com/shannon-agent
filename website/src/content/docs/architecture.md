@@ -1,83 +1,87 @@
 ---
 title: Architecture
-order: 2
-section: introduction
+order: 3
+section: getting-started
 ---
 
 # Architecture
 
-Shannon Code is organized as a Rust workspace with 13 crates, each with a single responsibility.
+Shannon Code is organized as a Cargo workspace with 12 crates, each with a single responsibility.
 
-## Crate Overview
+## System Overview
+
+```
+┌─────────────────────────────────────────────┐
+│           shannon-cli (Entry Point)         │
+│         clap: repl | version | config       │
+└──────────────────┬──────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────┐
+│           shannon-ui (Terminal)             │
+│  REPL ── Vim Mode ── Markdown ── Diff View  │
+└──────────────────┬──────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────┐
+│          shannon-core (Engine)              │
+│                                             │
+│  QueryEngine  LlmClient  ToolRegistry  Perm │
+│  (Streaming)  (Multi-LLM) (Dynamic)    Mgr  │
+└──────────────────┬──────────────────────────┘
+                   │
+┌──────────────────▼──────────────────────────┐
+│    shannon-tools ── shannon-mcp ── agents   │
+│    (File/Bash)     (Protocol)    (Multi)    │
+└─────────────────────────────────────────────┘
+```
+
+## Crate Map
 
 | Crate | Responsibility | Tests |
 |-------|---------------|-------|
-| `shannon-core` | API client, query engine, permissions, tools, state management | ~3370 |
-| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets, rendering | ~1089 |
-| `shannon-tools` | Tool implementations (bash, file ops, search, config manager) | ~1111 |
-| `shannon-commands` | Built-in commands (/help, /config, /pdf, /commit, etc.) | ~335 |
+| `shannon-core` | API client, query engine, permissions, tools, state | ~3370 |
+| `shannon-ui` | Terminal UI (ratatui), REPL, vim mode, widgets | ~1089 |
+| `shannon-tools` | Tool implementations (bash, file ops, search) | ~1111 |
+| `shannon-commands` | Built-in commands (/help, /config, /commit, etc.) | ~335 |
 | `shannon-agents` | Multi-agent orchestration | ~471 |
-| `shannon-cli` | CLI entry point (clap), config loading, non-interactive mode | ~191 |
+| `shannon-cli` | CLI entry point (clap), config loading | ~191 |
 | `shannon-skills` | Skill system (command templates) | ~171 |
-| `shannon-mcp` | MCP (Model Context Protocol) server integration | ~373 |
+| `shannon-mcp` | MCP server integration | ~373 |
 | `shannon-types` | Shared types (re-exported by shannon-core) | ~22 |
 | `shannon-tool-interface` | Tool trait definitions | ~24 |
+| `shannon-desktop` | Tauri desktop app (scaffolded) | ~24 |
+| `shannon-codegen` | Code generation utilities | ~102 |
 
-## Data Flow
+## Key Design Patterns
 
-```
-User Input → REPL (shannon-ui)
-  → QueryEngine (shannon-core)
-    → LlmClient (multi-provider adapter)
-      → Anthropic / OpenAI / Ollama / Custom
-    ← SSE Stream → MessageStream
-  → Tool Execution (shannon-tools)
-  → Permission Check (shannon-core)
-  ← Response Rendering
-```
+### Multi-Provider LLM
 
-## Key Patterns
+`LlmClient` normalizes Anthropic, OpenAI, and Ollama via an adapter pattern (`api/adapter.rs`). Adding a new provider requires implementing the adapter trait.
 
-### Multi-Provider Adapter
+### Streaming
 
-`LlmClient` normalizes different LLM APIs through an adapter pattern. All providers share the same interface:
+SSE byte stream → `SseStream` → `MessageStream` with chunk boundary buffering. The Bash tool emits `ToolProgress` events for real-time output.
 
-```rust
-let client = LlmClient::new(config)?;
-let stream = client.stream_message(messages, tools).await?;
-```
+### Tool Interface
 
-### Tool Trait
+The `Tool` trait in `shannon-tool-interface` defines:
 
-Every tool implements the `Tool` trait from `shannon-tool-interface`:
+- `execute()` — synchronous execution
+- `execute_streaming()` — streaming execution with progress
+- `is_read_only()` — safe for parallel execution
+- `is_concurrency_safe()` — can run alongside other tools
+- `is_destructive()` — modifies filesystem or external state
 
-```rust
-pub trait Tool: Send + Sync {
-    fn name(&self) -> &str;
-    fn execute(&self, input: Value) -> Result<ToolOutput>;
-    fn is_read_only(&self) -> bool;
-    fn is_destructive(&self) -> bool;
-}
-```
+### Error Handling
 
-### Streaming Pipeline
-
-SSE byte stream → `SseStream` → `MessageStream` with chunk boundary buffering. The bash tool emits `ToolProgress` events for real-time output.
+`thiserror` for library crates (`ApiError`, `QueryError`), `anyhow` for CLI/binary crates. Production code uses `expect("reason")` over `unwrap()` for panic diagnostics.
 
 ### Config Priority
 
-```
-CLI args > env vars (SHANNON_*) > .shannon.toml > ~/.shannon/config.toml
-```
+CLI args > env vars (`SHANNON_*`) > `.shannon.toml` > `~/.shannon/config.toml`
 
-### Permission Pipeline
+### Context Management
 
-User request → `PermissionManager` → `PermissionRuleChecker` → `LlmPermissionClassifier` (optional LLM fallback for ambiguous cases) → approve/deny.
-
-## Testing Architecture
-
-- **Unit tests**: `#[cfg(test)] mod tests` within source files
-- **Integration tests**: `crates/shannon-*/tests/` directories
-- **Scenario tests**: YAML-driven declarative tests in `tests/scenarios/`
-- **Mock HTTP**: `mockito` crate for API integration tests
-- **Record/Replay**: Record real API fixtures, replay in CI
+Three-layer context strategy:
+1. **Compaction** — Summarizes old messages when approaching context limits
+2. **Progressive loading** — Truncates large files preserving head/tail
+3. **Prompt caching** — Three-layer Anthropic cache breakpoint injection
