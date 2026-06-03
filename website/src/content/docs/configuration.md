@@ -1,113 +1,78 @@
 ---
 title: Configuration
-order: 3
+order: 10
 section: reference
 ---
 
 # Configuration
 
-## Config Priority
+Shannon Code uses a layered configuration system. Later sources override earlier ones:
 
-Shannon Code loads configuration from multiple sources, with later sources overriding earlier ones:
-
-1. Default values
-2. `~/.shannon/config.toml` (global)
-3. `.shannon.toml` (project-local)
-4. Environment variables (`SHANNON_*`)
-5. CLI arguments
+**CLI args > Environment variables > Project config > Global config**
 
 ## Global Config
 
-Create `~/.shannon/config.toml`:
+Path: `~/.shannon/config.toml`
 
 ```toml
-[llm]
 provider = "anthropic"
-model = "claude-sonnet-4-20250514"
-api_key_env = "SHANNON_API_KEY"
-max_tokens = 4096
-temperature = 0.7
-
-[ui]
-theme = "dark"
-vim_mode = false
-
-[permissions]
-default_mode = "balanced"  # strict | balanced | permissive
+api_key = "sk-ant-..."
+model = "claude-sonnet-4"
+max_tokens = 16384
+temperature = 1.0
+permissions_mode = "auto-allow"
 ```
+
+## Project Config
+
+Path: `.shannon.toml` (in project root)
+
+Same format as global config. Project settings override global settings.
 
 ## Environment Variables
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `SHANNON_API_KEY` | LLM API key | `sk-ant-...` |
-| `SHANNON_MODEL` | Override model | `gpt-4o` |
-| `SHANNON_PROVIDER` | Override provider | `openai` |
-| `SHANNON_BASE_URL` | Custom API endpoint | `http://localhost:11434/v1` |
+| `SHANNON_API_KEY` | API key for the LLM provider | `sk-ant-...` |
+| `SHANNON_MODEL` | Model to use | `claude-sonnet-4` |
+| `SHANNON_PROVIDER` | LLM provider | `anthropic`, `openai`, `ollama` |
+| `SHANNON_BASE_URL` | Custom API base URL | `http://localhost:11434/v1` |
+| `SHANNON_MAX_TOKENS` | Max response tokens | `16384` |
+| `SHANNON_TEMPERATURE` | Response randomness (0-1) | `0.7` |
+| `SHANNON_TIMEOUT` | Request timeout (seconds) | `120` |
+| `SHANNON_DEBUG` | Enable debug logging | `true` |
+| `SHANNON_PERMISSION_PROFILE` | Permission profile | `balanced` |
 
-## Provider Configuration
+Fallback env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`.
 
-### Anthropic
+## CLI Flags
 
-```toml
-[llm]
-provider = "anthropic"
-model = "claude-sonnet-4-20250514"
-api_key_env = "ANTHROPIC_API_KEY"
-```
+| Flag | Description |
+|------|-------------|
+| `--prompt <text>` | Run in headless/CI mode |
+| `--resume [UUID]` | Resume a session |
+| `--continue`, `-c` | Resume most recent session |
+| `--model <name>` | Override model for this session |
+| `--pipe` | Read stdin as prompt input |
+| `--allowed-tools <list>` | Restrict available tools |
+| `--max-turns <n>` | Limit conversation turns |
+| `--diff-only` | Show only diffs, no chat |
+| `--schema <file>` | Validate output against JSON Schema |
+| `--yes` | Auto-approve all permissions |
+| `--register-url-scheme` | Register `shannon://` URL handler |
+| `--unregister-url-scheme` | Unregister URL handler |
 
-### OpenAI
+## MCP Servers
 
-```toml
-[llm]
-provider = "openai"
-model = "gpt-4o"
-api_key_env = "OPENAI_API_KEY"
-```
-
-### Ollama (local)
-
-```toml
-[llm]
-provider = "ollama"
-model = "codellama"
-base_url = "http://localhost:11434"
-```
-
-### DeepSeek
-
-```toml
-[llm]
-provider = "deepseek"
-model = "deepseek-coder"
-api_key_env = "DEEPSEEK_API_KEY"
-```
-
-### Custom Endpoint
-
-```toml
-[llm]
-provider = "custom"
-base_url = "https://api.example.com/v1"
-model = "my-model"
-api_key_env = "MY_API_KEY"
-```
-
-## MCP Extensions
-
-MCP (Model Context Protocol) servers are configured in `.mcp.json`, `~/.claude/settings.json`, or `~/.shannon/settings.json`:
+MCP servers are configured in `.mcp.json`, `~/.claude/settings.json`, or `~/.shannon/settings.json`:
 
 ```json
 {
   "mcpServers": {
-    "filesystem": {
+    "my-server": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "env": { "GITHUB_TOKEN": "ghp_..." }
+      "args": ["-y", "my-mcp-server"],
+      "env": { "API_KEY": "..." }
     }
   }
 }
@@ -117,31 +82,11 @@ Tools are auto-discovered via `tools/list`.
 
 ## Permission Profiles
 
-Named presets loaded from `.shannon/profiles/*.toml` or `.claude/profiles/*.toml`:
+| Profile | Description |
+|---------|-------------|
+| `strict` | Approve all tool calls |
+| `balanced` | Auto-approve reads, approve writes |
+| `permissive` | Auto-approve non-destructive, deny destructive |
+| `auto-allow` | Auto-approve everything except critical |
 
-```toml
-name = "strict"
-description = "Confirm all operations"
-
-[rules]
-auto_approve = ["read_file", "search"]
-confirm = ["write_file", "edit_file", "bash"]
-deny = ["rm_rf"]
-```
-
-Built-in profiles: `strict`, `balanced`, `permissive`. Switch with `/profile <name>`.
-
-## CLI Arguments
-
-```bash
-shannon [OPTIONS]
-
-Options:
-  --prompt <text>       Non-interactive mode
-  --schema <path>       JSON Schema for structured output
-  --model <model>       Override model
-  --provider <provider> Override provider
-  --config <path>       Config file path
-  -h, --help            Show help
-  -V, --version         Show version
-```
+Set via config or `SHANNON_PERMISSION_PROFILE` env var.
