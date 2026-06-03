@@ -1285,8 +1285,6 @@ impl PermissionManager {
 
         let mode = if auto_approves_read && auto_approves_write && auto_approves_bash {
             ApprovalMode::AutoEdit
-        } else if auto_approves_read && !auto_approves_write && !auto_approves_bash {
-            ApprovalMode::Suggest
         } else {
             ApprovalMode::Suggest
         };
