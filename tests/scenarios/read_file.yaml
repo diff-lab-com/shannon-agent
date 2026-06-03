@@ -1,0 +1,28 @@
+name: read_file
+description: "Read a file and respond about its contents"
+prompt: "Read src/main.rs and tell me what it does"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/main.rs
+      content: |
+        fn main() {
+            println!("Hello, world!");
+        }
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Read
+      tool_id: toolu_1
+      input: { "path": "src/main.rs" }
+  - response:
+      type: text
+      content: "The file contains a simple Hello World program."
+
+validate:
+  - rule: exit_code
+    value: success
+  - rule: response_contains
+    text: "Hello"

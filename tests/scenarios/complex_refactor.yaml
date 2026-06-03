@@ -1,0 +1,46 @@
+name: complex_refactor
+description: "Multi-file refactoring: extract helper function"
+prompt: "Extract the repeated greeting logic from src/main.rs into a helper function in src/greeting.rs"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/main.rs
+      content: |
+        fn main() {
+            println!("Hello, Alice!");
+            println!("Hello, Bob!");
+            println!("Hello, Charlie!");
+        }
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Read
+      tool_id: toolu_1
+      input: { "path": "src/main.rs" }
+  - response:
+      type: tool_use
+      tool: Write
+      tool_id: toolu_2
+      input: { "path": "src/greeting.rs", "content": "pub fn greet(name: &str) {\n    println!(\"Hello, {}!\", name);\n}\n" }
+  - response:
+      type: tool_use
+      tool: Edit
+      tool_id: toolu_3
+      input: { "path": "src/main.rs", "old_string": "fn main() {\n    println!(\"Hello, Alice!\");\n    println!(\"Hello, Bob!\");\n    println!(\"Hello, Charlie!\");\n}", "new_string": "mod greeting;\n\nfn main() {\n    greeting::greet(\"Alice\");\n    greeting::greet(\"Bob\");\n    greeting::greet(\"Charlie\");\n}" }
+  - response:
+      type: text
+      content: "I've extracted the greeting logic into src/greeting.rs and updated main.rs to use it."
+
+validate:
+  - rule: file_exists
+    path: src/greeting.rs
+  - rule: file_content
+    path: src/greeting.rs
+    contains: "pub fn greet"
+  - rule: file_content
+    path: src/main.rs
+    contains: "greeting::greet"
+  - rule: exit_code
+    value: success

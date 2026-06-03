@@ -1,0 +1,68 @@
+---
+source: crates/shannon-tools/tests/tool_schema_snapshots.rs
+assertion_line: 60
+expression: output
+---
+Agent: Spawn and manage AI agent teammates for collaborative problem-solving
+AnalyzeImage: Analyze an image file or URL. The image is sent to the LLM for visual analysis based on your prompt. Supports PNG, JPEG, GIF, WebP, BMP, ICO, and TIFF formats.
+Bash: Executes bash commands and returns output
+Brief: Generate a concise task summary from conversation history or content
+Config: Manage runtime configuration with get, set, list, delete, and reset operations
+Cron: Schedule recurring or one-shot prompts for time-based task execution
+DocsQuery: Fetch up-to-date documentation for libraries and frameworks. Resolves package names via docs.rs (Rust), npm (JavaScript/TypeScript), and PyPI (Python). Returns documentation snippets useful for writing correct code.
+Edit: Perform exact string replacements in files
+GitBranch: List, create, switch, and delete git branches
+GitDiff: Show git diffs with support for staged, unstaged, and commit range diffs
+GitLog: View git commit history with filtering and formatting options
+GitSafety: Check if a git command is safe before executing it
+GitStash: Manage git stashes: list, push, pop, drop, and apply stashed changes
+Glob: Fast file pattern matching tool that works with any codebase size
+Grep: A powerful search tool built on ripgrep. Searches file contents using regex patterns. Supports include/exclude globs, context lines, case-insensitive matching, and multiple output modes.
+McpAuth: Manage OAuth authentication for MCP servers that require it
+McpResource: Read and list resources from MCP (Model Context Protocol) servers
+MergeResolve: Resolve merge conflict markers in a file by choosing 'ours' or 'theirs' for each conflict
+MultiEdit: Apply multiple file edits atomically — all edits succeed or none are applied
+NotebookEdit: Edit Jupyter notebook (.ipynb) cells - replace, insert, or delete cells
+PowerShell: Executes PowerShell commands and returns output
+REPL: Execute a REPL command that wraps primitive tool calls for batch operations
+Read: Read file contents from the local filesystem
+ScheduleWakeup: Schedule a prompt to be enqueued after a delay (for /loop dynamic pacing). Call with delaySeconds and prompt to schedule; omit or call without arguments to end the loop. Cache optimization: delays <= 270s keep the prompt cache warm; 270-300s risks cache expiry; > 300s pays cold read cost. Prefer 270s for active work, 600s+ for idle waits.
+SendMessage: Send messages to agent teammates for collaborative problem-solving
+Skill: Invoke user-callable slash-command skills for specialized workflows
+Sleep: Wait for a specified duration without holding a shell process
+StructuredOutput: Return structured output in the requested format. Call this tool exactly once at the end of your response to provide the structured output.
+Task: Create and manage tasks for tracking work progress
+TaskCreate: Create a new task with subject, description, and optional metadata
+TaskGet: Get details of a specific task by ID
+TaskList: List all tasks with optional status filter
+TaskOutput: Get the output/result of a task execution by its ID
+TaskStop: Stop or cancel a running task by its ID
+TaskUpdate: Update an existing task's status, subject, or description
+TeamDelete: Remove a team and clean up its associated task list
+TodoWrite: Create and manage session task checklists for tracking work progress
+WebFetch: Fetches a URL from the internet and optionally extracts its contents
+WebSearch: Search the web for information using a real search API
+Worktree: Manage git worktree sessions for isolated branch work
+Write: Write content to a file, overwriting if it exists
+ask_user_question: Ask the user a question during execution. Supports single-select, multi-select, and free-text input. Use this when you need confirmation, option selection, or information from the user.
+auto_commit: Smart git commit tool. Stages changes (all or specific files), generates semantic commit messages from diffs, and creates commits. Supports dry-run preview and co-author trailers. Shows git status and diff stats before committing.
+code_actions: Get available code actions (quick fixes, refactorings) for a range in a file. Uses the language server to suggest fixes for diagnostics and available refactorings.
+computer: Interact with the computer desktop: take screenshots, click, type, scroll, and press keys. Coordinates are in [0-1024, 0-768] range and scaled to actual screen resolution.
+document_symbol: List all symbols (functions, classes, methods, variables, etc.) in a file. Uses the language server to provide a hierarchical view of the document's symbol structure.
+enter_plan_mode: Enter plan mode for read-only analysis and planning. File modifications will be disabled.
+exit_plan_mode: Exit plan mode and return to normal editing mode.
+find_references: Find all references to the symbol at a given position in a file. Uses the language server to locate all usages of a symbol across the codebase.
+get_mcp_prompt: Get a prompt from an MCP (Model Context Protocol) server. Provide server_name, prompt_name, and optional arguments to retrieve the prompt messages.
+get_plan_status: Get the current plan mode status, including active state and any plan content.
+gh_issue_list: List GitHub issues for the current repository
+gh_issue_view: View a specific GitHub issue with comments
+gh_pr_create: Create a pull request on GitHub
+gh_pr_list: List pull requests for the current repository
+gh_pr_view: View a specific pull request with optional diff
+go_to_definition: Find the definition of the symbol at a given position in a file. Uses the language server (e.g., rust-analyzer) to locate where a symbol is defined.
+hover: Get type information and documentation for the symbol at a given position. Uses the language server to provide hover information such as type signatures, doc comments, and other contextual information.
+list_mcp_prompts: List available prompts from MCP (Model Context Protocol) servers. Returns prompt names, descriptions, and argument schemas. Optionally filter by server_name.
+list_mcp_resources: List available resources from MCP (Model Context Protocol) servers. Returns resource URIs, names, descriptions, and MIME types. Optionally filter by server_name.
+read_mcp_resource: Read the content of a specific MCP (Model Context Protocol) resource by providing the server name and resource URI. Returns the resource content as text.
+rename_symbol: Rename a symbol (variable, function, class, etc.) across the entire codebase. Uses the language server to find all occurrences and compute the correct edits for renaming.
+workspace_symbol: Search for symbols across the entire workspace by name. Uses the language server to find functions, classes, structs, etc. matching a query pattern across all files in the project.

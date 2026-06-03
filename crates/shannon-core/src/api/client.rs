@@ -1,12 +1,52 @@
 //! LLM API client with multi-provider and streaming support.
 
 use reqwest::Client;
+use std::path::PathBuf;
 use std::time::Duration;
 
+use super::adapter::{OpenaiStreamState, normalize_sse_event};
 use super::error::ApiError;
 use super::retry::retry_request;
 use super::streaming::MessageStream;
 use super::types::*;
+use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
+
+/// Generate a JWT token for Zhipu API authentication.
+///
+/// Zhipu API keys have the format `{id}.{secret}`. The v4 API accepts either
+/// the raw key or a JWT signed with HMAC-SHA256. Some keys / models require
+/// the JWT form, so we always generate it when the key matches the `id.secret`
+/// pattern. If the key doesn't contain a `.`, we fall back to the raw key.
+fn generate_zhipu_jwt(api_key: &str) -> Option<String> {
+    let (id, secret) = api_key.split_once('.')?;
+    if id.is_empty() || secret.is_empty() {
+        return None;
+    }
+
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"HS256","sign_type":"SIGN"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(format!(
+        r#"{{"api_key":"{id}","exp":{},"timestamp":{}}}"#,
+        now + 3600 * 1000,
+        now,
+    ));
+
+    let message = format!("{header}.{payload}");
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).ok()?;
+    mac.update(message.as_bytes());
+    let sig = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+
+    Some(format!("{message}.{sig}"))
+}
 
 /// LLM API client with multi-provider and streaming support
 #[derive(Clone)]
@@ -113,8 +153,6 @@ impl LlmClient {
             | LlmProvider::Xai
             | LlmProvider::Ai21
             | LlmProvider::SiliconFlow
-            | LlmProvider::Zhipu
-            | LlmProvider::ZhipuInternational
             | LlmProvider::Moonshot
             | LlmProvider::Minimax
             | LlmProvider::DashScope
@@ -124,6 +162,15 @@ impl LlmClient {
                     "Authorization".to_string(),
                     format!("Bearer {}", self.config.api_key),
                 ));
+            }
+            LlmProvider::Zhipu | LlmProvider::ZhipuInternational => {
+                let token = generate_zhipu_jwt(&self.config.api_key)
+                    .unwrap_or_else(|| self.config.api_key.clone());
+                headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+            }
+            LlmProvider::ZhipuCoding => {
+                headers.push(("x-api-key".to_string(), self.config.api_key.clone()));
+                headers.push(("anthropic-version".to_string(), "2023-06-01".to_string()));
             }
             LlmProvider::Custom => {
                 // Use extra_headers for custom provider auth
@@ -166,6 +213,140 @@ impl LlmClient {
         )
     }
 
+    // ── Record/Replay Hooks ────────────────────────────────────────────
+
+    /// Check if recording mode is enabled via `SHANNON_RECORD_DIR`.
+    fn record_dir() -> Option<PathBuf> {
+        std::env::var("SHANNON_RECORD_DIR").ok().map(PathBuf::from)
+    }
+
+    /// Check if replay mode is enabled via `SHANNON_REPLAY_DIR`.
+    fn replay_dir() -> Option<PathBuf> {
+        std::env::var("SHANNON_REPLAY_DIR").ok().map(PathBuf::from)
+    }
+
+    /// Hash the serialized request body for fixture matching.
+    fn request_hash(serialized: &serde_json::Value) -> String {
+        RecordedExchange::hash_body(&serialized.to_string())
+    }
+
+    /// Try to replay a recorded fixture. Returns `Some(MessageStream)` if a
+    /// matching fixture is found, `None` if replay mode is not active or no
+    /// fixture matches.
+    fn try_replay(
+        &self,
+        serialized_body: &serde_json::Value,
+        provider: &LlmProvider,
+    ) -> Option<MessageStream> {
+        let dir = Self::replay_dir()?;
+        let hash = Self::request_hash(serialized_body);
+
+        // Search for a fixture matching provider + hash
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            let fixture = RecordedExchange::load(&path).ok()?;
+            if fixture.provider == format!("{provider}") && fixture.request_hash == hash {
+                let events = Self::parse_raw_body(&fixture.response.body, provider);
+                return Some(Box::pin(futures::stream::iter(events)));
+            }
+        }
+
+        tracing::warn!(
+            "Replay mode active but no fixture found for {provider} hash={hash}. \
+             Run with SHANNON_RECORD_DIR to create fixtures."
+        );
+        None
+    }
+
+    /// Parse a raw SSE/NDJSON response body into a list of StreamEvents.
+    fn parse_raw_body(body: &str, provider: &LlmProvider) -> Vec<Result<StreamEvent, ApiError>> {
+        let mut state = OpenaiStreamState::new();
+        let mut events = Vec::new();
+
+        for line in body.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            // Strip "data: " prefix for SSE format (Anthropic/OpenAI)
+            let data = if provider.wire_format() == WireFormat::Ollama {
+                line
+            } else if let Some(stripped) = line.strip_prefix("data: ") {
+                if stripped == "[DONE]" {
+                    continue;
+                }
+                stripped
+            } else {
+                continue; // skip non-data lines in SSE format
+            };
+
+            let normalized = normalize_sse_event(data, provider, &mut state);
+            events.extend(normalized);
+        }
+
+        events
+    }
+
+    /// Record a request/response exchange to the fixture directory.
+    /// Uses JSONL mode when SHANNON_RECORD_SESSION is set, otherwise per-file.
+    /// Strips sensitive headers before saving.
+    fn record_exchange(
+        &self,
+        serialized_body: &serde_json::Value,
+        path: &str,
+        response_status: u16,
+        response_headers: Vec<(String, String)>,
+        response_body: &str,
+    ) {
+        if let Some(dir) = Self::record_dir() {
+            let exchange = RecordedExchange {
+                request_hash: Self::request_hash(serialized_body),
+                provider: format!("{}", self.config.provider),
+                model: self.config.model.clone(),
+                request: RecordedRequest {
+                    method: "POST".to_string(),
+                    path: path.to_string(),
+                    body: serialized_body.to_string(),
+                },
+                response: RecordedResponse {
+                    status: response_status,
+                    headers: response_headers,
+                    body: response_body.to_string(),
+                },
+            }
+            .strip_secrets();
+
+            // JSONL mode: append to session file
+            if let Ok(session) = std::env::var("SHANNON_RECORD_SESSION") {
+                let jsonl_path = dir.join(format!("{session}.jsonl"));
+                match exchange.save_jsonl(&jsonl_path) {
+                    Ok(_) => {
+                        tracing::info!(
+                            "Recorded to session {}: {}_{}",
+                            session,
+                            exchange.provider,
+                            exchange.request_hash
+                        );
+                    }
+                    Err(e) => tracing::warn!("Failed to save recording: {e}"),
+                }
+            } else if let Err(e) = exchange.save(&dir) {
+                tracing::warn!("Failed to save recording: {e}");
+            } else {
+                tracing::info!(
+                    "Recorded fixture: {}_{}",
+                    exchange.provider,
+                    exchange.request_hash
+                );
+            }
+        }
+    }
+
     /// Send a message with streaming response (SSE)
     pub async fn send_message_stream(
         &self,
@@ -174,11 +355,6 @@ impl LlmClient {
         system: Option<String>,
     ) -> Result<MessageStream, ApiError> {
         let max_reconnects = self.config.max_stream_reconnects;
-
-        // Clone upfront for potential reconnection use
-        let messages_clone = messages.clone();
-        let tools_clone = tools.clone();
-        let system_clone = system.clone();
 
         let request_body = MessageRequest {
             model: self.config.model.clone(),
@@ -197,17 +373,28 @@ impl LlmClient {
             reasoning_effort: self.config.reasoning_effort,
         };
 
+        let serialized = super::adapter::serialize_request_with_base_url(
+            &request_body,
+            &self.config.provider,
+            &self.config.base_url,
+        );
+
+        // ── Replay mode: return saved fixture ──
+        if let Some(stream) = self.try_replay(&serialized, &self.config.provider) {
+            tracing::info!("Replaying recorded fixture for this request");
+            return Ok(stream);
+        }
+
+        // ── Real API call ──
         let url = self.endpoint_url();
+        let provider_path = self.config.provider.endpoint().to_string();
         let headers = self.auth_headers();
 
         let mut request = self
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(
-                &request_body,
-                &self.config.provider,
-            ));
+            .json(&serialized);
 
         for (key, value) in headers {
             request = request.header(&key, &value);
@@ -247,7 +434,30 @@ impl LlmClient {
             ));
         }
 
+        // ── Record mode: buffer full response, save fixture ──
+        if Self::record_dir().is_some() {
+            let status = response.status().as_u16();
+            let resp_headers: Vec<(String, String)> = response
+                .headers()
+                .iter()
+                .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.to_string(), s.to_string())))
+                .collect();
+            let body = response.text().await.map_err(|e| {
+                ApiError::InvalidResponse(format!("Failed to read response for recording: {e}"))
+            })?;
+
+            self.record_exchange(&serialized, &provider_path, status, resp_headers, &body);
+
+            // Parse the buffered body into a stream
+            let events = Self::parse_raw_body(&body, &self.config.provider);
+            return Ok(Box::pin(futures::stream::iter(events)));
+        }
+
+        // ── Normal mode: live streaming ──
         if max_reconnects > 0 {
+            let messages_clone = request_body.messages.clone();
+            let tools_clone = request_body.tools.clone();
+            let system_clone = request_body.system.clone();
             Ok(super::streaming::sse_stream_from_response_resumable(
                 response,
                 self.config.provider.clone(),
@@ -305,7 +515,11 @@ impl LlmClient {
             request = request.header(k.as_str(), v.as_str());
         }
 
-        let body = super::adapter::serialize_request(&request_body, &self.config.provider);
+        let body = super::adapter::serialize_request_with_base_url(
+            &request_body,
+            &self.config.provider,
+            &self.config.base_url,
+        );
         request = request.json(&body);
 
         let response = request.send().await.map_err(|e| match e.status() {
@@ -340,6 +554,24 @@ impl LlmClient {
                 status,
                 &error_text,
             ));
+        }
+
+        // ── Record mode: buffer full response, save fixture ──
+        if Self::record_dir().is_some() {
+            let status = response.status().as_u16();
+            let resp_headers: Vec<(String, String)> = response
+                .headers()
+                .iter()
+                .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.to_string(), s.to_string())))
+                .collect();
+            let resp_body = response.text().await.map_err(|e| {
+                ApiError::InvalidResponse(format!("Failed to read response for recording: {e}"))
+            })?;
+            let provider_path = self.config.provider.endpoint().to_string();
+            self.record_exchange(&body, &provider_path, status, resp_headers, &resp_body);
+
+            let events = Self::parse_raw_body(&resp_body, &self.config.provider);
+            return Ok(Box::pin(futures::stream::iter(events)));
         }
 
         Ok(super::streaming::sse_stream_from_response(
@@ -384,9 +616,10 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(
+            .json(&super::adapter::serialize_request_with_base_url(
                 &request_body,
                 &self.config.provider,
+                &self.config.base_url,
             ));
 
         for (key, value) in headers {
@@ -468,9 +701,10 @@ impl LlmClient {
             .client
             .post(&url)
             .header("content-type", "application/json")
-            .json(&super::adapter::serialize_request(
+            .json(&super::adapter::serialize_request_with_base_url(
                 &request_body,
                 &self.config.provider,
+                &self.config.base_url,
             ));
 
         for (key, value) in headers {
@@ -1105,5 +1339,64 @@ mod tests {
     fn test_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<LlmClient>();
+    }
+
+    // ── Zhipu JWT ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_zhipu_jwt_generation() {
+        let jwt = generate_zhipu_jwt("mykeyid.mysecret").unwrap();
+        let parts: Vec<&str> = jwt.split('.').collect();
+        assert_eq!(parts.len(), 3, "JWT should have 3 parts");
+
+        use base64::Engine;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let header: serde_json::Value =
+            serde_json::from_slice(URL_SAFE_NO_PAD.decode(parts[0]).unwrap().as_slice()).unwrap();
+        assert_eq!(header["alg"], "HS256");
+        assert_eq!(header["sign_type"], "SIGN");
+
+        let payload: serde_json::Value =
+            serde_json::from_slice(URL_SAFE_NO_PAD.decode(parts[1]).unwrap().as_slice()).unwrap();
+        assert_eq!(payload["api_key"], "mykeyid");
+        assert!(payload["exp"].as_u64().unwrap() > payload["timestamp"].as_u64().unwrap());
+    }
+
+    #[test]
+    fn test_zhipu_jwt_no_dot_returns_none() {
+        assert!(generate_zhipu_jwt("nodot").is_none());
+    }
+
+    #[test]
+    fn test_zhipu_jwt_empty_parts_returns_none() {
+        assert!(generate_zhipu_jwt(".secret").is_none());
+        assert!(generate_zhipu_jwt("id.").is_none());
+    }
+
+    #[test]
+    fn test_zhipu_auth_headers_use_jwt() {
+        let config = LlmClientConfig {
+            provider: LlmProvider::Zhipu,
+            api_key: "testid.testsecret".to_string(),
+            model: "glm-4-flash".to_string(),
+            base_url: "https://open.bigmodel.cn".to_string(),
+            max_tokens: 4096,
+            api_version: String::new(),
+            timeout_seconds: 30,
+            max_stream_reconnects: 0,
+            extra_headers: Default::default(),
+            budget_tokens: None,
+            fallback_provider: None,
+            fallback_base_url: None,
+            retry_config: Default::default(),
+            reasoning_effort: None,
+        };
+        let client = LlmClient::new(config);
+        let headers = client.auth_headers();
+        let auth = headers.iter().find(|(k, _)| k == "Authorization").unwrap();
+        let token = auth.1.strip_prefix("Bearer ").unwrap();
+        // Should be a JWT (3 dot-separated parts), not the raw key
+        assert_eq!(token.split('.').count(), 3);
+        assert_ne!(token, "testid.testsecret");
     }
 }

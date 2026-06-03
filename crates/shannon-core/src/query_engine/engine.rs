@@ -270,6 +270,9 @@ pub struct QueryEngine {
     pub(crate) session_id: Uuid,
     /// Hook manager for lifecycle events (pre/post tool use, session start/end)
     pub(crate) hook_manager: Arc<tokio::sync::RwLock<crate::hooks::HookManager>>,
+    /// Triggered routines registry for hook-event-driven automation
+    pub(crate) triggered_routines:
+        Arc<tokio::sync::RwLock<crate::triggered_routines::TriggeredRoutineRegistry>>,
     /// Context injector for project instructions and preference memory.
     pub(crate) context_injector: Option<Arc<ContextInjector>>,
     /// Shared flag set by `PlanManager` (in `shannon-tools`) to signal that
@@ -280,6 +283,9 @@ pub struct QueryEngine {
     pub(crate) checkpoint_manager: crate::checkpoint::CheckpointManager,
     /// Effective maximum context tokens — resolved from user config > Ollama num_ctx > model registry.
     pub(crate) effective_max_context_tokens: usize,
+    /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
+    pub(crate) custom_profiles:
+        Arc<tokio::sync::RwLock<crate::custom_profiles::CustomProfileRegistry>>,
 }
 
 impl QueryEngine {
@@ -417,12 +423,18 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            triggered_routines: Arc::new(tokio::sync::RwLock::new(
+                crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
+            )),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
                 &session_id.to_string(),
             ),
             effective_max_context_tokens,
+            custom_profiles: Arc::new(tokio::sync::RwLock::new(
+                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+            )),
         }
     }
 
@@ -463,12 +475,18 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            triggered_routines: Arc::new(tokio::sync::RwLock::new(
+                crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
+            )),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
                 &session_id.to_string(),
             ),
             effective_max_context_tokens,
+            custom_profiles: Arc::new(tokio::sync::RwLock::new(
+                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+            )),
         }
     }
 
@@ -498,12 +516,18 @@ impl QueryEngine {
             memory: None,
             session_id,
             hook_manager: Arc::new(tokio::sync::RwLock::new(hook_mgr())),
+            triggered_routines: Arc::new(tokio::sync::RwLock::new(
+                crate::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
+            )),
             context_injector: None,
             plan_mode_active: Arc::new(RwLock::new(false)),
             checkpoint_manager: crate::checkpoint::CheckpointManager::for_session(
                 &session_id.to_string(),
             ),
             effective_max_context_tokens,
+            custom_profiles: Arc::new(tokio::sync::RwLock::new(
+                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+            )),
         }
     }
 
@@ -609,6 +633,13 @@ impl QueryEngine {
         self.hook_manager.clone()
     }
 
+    /// Access the triggered routines registry.
+    pub fn triggered_routines(
+        &self,
+    ) -> Arc<tokio::sync::RwLock<crate::triggered_routines::TriggeredRoutineRegistry>> {
+        self.triggered_routines.clone()
+    }
+
     /// Restore conversation from a previously saved session
     ///
     /// Attempts to load session data from disk. Returns Ok(false) if no
@@ -633,6 +664,13 @@ impl QueryEngine {
     /// Get a reference to the tool registry
     pub fn tools(&self) -> &ToolRegistry {
         &self.tools
+    }
+
+    /// Access the custom permission profiles registry.
+    pub fn custom_profiles(
+        &self,
+    ) -> &Arc<tokio::sync::RwLock<crate::custom_profiles::CustomProfileRegistry>> {
+        &self.custom_profiles
     }
 
     /// Add a user message to the conversation
@@ -837,6 +875,7 @@ impl QueryEngine {
         let session_id_for_save = self.session_id;
         let cost_tracker = self.cost_tracker.clone();
         let hook_manager = self.hook_manager.clone();
+        let triggered_routines = self.triggered_routines.clone();
         let context_injector = self.context_injector.clone();
         let plan_mode_active = self.plan_mode_active.clone();
         let checkpoint_manager = self.checkpoint_manager.clone();
@@ -928,6 +967,34 @@ impl QueryEngine {
             system_blocks.extend(extra_blocks);
         }
 
+        // Inject browser control instructions when browser MCP tools are present
+        {
+            let tool_names = tools.list();
+            if let Some(browser_text) = crate::query_engine::browser_control_prompt(&tool_names) {
+                let block = if use_cache {
+                    SystemContentBlock::cached(browser_text)
+                } else {
+                    SystemContentBlock::text(browser_text)
+                };
+                system_blocks.push(block);
+            }
+        }
+
+        // Inject team coordination instructions when team tools are present
+        {
+            let tool_names = tools.list();
+            if let Some(team_text) =
+                crate::query_engine::team_prompt::team_coordination_prompt(&tool_names)
+            {
+                let block = if use_cache {
+                    SystemContentBlock::cached(team_text)
+                } else {
+                    SystemContentBlock::text(team_text)
+                };
+                system_blocks.push(block);
+            }
+        }
+
         // Inject focus area from /focus command into system prompt
         if let Some(ref focus) = config.focus_area {
             let focus_text = format!(
@@ -955,6 +1022,17 @@ impl QueryEngine {
         } else {
             Some(LOCAL_MODEL_SYSTEM_PROMPT.to_string())
         };
+
+        // Inject the working directory so the model knows where to write files.
+        if let Ok(cwd) = std::env::current_dir() {
+            let cwd_text = format!("\n\n## Environment\n\nWorking directory: {}", cwd.display());
+            if let Some(ref mut prompt) = system_prompt {
+                prompt.push_str(&cwd_text);
+            }
+            if let Some(ref mut blocks) = system_blocks_opt {
+                blocks.push(crate::api::types::SystemContentBlock::text(cwd_text));
+            }
+        }
 
         // Clone existing conversation to preserve multi-turn context
         let mut conversation = self.conversation.clone();
@@ -1686,6 +1764,44 @@ impl QueryEngine {
                                                 }
                                             );
 
+                                            // Flush any pending tool input that wasn't finalized by
+                                            // ContentBlockStop (OpenAI/Ollama don't emit that event).
+                                            if let Some((id, name)) = current_tool_use.take() {
+                                                let raw =
+                                                    std::mem::take(&mut accumulated_tool_input);
+                                                match serde_json::from_str::<serde_json::Value>(
+                                                    &raw,
+                                                ) {
+                                                    Ok(json_val) => {
+                                                        tool_inputs.push((
+                                                            id.clone(),
+                                                            name.clone(),
+                                                            json_val.clone(),
+                                                        ));
+                                                        assistant_tool_uses.push(
+                                                            ContentBlock::ToolUse {
+                                                                id,
+                                                                name,
+                                                                input: json_val,
+                                                            },
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::warn!(
+                                                            "Malformed tool input (post-stream flush): {e}"
+                                                        );
+                                                        tool_results.push(ToolResultEntry {
+                                                            tool_use_id: id,
+                                                            content: format!(
+                                                                "Malformed tool input: {e}"
+                                                            ),
+                                                            is_error: true,
+                                                            metadata: Default::default(),
+                                                        });
+                                                    }
+                                                }
+                                            }
+
                                             if !tool_inputs.is_empty() {
                                                 // Phase 1: Check permissions and hooks (sequential — may need user input)
                                                 let mut approved_tools: Vec<(
@@ -2133,6 +2249,40 @@ impl QueryEngine {
                                                                                     .await;
                                                                             }
 
+                                                                            // Execute matching triggered routines (non-blocking)
+                                                                            {
+                                                                                let routines =
+                                                                                    triggered_routines
+                                                                                        .clone();
+                                                                                let tool =
+                                                                                    tool_name
+                                                                                        .clone();
+                                                                                tokio::spawn(
+                                                                                    async move {
+                                                                                        let reg =
+                                                                                            routines
+                                                                                                .read()
+                                                                                                .await;
+                                                                                        let results = reg
+                                                                                            .execute_matching(
+                                                                                                &crate::HookEventType::PostToolUse,
+                                                                                                &tool,
+                                                                                                None,
+                                                                                            )
+                                                                                            .await;
+                                                                                        for r in
+                                                                                            &results
+                                                                                        {
+                                                                                            if r.success() {
+                                                                                                tracing::info!(name = %r.name, "Triggered routine completed");
+                                                                                            } else {
+                                                                                                tracing::warn!(name = %r.name, stderr = %r.stderr, "Triggered routine failed");
+                                                                                            }
+                                                                                        }
+                                                                                    },
+                                                                                );
+                                                                            }
+
                                                                             // Emit progress: tool completed
                                                                             send_event!(tx, QueryEvent::ToolProgress {
                                                                                 query_id,
@@ -2276,6 +2426,31 @@ impl QueryEngine {
                                                                     let _ = hm
                                                                         .run_hooks(&post_event)
                                                                         .await;
+                                                                }
+
+                                                                // Execute matching triggered routines (non-blocking)
+                                                                {
+                                                                    let routines =
+                                                                        triggered_routines.clone();
+                                                                    let tool = tool_name.clone();
+                                                                    tokio::spawn(async move {
+                                                                        let reg =
+                                                                            routines.read().await;
+                                                                        let results = reg
+                                                                                .execute_matching(
+                                                                                    &crate::HookEventType::PostToolUse,
+                                                                                    &tool,
+                                                                                    None,
+                                                                                )
+                                                                                .await;
+                                                                        for r in &results {
+                                                                            if r.success() {
+                                                                                tracing::info!(name = %r.name, "Triggered routine completed");
+                                                                            } else {
+                                                                                tracing::warn!(name = %r.name, stderr = %r.stderr, "Triggered routine failed");
+                                                                            }
+                                                                        }
+                                                                    });
                                                                 }
 
                                                                 // Emit progress: tool completed
@@ -2767,7 +2942,10 @@ impl QueryEngine {
                             }
                         }
 
-                        if !has_content && tool_inputs.is_empty() {
+                        if !has_content
+                            && tool_inputs.is_empty()
+                            && phase != StreamingPhase::Finalized
+                        {
                             let total_cost = CostTracker::calculate_cost(
                                 &client_model,
                                 total_input_tokens,
@@ -3352,6 +3530,7 @@ mod tests {
             api_key: "test-key".to_string(),
             base_url: "http://localhost:11434".to_string(),
             model: "test-model".to_string(),
+            provider: LlmProvider::Ollama,
             ..Default::default()
         };
         LlmClient::new(config)
@@ -4262,6 +4441,40 @@ mod tests {
         assert!(prompt.starts_with("Base prompt."));
         assert!(prompt.contains("Section A."));
         assert!(prompt.contains("Section B."));
+    }
+
+    #[test]
+    fn test_system_prompt_default_has_no_cwd() {
+        let engine = create_test_engine();
+        let prompt = engine.system_prompt().unwrap();
+        assert!(
+            !prompt.contains("Working directory"),
+            "Default system prompt should NOT contain CWD (it is injected at query time): {prompt}"
+        );
+    }
+
+    #[test]
+    fn test_cwd_injection_appends_to_system_prompt() {
+        let engine = create_test_engine();
+        let mut prompt = engine.system_prompt().unwrap();
+
+        // Simulate the CWD injection that process_query does
+        if let Ok(cwd) = std::env::current_dir() {
+            prompt.push_str(&format!(
+                "\n\n## Environment\n\nWorking directory: {}",
+                cwd.display()
+            ));
+        }
+
+        assert!(
+            prompt.contains("Working directory"),
+            "After CWD injection, prompt should contain 'Working directory'"
+        );
+        let cwd = std::env::current_dir().unwrap();
+        assert!(
+            prompt.contains(&*cwd.to_string_lossy()),
+            "After CWD injection, prompt should contain the actual CWD path"
+        );
     }
 
     // ── Memory store tests ──────────────────────────────────────────

@@ -1,0 +1,61 @@
+---
+import DocsLayout from '../../layouts/DocsLayout.astro';
+---
+
+<DocsLayout title="Documentation">
+  <h1>Documentation</h1>
+  <p style={{ fontSize: 18, color: 'var(--muted)', maxWidth: 560, lineHeight: 1.7, marginBottom: 40 }}>
+    Everything you need to get started with Shannon Code — from installation to advanced configuration.
+  </p>
+
+  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16 }}>
+    <a href={import.meta.env.BASE_URL + 'docs/getting-started'} style={{
+      display: 'block',
+      padding: '24px',
+      background: 'var(--paper)',
+      border: '1px solid var(--line)',
+      borderRadius: 'var(--radius-md)',
+      textDecoration: 'none',
+      color: 'inherit',
+    }}>
+      <h3 style={{ marginBottom: 8 }}>Getting Started</h3>
+      <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Install, configure, and run Shannon Code in 30 seconds.</p>
+    </a>
+    <a href={import.meta.env.BASE_URL + 'docs/architecture'} style={{
+      display: 'block',
+      padding: '24px',
+      background: 'var(--paper)',
+      border: '1px solid var(--line)',
+      borderRadius: 'var(--radius-md)',
+      textDecoration: 'none',
+      color: 'inherit',
+    }}>
+      <h3 style={{ marginBottom: 8 }}>Architecture</h3>
+      <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Crate structure, data flow, and key design patterns.</p>
+    </a>
+    <a href={import.meta.env.BASE_URL + 'docs/configuration'} style={{
+      display: 'block',
+      padding: '24px',
+      background: 'var(--paper)',
+      border: '1px solid var(--line)',
+      borderRadius: 'var(--radius-md)',
+      textDecoration: 'none',
+      color: 'inherit',
+    }}>
+      <h3 style={{ marginBottom: 8 }}>Configuration</h3>
+      <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Providers, MCP extensions, permissions, and CLI flags.</p>
+    </a>
+    <a href={import.meta.env.BASE_URL + 'docs/testing'} style={{
+      display: 'block',
+      padding: '24px',
+      background: 'var(--paper)',
+      border: '1px solid var(--line)',
+      borderRadius: 'var(--radius-md)',
+      textDecoration: 'none',
+      color: 'inherit',
+    }}>
+      <h3 style={{ marginBottom: 8 }}>Testing</h3>
+      <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Unit tests, integration tests, scenarios, and benchmarks.</p>
+    </a>
+  </div>
+</DocsLayout>

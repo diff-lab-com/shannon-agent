@@ -1,0 +1,9 @@
+---
+import '../styles/global.css';
+import LandingLayout from '../layouts/LandingLayout.astro';
+import LandingPage from '../components/LandingPage';
+---
+
+<LandingLayout lang="en">
+  <LandingPage client:load />
+</LandingLayout>

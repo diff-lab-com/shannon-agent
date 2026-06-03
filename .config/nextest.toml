@@ -12,17 +12,30 @@ test-threads = 8
 # contention between tests is already isolated. But some crates
 # share filesystem state — keep those single-threaded below.
 
-# Crates with env var / filesystem contention: single-threaded.
+# Crates with env var / filesystem contention: run serially via test group.
+[test-groups]
+serial = { max-threads = 1 }
+
 [[profile.default.overrides]]
 filter = 'package(shannon-core)'
-test-threads = 1
+test-group = 'serial'
 
 [[profile.default.overrides]]
 filter = 'package(shannon-commands)'
-test-threads = 1
+test-group = 'serial'
 
-# CI profile: stricter timeouts, retries for flaky tests.
+# CI profile: stricter timeouts, retries for flaky tests, JUnit output.
 [profile.ci]
 test-threads = 4
 failure-output = "immediate-final"
 fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 3 }
+retries = { count = 2, backoff = "exponential", delay = "5s", max-delay = "30s", jitter = true }
+
+[[profile.ci.overrides]]
+filter = 'package(shannon-core)'
+test-group = 'serial'
+
+[[profile.ci.overrides]]
+filter = 'package(shannon-commands)'
+test-group = 'serial'

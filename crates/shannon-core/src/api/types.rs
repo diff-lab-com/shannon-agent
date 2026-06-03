@@ -81,6 +81,8 @@ pub enum LlmProvider {
     Zhipu,
     /// Zhipu International / BigModel (open.international.bigmodel.cn)
     ZhipuInternational,
+    /// Zhipu Coding Plan (Anthropic-compatible wire format at open.bigmodel.cn/api/anthropic)
+    ZhipuCoding,
     /// Moonshot / Kimi (api.moonshot.cn)
     Moonshot,
     /// MiniMax (api.minimax.chat)
@@ -141,6 +143,8 @@ impl LlmProvider {
             LlmProvider::SiliconFlow
         } else if url.contains("international.bigmodel.cn") {
             LlmProvider::ZhipuInternational
+        } else if url.contains("bigmodel.cn/api/anthropic") {
+            LlmProvider::ZhipuCoding
         } else if url.contains("bigmodel.cn") || url.contains("zhipuai.cn") {
             LlmProvider::Zhipu
         } else if url.contains("moonshot.cn") || url.contains("kimi") {
@@ -181,6 +185,7 @@ impl LlmProvider {
             LlmProvider::SiliconFlow => "/v1/chat/completions",
             LlmProvider::Zhipu => "/api/paas/v4/chat/completions",
             LlmProvider::ZhipuInternational => "/api/paas/v4/chat/completions",
+            LlmProvider::ZhipuCoding => "/v1/messages",
             LlmProvider::Moonshot => "/v1/chat/completions",
             LlmProvider::Minimax => "/v1/text/chatcompletion_v2",
             LlmProvider::DashScope => "/compatible-mode/v1/chat/completions",
@@ -211,6 +216,7 @@ impl LlmProvider {
             LlmProvider::SiliconFlow => "https://api.siliconflow.cn",
             LlmProvider::Zhipu => "https://open.bigmodel.cn",
             LlmProvider::ZhipuInternational => "https://open.international.bigmodel.cn",
+            LlmProvider::ZhipuCoding => "https://open.bigmodel.cn/api/anthropic",
             LlmProvider::Moonshot => "https://api.moonshot.cn",
             LlmProvider::Minimax => "https://api.minimax.chat",
             LlmProvider::DashScope => "https://dashscope.aliyuncs.com",
@@ -225,7 +231,9 @@ impl LlmProvider {
     /// Return the wire protocol format for this provider.
     pub fn wire_format(&self) -> WireFormat {
         match self {
-            Self::Anthropic | Self::Custom | Self::Bedrock => WireFormat::Anthropic,
+            Self::Anthropic | Self::Custom | Self::Bedrock | Self::ZhipuCoding => {
+                WireFormat::Anthropic
+            }
             Self::OpenAI
             | Self::Azure
             | Self::Mistral
@@ -279,7 +287,7 @@ impl LlmProvider {
             Self::Xai => Some("XAI_API_KEY"),
             Self::Ai21 => Some("AI21_API_KEY"),
             Self::SiliconFlow => Some("SILICONFLOW_API_KEY"),
-            Self::Zhipu => Some("ZHIPU_API_KEY"),
+            Self::Zhipu | Self::ZhipuCoding => Some("ZHIPU_API_KEY"),
             Self::ZhipuInternational => Some("ZHIPU_INTL_API_KEY"),
             Self::Moonshot => Some("MOONSHOT_API_KEY"),
             Self::Minimax => Some("MINIMAX_API_KEY"),
@@ -328,6 +336,7 @@ impl std::fmt::Display for LlmProvider {
             LlmProvider::SiliconFlow => write!(f, "siliconflow"),
             LlmProvider::Zhipu => write!(f, "zhipu"),
             LlmProvider::ZhipuInternational => write!(f, "zhipu-international"),
+            LlmProvider::ZhipuCoding => write!(f, "zhipu-coding"),
             LlmProvider::Moonshot => write!(f, "moonshot"),
             LlmProvider::Minimax => write!(f, "minimax"),
             LlmProvider::DashScope => write!(f, "dashscope"),
@@ -442,12 +451,19 @@ impl From<ShannonConfig> for LlmClientConfig {
 
         // --- Resolve api_key ------------------------------------------------
         // --- Resolve base_url -----------------------------------------------
+        // Track whether base_url came from a provider-specific env var so we
+        // can discard it when the provider is explicitly set to something else.
+        let shannon_base_url = std::env::var("SHANNON_BASE_URL").ok();
+        let anthropic_base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
+        let openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
+        let has_explicit_base_url_env = shannon_base_url.is_some();
+
         let base_url = cfg
             .base_url
             .clone()
-            .or_else(|| std::env::var("SHANNON_BASE_URL").ok())
-            .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok())
-            .or_else(|| std::env::var("OPENAI_BASE_URL").ok())
+            .or(shannon_base_url)
+            .or(anthropic_base_url.clone())
+            .or(openai_base_url.clone())
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());
 
         // --- Resolve model --------------------------------------------------
@@ -481,6 +497,7 @@ impl From<ShannonConfig> for LlmClientConfig {
                 "siliconflow" => LlmProvider::SiliconFlow,
                 "zhipu" | "zhipu-cn" => LlmProvider::Zhipu,
                 "zhipu-international" | "zhipu-intl" => LlmProvider::ZhipuInternational,
+                "zhipu-coding" | "zhipu-anthropic" => LlmProvider::ZhipuCoding,
                 "moonshot" | "kimi" => LlmProvider::Moonshot,
                 "minimax" => LlmProvider::Minimax,
                 "dashscope" | "qwen" => LlmProvider::DashScope,
@@ -490,6 +507,31 @@ impl From<ShannonConfig> for LlmClientConfig {
             }
         } else {
             LlmProvider::from_base_url(&base_url)
+        };
+
+        // --- Fix base_url when provider is explicitly set but base_url came ---
+        // --- from a different provider's env var (e.g. ANTHROPIC_BASE_URL  ---
+        // --- when SHANNON_PROVIDER=zhipu), or from the hardcoded default.   ---
+        let base_url = if !has_explicit_base_url && !has_explicit_base_url_env {
+            let provider_default = provider.default_base_url().to_string();
+            // If base_url matches a non-target provider's env var, use provider default
+            let came_from_anthropic = anthropic_base_url.as_deref() == Some(&base_url);
+            let came_from_openai = openai_base_url.as_deref() == Some(&base_url);
+            let is_anthropic_provider = matches!(provider, LlmProvider::Anthropic);
+            let is_openai_provider = matches!(provider, LlmProvider::OpenAI);
+            let no_env_base_url = anthropic_base_url.is_none() && openai_base_url.is_none();
+            if (came_from_anthropic && !is_anthropic_provider)
+                || (came_from_openai && !is_openai_provider)
+                // No provider-specific env var set and base_url is the hardcoded
+                // default — use the explicitly-set provider's default instead.
+                || (no_env_base_url && base_url != provider_default)
+            {
+                provider_default
+            } else {
+                base_url
+            }
+        } else {
+            base_url
         };
 
         // --- Resolve API key (provider-aware) --------------------------------

@@ -1,0 +1,36 @@
+name: edit_file
+description: "Edit a file by replacing old text with new text"
+prompt: "Change the greeting from Hello to Goodbye in src/main.rs"
+provider: anthropic
+
+setup:
+  files:
+    - path: src/main.rs
+      content: |
+        fn main() {
+            println!("Hello, world!");
+        }
+
+mock_responses:
+  - response:
+      type: tool_use
+      tool: Read
+      tool_id: toolu_1
+      input: { "path": "src/main.rs" }
+  - response:
+      type: tool_use
+      tool: Edit
+      tool_id: toolu_2
+      input: { "path": "src/main.rs", "old_string": "Hello", "new_string": "Goodbye" }
+  - response:
+      type: text
+      content: "I've updated the greeting."
+
+validate:
+  - rule: file_exists
+    path: src/main.rs
+  - rule: file_content
+    path: src/main.rs
+    contains: "Goodbye"
+  - rule: exit_code
+    value: success

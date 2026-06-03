@@ -1,0 +1,140 @@
+{
+  "name": "shannon-code",
+  "displayName": "Shannon Code",
+  "description": "AI-powered code assistant with multi-provider LLM support, MCP extensions, and intelligent tool use",
+  "version": "0.1.0",
+  "publisher": "diffLab",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shannon-agent/shannon-code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/shannon-agent/shannon-code/issues"
+  },
+  "homepage": "https://github.com/shannon-agent/shannon-code#readme",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#1a1a2e",
+    "theme": "dark"
+  },
+  "keywords": [
+    "ai",
+    "chat",
+    "code assistant",
+    "llm",
+    "anthropic",
+    "openai",
+    "mcp",
+    "multi-provider"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Chat",
+    "Programming Languages",
+    "Machine Learning"
+  ],
+  "activationEvents": [
+    "onCommand:shannon.openChat",
+    "onCommand:shannon.sendPrompt"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "shannon.openChat",
+        "title": "Shannon: Open Chat"
+      },
+      {
+        "command": "shannon.sendPrompt",
+        "title": "Shannon: Send Prompt"
+      },
+      {
+        "command": "shannon.stopGeneration",
+        "title": "Shannon: Stop Generation"
+      },
+      {
+        "command": "shannon.showPendingChanges",
+        "title": "Shannon: Show Pending Changes"
+      },
+      {
+        "command": "shannon.acceptAllChanges",
+        "title": "Shannon: Accept All Changes"
+      },
+      {
+        "command": "shannon.rejectAllChanges",
+        "title": "Shannon: Reject All Changes"
+      },
+      {
+        "command": "shannon.openSettings",
+        "title": "Shannon: Open Settings"
+      },
+      {
+        "command": "shannon.newChat",
+        "title": "Shannon: New Chat"
+      },
+      {
+        "command": "shannon.clearHistory",
+        "title": "Shannon: Clear History"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "shannon.openChat",
+        "key": "ctrl+shift+s",
+        "mac": "cmd+shift+s",
+        "when": "!terminalFocus"
+      },
+      {
+        "command": "shannon.sendPrompt",
+        "key": "ctrl+shift+enter",
+        "mac": "cmd+shift+enter"
+      },
+      {
+        "command": "shannon.stopGeneration",
+        "key": "escape",
+        "when": "shannon.generating"
+      }
+    ],
+    "configuration": {
+      "title": "Shannon Code",
+      "properties": {
+        "shannon.cliPath": {
+          "type": "string",
+          "default": "shannon",
+          "description": "Path to the Shannon Code CLI binary"
+        },
+        "shannon.provider": {
+          "type": "string",
+          "enum": ["anthropic", "openai", "ollama", "deepseek"],
+          "default": "anthropic",
+          "description": "LLM provider to use"
+        },
+        "shannon.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model override (empty = provider default)"
+        },
+        "shannon.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key (or set SHANNON_API_KEY env var)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "npm run compile && node out/test/suite/shannonClient.test.js && node out/test/suite/extension.test.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

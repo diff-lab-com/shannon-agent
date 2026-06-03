@@ -62,6 +62,22 @@ shell-words = "1.1"
 # PTY support for interactive commands
 portable-pty = "0.8"
 
+[features]
+default = []
+computer-use = ["xcap", "enigo", "image"]
+
+[dependencies.xcap]
+version = "0.0.13"
+optional = true
+
+[dependencies.enigo]
+version = "0.2"
+optional = true
+
+[dependencies.image]
+version = "0.25"
+optional = true
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
@@ -72,6 +88,7 @@ globset = "0.4"
 regex = "1"
 ignore = "0.4"
 proptest = { workspace = true }
+insta = "1.42"
 
 [[bench]]
 name = "tool_benchmarks"

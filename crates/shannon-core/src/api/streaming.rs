@@ -645,8 +645,8 @@ mod tests {
             r#"data: {"message":{"role":"assistant","tool_calls":[{"function":{"name":"bash","arguments":{"command":"ls"}}}]}}"#,
         ];
         let events = parse_sse_lines(&lines, LlmProvider::Ollama);
-        // Should have ContentBlockStart + ContentBlockStop
-        assert_eq!(events.len(), 2);
+        // Should have ContentBlockStart + InputJsonDelta + ContentBlockStop
+        assert_eq!(events.len(), 3);
 
         match &events[0] {
             Ok(StreamEvent::ContentBlockStart { .. }) => {}
@@ -654,6 +654,14 @@ mod tests {
         }
 
         match &events[1] {
+            Ok(StreamEvent::ContentBlockDelta {
+                delta: ContentDelta::InputJsonDelta { .. },
+                ..
+            }) => {}
+            other => panic!("Expected ContentBlockDelta InputJsonDelta, got {other:?}"),
+        }
+
+        match &events[2] {
             Ok(StreamEvent::ContentBlockStop { .. }) => {}
             other => panic!("Expected ContentBlockStop, got {other:?}"),
         }

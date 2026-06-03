@@ -339,7 +339,7 @@ struct Cli {
     model: Option<String>,
 
     /// LLM provider (anthropic, openai, ollama, custom)
-    #[arg(short, long)]
+    #[arg(long)]
     provider: Option<String>,
 
     /// Set language/locale (e.g., en, zh)
@@ -387,14 +387,19 @@ struct Cli {
     #[arg(short = 'r', long, value_name = "UUID", num_args = 0..=1)]
     resume: Option<String>,
 
+    /// Resume a specific session by UUID (explicit alternative to --resume <UUID>).
+    /// Example: shannon --resume-id 550e8400-e29b-41d4-a716-446655440000
+    #[arg(long = "resume-id", value_name = "UUID")]
+    resume_id: Option<String>,
+
     /// Continue the most recent session (alias for --resume).
     #[arg(short = 'c', long, alias = "cont")]
     r#continue: bool,
 
     /// CI/CD headless mode: non-interactive prompt (pipe-friendly).
     /// Skips TUI entirely. Use with --output-format, --allowed-tools, --max-turns.
-    /// Example: shannon --prompt "fix the bug" --allowed-tools Read,Edit,Bash --output-format json
-    #[arg(long = "prompt")]
+    /// Example: shannon -p "fix the bug" --allowed-tools Read,Edit,Bash --output-format json
+    #[arg(short = 'p', long = "prompt")]
     headless_prompt: Option<String>,
 
     // NOTE: `--allowed-tools` is defined above as `team_allowed_tools` (shared
@@ -452,7 +457,7 @@ enum Commands {
         model: Option<String>,
 
         /// LLM provider (anthropic, openai, ollama, custom)
-        #[arg(short, long)]
+        #[arg(long)]
         provider: Option<String>,
 
         /// Maximum tokens for the response (default: 8192)
@@ -503,7 +508,7 @@ enum Commands {
         model: Option<String>,
 
         /// LLM provider (anthropic, openai, ollama, custom)
-        #[arg(short, long)]
+        #[arg(long)]
         provider: Option<String>,
 
         /// Maximum tokens for response
@@ -2217,9 +2222,14 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     }
 
     // Determine if session resume is requested (used by multiple code paths below)
-    let should_resume = cli.resume.is_some() || cli.r#continue;
-    // Normalize empty string from bare --resume (no UUID) to None
-    let resume_session_id: Option<&str> = cli.resume.as_deref().filter(|s| !s.is_empty());
+    // Precedence: --resume-id > --resume <UUID> > --resume / --continue (most recent)
+    let should_resume = cli.resume.is_some() || cli.r#continue || cli.resume_id.is_some();
+    // Use --resume-id if provided, otherwise fall back to --resume value.
+    // Normalize empty string from bare --resume (no UUID) to None.
+    let resume_session_id: Option<&str> = cli
+        .resume_id
+        .as_deref()
+        .or_else(|| cli.resume.as_deref().filter(|s| !s.is_empty()));
 
     // ── CI/CD Headless mode: --prompt flag ──
     // Takes priority over bare prompt and pipe mode.
@@ -2868,15 +2878,24 @@ mod tests {
 
     #[test]
     fn test_cli_bare_prompt_with_provider() {
-        let cli = Cli::try_parse_from(["shannon", "-p", "anthropic", "test query"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["shannon", "--provider", "anthropic", "test query"]).unwrap();
         assert_eq!(cli.prompt.as_deref(), Some("test query"));
         assert_eq!(cli.provider.as_deref(), Some("anthropic"));
         assert!(cli.command.is_none());
     }
 
     #[test]
+    fn test_cli_prompt_short_flag() {
+        let cli = Cli::try_parse_from(["shannon", "-p", "fix the bug", "--output-format", "json"])
+            .unwrap();
+        assert_eq!(cli.headless_prompt.as_deref(), Some("fix the bug"));
+    }
+
+    #[test]
     fn test_cli_bare_prompt_with_model_and_provider() {
-        let cli = Cli::try_parse_from(["shannon", "-m", "gpt-4o", "-p", "openai", "你好"]).unwrap();
+        let cli = Cli::try_parse_from(["shannon", "-m", "gpt-4o", "--provider", "openai", "你好"])
+            .unwrap();
         assert_eq!(cli.prompt.as_deref(), Some("你好"));
         assert_eq!(cli.model.as_deref(), Some("gpt-4o"));
         assert_eq!(cli.provider.as_deref(), Some("openai"));
@@ -2905,6 +2924,124 @@ mod tests {
         }
     }
 
+    // ── Resume flag tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_cli_resume_bare_flag_is_none() {
+        // With num_args = 0..=1, bare --resume (no value) gives None
+        // because clap treats "value absent" as None for Option<String>.
+        // Use --continue or -c for "resume most recent" behavior.
+        let cli = Cli::try_parse_from(["shannon", "--resume"]).unwrap();
+        assert!(cli.resume.is_none());
+        assert!(!cli.r#continue);
+        assert!(cli.resume_id.is_none());
+    }
+
+    #[test]
+    fn test_cli_resume_with_uuid() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cli = Cli::try_parse_from(["shannon", "--resume", uuid]).unwrap();
+        assert_eq!(cli.resume.as_deref(), Some(uuid));
+        assert!(cli.resume_id.is_none());
+    }
+
+    #[test]
+    fn test_cli_resume_short_flag_with_uuid() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cli = Cli::try_parse_from(["shannon", "-r", uuid]).unwrap();
+        assert_eq!(cli.resume.as_deref(), Some(uuid));
+    }
+
+    #[test]
+    fn test_cli_continue_flag() {
+        let cli = Cli::try_parse_from(["shannon", "--continue"]).unwrap();
+        assert!(cli.r#continue);
+        assert!(cli.resume.is_none());
+        assert!(cli.resume_id.is_none());
+    }
+
+    #[test]
+    fn test_cli_continue_short_flag() {
+        let cli = Cli::try_parse_from(["shannon", "-c"]).unwrap();
+        assert!(cli.r#continue);
+    }
+
+    #[test]
+    fn test_cli_resume_id_flag() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cli = Cli::try_parse_from(["shannon", "--resume-id", uuid]).unwrap();
+        assert_eq!(cli.resume_id.as_deref(), Some(uuid));
+        assert!(cli.resume.is_none());
+        assert!(!cli.r#continue);
+    }
+
+    #[test]
+    fn test_cli_resume_id_takes_precedence_over_resume() {
+        // When both --resume-id and --resume are provided, --resume-id wins
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let other_uuid = "12345678-1234-1234-1234-123456789012";
+        let cli =
+            Cli::try_parse_from(["shannon", "--resume-id", uuid, "--resume", other_uuid]).unwrap();
+        assert_eq!(cli.resume_id.as_deref(), Some(uuid));
+        assert_eq!(cli.resume.as_deref(), Some(other_uuid));
+
+        // In run_with_cli, --resume-id takes precedence
+        let resolved: Option<&str> = cli
+            .resume_id
+            .as_deref()
+            .or_else(|| cli.resume.as_deref().filter(|s| !s.is_empty()));
+        assert_eq!(resolved, Some(uuid));
+    }
+
+    #[test]
+    fn test_cli_continue_with_headless_prompt() {
+        // --continue + --prompt should work together
+        let cli = Cli::try_parse_from(["shannon", "--continue", "-p", "fix the bug"]).unwrap();
+        assert!(cli.r#continue);
+        assert_eq!(cli.headless_prompt.as_deref(), Some("fix the bug"));
+    }
+
+    #[test]
+    fn test_cli_resume_id_with_headless_prompt() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let cli =
+            Cli::try_parse_from(["shannon", "--resume-id", uuid, "-p", "continue this"]).unwrap();
+        assert_eq!(cli.resume_id.as_deref(), Some(uuid));
+        assert_eq!(cli.headless_prompt.as_deref(), Some("continue this"));
+    }
+
+    // ── load_resume_session tests ────────────────────────────────────────
+
+    #[test]
+    fn test_load_resume_session_invalid_uuid() {
+        let result = load_resume_session(Some("not-a-valid-uuid"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid session UUID"),
+            "Expected invalid UUID error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_resume_session_nonexistent_uuid() {
+        let uuid = Uuid::new_v4();
+        let result = load_resume_session(Some(&uuid.to_string()));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "Expected 'not found' error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_load_resume_session_no_sessions() {
+        // With an empty default sessions dir, should return an error.
+        // Just verify it doesn't panic.
+        let _ = load_resume_session(None);
+    }
+
     // ── New REPL options tests ────────────────────────────────────────────
 
     #[test]
@@ -2931,7 +3068,7 @@ mod tests {
 
     #[test]
     fn test_cli_parse_repl_with_provider_short() {
-        let cli = Cli::try_parse_from(["shannon", "repl", "-p", "anthropic"]).unwrap();
+        let cli = Cli::try_parse_from(["shannon", "repl", "--provider", "anthropic"]).unwrap();
         match cli.command {
             Some(Commands::Repl { provider, .. }) => {
                 assert_eq!(provider.as_deref(), Some("anthropic"));
@@ -3024,7 +3161,7 @@ mod tests {
             "repl",
             "-m",
             "claude-3-5-sonnet-20241022",
-            "-p",
+            "--provider",
             "anthropic",
             "--max-tokens",
             "16384",
@@ -3163,7 +3300,8 @@ mod tests {
 
     #[test]
     fn test_cli_parse_query_with_provider() {
-        let cli = Cli::try_parse_from(["shannon", "query", "-p", "anthropic", "test"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["shannon", "query", "--provider", "anthropic", "test"]).unwrap();
         match cli.command {
             Some(Commands::Query {
                 query, provider, ..
@@ -3263,7 +3401,7 @@ mod tests {
             "query",
             "-m",
             "claude-sonnet-4",
-            "-p",
+            "--provider",
             "anthropic",
             "--max-tokens",
             "4096",
@@ -3466,7 +3604,7 @@ mod tests {
             "query",
             "-m",
             "gpt-4o",
-            "-p",
+            "--provider",
             "openai",
             "--max-tokens",
             "4096",
