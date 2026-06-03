@@ -132,28 +132,37 @@ VS Code 配套扩展（`editors/vscode/`）：
 
 ## 快速开始
 
-### 环境要求
+### 1. 安装
 
-- **Rust** 1.88+（edition 2024）
-- **操作系统**：Linux / macOS / Windows
-- **API 密钥**：任何 OpenAI 兼容 API 密钥
-
-### 构建
+下载适用于您平台的最新版本：
 
 ```bash
-git clone https://github.com/shannon-agent/shannon-code.git
-cd shannon-code
-cargo build --release
-# 二进制文件位于 target/release/shannon
+# Linux / macOS（从 GitHub Releases 下载）
+curl -fsSL https://github.com/shannon-agent/shannon-code/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
+sudo mv shannon /usr/local/bin/
+
+# 或使用 cargo（需要 Rust 1.88+）
+cargo install --git https://github.com/shannon-agent/shannon-code.git
 ```
 
-### 配置
+<details>
+<summary>其他平台</summary>
 
-配置优先级：CLI 参数 > 环境变量（`SHANNON_*`）> `.shannon.toml`（项目级）> `~/.shannon/config.toml`（全局）。
+- **Windows**：从 [Releases](https://github.com/shannon-agent/shannon-code/releases) 下载 `.zip`
+- **从源码构建**：见下方[开发者指南](#开发者指南)
 
-#### Anthropic
+</details>
+
+### 2. 配置
+
+设置 API 密钥和首选模型：
 
 ```bash
+# 方式 A：环境变量（最快）
+export SHANNON_API_KEY="sk-ant-..."
+export SHANNON_MODEL="claude-sonnet-4-20250514"
+
+# 方式 B：配置文件（持久化）
 mkdir -p ~/.shannon
 cat > ~/.shannon/config.toml << 'EOF'
 provider = "anthropic"
@@ -163,75 +172,52 @@ max_tokens = 8192
 EOF
 ```
 
-#### OpenAI / DeepSeek / 任何兼容端点
+<details>
+<summary>其他提供商</summary>
 
+**OpenAI / DeepSeek / 任何兼容端点：**
 ```bash
-mkdir -p ~/.shannon
 cat > ~/.shannon/config.toml << 'EOF'
 provider = "openai"
 model = "gpt-4o"
 api_key = "sk-..."
 base_url = "https://api.openai.com/v1"
-max_tokens = 8192
 EOF
 ```
 
-#### Ollama（本地，无需 API 密钥）
-
+**Ollama（本地，无需 API 密钥）：**
 ```bash
 ollama serve
 export SHANNON_MODEL="llama3"
-shannon
 ```
 
-#### 环境变量
+</details>
 
-| 变量 | 说明 |
-|------|------|
-| `SHANNON_API_KEY` | LLM 提供商的 API 密钥 |
-| `SHANNON_MODEL` | 模型名称（如 `claude-sonnet-4-20250514`、`gpt-4o`） |
-| `SHANNON_PROVIDER` | 提供商：`anthropic`、`openai`、`ollama`、`custom` |
-| `SHANNON_BASE_URL` | 自定义 API 端点 URL |
-| `SHANNON_MAX_TOKENS` | 最大输出 token 数 |
-| `SHANNON_TEMPERATURE` | 采样温度（0.0-1.0） |
-| `SHANNON_PERMISSION_PROFILE` | 权限配置：`strict`、`balanced`、`permissive` |
-
-自动检测：`ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY` 也可作为备用密钥。
-
-#### MCP 服务器
-
-在 `.mcp.json`（项目级）或 `~/.claude/settings.json` 中添加：
-
-```json
-{
-  "mcpServers": {
-    "fetch": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-fetch"]
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-filesystem", "/path/to/project"]
-    }
-  }
-}
-```
-
-### 运行
+### 3. 运行
 
 ```bash
-shannon                                    # 交互式 REPL
-shannon /path/to/project                   # 在项目目录启动
-shannon --prompt "解释auth模块"             # 非交互/CI 模式
-shannon --resume                           # 恢复最近的会话
-shannon --resume <uuid>                    # 恢复指定会话
-shannon --prompt "列出TODO" --schema schema.json  # 结构化输出
-echo "修复这个bug" | shannon --pipe         # 管道模式
-shannon --prompt "重构" --allowed-tools Read,Edit,Bash,Grep --max-turns 10  # CI 限制
-shannon --prompt "修复lint" --diff-only     # 仅输出 diff
+shannon                          # 交互式 REPL
+shannon /path/to/project         # 在项目目录打开
+shannon --resume                  # 恢复上次会话
 ```
 
-### REPL 命令
+就这么简单。输入问题，按回车即可。
+
+<details>
+<summary>更多用法</summary>
+
+```bash
+shannon --prompt "解释auth模块"             # 非交互/CI 模式
+shannon --prompt "列出TODO" --schema schema.json  # 结构化 JSON 输出
+echo "修复这个bug" | shannon --pipe          # 管道模式
+shannon --prompt "重构" --allowed-tools Read,Edit,Bash,Grep --max-turns 10  # CI
+shannon --prompt "修复lint" --diff-only       # 仅输出 diff
+```
+
+</details>
+
+<details>
+<summary>REPL 命令</summary>
 
 | 命令 | 说明 |
 |------|------|
@@ -251,6 +237,47 @@ shannon --prompt "修复lint" --diff-only     # 仅输出 diff
 | `/routine` | 管理触发/定时例程 |
 | `/preset` | 使用对话预设（review、debug 等） |
 | `/session` | 保存/加载会话模板 |
+
+</details>
+
+<details>
+<summary>MCP 服务器配置</summary>
+
+在 `.mcp.json`（项目级）或 `~/.claude/settings.json` 中添加：
+
+```json
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-fetch"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-filesystem", "/path/to/project"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>环境变量参考</summary>
+
+| 变量 | 说明 |
+|------|------|
+| `SHANNON_API_KEY` | LLM 提供商的 API 密钥 |
+| `SHANNON_MODEL` | 模型名称（如 `claude-sonnet-4-20250514`、`gpt-4o`） |
+| `SHANNON_PROVIDER` | 提供商：`anthropic`、`openai`、`ollama`、`custom` |
+| `SHANNON_BASE_URL` | 自定义 API 端点 URL |
+| `SHANNON_MAX_TOKENS` | 最大输出 token 数 |
+| `SHANNON_TEMPERATURE` | 采样温度（0.0-1.0） |
+| `SHANNON_PERMISSION_PROFILE` | 权限配置：`strict`、`balanced`、`permissive` |
+
+自动检测：`ANTHROPIC_API_KEY` 和 `OPENAI_API_KEY` 也可作为备用密钥。
+
+</details>
 
 ---
 
@@ -280,7 +307,9 @@ shannon-code/
 
 ---
 
-## 开发
+## 开发者指南
+
+面向贡献者和高级用户的源码构建说明。
 
 ```bash
 cargo build                        # 调试构建

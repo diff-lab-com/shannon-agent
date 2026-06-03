@@ -132,28 +132,37 @@ A companion extension for VS Code is available in `editors/vscode/`:
 
 ## Quick Start
 
-### Prerequisites
+### 1. Install
 
-- **Rust** 1.88+ (edition 2024)
-- **OS**: Linux / macOS / Windows
-- **API Key**: Any OpenAI-compatible API key
-
-### Build
+Download the latest release for your platform:
 
 ```bash
-git clone https://github.com/shannon-agent/shannon-code.git
-cd shannon-code
-cargo build --release
-# Binary at target/release/shannon
+# Linux / macOS (from GitHub Releases)
+curl -fsSL https://github.com/shannon-agent/shannon-code/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
+sudo mv shannon /usr/local/bin/
+
+# Or with cargo (requires Rust 1.88+)
+cargo install --git https://github.com/shannon-agent/shannon-code.git
 ```
 
-### Configure
+<details>
+<summary>Other platforms</summary>
 
-Configuration priority: CLI args > env vars (`SHANNON_*`) > `.shannon.toml` (project) > `~/.shannon/config.toml` (global).
+- **Windows**: Download `.zip` from [Releases](https://github.com/shannon-agent/shannon-code/releases)
+- **From source**: See [Developer Guide](#developer-guide) below
 
-#### Anthropic
+</details>
+
+### 2. Configure
+
+Set your API key and preferred model:
 
 ```bash
+# Option A: Environment variable (fastest)
+export SHANNON_API_KEY="sk-ant-..."
+export SHANNON_MODEL="claude-sonnet-4-20250514"
+
+# Option B: Config file (persistent)
 mkdir -p ~/.shannon
 cat > ~/.shannon/config.toml << 'EOF'
 provider = "anthropic"
@@ -163,75 +172,52 @@ max_tokens = 8192
 EOF
 ```
 
-#### OpenAI / DeepSeek / Any compatible
+<details>
+<summary>Other providers</summary>
 
+**OpenAI / DeepSeek / Any compatible:**
 ```bash
-mkdir -p ~/.shannon
 cat > ~/.shannon/config.toml << 'EOF'
 provider = "openai"
 model = "gpt-4o"
 api_key = "sk-..."
 base_url = "https://api.openai.com/v1"
-max_tokens = 8192
 EOF
 ```
 
-#### Ollama (local, no API key needed)
-
+**Ollama (local, no API key needed):**
 ```bash
 ollama serve
 export SHANNON_MODEL="llama3"
-shannon
 ```
 
-#### Environment variables
+</details>
 
-| Variable | Description |
-|----------|-------------|
-| `SHANNON_API_KEY` | API key for the LLM provider |
-| `SHANNON_MODEL` | Model name (e.g. `claude-sonnet-4-20250514`, `gpt-4o`) |
-| `SHANNON_PROVIDER` | Provider: `anthropic`, `openai`, `ollama`, `custom` |
-| `SHANNON_BASE_URL` | Custom API endpoint URL |
-| `SHANNON_MAX_TOKENS` | Maximum output tokens |
-| `SHANNON_TEMPERATURE` | Sampling temperature (0.0-1.0) |
-| `SHANNON_PERMISSION_PROFILE` | Permission profile: `strict`, `balanced`, `permissive` |
-
-Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are auto-detected.
-
-#### MCP Servers
-
-Add in `.mcp.json` (project) or `~/.claude/settings.json`:
-
-```json
-{
-  "mcpServers": {
-    "fetch": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-fetch"]
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@anthropic/mcp-filesystem", "/path/to/project"]
-    }
-  }
-}
-```
-
-### Run
+### 3. Run
 
 ```bash
-shannon                                    # Interactive REPL
-shannon /path/to/project                   # Start in project directory
-shannon --prompt "Explain the auth module" # Non-interactive / CI mode
-shannon --resume                           # Resume most recent session
-shannon --resume <uuid>                    # Resume specific session
-shannon --prompt "List TODOs" --schema schema.json  # Structured output
-echo "fix this bug" | shannon --pipe       # Pipe mode
-shannon --prompt "refactor" --allowed-tools Read,Edit,Bash,Grep --max-turns 10  # CI
-shannon --prompt "fix lint" --diff-only    # Only output diff
+shannon                          # Interactive REPL
+shannon /path/to/project         # Open in a project directory
+shannon --resume                  # Resume last session
 ```
 
-### REPL Commands
+That's it. Type your question and press Enter.
+
+<details>
+<summary>More usage examples</summary>
+
+```bash
+shannon --prompt "Explain the auth module"    # Non-interactive / CI mode
+shannon --prompt "List TODOs" --schema schema.json  # Structured JSON output
+echo "fix this bug" | shannon --pipe           # Pipe mode
+shannon --prompt "refactor" --allowed-tools Read,Edit,Bash,Grep --max-turns 10  # CI
+shannon --prompt "fix lint" --diff-only         # Only output diff
+```
+
+</details>
+
+<details>
+<summary>REPL commands</summary>
 
 | Command | Description |
 |---------|-------------|
@@ -251,6 +237,47 @@ shannon --prompt "fix lint" --diff-only    # Only output diff
 | `/routine` | Manage triggered/scheduled routines |
 | `/preset` | Use conversation presets (review, debug, etc.) |
 | `/session` | Save/load session templates |
+
+</details>
+
+<details>
+<summary>MCP server setup</summary>
+
+Add MCP servers in `.mcp.json` (project-level) or `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-fetch"]
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-filesystem", "/path/to/project"]
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Environment variables reference</summary>
+
+| Variable | Description |
+|----------|-------------|
+| `SHANNON_API_KEY` | API key for the LLM provider |
+| `SHANNON_MODEL` | Model name (e.g. `claude-sonnet-4-20250514`, `gpt-4o`) |
+| `SHANNON_PROVIDER` | Provider: `anthropic`, `openai`, `ollama`, `custom` |
+| `SHANNON_BASE_URL` | Custom API endpoint URL |
+| `SHANNON_MAX_TOKENS` | Maximum output tokens |
+| `SHANNON_TEMPERATURE` | Sampling temperature (0.0-1.0) |
+| `SHANNON_PERMISSION_PROFILE` | Permission profile: `strict`, `balanced`, `permissive` |
+
+Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are auto-detected.
+
+</details>
 
 ---
 
@@ -280,7 +307,9 @@ shannon-code/
 
 ---
 
-## Development
+## Developer Guide
+
+Building from source for contributors and advanced users.
 
 ```bash
 cargo build                        # Debug build
