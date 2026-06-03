@@ -10,9 +10,10 @@ const translations = {
       getStarted: 'Get Started',
     },
     hero: {
-      badge: 'v0.1.0 · Rust · Apache-2.0',
-      title: ['The ', { text: 'open-source', italic: true }, ' AI coding assistant'],
-      subtitle: 'Works with any LLM provider — Anthropic, OpenAI, DeepSeek, Ollama, or any OpenAI-compatible endpoint. Written in Rust for performance and safety.',
+      badge: 'Claude Code Compatible · Rust · Apache-2.0',
+      title: ['AI coding, ', { text: 'without limits', italic: true }, ''],
+      subtitle: 'Claude Code compatible. Works with DeepSeek, OpenAI, Ollama, and any OpenAI endpoint. Written in Rust, no vendor lock-in.',
+      costHint: 'DeepSeek ~$0.14/M tokens  ·  Claude ~$15/M tokens',
       installTabs: {
         cargo: 'Cargo',
         curl: 'curl',
@@ -88,9 +89,10 @@ const translations = {
       getStarted: '开始使用',
     },
     hero: {
-      badge: 'v0.1.0 · Rust · Apache-2.0',
-      title: ['开源的', { text: 'AI 编程助手', italic: true }, ''],
-      subtitle: '支持任何 LLM 提供商 — Anthropic、OpenAI、DeepSeek、Ollama 或任何 OpenAI 兼容端点。使用 Rust 编写，高性能且安全。',
+      badge: '兼容 Claude Code · Rust · Apache-2.0',
+      title: ['AI 编程，', { text: '不受限', italic: true }, ''],
+      subtitle: '兼容 Claude Code 生态，支持 DeepSeek、OpenAI、Ollama 等任何模型。Rust 驱动，开源免费，零锁定。',
+      costHint: 'DeepSeek ~$0.14/百万 token  ·  Claude ~$15/百万 token',
       installTabs: {
         cargo: 'Cargo',
         curl: 'curl',
