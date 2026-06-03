@@ -74,6 +74,6 @@ shannon --prompt "Fix the auth bug in src/login.rs"
 
 ## Next Steps
 
-- Read the [Architecture](/docs/architecture) overview
-- Configure [MCP extensions](/docs/configuration#mcp-extensions)
-- Set up [permission profiles](/docs/configuration#permission-profiles)
+- Read the [Architecture](../architecture/) overview
+- Configure [MCP extensions](../configuration/#mcp-extensions)
+- Set up [permission profiles](../configuration/#permission-profiles)
