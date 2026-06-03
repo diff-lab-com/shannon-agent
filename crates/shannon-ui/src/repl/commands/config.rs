@@ -168,14 +168,14 @@ pub(crate) fn handle_init(repl: &mut Repl) -> Result<()> {
         init_info.push_str("Git repository: not found\n");
     }
 
-    let claude_md_path = std::path::Path::new(cwd).join("CLAUDE.md");
-    if claude_md_path.exists() {
-        init_info.push_str("CLAUDE.md: already exists\n");
+    let agents_md_path = std::path::Path::new(cwd).join("AGENTS.md");
+    if agents_md_path.exists() {
+        init_info.push_str("AGENTS.md: already exists\n");
     } else {
         let default_content = "# Project Instructions\n\nThis file contains project-specific instructions for Shannon.\n\n## Coding Standards\n\n- Follow existing code patterns\n- Write clear, descriptive commit messages\n- Keep functions focused and concise\n\n## Project Structure\n\n- Describe your project structure here\n";
-        match std::fs::write(&claude_md_path, default_content) {
-            Ok(_) => init_info.push_str("CLAUDE.md: created with default template\n"),
-            Err(e) => init_info.push_str(&format!("CLAUDE.md: failed to create ({e})\n")),
+        match std::fs::write(&agents_md_path, default_content) {
+            Ok(_) => init_info.push_str("AGENTS.md: created with default template\n"),
+            Err(e) => init_info.push_str(&format!("AGENTS.md: failed to create ({e})\n")),
         }
     }
 
@@ -518,7 +518,7 @@ pub(crate) fn handle_context(repl: &mut Repl, args: &str) -> Result<()> {
 
     if !found_any {
         msg.push_str(
-            "\nNo project context available. Create a CLAUDE.md file or initialize a git repo.",
+            "\nNo project context available. Create an AGENTS.md file or initialize a git repo.",
         );
     }
 
