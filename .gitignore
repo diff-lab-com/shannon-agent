@@ -120,3 +120,4 @@ claudedocs/
 docs-mdbook/book/
 
 .astro/
+node_modules/
