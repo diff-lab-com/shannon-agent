@@ -35,7 +35,7 @@ for (const doc of sortedDocs) {
   }
 }
 
-const base = import.meta.env.BASE_URL;
+const base = (import.meta.env.BASE_URL as string).replace(/\/?$/, '/');
 
 function docHref(doc: typeof allDocs[0]): string {
   const slug = doc.id.replace(/\.md$/, '');
