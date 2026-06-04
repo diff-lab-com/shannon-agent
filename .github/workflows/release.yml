@@ -316,8 +316,8 @@ jobs:
           for f in release-artifacts/shannon-*; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
-            wrangler r2 object put "$BUCKET/shannon/$VERSION/$base" --file "$f"
-            wrangler r2 object put "$BUCKET/shannon/latest/$base" --file "$f"
+            wrangler r2 object put "$BUCKET/$VERSION/$base" --file "$f"
+            wrangler r2 object put "$BUCKET/latest/$base" --file "$f"
           done
           wrangler r2 object put "$BUCKET/install.sh" --file scripts/install.sh
           wrangler r2 object put "$BUCKET/install.ps1" --file scripts/install.ps1

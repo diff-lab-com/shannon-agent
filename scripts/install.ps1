@@ -7,9 +7,9 @@
 
 $ErrorActionPreference = 'Stop'
 
-$CDN_BASE = 'https://cdn.shannon.dev/shannon/latest'
-$BINARY = 'shannon-x86_64-windows.exe'
-$URL = "$CDN_BASE/$BINARY"
+$CDN_BASE = 'https://cdn.shannon.dev/latest'
+$ARCHIVE = 'shannon-cli-x86_64-pc-windows-msvc.zip'
+$URL = "$CDN_BASE/$ARCHIVE"
 
 # Determine install directory
 $InstallDir = if ($env:USERPROFILE) {
@@ -27,9 +27,10 @@ if (-not (Test-Path $InstallDir)) {
 }
 
 # Download
-Write-Host "[info] Downloading $BINARY..." -ForegroundColor Cyan
+Write-Host "[info] Downloading $ARCHIVE..." -ForegroundColor Cyan
+$ZipPath = Join-Path $env:TEMP 'shannon-cli.zip'
 try {
-    Invoke-WebRequest -Uri $URL -OutFile $TargetPath -UseBasicParsing
+    Invoke-WebRequest -Uri $URL -OutFile $ZipPath -UseBasicParsing
 } catch {
     Write-Host "[error] Download failed: $_" -ForegroundColor Red
     exit 1
@@ -39,17 +40,36 @@ try {
 $ShaUrl = "$URL.sha256"
 try {
     $ShaResponse = Invoke-WebRequest -Uri $ShaUrl -UseBasicParsing
-    $ExpectedHash = $ShaResponse.Content.Split(' ')[0].Trim()
-    $ActualHash = (Get-FileHash -Path $TargetPath -Algorithm SHA256).Hash.ToLower()
+    $ShaLine = $ShaResponse.Content.Trim()
+    # sha256sum format: <hash>  <filename> or <hash> *<filename>
+    $ExpectedHash = $ShaLine.Split(' ')[0].Trim()
+    $ActualHash = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLower()
     if ($ActualHash -ne $ExpectedHash.ToLower()) {
         Write-Host "[error] Checksum mismatch!" -ForegroundColor Red
-        Remove-Item $TargetPath
+        Remove-Item $ZipPath
         exit 1
     }
     Write-Host "[ok] Checksum verified" -ForegroundColor Green
 } catch {
     Write-Host "[info] Checksum not available, skipping verification" -ForegroundColor Yellow
 }
+
+# Extract
+Write-Host "[info] Extracting..." -ForegroundColor Cyan
+$ExtractDir = Join-Path $env:TEMP 'shannon-cli-extract'
+if (Test-Path $ExtractDir) { Remove-Item $ExtractDir -Recurse -Force }
+Expand-Archive -Path $ZipPath -DestinationPath $ExtractDir -Force
+
+# Find and install binary
+$Binary = Get-ChildItem -Path $ExtractDir -Filter 'shannon.exe' -Recurse | Select-Object -First 1
+if (-not $Binary) {
+    Write-Host "[error] shannon.exe not found in archive" -ForegroundColor Red
+    exit 1
+}
+
+Copy-Item $Binary.FullName $TargetPath -Force
+Remove-Item $ZipPath -Force
+if (Test-Path $ExtractDir) { Remove-Item $ExtractDir -Recurse -Force }
 
 # Add to PATH if not already there
 $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
