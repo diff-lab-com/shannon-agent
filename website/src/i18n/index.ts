@@ -15,13 +15,13 @@ const translations = {
       subtitle: 'Claude Code compatible. Works with DeepSeek, OpenAI, Ollama, and any OpenAI endpoint. Written in Rust, no vendor lock-in.',
       costHint: 'DeepSeek ~$0.14/M tokens  ·  Claude ~$15/M tokens',
       installTabs: {
-        cargo: 'Cargo',
         curl: 'curl',
+        cargo: 'Cargo',
         brew: 'Homebrew',
       },
       installCommands: {
+        curl: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
         cargo: 'cargo install --git https://github.com/shannon-agent/shannon-code.git',
-        curl: 'curl -fsSL https://github.com/shannon-agent/shannon-code/releases/latest/download/install.sh | sh',
         brew: 'brew install shannon-agent/tap/shannon',
       },
       copied: 'Copied!',
@@ -72,7 +72,7 @@ const translations = {
     },
     cta: {
       title: 'Get started in 30 seconds',
-      command: 'cargo install --git https://github.com/shannon-agent/shannon-code.git',
+      command: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
       button: 'Read the Docs',
     },
     footer: {
@@ -94,13 +94,13 @@ const translations = {
       subtitle: '兼容 Claude Code 生态，支持 DeepSeek、OpenAI、Ollama 等任何模型。Rust 驱动，开源免费，零锁定。',
       costHint: 'DeepSeek ~$0.14/百万 token  ·  Claude ~$15/百万 token',
       installTabs: {
-        cargo: 'Cargo',
         curl: 'curl',
+        cargo: 'Cargo',
         brew: 'Homebrew',
       },
       installCommands: {
+        curl: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
         cargo: 'cargo install --git https://github.com/shannon-agent/shannon-code.git',
-        curl: 'curl -fsSL https://github.com/shannon-agent/shannon-code/releases/latest/download/install.sh | sh',
         brew: 'brew install shannon-agent/tap/shannon',
       },
       copied: '已复制！',
@@ -151,7 +151,7 @@ const translations = {
     },
     cta: {
       title: '30 秒开始使用',
-      command: 'cargo install --git https://github.com/shannon-agent/shannon-code.git',
+      command: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
       button: '阅读文档',
     },
     footer: {

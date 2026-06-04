@@ -296,3 +296,29 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+      # ── Cloudflare R2 upload ──────────────────────────────────────────
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Upload to Cloudflare R2
+        if: vars.R2_BUCKET != ''
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          command: |
+            VERSION="${{ needs.plan.outputs.tag }}"
+            BUCKET="${{ vars.R2_BUCKET }}"
+            # Upload binaries to versioned and latest paths
+            for f in release-artifacts/shannon-*; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              npx wrangler r2 object put "$BUCKET/shannon/$VERSION/$base" --file "$f"
+              npx wrangler r2 object put "$BUCKET/shannon/latest/$base" --file "$f"
+            done
+            # Upload install scripts
+            npx wrangler r2 object put "$BUCKET/install.sh" --file scripts/install.sh
+            npx wrangler r2 object put "$BUCKET/install.ps1" --file scripts/install.ps1
