@@ -7,7 +7,7 @@ interface HeroProps {
 
 export default function Hero({ lang }: HeroProps) {
   const t = getTranslations(lang);
-  const [activeTab, setActiveTab] = useState<'cargo' | 'curl' | 'brew'>('cargo');
+  const [activeTab, setActiveTab] = useState<'curl' | 'cargo' | 'brew'>('curl');
   const [copied, setCopied] = useState(false);
 
   const copyCommand = () => {
@@ -16,7 +16,7 @@ export default function Hero({ lang }: HeroProps) {
     setTimeout(() => setCopied(false), 1400);
   };
 
-  const tabs = ['cargo', 'curl', 'brew'] as const;
+  const tabs = ['curl', 'cargo', 'brew'] as const;
 
   return (
     <section style={{

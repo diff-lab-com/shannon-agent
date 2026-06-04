@@ -268,6 +268,10 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      - name: "Add install scripts to release"
+        run: |
+          cp scripts/install.sh artifacts/install.sh
+          cp scripts/install.ps1 artifacts/install.ps1
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
@@ -296,3 +300,30 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+
+      # ── Cloudflare R2 upload ──────────────────────────────────────────
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Upload to Cloudflare R2
+        if: vars.R2_BUCKET != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm install -g wrangler@4.98.0
+          VERSION="${{ needs.plan.outputs.tag }}"
+          BUCKET="${{ vars.R2_BUCKET }}"
+          for f in release-artifacts/shannon-*; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            wrangler r2 object put "$BUCKET/$VERSION/$base" --file "$f"
+            wrangler r2 object put "$BUCKET/latest/$base" --file "$f"
+          done
+          wrangler r2 object put "$BUCKET/install.sh" --file scripts/install.sh
+          wrangler r2 object put "$BUCKET/install.ps1" --file scripts/install.ps1
+          wrangler r2 object put "$BUCKET/latest/install.sh" --file scripts/install.sh
+          wrangler r2 object put "$BUCKET/latest/install.ps1" --file scripts/install.ps1

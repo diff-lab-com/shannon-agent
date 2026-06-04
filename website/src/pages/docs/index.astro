@@ -31,7 +31,7 @@ import DocsLayout from '../../layouts/DocsLayout.astro';
       color: 'inherit',
     }}>
       <h3 style={{ marginBottom: 8 }}>Getting Started</h3>
-      <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Install, configure, and run Shannon Code in 30 seconds.</p>
+      <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Install the binary, configure your API key, and start coding in under a minute.</p>
     </a>
     <a href={import.meta.env.BASE_URL + '/docs/architecture'} style={{
       display: 'block',
@@ -104,6 +104,18 @@ import DocsLayout from '../../layouts/DocsLayout.astro';
     }}>
       <h3 style={{ marginBottom: 8 }}>Migration Guide</h3>
       <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Migrate from Claude Code, Codex CLI, or OpenCode.</p>
+    </a>
+    <a href={import.meta.env.BASE_URL + '/docs/building-from-source'} style={{
+      display: 'block',
+      padding: '24px',
+      background: 'var(--paper)',
+      border: '1px solid var(--line)',
+      borderRadius: 'var(--radius-md)',
+      textDecoration: 'none',
+      color: 'inherit',
+    }}>
+      <h3 style={{ marginBottom: 8 }}>Building from Source</h3>
+      <p style={{ color: 'var(--muted)', fontSize: 14, margin: 0 }}>Clone, compile, and contribute to Shannon Code.</p>
     </a>
   </div>
 </DocsLayout>
