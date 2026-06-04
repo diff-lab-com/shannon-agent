@@ -92,7 +92,7 @@ export default function Navbar({ lang, onLangChange }: NavbarProps) {
           </button>
           <a href="https://github.com/shannon-agent/shannon-code" target="_blank" rel="noopener noreferrer"
             style={navLinkStyle}>{t.nav.github}</a>
-          <a href="#install" className="btn-primary" style={{ fontSize: 14, padding: '8px 18px' }}
+          <a href={BASE + 'docs/getting-started'} className="btn-primary" style={{ fontSize: 14, padding: '8px 18px' }}
             onClick={() => setMenuOpen(false)}>{t.nav.getStarted}</a>
         </div>
 
