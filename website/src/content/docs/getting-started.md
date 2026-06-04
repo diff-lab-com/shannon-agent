@@ -6,25 +6,59 @@ section: getting-started
 
 # Getting Started
 
-## Prerequisites
+Get Shannon Code running in under a minute. No Rust toolchain needed.
 
-- **Rust** 1.88+ (edition 2024)
-- **Git**
-- An LLM API key (Anthropic, OpenAI, or a local Ollama instance)
+## Install
 
-## Build
+Pick your platform:
+
+### macOS
 
 ```bash
-git clone https://github.com/ericdong/shannon-code.git
-cd shannon-code
-cargo build --release
+# Apple Silicon (M1/M2/M3/M4)
+curl -fsSL https://cdn.shannon.dev/install.sh | sh
+
+# Intel
+curl -fsSL https://cdn.shannon.dev/install.sh | sh
+
+# Or with Homebrew
+brew install shannon-agent/tap/shannon
 ```
 
-The binary is at `target/release/shannon`.
+### Linux
+
+```bash
+curl -fsSL https://cdn.shannon.dev/install.sh | sh
+```
+
+### Windows
+
+Download the latest binary:
+
+[Download shannon-x86_64-windows.exe](https://cdn.shannon.dev/shannon/latest/shannon-x86_64-windows.exe)
+
+Or in PowerShell:
+
+```powershell
+irm https://cdn.shannon.dev/install.ps1 | iex
+```
+
+### Other Methods
+
+```bash
+# Cargo (requires Rust toolchain)
+cargo install --git https://github.com/shannon-agent/shannon-code.git
+```
 
 ## Configure
 
-Create `~/.shannon/config.toml`:
+Set your API key as an environment variable:
+
+```bash
+export SHANNON_API_KEY="sk-ant-..."
+```
+
+Or create a config file at `~/.shannon/config.toml`:
 
 ```toml
 provider = "anthropic"
@@ -32,36 +66,40 @@ api_key = "sk-ant-..."
 model = "claude-sonnet-4"
 ```
 
-Or use environment variables:
+Shannon supports multiple providers. Switch by changing the config:
 
-```bash
-export SHANNON_API_KEY="sk-ant-..."
-export SHANNON_MODEL="claude-sonnet-4"
-export SHANNON_PROVIDER="anthropic"
-```
+| Provider | `provider` value | `model` example |
+|----------|-----------------|-----------------|
+| Anthropic | `anthropic` | `claude-sonnet-4` |
+| OpenAI | `openai` | `gpt-4o` |
+| DeepSeek | `deepseek` | `deepseek-chat` |
+| Ollama (local) | `ollama` | `llama3` |
 
 See [Configuration](../configuration/) for all options.
 
-## Run
+## First Run
 
 ```bash
-# Interactive REPL
+# Start interactive REPL
 shannon
 
-# One-shot prompt (headless mode)
+# Or ask a question directly
 shannon --prompt "explain this codebase"
 
-# Resume last session
+# Continue where you left off
 shannon --resume
-
-# Resume specific session
-shannon --resume <session-uuid>
 ```
 
 ## Verify
 
-```bash
-cargo test --workspace -- --test-threads=1
-```
+Run `shannon` in a project directory. You should see the REPL prompt and can start asking questions about your code.
 
-All tests should pass. Use `--test-threads=1` because some tests share environment variables.
+## What's Next?
+
+- [Configuration](../configuration/) — customize providers, MCP servers, permissions
+- [Features](../features/) — tools, agents, hooks, memory, caching
+- [Migration](../migration/) — switch from Claude Code, Codex CLI, or OpenCode
+
+---
+
+Building from source? See [Building from Source](../building-from-source/).
