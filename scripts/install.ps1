@@ -1,13 +1,13 @@
 # Shannon Code installer for Windows
 # Usage:
-#   irm https://cdn.shannon.dev/install.ps1 | iex
+#   irm https://github.com/shannon-agent/shannon-code/releases/latest/download/install.ps1 | iex
 #
 # Downloads the latest Shannon Code binary and installs it to a
 # directory on your PATH.
 
 $ErrorActionPreference = 'Stop'
 
-$CDN_BASE = 'https://cdn.shannon.dev/latest'
+$CDN_BASE = if ($env:SHANNON_CDN_URL) { "$env:SHANNON_CDN_URL/latest" } else { 'https://github.com/shannon-agent/shannon-code/releases/latest/download' }
 $ARCHIVE = 'shannon-cli-x86_64-pc-windows-msvc.zip'
 $URL = "$CDN_BASE/$ARCHIVE"
 

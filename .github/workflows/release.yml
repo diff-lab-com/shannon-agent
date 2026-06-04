@@ -268,6 +268,10 @@ jobs:
         run: |
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
+      - name: "Add install scripts to release"
+        run: |
+          cp scripts/install.sh artifacts/install.sh
+          cp scripts/install.ps1 artifacts/install.ps1
       - name: Create GitHub Release
         env:
           PRERELEASE_FLAG: "${{ fromJson(steps.host.outputs.manifest).announcement_is_prerelease && '--prerelease' || '' }}"
@@ -321,3 +325,5 @@ jobs:
           done
           wrangler r2 object put "$BUCKET/install.sh" --file scripts/install.sh
           wrangler r2 object put "$BUCKET/install.ps1" --file scripts/install.ps1
+          wrangler r2 object put "$BUCKET/latest/install.sh" --file scripts/install.sh
+          wrangler r2 object put "$BUCKET/latest/install.ps1" --file scripts/install.ps1

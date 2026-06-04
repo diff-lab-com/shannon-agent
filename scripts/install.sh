@@ -2,7 +2,7 @@
 # Shannon Code installer — https://github.com/shannon-agent/shannon-code
 #
 # Usage:
-#   curl -fsSL https://cdn.shannon.dev/install.sh | sh
+#   curl -fsSL ${SHANNON_CDN_URL:-https://github.com/shannon-agent/shannon-code/releases/latest/download}/install.sh | sh
 #
 # This script detects your OS and architecture, downloads the latest
 # Shannon Code binary, verifies its SHA-256 checksum, and installs
@@ -10,7 +10,7 @@
 
 set -e
 
-CDN_BASE="https://cdn.shannon.dev/latest"
+CDN_BASE="${SHANNON_CDN_URL:-https://github.com/shannon-agent/shannon-code/releases/latest/download}"
 
 info()  { printf '\033[1m[info]\033[0m  %s\n' "$1"; }
 ok()    { printf '\033[32m[ok]\033[0m    %s\n' "$1"; }
