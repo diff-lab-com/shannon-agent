@@ -40,3 +40,4 @@ parking_lot = "0.12"
 [dev-dependencies]
 tempfile = "3"
 insta = "1.42"
+serial_test = { version = "3", features = ["file_locks"] }

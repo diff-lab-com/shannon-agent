@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::widgets::ChatRole;
+use serial_test::serial;
 use shannon_core::UiAdapter;
 use std::io::IsTerminal;
 
@@ -2801,6 +2802,7 @@ fn test_repl_route_routing_state() {
 // ---- /mcp command tests ----
 
 #[test]
+#[serial]
 fn test_repl_mcp_help() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp".to_string());
@@ -2811,6 +2813,7 @@ fn test_repl_mcp_help() {
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_add_and_list() {
     let _ = std::fs::remove_dir_all(".shannon-test-mcp");
     let mut repl = Repl::new().unwrap();
@@ -2830,6 +2833,7 @@ fn test_repl_mcp_add_and_list() {
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_show() {
     let mut repl = Repl::new().unwrap();
     repl.prompt
@@ -2844,6 +2848,7 @@ fn test_repl_mcp_show() {
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_show_not_found() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp show nonexistent".to_string());
@@ -2853,6 +2858,7 @@ fn test_repl_mcp_show_not_found() {
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_remove() {
     let mut repl = Repl::new().unwrap();
     repl.prompt
@@ -2865,6 +2871,7 @@ fn test_repl_mcp_remove() {
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_path() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp path".to_string());
