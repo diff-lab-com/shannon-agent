@@ -304,6 +304,8 @@ impl LlmClient {
         response_body: &str,
     ) {
         if let Some(dir) = Self::record_dir() {
+            let (cache_creation, cache_read) =
+                RecordedExchange::extract_cache_metrics(response_body);
             let exchange = RecordedExchange {
                 request_hash: Self::request_hash(serialized_body),
                 provider: format!("{}", self.config.provider),
@@ -318,6 +320,8 @@ impl LlmClient {
                     headers: response_headers,
                     body: response_body.to_string(),
                 },
+                cache_creation_input_tokens: cache_creation,
+                cache_read_input_tokens: cache_read,
             }
             .strip_secrets();
 

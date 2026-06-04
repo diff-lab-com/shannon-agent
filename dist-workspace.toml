@@ -23,6 +23,8 @@ hosting = "github"
 unix-archive = ".tar.gz"
 windows-archive = ".zip"
 merge-tasks = true
+# Allow custom modifications to the generated CI workflow
+allow-dirty = ["ci"]
 
 [dist.homebrew]
 tap = "shannon-agent/homebrew-shannon"

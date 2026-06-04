@@ -46,6 +46,12 @@ pub struct RecordedExchange {
     pub request: RecordedRequest,
     /// The HTTP response details.
     pub response: RecordedResponse,
+    /// Tokens written to the prompt cache (Anthropic-specific).
+    #[serde(default)]
+    pub cache_creation_input_tokens: u32,
+    /// Tokens read from the prompt cache (Anthropic-specific).
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -118,6 +124,57 @@ impl RecordedExchange {
         "anthropic-api-key", // Alias used by some SDKs
     ];
 
+    /// Extract cache metrics from the response body JSON.
+    /// Looks for Anthropic-style `usage.cache_creation_input_tokens` and
+    /// `usage.cache_read_input_tokens`, or OpenAI-style equivalents in SSE data lines.
+    pub fn extract_cache_metrics(response_body: &str) -> (u32, u32) {
+        // Try parsing as a single JSON object first (non-streaming response)
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(response_body) {
+            if let Some(usage) = v.get("usage") {
+                let created = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                let read = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                return (created, read);
+            }
+        }
+
+        // For streaming responses, scan SSE data lines for message_start/message_delta
+        let mut created: u32 = 0;
+        let mut read: u32 = 0;
+        for line in response_body.lines() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with("data: ") {
+                continue;
+            }
+            let data = &trimmed[6..];
+            if data == "[DONE]" {
+                continue;
+            }
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(usage) = v
+                    .get("message")
+                    .and_then(|m| m.get("usage"))
+                    .or_else(|| v.get("usage"))
+                {
+                    created = usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    read = usage
+                        .get("cache_read_input_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                }
+            }
+        }
+        (created, read)
+    }
+
     /// Return a copy with sensitive headers redacted.
     pub fn strip_secrets(mut self) -> Self {
         self.response.headers = self
@@ -180,6 +237,55 @@ impl RecordedExchange {
 pub struct ReplayHarness {
     pub fixtures: Vec<RecordedExchange>,
     pub fixture_dir: PathBuf,
+}
+
+/// Aggregate cache statistics from a set of recorded exchanges.
+#[derive(Debug, Default)]
+pub struct CacheStats {
+    pub total_exchanges: usize,
+    pub exchanges_with_cache_hit: usize,
+    pub total_cache_creation_tokens: u64,
+    pub total_cache_read_tokens: u64,
+}
+
+impl CacheStats {
+    /// Compute stats from a slice of recorded exchanges.
+    pub fn from_exchanges(exchanges: &[RecordedExchange]) -> Self {
+        let mut stats = CacheStats {
+            total_exchanges: exchanges.len(),
+            ..CacheStats::default()
+        };
+        for ex in exchanges {
+            stats.total_cache_creation_tokens += ex.cache_creation_input_tokens as u64;
+            stats.total_cache_read_tokens += ex.cache_read_input_tokens as u64;
+            if ex.cache_read_input_tokens > 0 {
+                stats.exchanges_with_cache_hit += 1;
+            }
+        }
+        stats
+    }
+
+    /// Cache hit rate as a fraction (0.0–1.0).
+    pub fn hit_rate(&self) -> f64 {
+        if self.total_exchanges == 0 {
+            return 0.0;
+        }
+        self.exchanges_with_cache_hit as f64 / self.total_exchanges as f64
+    }
+
+    /// Print a human-readable summary.
+    pub fn print_summary(&self) {
+        println!("Cache Statistics");
+        println!("================");
+        println!("Exchanges:           {}", self.total_exchanges);
+        println!(
+            "Cache hits:          {} ({:.1}%)",
+            self.exchanges_with_cache_hit,
+            self.hit_rate() * 100.0
+        );
+        println!("Tokens written:      {}", self.total_cache_creation_tokens);
+        println!("Tokens read (saved): {}", self.total_cache_read_tokens);
+    }
 }
 
 impl ReplayHarness {
@@ -300,6 +406,7 @@ impl RecordingSession {
         response_headers: Vec<(String, String)>,
         response_body: &str,
     ) -> Result<PathBuf, String> {
+        let (cache_creation, cache_read) = RecordedExchange::extract_cache_metrics(response_body);
         let exchange = RecordedExchange {
             request_hash: RecordedExchange::hash_body(request_body),
             provider: self.provider.clone(),
@@ -314,6 +421,8 @@ impl RecordingSession {
                 headers: response_headers,
                 body: response_body.to_string(),
             },
+            cache_creation_input_tokens: cache_creation,
+            cache_read_input_tokens: cache_read,
         }
         .strip_secrets();
 
@@ -379,6 +488,8 @@ mod tests {
                 headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
                 body: "data: {\"type\":\"message_start\"}\n\ndata: [DONE]\n\n".to_string(),
             },
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         };
 
         let saved_path = exchange.save(&dir).unwrap();
@@ -424,6 +535,8 @@ mod tests {
                 headers: vec![],
                 body: "data: {}\n\ndata: [DONE]\n\n".to_string(),
             },
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         };
         exchange.save(&dir).unwrap();
 
@@ -458,6 +571,8 @@ mod tests {
                 headers: vec![("content-type".to_string(), "text/event-stream".to_string())],
                 body: "data: {\"type\":\"message_start\"}\n\n".to_string(),
             },
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         };
 
         let exchange2 = RecordedExchange {
@@ -474,6 +589,8 @@ mod tests {
                 headers: vec![],
                 body: "data: {\"type\":\"content_block_delta\"}\n\n".to_string(),
             },
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         };
 
         exchange1.save_jsonl(&path).unwrap();
@@ -513,6 +630,8 @@ mod tests {
                 ],
                 body: "{}".to_string(),
             },
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         };
 
         let stripped = exchange.strip_secrets();
@@ -563,6 +682,8 @@ mod tests {
                 headers: vec![],
                 body: "data: {}\n\n".to_string(),
             },
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
         };
 
         exchange
@@ -586,5 +707,75 @@ mod tests {
         if std::env::var("SHANNON_RECORD_DIR").is_err() {
             assert!(RecordingSession::from_env().is_none());
         }
+    }
+
+    #[test]
+    fn test_extract_cache_metrics_non_streaming() {
+        let body = r#"{"id":"msg_1","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":300}}"#;
+        let (created, read) = RecordedExchange::extract_cache_metrics(body);
+        assert_eq!(created, 200);
+        assert_eq!(read, 300);
+    }
+
+    #[test]
+    fn test_extract_cache_metrics_streaming() {
+        let body = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}\n\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":50,\"cache_creation_input_tokens\":500,\"cache_read_input_tokens\":1000}}\n\ndata: [DONE]\n\n";
+        let (created, read) = RecordedExchange::extract_cache_metrics(body);
+        assert_eq!(created, 500);
+        assert_eq!(read, 1000);
+    }
+
+    #[test]
+    fn test_extract_cache_metrics_no_usage() {
+        let body = r#"{"id":"msg_1","content":"hello"}"#;
+        let (created, read) = RecordedExchange::extract_cache_metrics(body);
+        assert_eq!(created, 0);
+        assert_eq!(read, 0);
+    }
+
+    #[test]
+    fn test_cache_stats() {
+        let exchanges = vec![
+            RecordedExchange {
+                request_hash: "h1".to_string(),
+                provider: "anthropic".to_string(),
+                model: "test".to_string(),
+                request: RecordedRequest {
+                    method: "POST".to_string(),
+                    path: "/v1/messages".to_string(),
+                    body: "{}".to_string(),
+                },
+                response: RecordedResponse {
+                    status: 200,
+                    headers: vec![],
+                    body: "{}".to_string(),
+                },
+                cache_creation_input_tokens: 100,
+                cache_read_input_tokens: 200,
+            },
+            RecordedExchange {
+                request_hash: "h2".to_string(),
+                provider: "anthropic".to_string(),
+                model: "test".to_string(),
+                request: RecordedRequest {
+                    method: "POST".to_string(),
+                    path: "/v1/messages".to_string(),
+                    body: "{}".to_string(),
+                },
+                response: RecordedResponse {
+                    status: 200,
+                    headers: vec![],
+                    body: "{}".to_string(),
+                },
+                cache_creation_input_tokens: 50,
+                cache_read_input_tokens: 0,
+            },
+        ];
+        let stats = CacheStats::from_exchanges(&exchanges);
+        assert_eq!(stats.total_exchanges, 2);
+        assert_eq!(stats.exchanges_with_cache_hit, 1);
+        assert_eq!(stats.total_cache_creation_tokens, 150);
+        assert_eq!(stats.total_cache_read_tokens, 200);
+        assert!((stats.hit_rate() - 0.5).abs() < 0.001);
     }
 }

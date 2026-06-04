@@ -564,8 +564,7 @@ impl ComputerUseTool {
     ) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would scroll {:?} x{}. Rebuild with --features computer-use.",
-                direction, amount
+                "Computer use not enabled. Would scroll {direction:?} x{amount}. Rebuild with --features computer-use.",
             ),
             is_error: true,
             metadata: HashMap::new(),
@@ -617,8 +616,7 @@ impl ComputerUseTool {
     async fn execute_key_press(&self, key: &str) -> ToolResult<ToolOutput> {
         Ok(ToolOutput {
             content: format!(
-                "Computer use not enabled. Would press '{}'. Rebuild with --features computer-use.",
-                key
+                "Computer use not enabled. Would press '{key}'. Rebuild with --features computer-use.",
             ),
             is_error: true,
             metadata: HashMap::new(),
@@ -630,7 +628,7 @@ impl ComputerUseTool {
         let millis = (duration * 1000.0) as u64;
         tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
         Ok(ToolOutput {
-            content: format!("Waited {:.1}s", duration),
+            content: format!("Waited {duration:.1}s"),
             is_error: false,
             metadata: HashMap::new(),
         })
@@ -642,7 +640,7 @@ impl ComputerUseTool {
         let millis = (duration * 1000.0) as u64;
         tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
         Ok(ToolOutput {
-            content: format!("Waited {:.1}s", duration),
+            content: format!("Waited {duration:.1}s"),
             is_error: false,
             metadata: HashMap::new(),
         })
