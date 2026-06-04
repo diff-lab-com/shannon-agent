@@ -86,10 +86,6 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Property-based testing
 proptest = "1"
 
-[workspace.metadata.dist]
-# Allow custom modifications to the release workflow (R2 upload steps)
-allow-dirty = ["./.github/workflows/release.yml"]
-
 [profile.release]
 opt-level = 3
 lto = true
