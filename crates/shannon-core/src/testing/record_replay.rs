@@ -251,8 +251,10 @@ pub struct CacheStats {
 impl CacheStats {
     /// Compute stats from a slice of recorded exchanges.
     pub fn from_exchanges(exchanges: &[RecordedExchange]) -> Self {
-        let mut stats = CacheStats::default();
-        stats.total_exchanges = exchanges.len();
+        let mut stats = CacheStats {
+            total_exchanges: exchanges.len(),
+            ..CacheStats::default()
+        };
         for ex in exchanges {
             stats.total_cache_creation_tokens += ex.cache_creation_input_tokens as u64;
             stats.total_cache_read_tokens += ex.cache_read_input_tokens as u64;
