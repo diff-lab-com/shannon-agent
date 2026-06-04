@@ -35,7 +35,7 @@ curl -fsSL https://cdn.shannon.dev/install.sh | sh
 
 Download the latest binary:
 
-[Download shannon-x86_64-windows.exe](https://cdn.shannon.dev/shannon/latest/shannon-x86_64-windows.exe)
+[Download shannon-cli-x86_64-pc-windows-msvc.zip](https://cdn.shannon.dev/latest/shannon-cli-x86_64-pc-windows-msvc.zip)
 
 Or in PowerShell:
 

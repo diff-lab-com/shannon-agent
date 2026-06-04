@@ -8,7 +8,7 @@ interface DownloadButtonsProps {
   lang: Lang;
 }
 
-const CDN_BASE = 'https://cdn.shannon.dev/shannon/latest';
+const CDN_BASE = 'https://cdn.shannon.dev/latest';
 
 function detectOS(): OS {
   if (typeof navigator === 'undefined') return 'linux';
@@ -27,16 +27,16 @@ function detectArch(): Arch {
 
 const DOWNLOADS: Record<OS, Record<Arch, { url: string; label: string }>> = {
   macos: {
-    arm64: { url: `${CDN_BASE}/shannon-aarch64-macos`, label: 'macOS (Apple Silicon)' },
-    x64: { url: `${CDN_BASE}/shannon-x86_64-macos`, label: 'macOS (Intel)' },
+    arm64: { url: `${CDN_BASE}/shannon-cli-aarch64-apple-darwin.tar.gz`, label: 'macOS (Apple Silicon)' },
+    x64: { url: `${CDN_BASE}/shannon-cli-x86_64-apple-darwin.tar.gz`, label: 'macOS (Intel)' },
   },
   linux: {
-    arm64: { url: `${CDN_BASE}/shannon-aarch64-linux`, label: 'Linux (ARM64)' },
-    x64: { url: `${CDN_BASE}/shannon-x86_64-linux`, label: 'Linux (x86_64)' },
+    arm64: { url: `${CDN_BASE}/shannon-cli-aarch64-unknown-linux-musl.tar.gz`, label: 'Linux (ARM64)' },
+    x64: { url: `${CDN_BASE}/shannon-cli-x86_64-unknown-linux-musl.tar.gz`, label: 'Linux (x86_64)' },
   },
   windows: {
-    arm64: { url: `${CDN_BASE}/shannon-x86_64-windows.exe`, label: 'Windows (x86_64)' },
-    x64: { url: `${CDN_BASE}/shannon-x86_64-windows.exe`, label: 'Windows (x86_64)' },
+    arm64: { url: `${CDN_BASE}/shannon-cli-x86_64-pc-windows-msvc.zip`, label: 'Windows (x86_64)' },
+    x64: { url: `${CDN_BASE}/shannon-cli-x86_64-pc-windows-msvc.zip`, label: 'Windows (x86_64)' },
   },
 };
 

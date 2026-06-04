@@ -10,7 +10,7 @@
 
 set -e
 
-CDN_BASE="https://cdn.shannon.dev/shannon/latest"
+CDN_BASE="https://cdn.shannon.dev/latest"
 
 info()  { printf '\033[1m[info]\033[0m  %s\n' "$1"; }
 ok()    { printf '\033[32m[ok]\033[0m    %s\n' "$1"; }
@@ -22,14 +22,14 @@ OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 case "$OS-$ARCH" in
-  Darwin-arm64)           BINARY="shannon-aarch64-macos" ;;
-  Darwin-x86_64|Darwin-amd64) BINARY="shannon-x86_64-macos" ;;
-  Linux-arm64|Linux-aarch64)  BINARY="shannon-aarch64-linux" ;;
-  Linux-x86_64|Linux-amd64)   BINARY="shannon-x86_64-linux" ;;
-  *) err "Unsupported platform: $OS $ARCH. Please build from source: https://shannon.dev/docs/building-from-source/" ;;
+  Darwin-arm64)               ARCHIVE="shannon-cli-aarch64-apple-darwin.tar.gz" ;;
+  Darwin-x86_64|Darwin-amd64) ARCHIVE="shannon-cli-x86_64-apple-darwin.tar.gz" ;;
+  Linux-arm64|Linux-aarch64)  ARCHIVE="shannon-cli-aarch64-unknown-linux-musl.tar.gz" ;;
+  Linux-x86_64|Linux-amd64)   ARCHIVE="shannon-cli-x86_64-unknown-linux-musl.tar.gz" ;;
+  *) err "Unsupported platform: $OS $ARCH. Please build from source." ;;
 esac
 
-info "Detected: $OS $ARCH → $BINARY"
+info "Detected: $OS $ARCH"
 
 # ── Determine install directory ─────────────────────────────────────────────
 
@@ -43,40 +43,43 @@ TARGET="$INSTALL_DIR/shannon"
 
 # ── Download ────────────────────────────────────────────────────────────────
 
-URL="$CDN_BASE/$BINARY"
+URL="$CDN_BASE/$ARCHIVE"
 SHA_URL="$URL.sha256"
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-info "Downloading $BINARY..."
-curl -fSL --progress-bar "$URL" -o "$TMPDIR/shannon" || err "Download failed"
+info "Downloading $ARCHIVE..."
+curl -fSL --progress-bar "$URL" -o "$TMPDIR/$ARCHIVE" || err "Download failed"
 
 # ── Verify checksum ─────────────────────────────────────────────────────────
 
 if command -v sha256sum >/dev/null 2>&1; then
   info "Verifying checksum..."
-  curl -fSL "$SHA_URL" -o "$TMPDIR/shannon.sha256" 2>/dev/null || true
-  if [ -f "$TMPDIR/shannon.sha256" ]; then
-    (cd "$TMPDIR" && sha256sum -c shannon.sha256) || err "Checksum mismatch — file may be corrupted"
+  curl -fSL "$SHA_URL" -o "$TMPDIR/$ARCHIVE.sha256" 2>/dev/null || true
+  if [ -f "$TMPDIR/$ARCHIVE.sha256" ]; then
+    (cd "$TMPDIR" && sha256sum -c "$ARCHIVE.sha256") || err "Checksum mismatch"
   else
     info "Checksum not available, skipping verification"
   fi
-elif command -v shasum >/dev/null 2>&1; then
-  info "Verifying checksum..."
-  EXPECTED="$(curl -fSL "$SHA_URL" 2>/dev/null | cut -d' ' -f1)" || true
-  if [ -n "$EXPECTED" ]; then
-    ACTUAL="$(shasum -a 256 "$TMPDIR/shannon" | cut -d' ' -f1)"
-    if [ "$ACTUAL" != "$EXPECTED" ]; then
-      err "Checksum mismatch — expected $EXPECTED, got $ACTUAL"
-    fi
-  fi
 fi
 
-# ── Install ─────────────────────────────────────────────────────────────────
+# ── Extract and install ─────────────────────────────────────────────────────
 
-chmod +x "$TMPDIR/shannon"
-mv "$TMPDIR/shannon" "$TARGET"
+info "Extracting..."
+tar xzf "$TMPDIR/$ARCHIVE" -C "$TMPDIR"
+
+BINARY="$(find "$TMPDIR" -name shannon -type f 2>/dev/null | head -1)"
+if [ -z "$BINARY" ]; then
+  # cargo-dist puts binary in a subdirectory named after the archive
+  DIRNAME="${ARCHIVE%.tar.gz}"
+  BINARY="$TMPDIR/$DIRNAME/shannon"
+fi
+
+[ -f "$BINARY" ] || err "Binary not found in archive"
+
+chmod +x "$BINARY"
+mv "$BINARY" "$TARGET"
 
 ok "Installed Shannon Code to $TARGET"
 
