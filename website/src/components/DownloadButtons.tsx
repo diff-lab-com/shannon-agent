@@ -8,7 +8,8 @@ interface DownloadButtonsProps {
   lang: Lang;
 }
 
-const CDN_BASE = 'https://cdn.shannon.dev/latest';
+const GH_RELEASE = 'https://github.com/shannon-agent/shannon-code/releases/latest/download';
+const CDN_BASE = import.meta.env.PUBLIC_CDN_BASE || GH_RELEASE;
 
 function detectOS(): OS {
   if (typeof navigator === 'undefined') return 'linux';
@@ -48,16 +49,16 @@ const OS_LABELS: Record<OS, Record<Lang, string>> = {
 
 const INSTALL_COMMANDS: Record<OS, Record<Lang, string>> = {
   macos: {
-    en: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
-    zh: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
+    en: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
+    zh: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
   },
   linux: {
-    en: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
-    zh: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
+    en: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
+    zh: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
   },
   windows: {
-    en: 'irm https://cdn.shannon.dev/install.ps1 | iex',
-    zh: 'irm https://cdn.shannon.dev/install.ps1 | iex',
+    en: `irm ${CDN_BASE}/install.ps1 | iex`,
+    zh: `irm ${CDN_BASE}/install.ps1 | iex`,
   },
 };
 

@@ -1,5 +1,7 @@
 export type Lang = 'en' | 'zh';
 
+const CDN_BASE = import.meta.env.PUBLIC_CDN_BASE || 'https://github.com/shannon-agent/shannon-code/releases/latest/download';
+
 const translations = {
   en: {
     nav: {
@@ -20,7 +22,7 @@ const translations = {
         brew: 'Homebrew',
       },
       installCommands: {
-        curl: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
+        curl: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
         cargo: 'cargo install --git https://github.com/shannon-agent/shannon-code.git',
         brew: 'brew install shannon-agent/tap/shannon',
       },
@@ -72,7 +74,7 @@ const translations = {
     },
     cta: {
       title: 'Get started in 30 seconds',
-      command: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
+      command: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
       button: 'Read the Docs',
     },
     footer: {
@@ -99,7 +101,7 @@ const translations = {
         brew: 'Homebrew',
       },
       installCommands: {
-        curl: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
+        curl: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
         cargo: 'cargo install --git https://github.com/shannon-agent/shannon-code.git',
         brew: 'brew install shannon-agent/tap/shannon',
       },
@@ -151,7 +153,7 @@ const translations = {
     },
     cta: {
       title: '30 秒开始使用',
-      command: 'curl -fsSL https://cdn.shannon.dev/install.sh | sh',
+      command: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
       button: '阅读文档',
     },
     footer: {
