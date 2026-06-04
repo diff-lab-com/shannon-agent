@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { type Lang, getTranslations } from '../i18n';
+import { type Lang, getTranslations, BASE } from '../i18n';
 
 interface HeroProps {
   lang: Lang;
@@ -7,16 +6,6 @@ interface HeroProps {
 
 export default function Hero({ lang }: HeroProps) {
   const t = getTranslations(lang);
-  const [activeTab, setActiveTab] = useState<'curl' | 'cargo' | 'brew'>('curl');
-  const [copied, setCopied] = useState(false);
-
-  const copyCommand = () => {
-    navigator.clipboard.writeText(t.hero.installCommands[activeTab]);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1400);
-  };
-
-  const tabs = ['curl', 'cargo', 'brew'] as const;
 
   return (
     <section style={{
@@ -78,85 +67,37 @@ export default function Hero({ lang }: HeroProps) {
         {t.hero.costHint}
       </p>
 
-      {/* Install panel */}
-      <div id="install" style={{
-        maxWidth: 620,
-        margin: '0 auto 24px',
-        background: 'var(--paper)',
-        borderRadius: 'var(--radius-lg)',
-        border: '1px solid var(--line)',
-        overflow: 'hidden',
-      }}>
-        {/* Tabs */}
-        <div style={{ display: 'flex', borderBottom: '1px solid var(--line)' }}>
-          {tabs.map(tab => (
-            <button
-              key={tab}
-              onClick={() => { setActiveTab(tab); setCopied(false); }}
-              style={{
-                flex: 1,
-                padding: '12px 0',
-                background: activeTab === tab ? 'var(--accent)' : 'transparent',
-                color: activeTab === tab ? 'white' : 'var(--muted)',
-                border: 'none',
-                fontFamily: 'var(--font-mono)',
-                fontSize: 13,
-                fontWeight: 500,
-                cursor: 'pointer',
-                transition: 'background 0.15s, color 0.15s',
-              }}
-            >
-              {t.hero.installTabs[tab]}
-            </button>
-          ))}
-        </div>
-        {/* Command */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          padding: '16px 20px',
-          gap: 12,
-        }}>
-          <code style={{
-            flex: 1,
-            fontFamily: 'var(--font-mono)',
-            fontSize: 14,
-            color: 'var(--ink)',
-            textAlign: 'left',
-            overflowX: 'auto',
-            whiteSpace: 'nowrap',
-          }}>
-            {t.hero.installCommands[activeTab]}
-          </code>
-          <button
-            onClick={copyCommand}
-            style={{
-              background: copied ? 'rgba(52, 211, 153, 0.1)' : 'transparent',
-              border: `1px solid ${copied ? 'var(--ok)' : 'var(--line)'}`,
-              borderRadius: 'var(--radius-sm)',
-              padding: '6px 14px',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12,
-              color: copied ? 'var(--ok)' : 'var(--muted)',
-              cursor: 'pointer',
-              transition: 'all 0.15s',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {copied ? t.hero.copied : t.hero.copy}
-          </button>
-        </div>
+      {/* CTA buttons */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap' }}>
+        <a
+          href={BASE + 'docs/getting-started'}
+          className="btn-primary"
+          style={{ fontSize: 15, padding: '12px 28px' }}
+        >
+          {t.hero.getStarted} →
+        </a>
+        <a
+          href="https://github.com/shannon-agent/shannon-code"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '12px 28px',
+            background: 'transparent',
+            color: 'var(--muted)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: 15,
+            fontWeight: 500,
+            textDecoration: 'none',
+            transition: 'all 0.15s',
+          }}
+        >
+          ⭐ {t.hero.starGithub} →
+        </a>
       </div>
-
-      {/* Star link */}
-      <a
-        href="https://github.com/shannon-agent/shannon-code"
-        target="_blank"
-        rel="noopener noreferrer"
-        style={{ color: 'var(--muted)', fontSize: 15, textDecoration: 'none' }}
-      >
-        ⭐ {t.hero.starGithub} →
-      </a>
     </section>
   );
 }

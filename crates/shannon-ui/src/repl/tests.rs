@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::widgets::ChatRole;
+use serial_test::serial;
 use shannon_core::UiAdapter;
 use std::io::IsTerminal;
 
@@ -2800,19 +2801,28 @@ fn test_repl_route_routing_state() {
 
 // ---- /mcp command tests ----
 
+/// Helper: clean `.shannon/mcp.json` to ensure test isolation.
+fn clean_mcp_config() {
+    let _ = std::fs::remove_file(".shannon/mcp.json");
+}
+
 #[test]
+#[serial]
 fn test_repl_mcp_help() {
+    clean_mcp_config();
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("list"), "mcp help should show list");
     assert!(msg.contains("add"), "mcp help should show add");
+    clean_mcp_config();
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_add_and_list() {
-    let _ = std::fs::remove_dir_all(".shannon-test-mcp");
+    clean_mcp_config();
     let mut repl = Repl::new().unwrap();
     repl.prompt
         .set_input("/mcp add test-server /usr/bin/test-server".to_string());
@@ -2827,10 +2837,13 @@ fn test_repl_mcp_add_and_list() {
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("test-server"), "list should show server name");
+    clean_mcp_config();
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_show() {
+    clean_mcp_config();
     let mut repl = Repl::new().unwrap();
     repl.prompt
         .set_input("/mcp add my-server /usr/bin/echo hello".to_string());
@@ -2841,19 +2854,25 @@ fn test_repl_mcp_show() {
     assert!(msg.contains("my-server"), "should show server name");
     assert!(msg.contains("/usr/bin/echo"), "should show command");
     assert!(msg.contains("hello"), "should show args");
+    clean_mcp_config();
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_show_not_found() {
+    clean_mcp_config();
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp show nonexistent".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("not found"), "should report server not found");
+    clean_mcp_config();
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_remove() {
+    clean_mcp_config();
     let mut repl = Repl::new().unwrap();
     repl.prompt
         .set_input("/mcp add temp-server /usr/bin/true".to_string());
@@ -2862,15 +2881,19 @@ fn test_repl_mcp_remove() {
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("Removed"), "should confirm removal");
+    clean_mcp_config();
 }
 
 #[test]
+#[serial]
 fn test_repl_mcp_path() {
+    clean_mcp_config();
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/mcp path".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
     let msg = &repl.chat.last_message().unwrap().content;
     assert!(msg.contains("mcp.json"), "should show config path");
+    clean_mcp_config();
 }
 
 // ── /rewind Integration Tests ────────────────────────────────────────
