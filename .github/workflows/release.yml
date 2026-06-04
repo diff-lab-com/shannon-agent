@@ -308,6 +308,7 @@ jobs:
         if: vars.R2_BUCKET != ''
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npm install -g wrangler@3
           VERSION="${{ needs.plan.outputs.tag }}"
@@ -316,9 +317,9 @@ jobs:
           for f in release-artifacts/shannon-*; do
             [ -f "$f" ] || continue
             base=$(basename "$f")
-            wrangler r2 object put "$BUCKET/shannon/$VERSION/$base" --file "$f"
-            wrangler r2 object put "$BUCKET/shannon/latest/$base" --file "$f"
+            wrangler r2 object put "$BUCKET/shannon/$VERSION/$base" --file "$f" --account-id "$CLOUDFLARE_ACCOUNT_ID"
+            wrangler r2 object put "$BUCKET/shannon/latest/$base" --file "$f" --account-id "$CLOUDFLARE_ACCOUNT_ID"
           done
           # Upload install scripts
-          wrangler r2 object put "$BUCKET/install.sh" --file scripts/install.sh
-          wrangler r2 object put "$BUCKET/install.ps1" --file scripts/install.ps1
+          wrangler r2 object put "$BUCKET/install.sh" --file scripts/install.sh --account-id "$CLOUDFLARE_ACCOUNT_ID"
+          wrangler r2 object put "$BUCKET/install.ps1" --file scripts/install.ps1 --account-id "$CLOUDFLARE_ACCOUNT_ID"
