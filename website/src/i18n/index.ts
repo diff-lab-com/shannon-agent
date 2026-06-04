@@ -1,7 +1,5 @@
 export type Lang = 'en' | 'zh';
 
-const CDN_BASE = import.meta.env.PUBLIC_CDN_BASE || 'https://github.com/shannon-agent/shannon-code/releases/latest/download';
-
 const translations = {
   en: {
     nav: {
@@ -16,18 +14,7 @@ const translations = {
       title: ['AI coding, ', { text: 'without limits', italic: true }, ''],
       subtitle: 'Claude Code compatible. Works with DeepSeek, OpenAI, Ollama, and any OpenAI endpoint. Written in Rust, no vendor lock-in.',
       costHint: 'DeepSeek ~$0.14/M tokens  ·  Claude ~$15/M tokens',
-      installTabs: {
-        curl: 'curl',
-        cargo: 'Cargo',
-        brew: 'Homebrew',
-      },
-      installCommands: {
-        curl: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
-        cargo: 'cargo install --git https://github.com/shannon-agent/shannon-code.git',
-        brew: 'brew install shannon-agent/tap/shannon',
-      },
-      copied: 'Copied!',
-      copy: 'Copy',
+      getStarted: 'Get Started',
       starGithub: 'Star on GitHub',
     },
     terminal: {
@@ -74,7 +61,6 @@ const translations = {
     },
     cta: {
       title: 'Get started in 30 seconds',
-      command: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
       button: 'Read the Docs',
     },
     footer: {
@@ -95,18 +81,7 @@ const translations = {
       title: ['AI 编程，', { text: '不受限', italic: true }, ''],
       subtitle: '兼容 Claude Code 生态，支持 DeepSeek、OpenAI、Ollama 等任何模型。Rust 驱动，开源免费，零锁定。',
       costHint: 'DeepSeek ~$0.14/百万 token  ·  Claude ~$15/百万 token',
-      installTabs: {
-        curl: 'curl',
-        cargo: 'Cargo',
-        brew: 'Homebrew',
-      },
-      installCommands: {
-        curl: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
-        cargo: 'cargo install --git https://github.com/shannon-agent/shannon-code.git',
-        brew: 'brew install shannon-agent/tap/shannon',
-      },
-      copied: '已复制！',
-      copy: '复制',
+      getStarted: '开始使用',
       starGithub: 'GitHub 加星',
     },
     terminal: {
@@ -153,7 +128,6 @@ const translations = {
     },
     cta: {
       title: '30 秒开始使用',
-      command: `curl -fsSL ${CDN_BASE}/install.sh | sh`,
       button: '阅读文档',
     },
     footer: {
