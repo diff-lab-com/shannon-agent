@@ -541,10 +541,15 @@ impl From<ShannonConfig> for LlmClientConfig {
             .unwrap_or_else(|| cfg.resolve_api_key_for_provider(&provider));
 
         // --- Auto-fallback to Ollama when no key & no explicit base_url ----
+        // Only auto-fallback when the provider was NOT explicitly specified
+        // (e.g. via --provider flag). Explicit provider + missing key should
+        // produce a clear auth error, not silently switch to Ollama.
+        let has_explicit_provider = cfg.provider.is_some();
         let (api_key, base_url, model, provider) = if api_key.is_empty()
             && provider.requires_auth()
             && !has_explicit_base_url
             && std::env::var("SHANNON_BASE_URL").is_err()
+            && !has_explicit_provider
         {
             tracing::info!("No API key configured, defaulting to Ollama (localhost:11434)");
             let ollama_model = if has_explicit_model {
