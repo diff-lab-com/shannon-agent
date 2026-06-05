@@ -10,10 +10,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  smoke-test:
-    name: Live API Smoke Test
+  mock-smoke-test:
+    name: Mock Provider Smoke Test
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -21,85 +20,10 @@ jobs:
         with:
           toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
-      - name: Build
-        run: cargo build --release -p shannon-cli
-      - name: Smoke test — DeepSeek
+      - name: Run mock-based provider smoke tests
         run: |
-          ./target/release/shannon \
-            --prompt "Say exactly: smoke test passed" \
-            --provider deepseek \
-            --output-format json \
-            > /tmp/smoke-deepseek.json 2>/tmp/smoke-deepseek-stderr.log || true
-          echo "=== JSON output ===" && cat /tmp/smoke-deepseek.json
-          echo "=== stderr ===" && cat /tmp/smoke-deepseek-stderr.log
-          python3 -c "import json,sys; d=json.load(open('/tmp/smoke-deepseek.json')); sys.exit(0 if d.get('exit_code')=='success' else 1)"
-          echo "DeepSeek exit_code check: $?"
-        env:
-          SHANNON_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-
-  smoke-test-anthropic:
-    name: Live API Smoke Test (Anthropic)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
-      - name: Build
-        run: cargo build --release -p shannon-cli
-      - name: Smoke test — Anthropic
-        run: |
-          ./target/release/shannon \
-            --prompt "Say exactly: smoke test passed" \
-            --provider anthropic \
-            --output-format json \
-            > /tmp/smoke-anthropic.json 2>/tmp/smoke-anthropic-stderr.log || true
-          echo "=== JSON output ===" && cat /tmp/smoke-anthropic.json
-          echo "=== stderr ===" && cat /tmp/smoke-anthropic-stderr.log
-          python3 -c "import json,sys; d=json.load(open('/tmp/smoke-anthropic.json')); sys.exit(0 if d.get('exit_code')=='success' else 1)"
-          echo "Anthropic exit_code check: $?"
-        env:
-          SHANNON_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
-  smoke-test-ollama:
-    name: Live API Smoke Test (Ollama)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
-      - name: Build
-        run: cargo build --release -p shannon-cli
-      - name: Install Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
-      - name: Start Ollama and pull model
-        run: |
-          ollama serve &
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:11434/ > /dev/null 2>&1; then
-              echo "Ollama is ready"
-              break
-            fi
-            echo "Waiting for Ollama... ($i/30)"
-            sleep 2
-          done
-          ollama pull qwen2.5:0.5b
-      - name: Smoke test — Ollama
-        run: |
-          ./target/release/shannon \
-            --prompt "Say exactly: smoke test passed" \
-            --provider ollama \
-            --model qwen2.5:0.5b \
-            --output-format json \
-            > /tmp/smoke-ollama.json 2>/tmp/smoke-ollama-stderr.log || true
-          echo "=== JSON output ===" && cat /tmp/smoke-ollama.json
-          echo "=== stderr ===" && cat /tmp/smoke-ollama-stderr.log
-          python3 -c "import json,sys; d=json.load(open('/tmp/smoke-ollama.json')); sys.exit(0 if d.get('exit_code')=='success' else 1)"
-          echo "Ollama exit_code check: $?"
+          cargo test --test cli_e2e_tests -- \
+            test_ollama_text_response_headless \
+            test_anthropic_text_response_headless \
+            test_deepseek_text_response_headless \
+            --test-threads=1
