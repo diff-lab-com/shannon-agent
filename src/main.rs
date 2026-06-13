@@ -65,6 +65,10 @@ fn main() {
             commands::list_agent_definitions,
             commands::create_agent_definition,
             commands::delete_agent_definition,
+            // Inter-agent message history (Phase D C3)
+            commands::list_agent_messages,
+            commands::list_agent_message_teams,
+            commands::record_agent_message,
             commands::list_tasks,
             commands::get_file_tree,
             commands::get_working_dir_info,

@@ -511,3 +511,16 @@ export const EVENT_NAMES = {
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
+
+// --- Inter-agent message history (Phase D C3) ---
+
+export interface AgentMessageEntry {
+  message_id: string
+  team: string
+  from: string
+  to: string
+  content_preview: string
+  content_kind: 'text' | 'structured' | 'protocol'
+  priority: 'low' | 'normal' | 'high' | 'critical'
+  timestamp: number
+}

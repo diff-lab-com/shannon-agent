@@ -237,6 +237,35 @@ export async function listAgents(): Promise<AgentInfo[]> {
   return invoke('list_agents')
 }
 
+// --- Inter-agent message history (Phase D C3) ---
+
+export async function listAgentMessages(
+  team?: string,
+  limit?: number,
+): Promise<import('@/types').AgentMessageEntry[]> {
+  return invoke('list_agent_messages', { team: team ?? null, limit: limit ?? null })
+}
+
+export async function listAgentMessageTeams(): Promise<string[]> {
+  return invoke('list_agent_message_teams')
+}
+
+export async function recordAgentMessage(
+  team: string,
+  from: string,
+  to: string,
+  content: string,
+  priority?: 'low' | 'normal' | 'high' | 'critical',
+): Promise<string> {
+  return invoke('record_agent_message', {
+    team,
+    from,
+    to,
+    content,
+    priority: priority ?? null,
+  })
+}
+
 export interface AgentDefinitionInfo {
   name: string
   description: string

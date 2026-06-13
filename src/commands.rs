@@ -101,6 +101,8 @@ pub struct AppState {
     /// `plugin.toml` and Claude Code `.claude-plugin/plugin.json` formats,
     /// plus packaged `.dxt` / `.mcpb` archives.
     pub(crate) plugin_registry: Arc<tokio::sync::RwLock<shannon_core::plugin::PluginRegistry>>,
+    /// Append-only inter-agent message history (`~/.shannon/agent-messages/`).
+    pub(crate) agent_message_history: Arc<shannon_agents::message_history::MessageHistoryStore>,
 }
 
 /// Session metadata for session list.
@@ -342,6 +344,9 @@ impl AppState {
             plugin_registry: Arc::new(tokio::sync::RwLock::new(
                 shannon_core::plugin::PluginRegistry::new(plugin_registry_dir()),
             )),
+            agent_message_history: Arc::new(
+                shannon_agents::message_history::MessageHistoryStore::new(),
+            ),
         }
     }
 
@@ -2832,6 +2837,124 @@ pub async fn list_agents(state: tauri::State<'_, AppState>) -> Result<Vec<AgentI
         })
         .collect();
     Ok(agents)
+}
+
+/// Serializable view of a recorded inter-agent message.
+///
+/// Mirrors `shannon_agents::message_history::MessageRecord` for the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMessageEntry {
+    pub message_id: String,
+    pub team: String,
+    pub from: String,
+    pub to: String,
+    pub content_preview: String,
+    pub content_kind: String,
+    pub priority: String,
+    pub timestamp: i64,
+}
+
+/// List inter-agent messages for a team (most recent first).
+///
+/// Pass `team=None` to scan all teams (`<adhoc>` plus any team dirs).
+#[tauri::command]
+pub async fn list_agent_messages(
+    state: tauri::State<'_, AppState>,
+    team: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<AgentMessageEntry>, String> {
+    let store = state.agent_message_history.clone();
+    let limit = limit.unwrap_or(100).min(500);
+    let mut out: Vec<AgentMessageEntry> = Vec::new();
+
+    let teams: Vec<String> = match team {
+        Some(t) => vec![t],
+        None => list_message_team_dirs(&store),
+    };
+
+    for t in teams {
+        match store.list_by_team(&t, limit) {
+            Ok(records) => {
+                for r in records {
+                    out.push(AgentMessageEntry {
+                        message_id: r.message_id,
+                        team: r.team,
+                        from: r.from,
+                        to: r.to,
+                        content_preview: r.content_preview,
+                        content_kind: r.content_kind.as_str().into(),
+                        priority: r.priority,
+                        timestamp: r.timestamp.timestamp(),
+                    });
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, team = %t, "list_agent_messages: skipping team"),
+        }
+    }
+
+    out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    out.truncate(limit);
+    Ok(out)
+}
+
+/// Enumerate teams that have at least one recorded message directory.
+#[tauri::command]
+pub async fn list_agent_message_teams(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    Ok(list_message_team_dirs(&state.agent_message_history))
+}
+
+fn list_message_team_dirs(
+    store: &shannon_agents::message_history::MessageHistoryStore,
+) -> Vec<String> {
+    let base = store.base_dir();
+    let mut teams = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(base) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                if let Some(name) = entry.file_name().to_str() {
+                    teams.push(name.to_string());
+                }
+            }
+        }
+    }
+    teams.sort();
+    teams
+}
+
+/// Record an inter-agent message into the append-only history.
+///
+/// Used by the desktop UI's "Agent Messages" panel for manual / test injection
+/// until real team agents are wired in. Real team agents write directly via
+/// `AgentCoordinator::record_to_history` (see `shannon-agents`).
+#[tauri::command]
+pub async fn record_agent_message(
+    state: tauri::State<'_, AppState>,
+    team: String,
+    from: String,
+    to: String,
+    content: String,
+    priority: Option<String>,
+) -> Result<String, String> {
+    use shannon_agents::message_history::{ContentKind, MessageRecord};
+
+    let priority = priority.unwrap_or_else(|| "normal".into());
+    let record = MessageRecord {
+        message_id: uuid::Uuid::new_v4().to_string(),
+        team,
+        from,
+        to,
+        content_preview: MessageRecord::truncate_preview(&content),
+        content_kind: ContentKind::Text,
+        priority,
+        timestamp: chrono::Utc::now(),
+        revision: 0,
+    };
+    state
+        .agent_message_history
+        .record(&record)
+        .map_err(|e| e.to_string())
 }
 
 /// Serializable view of an agent definition loaded from disk.

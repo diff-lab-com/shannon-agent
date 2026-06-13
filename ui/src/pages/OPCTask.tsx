@@ -2,6 +2,7 @@ import { useApp } from '@/context/AppContext'
 import { useParams, Link } from 'react-router-dom'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 
 export default function OPCTask() {
   const { tasks, agents, usage, respondPermission } = useApp()
@@ -128,6 +129,9 @@ export default function OPCTask() {
                 </div>
               )}
             </div>
+
+            {/* Agent Messages (Phase D C3) */}
+            <AgentMessagesPanel limit={50} />
 
             {/* Human-in-the-Loop Review */}
             {hasRunningTasks && (

@@ -15,12 +15,13 @@ tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-pl
 
 [dependencies]
 # Shannon engine crates — pulled from the shannon-code git repo via subpath.
-# Update by pinning to a tag/rev when cutting desktop releases.
-shannon-core = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-core" }
-shannon-types = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-types" }
-shannon-tools = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-tools" }
-shannon-mcp = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-mcp" }
-shannon-skills = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-skills" }
+# Pinned to dev@e63ae82 (Phase D C3 — agent message history store).
+shannon-core = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-core", rev = "e63ae82" }
+shannon-types = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-types", rev = "e63ae82" }
+shannon-tools = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-tools", rev = "e63ae82" }
+shannon-mcp = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-mcp", rev = "e63ae82" }
+shannon-skills = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-skills", rev = "e63ae82" }
+shannon-agents = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-agents", rev = "e63ae82" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
