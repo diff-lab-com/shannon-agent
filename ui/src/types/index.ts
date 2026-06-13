@@ -231,6 +231,23 @@ export interface TaskItem {
   priority?: string
   description?: string
   progress?: number
+  /** IDs of tasks this task waits on. Backend JSON key: blockedBy. */
+  blocked_by?: string[]
+  /** IDs of tasks waiting on this task. Backend JSON key: blocks. */
+  blocks?: string[]
+  /** Optional due date as unix seconds. */
+  due_date?: number | null
+  /** Active-form label for in-progress status. */
+  active_form?: string
+}
+
+/// Payload for `update_task`. All fields optional except `id`.
+export interface UpdateTaskPayload {
+  id: string
+  status?: string
+  assignee?: string
+  priority?: string
+  due_date?: number | null
 }
 
 export interface BackgroundTaskInfo {

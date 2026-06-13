@@ -70,6 +70,7 @@ fn main() {
             commands::list_agent_message_teams,
             commands::record_agent_message,
             commands::list_tasks,
+            commands::update_task,
             commands::get_file_tree,
             commands::get_working_dir_info,
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)

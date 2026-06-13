@@ -21,6 +21,7 @@ import NewTaskForm from '@/components/tasks/NewTaskForm'
 import ScheduleForm from '@/components/tasks/ScheduleForm'
 import TaskList from '@/components/tasks/TaskList'
 import TaskCalendarView from '@/components/tasks/TaskCalendarView'
+import TaskDAGView from '@/components/tasks/TaskDAGView'
 import CalendarSidebarWidget from '@/components/tasks/CalendarSidebarWidget'
 import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
 import RoutineDetailDrawer from '@/components/tasks/RoutineDetailDrawer'
@@ -44,6 +45,7 @@ export default function Tasks() {
   const [viewYear, setViewYear] = useState(new Date().getFullYear())
   const [showFilters, setShowFilters] = useState(false)
   const [calendarView, setCalendarView] = useState(false)
+  const [dagView, setDagView] = useState(false)
   const [selectedDay, setSelectedDay] = useState<number | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null)
@@ -135,7 +137,9 @@ export default function Tasks() {
           showFilters={showFilters}
           onToggleFilters={() => setShowFilters(!showFilters)}
           calendarView={calendarView}
-          onToggleCalendar={() => setCalendarView(!calendarView)}
+          onToggleCalendar={() => { setCalendarView(!calendarView); if (!calendarView) setDagView(false) }}
+          dagView={dagView}
+          onToggleDag={() => { setDagView(!dagView); if (!dagView) setCalendarView(false) }}
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
           onToggleSchedule={() => setShowSchedule(!showSchedule)}
         />
@@ -197,7 +201,9 @@ export default function Tasks() {
 
         {showFilters && <TasksFilters active={activeFilter} onChange={setActiveFilter} />}
 
-        {calendarView ? (
+        {dagView ? (
+          <TaskDAGView tasks={tasks} onSelectTask={setSelectedTaskId} />
+        ) : calendarView ? (
           <TaskCalendarView
             viewMonth={viewMonth}
             viewYear={viewYear}
@@ -246,7 +252,11 @@ export default function Tasks() {
         )}
       </div>
 
-      <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTaskId(null)} />
+      <TaskDetailDrawer
+        task={selectedTask}
+        onClose={() => setSelectedTaskId(null)}
+        onUpdated={() => void refreshTasks()}
+      />
       <RoutineDetailDrawer
         routine={selectedRoutine}
         routines={scheduledTasks}

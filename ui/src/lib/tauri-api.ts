@@ -296,6 +296,10 @@ export async function listTasks(): Promise<TaskItem[]> {
   return invoke('list_tasks')
 }
 
+export async function updateTask(payload: import('@/types').UpdateTaskPayload): Promise<TaskItem> {
+  return invoke('update_task', { payload })
+}
+
 // --- Billing ---
 
 export async function getBillingPlan(): Promise<import('@/types').BillingPlan> {

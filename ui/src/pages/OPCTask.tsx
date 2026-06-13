@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
+import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
 
 export default function OPCTask() {
   const { tasks, agents, usage, respondPermission } = useApp()
@@ -198,6 +199,9 @@ export default function OPCTask() {
 
           {/* Right Column */}
           <div className="xl:col-span-4 flex flex-col gap-lg">
+            {/* Agent Load (Phase D G10) */}
+            <AgentLoadPanel agents={agents} />
+
             {/* Efficiency Metrics */}
             <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm flex flex-col gap-md">
               <div className="flex items-center gap-2 mb-2">

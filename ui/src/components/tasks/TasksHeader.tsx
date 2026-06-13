@@ -10,6 +10,8 @@ interface TasksHeaderProps {
   onToggleFilters: () => void
   calendarView: boolean
   onToggleCalendar: () => void
+  dagView?: boolean
+  onToggleDag?: () => void
   onToggleNewTask: () => void
   onToggleSchedule: () => void
 }
@@ -19,6 +21,8 @@ export default function TasksHeader({
   onToggleFilters,
   calendarView,
   onToggleCalendar,
+  dagView,
+  onToggleDag,
   onToggleNewTask,
   onToggleSchedule,
 }: TasksHeaderProps) {
@@ -45,6 +49,16 @@ export default function TasksHeader({
           <span className="material-symbols-outlined text-[18px]">calendar_month</span>
           {calendarView ? 'List View' : 'Month View'}
         </Button>
+        {onToggleDag ? (
+          <Button
+            aria-label="Toggle graph view"
+            onClick={onToggleDag}
+            className={`px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors ${dagView ? 'ring-2 ring-primary' : ''}`}
+          >
+            <span className="material-symbols-outlined text-[18px]">account_tree</span>
+            {dagView ? 'Hide Graph' : 'Graph'}
+          </Button>
+        ) : null}
         <Button
           aria-label="Create new scheduled routine"
           className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors"
