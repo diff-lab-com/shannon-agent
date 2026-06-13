@@ -213,6 +213,52 @@ pub struct ScheduledRoutine {
     /// Last execution error (cleared on next success).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+
+    // ── Task dependencies (C4) ─────────────────────────────────────────
+    /// IDs of routines that must have completed successfully before this
+    /// routine fires. Empty = no dependencies (fires independently).
+    /// A dependency "completed successfully" means its most recent run has
+    /// status `Succeeded`. If a dependency has never run or is in any
+    /// non-terminal/failed state, this routine is blocked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
+}
+
+/// Result of checking a routine's dependencies.
+///
+/// Returned by [`RoutineManager::check_dependencies`]. An empty `blocked_by`
+/// vector means the routine is unblocked and may fire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyBlocker {
+    /// ID of the routine that is blocked.
+    pub routine_id: String,
+    /// IDs of dependencies that are not yet in a successful terminal state.
+    pub blocked_by: Vec<String>,
+}
+
+impl DependencyBlocker {
+    /// Whether the routine is blocked by any pending dependency.
+    pub fn is_blocked(&self) -> bool {
+        !self.blocked_by.is_empty()
+    }
+}
+
+/// C4 helper: whether the routine's most recent run finished `Succeeded`.
+///
+/// Returns `false` if the routine is missing, has never run, or its last
+/// run is in any non-`Succeeded` state (`Running`, `Failed`, etc.).
+fn routine_last_run_succeeded(
+    routine: Option<&ScheduledRoutine>,
+    runs: &crate::scheduled_runs::ScheduledRunsStore,
+) -> bool {
+    let Some(r) = routine else { return false };
+    let Some(run_id) = r.last_run_id.as_deref() else {
+        return false;
+    };
+    match runs.find_by_id(run_id) {
+        Ok(Some(run)) => run.status == crate::scheduled_runs::RunStatus::Succeeded,
+        _ => false,
+    }
 }
 
 impl ScheduledRoutine {
@@ -236,6 +282,7 @@ impl ScheduledRoutine {
             policy: None,
             last_run_id: None,
             last_error: None,
+            depends_on: Vec::new(),
         }
     }
 
@@ -269,6 +316,7 @@ impl ScheduledRoutine {
             policy: None,
             last_run_id: None,
             last_error: None,
+            depends_on: Vec::new(),
         })
     }
 
@@ -453,6 +501,39 @@ impl RoutineManager {
         due
     }
 
+    /// Check whether a routine is blocked by pending dependencies (C4).
+    ///
+    /// A dependency "completed" means its most recent run finished with
+    /// [`crate::scheduled_runs::RunStatus::Succeeded`]. If the dependency
+    /// has never run, is currently running, or its last run failed, it is
+    /// considered pending and blocks the dependent routine.
+    ///
+    /// Dependencies that no longer exist in the manager (deleted) are
+    /// silently ignored — they do not block.
+    pub fn check_dependencies(
+        &self,
+        routine_id: &str,
+        runs: &crate::scheduled_runs::ScheduledRunsStore,
+    ) -> DependencyBlocker {
+        let mut blocked_by = Vec::new();
+        if let Some(routine) = self.routines.get(routine_id) {
+            for dep_id in &routine.depends_on {
+                if self.routines.get(dep_id).is_none() {
+                    // Deleted dependency — don't block.
+                    continue;
+                }
+                let succeeded = routine_last_run_succeeded(self.routines.get(dep_id), runs);
+                if !succeeded {
+                    blocked_by.push(dep_id.clone());
+                }
+            }
+        }
+        DependencyBlocker {
+            routine_id: routine_id.to_string(),
+            blocked_by,
+        }
+    }
+
     /// Get all due prompts, mark them fired, and record a `Running` run for each
     /// in the given history store.
     ///
@@ -460,6 +541,8 @@ impl RoutineManager {
     /// - Creates a `ScheduledRun` with status `Running` for each fired routine
     /// - Sets `routine.last_run_id` to the new run ID
     /// - Returns [`DueRun`] structs carrying `task_id` / `task_name` / `prompt` / `run_id`
+    /// - **Skips routines blocked by pending dependencies (C4)**, recording
+    ///   the blocker IDs in `last_error` instead of firing.
     ///
     /// Callers must call [`ScheduledRunsStore::update`] with the `run_id` to
     /// transition the run to `Succeeded` / `Failed` after executing the prompt.
@@ -468,8 +551,27 @@ impl RoutineManager {
         runs: &crate::scheduled_runs::ScheduledRunsStore,
     ) -> Result<Vec<DueRun>, crate::scheduled_runs::RunsStoreError> {
         let mut due = Vec::new();
+        // Pre-compute dependency success map to avoid double-borrowing
+        // self.routines while iterating values_mut (C4).
+        let dep_succeeded: std::collections::HashMap<String, bool> = self
+            .routines
+            .iter()
+            .map(|(id, r)| (id.clone(), routine_last_run_succeeded(Some(r), runs)))
+            .collect();
         for routine in self.routines.values_mut() {
             if routine.should_fire() {
+                // C4: dependency check — gather blocker IDs before firing.
+                let blocker_ids: Vec<String> = routine
+                    .depends_on
+                    .iter()
+                    .filter(|dep_id| dep_succeeded.get(*dep_id).copied() == Some(false))
+                    .cloned()
+                    .collect();
+                if !blocker_ids.is_empty() {
+                    routine.last_error =
+                        Some(format!("Blocked by deps: {}", blocker_ids.join(", ")));
+                    continue;
+                }
                 let run_id = runs.start_run(&routine.id, &routine.name)?;
                 routine.last_run_id = Some(run_id.clone());
                 let task_id = routine.id.clone();
@@ -1045,5 +1147,175 @@ mod tests {
         assert!(!json.contains("budget_usd"));
         // auto_archive_when_empty should serialize (default true)
         assert!(json.contains("auto_archive_when_empty"));
+    }
+
+    // ── C4: Task dependency tests ────────────────────────────────────────
+
+    #[test]
+    fn test_depends_on_default_empty() {
+        let r = ScheduledRoutine::new("a".into(), "p".into(), 60);
+        assert!(
+            r.depends_on.is_empty(),
+            "new routines have no deps by default"
+        );
+    }
+
+    #[test]
+    fn test_depends_on_backward_compat_missing_field() {
+        // Legacy JSON without depends_on should still deserialize.
+        let json = r#"{
+            "id": "abc12345",
+            "name": "legacy",
+            "prompt": "do thing",
+            "interval_secs": 60,
+            "created_at": "2024-01-01T00:00:00Z",
+            "enabled": true,
+            "fire_count": 0,
+            "trigger_type": "interval"
+        }"#;
+        let r: ScheduledRoutine = serde_json::from_str(json).unwrap();
+        assert!(r.depends_on.is_empty());
+    }
+
+    #[test]
+    fn test_depends_on_serializes_only_when_nonempty() {
+        let mut r = ScheduledRoutine::new("a".into(), "p".into(), 60);
+        let json_empty = serde_json::to_string(&r).unwrap();
+        assert!(!json_empty.contains("depends_on"));
+        r.depends_on = vec!["dep1".into()];
+        let json_with_dep = serde_json::to_string(&r).unwrap();
+        assert!(json_with_dep.contains("depends_on"));
+    }
+
+    #[test]
+    fn test_check_dependencies_no_deps_returns_empty_blocker() {
+        use crate::scheduled_runs::ScheduledRunsStore;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let id = mgr.add(ScheduledRoutine::new("a".into(), "p".into(), 60));
+        let blocker = mgr.check_dependencies(&id, &store);
+        assert!(!blocker.is_blocked());
+        assert!(blocker.blocked_by.is_empty());
+    }
+
+    #[test]
+    fn test_check_dependencies_blocked_when_dep_never_ran() {
+        use crate::scheduled_runs::ScheduledRunsStore;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let dep_id = mgr.add(ScheduledRoutine::new("dep".into(), "p".into(), 60));
+        let mut child = ScheduledRoutine::new("child".into(), "p".into(), 60);
+        child.depends_on = vec![dep_id.clone()];
+        let child_id = mgr.add(child);
+        let blocker = mgr.check_dependencies(&child_id, &store);
+        assert!(blocker.is_blocked());
+        assert_eq!(blocker.blocked_by, vec![dep_id]);
+    }
+
+    #[test]
+    fn test_check_dependencies_unblocked_when_dep_succeeded() {
+        use crate::scheduled_runs::{RunStatus, ScheduledRunsStore};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let dep_id = mgr.add(ScheduledRoutine::new("dep".into(), "p".into(), 60));
+        let run_id = store.start_run(&dep_id, "dep").unwrap();
+        store
+            .update(&run_id, |r| r.finish(RunStatus::Succeeded, None))
+            .unwrap();
+        mgr.routines.get_mut(&dep_id).unwrap().last_run_id = Some(run_id);
+        let mut child = ScheduledRoutine::new("child".into(), "p".into(), 60);
+        child.depends_on = vec![dep_id.clone()];
+        let child_id = mgr.add(child);
+        let blocker = mgr.check_dependencies(&child_id, &store);
+        assert!(!blocker.is_blocked(), "dep succeeded → child unblocked");
+    }
+
+    #[test]
+    fn test_check_dependencies_blocked_when_dep_failed() {
+        use crate::scheduled_runs::{RunStatus, ScheduledRunsStore};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let dep_id = mgr.add(ScheduledRoutine::new("dep".into(), "p".into(), 60));
+        let run_id = store.start_run(&dep_id, "dep").unwrap();
+        store
+            .update(&run_id, |r| {
+                r.finish(RunStatus::Failed, Some("boom".into()))
+            })
+            .unwrap();
+        mgr.routines.get_mut(&dep_id).unwrap().last_run_id = Some(run_id);
+        let mut child = ScheduledRoutine::new("child".into(), "p".into(), 60);
+        child.depends_on = vec![dep_id.clone()];
+        let child_id = mgr.add(child);
+        let blocker = mgr.check_dependencies(&child_id, &store);
+        assert!(blocker.is_blocked(), "dep failed → child blocked");
+    }
+
+    #[test]
+    fn test_check_dependencies_ignores_deleted_deps() {
+        use crate::scheduled_runs::ScheduledRunsStore;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        let mut child = ScheduledRoutine::new("child".into(), "p".into(), 60);
+        child.depends_on = vec!["ghost-dep".into()];
+        let child_id = mgr.add(child);
+        let blocker = mgr.check_dependencies(&child_id, &store);
+        assert!(
+            !blocker.is_blocked(),
+            "deleted deps don't block (graceful degradation)"
+        );
+    }
+
+    #[test]
+    fn test_drain_due_skips_blocked_routine_and_records_error() {
+        use crate::scheduled_runs::ScheduledRunsStore;
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        // Disable dep so only the child is a fire candidate.
+        let mut dep = ScheduledRoutine::new("dep".into(), "p".into(), 60);
+        dep.enabled = false;
+        let dep_id = mgr.add(dep);
+        let mut child = ScheduledRoutine::new("child".into(), "p".into(), 60);
+        child.depends_on = vec![dep_id.clone()];
+        let child_id = mgr.add(child);
+        let due = mgr.drain_due_with_history(&store).unwrap();
+        assert!(due.is_empty(), "blocked routine should not fire");
+        let child_after = mgr.get(&child_id).unwrap();
+        assert!(
+            child_after
+                .last_error
+                .as_deref()
+                .unwrap()
+                .contains("Blocked by deps")
+        );
+    }
+
+    #[test]
+    fn test_drain_due_fires_unblocked_routine() {
+        use crate::scheduled_runs::{RunStatus, ScheduledRunsStore};
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ScheduledRunsStore::with_base(tmp.path().to_path_buf());
+        let mut mgr = RoutineManager::new();
+        // Disable dep so it doesn't also fire; but record a Succeeded run
+        // so the dependency check sees it as complete.
+        let mut dep = ScheduledRoutine::new("dep".into(), "p".into(), 60);
+        dep.enabled = false;
+        let dep_id = mgr.add(dep);
+        let run_id = store.start_run(&dep_id, "dep").unwrap();
+        store
+            .update(&run_id, |r| r.finish(RunStatus::Succeeded, None))
+            .unwrap();
+        mgr.routines.get_mut(&dep_id).unwrap().last_run_id = Some(run_id);
+        let mut child = ScheduledRoutine::new("child".into(), "p".into(), 60);
+        child.depends_on = vec![dep_id];
+        let child_id = mgr.add(child);
+        let due = mgr.drain_due_with_history(&store).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].task_id, child_id);
     }
 }
