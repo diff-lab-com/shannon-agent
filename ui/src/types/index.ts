@@ -278,6 +278,8 @@ export interface AgentInfo {
   progress?: number
   tools_used?: number
   duration?: number
+  worktree_path?: string
+  session_id?: string
 }
 
 // --- Billing Types ---

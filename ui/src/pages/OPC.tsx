@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react'
-import { Link } from 'react-router-dom'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { Input } from '@/components/ui/input'
 import { useApp } from '@/context/AppContext'
+import type { TaskItem } from '@/types'
 
 const AGENT_ICONS: Record<string, string> = {
   research: 'query_stats',
@@ -28,11 +29,42 @@ function iconForAgent(name: string): string {
   return 'smart_toy'
 }
 
+// Maps Kanban column → acceptable task statuses (mirrors the bucketing below)
+const COLUMN_STATUSES: Record<ColumnId, string[]> = {
+  todo: ['pending', 'todo'],
+  pending: ['review', 'blocked'],
+  doing: ['in_progress', 'running'],
+  done: ['completed'],
+  deprecated: ['deprecated'],
+}
+
+type ColumnId = 'todo' | 'pending' | 'doing' | 'done' | 'deprecated'
+
+function bucketFor(status: string): ColumnId {
+  for (const [col, statuses] of Object.entries(COLUMN_STATUSES)) {
+    if (statuses.includes(status)) return col as ColumnId
+  }
+  return 'todo'
+}
+
+// Shorten a worktree path to its tail for compact display: "/Users/x/worktrees/foo" → "/foo"
+function shortWorktree(p: string): string {
+  const trimmed = p.replace(/\/+$/, '')
+  const slash = trimmed.lastIndexOf('/')
+  return slash >= 0 ? trimmed.slice(slash) : trimmed
+}
+
 export default function OPC() {
-  const { agents, tasks, config, loading } = useApp()
+  const { agents, tasks, config, loading, refreshTasks } = useApp()
+  const navigate = useNavigate()
   const [quickTask, setQuickTask] = useState('')
   const [editingFocus, setEditingFocus] = useState(false)
   const [focusText, setFocusText] = useState('')
+  // Local override layer — when the user drag-drops a card, we patch the task
+  // status locally until a backend update_task_status API lands.
+  const [overrides, setOverrides] = useState<Record<string, string>>({})
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
 
   const currentFocus = config?.strategic_focus
     || (config?.provider
@@ -40,6 +72,18 @@ export default function OPC() {
       : 'Autonomous task execution through multi-agent orchestration and intelligent coordination.')
 
   useEffect(() => { setFocusText(currentFocus) }, [currentFocus])
+
+  // Close agent menu on outside click
+  useEffect(() => {
+    if (!openMenuId) return
+    function onDown(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [openMenuId])
 
   const handleSaveFocus = () => {
     import('@/lib/tauri-api').then(api => api.configure({ key: 'strategic_focus', value: focusText })).then(() => toast.success('Strategic focus saved')).catch(() => toast.error('Failed to save focus'))
@@ -56,11 +100,52 @@ export default function OPC() {
     } catch (e) { console.warn('Failed to start quick task:', e); toast.error('Failed to create task') }
   }
 
-  const todoTasks = tasks.filter(t => t.status === 'pending' || t.status === 'todo')
-  const pendingTasks = tasks.filter(t => t.status === 'review' || t.status === 'blocked')
-  const inProgressTasks = tasks.filter(t => t.status === 'in_progress' || t.status === 'running')
-  const doneTasks = tasks.filter(t => t.status === 'completed')
-  const deprecatedTasks = tasks.filter(t => t.status === 'deprecated')
+  // Merge overrides into tasks list so DnD moves reflect immediately
+  const effectiveTasks: TaskItem[] = useMemo(
+    () => tasks.map(t => (overrides[t.id] ? { ...t, status: overrides[t.id] } : t)),
+    [tasks, overrides],
+  )
+
+  const todoTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'todo')
+  const pendingTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'pending')
+  const inProgressTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'doing')
+  const doneTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'done')
+  const deprecatedTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'deprecated')
+
+  // F4: native HTML5 DnD — no extra deps. Backend update_task_status is not
+  // wired yet, so we apply an optimistic local override and surface a toast.
+  const handleDrop = (taskId: string, target: ColumnId) => {
+    const task = effectiveTasks.find(t => t.id === taskId)
+    if (!task) return
+    const current = bucketFor(task.status)
+    if (current === target) return
+    const newStatus = COLUMN_STATUSES[target][0]
+    setOverrides(prev => ({ ...prev, [taskId]: newStatus }))
+    toast.success(`Moved to ${target}`, { description: 'Local override — backend persistence pending' })
+  }
+
+  // F5: agent card click → navigate to task detail (session-aware)
+  const handleAgentClick = (agentId: string, sessionId?: string) => {
+    setOpenMenuId(null)
+    const target = sessionId ? `/opc/task?agent=${agentId}&session=${sessionId}` : `/opc/task?agent=${agentId}`
+    navigate(target)
+  }
+
+  // F6: agent menu actions
+  const handleStopAgent = async (agentId: string, name: string) => {
+    setOpenMenuId(null)
+    try {
+      await import('@/lib/tauri-api').then(api => api.cancelBackgroundTask(agentId))
+      toast.success(`Stopped ${name}`)
+    } catch (e) {
+      console.warn('Failed to stop agent:', e)
+      toast.error(`Failed to stop ${name}`)
+    }
+  }
+  const handleAgentAction = (action: string, name: string) => {
+    setOpenMenuId(null)
+    toast.info(`${action} for ${name}`, { description: 'Backend wiring pending' })
+  }
 
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
@@ -121,8 +206,17 @@ export default function OPC() {
               <div className="space-y-sm">
                 {agents.map(agent => {
                   const isActive = agent.status === 'active' || agent.status === 'running'
+                  const isMenuOpen = openMenuId === agent.id
                   return (
-                    <div key={agent.id} role="button" tabIndex={0} aria-label={`${agent.name} — ${agent.status}`} className="bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/20 rounded-xl p-md flex flex-col shadow-sm cursor-pointer hover:border-primary/30 transition-colors group" onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click() }}>
+                    <div
+                      key={agent.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${agent.name} — ${agent.status}${agent.worktree_path ? ` (${shortWorktree(agent.worktree_path)})` : ''}`}
+                      className="bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/20 rounded-xl p-md flex flex-col shadow-sm cursor-pointer hover:border-primary/30 transition-colors group relative"
+                      onClick={() => handleAgentClick(agent.id, agent.session_id)}
+                      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAgentClick(agent.id, agent.session_id) } }}
+                    >
                       <div className="flex items-center justify-between mb-sm">
                         <div className="flex items-center gap-3">
                           <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -133,7 +227,20 @@ export default function OPC() {
                             <div className="font-label-sm text-[11px] text-on-surface-variant">{agent.model || 'Default Model'}</div>
                           </div>
                         </div>
-                        <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-tertiary animate-pulse' : 'bg-outline-variant'}`} />
+                        <div className="flex items-center gap-1">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${isActive ? 'bg-tertiary animate-pulse' : 'bg-outline-variant'}`} />
+                          {/* F6: ⋮ menu trigger */}
+                          <button
+                            type="button"
+                            aria-label={`Actions for ${agent.name}`}
+                            aria-haspopup="menu"
+                            aria-expanded={isMenuOpen}
+                            className="w-6 h-6 flex items-center justify-center rounded text-on-surface-variant hover:bg-surface-container-high/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 cursor-pointer"
+                            onClick={e => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : agent.id) }}
+                          >
+                            <span className="material-symbols-outlined text-[16px]">more_vert</span>
+                          </button>
+                        </div>
                       </div>
                       <div className="flex items-center gap-2">
                         <div className={`w-1 h-3 rounded-full shrink-0 ${isActive ? 'bg-tertiary' : 'bg-outline-variant'}`} />
@@ -141,6 +248,37 @@ export default function OPC() {
                           {agent.task || agent.status}
                         </span>
                       </div>
+                      {/* C1: worktree path label */}
+                      {agent.worktree_path ? (
+                        <div className="mt-sm flex items-center gap-1 font-label-sm text-[10px] text-on-surface-variant/80 bg-surface-container-low/60 rounded px-1.5 py-0.5 self-start">
+                          <span className="material-symbols-outlined text-[12px]">fork_right</span>
+                          <span className="font-mono truncate max-w-[200px]" title={agent.worktree_path}>{shortWorktree(agent.worktree_path)}</span>
+                        </div>
+                      ) : null}
+
+                      {/* F6: dropdown menu */}
+                      {isMenuOpen ? (
+                        <div
+                          ref={menuRef}
+                          role="menu"
+                          aria-label={`${agent.name} actions`}
+                          className="absolute right-2 top-12 z-50 w-40 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-1 text-on-surface"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleStopAgent(agent.id, agent.name)}>
+                            <span className="material-symbols-outlined text-[14px] text-error">stop_circle</span> Stop
+                          </button>
+                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleAgentAction('Pause', agent.name)}>
+                            <span className="material-symbols-outlined text-[14px]">pause_circle</span> Pause
+                          </button>
+                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleAgentAction('View Logs', agent.name)}>
+                            <span className="material-symbols-outlined text-[14px]">description</span> View Logs
+                          </button>
+                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleAgentAction('Reassign', agent.name)}>
+                            <span className="material-symbols-outlined text-[14px]">swap_horiz</span> Reassign
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   )
                 })}
@@ -172,14 +310,19 @@ export default function OPC() {
             <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar items-start min-h-[600px]">
 
               {/* To Do */}
-              <KanbanColumn title="To Do" color="bg-secondary" count={todoTasks.length}>
-                {todoTasks.map(task => <KanbanCard key={task.id} task={task} />)}
+              <KanbanColumn title="To Do" color="bg-secondary" count={todoTasks.length} onDrop={taskId => handleDrop(taskId, 'todo')}>
+                {todoTasks.map(task => <KanbanCard key={task.id} task={task} draggable />)}
               </KanbanColumn>
 
               {/* Pending */}
-              <KanbanColumn title="Pending" color="bg-secondary" count={pendingTasks.length}>
+              <KanbanColumn title="Pending" color="bg-secondary" count={pendingTasks.length} onDrop={taskId => handleDrop(taskId, 'pending')}>
                 {pendingTasks.map(task => (
-                  <div key={task.id} className="bg-surface-container-lowest rounded-xl p-md border border-error/20 shadow-sm mb-3 ring-1 ring-error/5 cursor-grab active:cursor-grabbing hover:border-error/40 transition-colors relative">
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
+                    className="bg-surface-container-lowest rounded-xl p-md border border-error/20 shadow-sm mb-3 ring-1 ring-error/5 cursor-grab active:cursor-grabbing hover:border-error/40 transition-colors relative"
+                  >
                     <div className="absolute left-0 top-0 bottom-0 w-1 bg-error rounded-l-xl" />
                     <div className="flex justify-between items-start mb-2 ml-1">
                       <span className="font-label-sm text-[10px] font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
@@ -199,9 +342,14 @@ export default function OPC() {
               </KanbanColumn>
 
               {/* Doing */}
-              <KanbanColumn title="Doing" color="bg-primary" count={inProgressTasks.length}>
+              <KanbanColumn title="Doing" color="bg-primary" count={inProgressTasks.length} onDrop={taskId => handleDrop(taskId, 'doing')}>
                 {inProgressTasks.map(task => (
-                  <div key={task.id} className="bg-surface-container-lowest rounded-xl p-md border border-primary/20 shadow-sm mb-3 cursor-pointer hover:border-primary/50 transition-colors relative">
+                  <div
+                    key={task.id}
+                    draggable
+                    onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
+                    className="bg-surface-container-lowest rounded-xl p-md border border-primary/20 shadow-sm mb-3 cursor-grab active:cursor-grabbing hover:border-primary/50 transition-colors relative"
+                  >
                     <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary rounded-l-xl" />
                     <div className="flex justify-between items-center mb-2 ml-1">
                       <span className="font-label-sm text-[10px] font-bold text-primary tracking-wider">{task.id.slice(0, 8)}</span>
@@ -228,9 +376,15 @@ export default function OPC() {
               </KanbanColumn>
 
               {/* Done */}
-              <KanbanColumn title="Done" color="bg-tertiary" count={doneTasks.length}>
+              <KanbanColumn title="Done" color="bg-tertiary" count={doneTasks.length} onDrop={taskId => handleDrop(taskId, 'done')}>
                 {doneTasks.map(task => (
-                  <Link key={task.id} to="/opc/task" className="block bg-surface-container-lowest rounded-xl p-3 border border-tertiary/20 shadow-sm mb-3 cursor-pointer hover:bg-surface-bright transition-colors bg-tertiary/5">
+                  <Link
+                    key={task.id}
+                    to="/opc/task"
+                    draggable
+                    onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
+                    className="block bg-surface-container-lowest rounded-xl p-3 border border-tertiary/20 shadow-sm mb-3 cursor-grab active:cursor-grabbing hover:bg-surface-bright transition-colors bg-tertiary/5"
+                  >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
@@ -243,13 +397,28 @@ export default function OPC() {
               </KanbanColumn>
 
               {/* Deprecated */}
-              <KanbanColumn title="Deprecated" color="bg-outline-variant" count={deprecatedTasks.length}>
-                <div className="flex items-center justify-center p-xl mt-xl">
-                  <EmptyState icon="archive" title="No deprecated tasks." description="Completed or cancelled tasks will appear here." />
-                </div>
+              <KanbanColumn title="Deprecated" color="bg-outline-variant" count={deprecatedTasks.length} onDrop={taskId => handleDrop(taskId, 'deprecated')}>
+                {deprecatedTasks.length === 0 ? (
+                  <div className="flex items-center justify-center p-xl mt-xl">
+                    <EmptyState icon="archive" title="No deprecated tasks." description="Completed or cancelled tasks will appear here." />
+                  </div>
+                ) : (
+                  deprecatedTasks.map(task => <KanbanCard key={task.id} task={task} draggable />)
+                )}
               </KanbanColumn>
 
             </div>
+            {/* Hidden helper: trigger refresh button when overrides exist so users can reset */}
+            {Object.keys(overrides).length > 0 ? (
+              <div className="mt-sm flex justify-end">
+                <button
+                  className="text-label-sm text-on-surface-variant hover:text-primary cursor-pointer underline"
+                  onClick={() => { setOverrides({}); void refreshTasks() }}
+                >
+                  Reset local overrides
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
         )}
@@ -259,9 +428,32 @@ export default function OPC() {
   )
 }
 
-function KanbanColumn({ title, color, count, children }: { title: string; color: string; count: number; children: React.ReactNode }) {
+function KanbanColumn({
+  title,
+  color,
+  count,
+  children,
+  onDrop,
+}: {
+  title: string
+  color: string
+  count: number
+  children: React.ReactNode
+  onDrop?: (taskId: string) => void
+}) {
+  const [isOver, setIsOver] = useState(false)
   return (
-    <div className="w-[300px] shrink-0 bg-surface-container-lowest/50 rounded-xl p-xs border border-transparent hover:bg-surface-container-low/30 transition-colors">
+    <div
+      className={`w-[300px] shrink-0 rounded-xl p-xs border transition-colors ${isOver ? 'bg-surface-container-high/40 border-primary/40' : 'bg-surface-container-lowest/50 border-transparent hover:bg-surface-container-low/30'}`}
+      onDragOver={e => { e.preventDefault(); setIsOver(true) }}
+      onDragLeave={() => setIsOver(false)}
+      onDrop={e => {
+        e.preventDefault()
+        setIsOver(false)
+        const taskId = e.dataTransfer.getData('text/plain')
+        if (taskId && onDrop) onDrop(taskId)
+      }}
+    >
       <div className="flex justify-between items-center px-2 py-3 mb-1">
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${color}`} />
@@ -279,9 +471,16 @@ function KanbanColumn({ title, color, count, children }: { title: string; color:
   )
 }
 
-function KanbanCard({ task }: { task: { id: string; title: string; description?: string; assignee?: string; priority?: string } }) {
+function KanbanCard({ task, draggable }: { task: { id: string; title: string; description?: string; assignee?: string; priority?: string }; draggable?: boolean }) {
   return (
-    <div className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/30 shadow-sm mb-3 cursor-pointer hover:border-primary/50 hover:shadow-md transition-all group/card focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" tabIndex={0} role="button" onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.location.hash = `/opc/task/${task.id}` } }}>
+    <div
+      draggable={draggable}
+      onDragStart={draggable ? (e => e.dataTransfer.setData('text/plain', task.id)) : undefined}
+      className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/30 shadow-sm mb-3 cursor-pointer hover:border-primary/50 hover:shadow-md transition-all group/card focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
+      tabIndex={0}
+      role="button"
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.location.hash = `/opc/task/${task.id}` } }}
+    >
       <div className="flex justify-between items-start mb-2">
         <span className="font-label-sm text-[10px] font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
         {task.priority ? (

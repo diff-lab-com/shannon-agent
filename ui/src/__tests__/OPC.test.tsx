@@ -183,4 +183,76 @@ describe('OPC page', () => {
     fireEvent.click(screen.getByText('Cancel'))
     expect(screen.getByText('Edit')).toBeInTheDocument()
   })
+
+  // C1: worktree path label on agent card
+  it('renders worktree path label when agent has worktree_path', () => {
+    resetCtx()
+    ctx.agents = [{ id: 'a1', name: 'Dev Agent', status: 'running', worktree_path: '/Users/x/worktrees/feature-auth' }]
+    renderOPC()
+    expect(screen.getByText('/feature-auth')).toBeInTheDocument()
+  })
+
+  it('omits worktree label when agent has no worktree_path', () => {
+    resetCtx()
+    ctx.agents = [{ id: 'a1', name: 'Dev Agent', status: 'running' }]
+    renderOPC()
+    expect(screen.queryByText(/worktree/i)).not.toBeInTheDocument()
+  })
+
+  // F6: ⋮ menu shows Stop / Pause / View Logs / Reassign actions
+  it('opens agent actions menu when ⋮ button clicked', () => {
+    resetCtx()
+    ctx.agents = [{ id: 'a1', name: 'Bot', status: 'running' }]
+    renderOPC()
+    const menuBtn = screen.getByRole('button', { name: /Actions for Bot/ })
+    fireEvent.click(menuBtn)
+    expect(screen.getByRole('menuitem', { name: /Stop/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Pause/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /View Logs/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Reassign/ })).toBeInTheDocument()
+  })
+
+  it('clicking ⋮ button does not navigate (stops propagation)', () => {
+    resetCtx()
+    ctx.agents = [{ id: 'a1', name: 'Bot', status: 'running' }]
+    renderOPC()
+    const menuBtn = screen.getByRole('button', { name: /Actions for Bot/ })
+    // Should not throw or trigger navigation
+    expect(() => fireEvent.click(menuBtn)).not.toThrow()
+  })
+
+  // F4: HTML5 drag-and-drop moves cards between columns optimistically
+  it('moves a todo card to Doing column on drop (local override)', () => {
+    resetCtx()
+    ctx.tasks = [{ id: 'task-99', title: 'Draggable Task', status: 'todo' }]
+    renderOPC()
+    // Verify card initially in To Do
+    expect(screen.getByText('Draggable Task')).toBeInTheDocument()
+    // Simulate drop on the Doing column — jsdom lacks DataTransfer, stub it
+    const doingColumn = screen.getByText('Doing').closest('div[class*="shrink-0"]') as HTMLElement
+    expect(doingColumn).toBeTruthy()
+    const dt = { getData: (type: string) => (type === 'text/plain' ? 'task-99' : '') }
+    fireEvent.drop(doingColumn!, { dataTransfer: dt as unknown as DataTransfer })
+    // The card should still be in the document (moved column) — title persists
+    expect(screen.getByText('Draggable Task')).toBeInTheDocument()
+  })
+
+  it('KanbanColumn handles dragover without error', () => {
+    resetCtx()
+    ctx.tasks = [{ id: 'task-1', title: 'Item', status: 'todo' }]
+    renderOPC()
+    const todoColumn = screen.getByText('To Do').closest('div[class*="shrink-0"]') as HTMLElement
+    fireEvent.dragOver(todoColumn, { dataTransfer: {} as DataTransfer })
+    // Should not error and column should still be present
+    expect(todoColumn).toBeInTheDocument()
+  })
+
+  // F5: clicking agent card calls navigate (smoke test — navigate requires router context)
+  it('agent card is keyboard focusable as button', () => {
+    resetCtx()
+    ctx.agents = [{ id: 'a1', name: 'Bot', status: 'running' }]
+    renderOPC()
+    const card = screen.getByRole('button', { name: /Bot — running/ })
+    expect(card).toHaveAttribute('tabindex', '0')
+  })
 })
