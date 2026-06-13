@@ -13,10 +13,12 @@ import { toast } from 'sonner'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import { useScheduledTasks } from '@/hooks/scheduled-tasks'
+import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
 import TasksHeader from '@/components/tasks/TasksHeader'
 import TasksFilters from '@/components/tasks/TasksFilters'
 import NewTaskForm from '@/components/tasks/NewTaskForm'
+import ScheduleForm from '@/components/tasks/ScheduleForm'
 import TaskList from '@/components/tasks/TaskList'
 import TaskCalendarView from '@/components/tasks/TaskCalendarView'
 import CalendarSidebarWidget from '@/components/tasks/CalendarSidebarWidget'
@@ -31,7 +33,7 @@ type Tab = 'active' | 'history'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
-  const { tasks: scheduledTasks } = useScheduledTasks()
+  const { tasks: scheduledTasks, create: createScheduled } = useScheduledTasks()
 
   // Cross-component state
   const [tab, setTab] = useState<Tab>('active')
@@ -45,6 +47,7 @@ export default function Tasks() {
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('all')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [showNewTask, setShowNewTask] = useState(false)
+  const [showSchedule, setShowSchedule] = useState(false)
   const [newTaskPrompt, setNewTaskPrompt] = useState('')
   const [taskPage, setTaskPage] = useState(1)
   const [cancelTarget, setCancelTarget] = useState<string | null>(null)
@@ -74,6 +77,21 @@ export default function Tasks() {
       toast.success(rich?.assignee ? `Task assigned to ${rich.assignee}` : 'Task created')
       await refreshTasks()
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : 'Failed to start task'); toast.error('Failed to create task') }
+  }
+
+  const handleCreateSchedule = async (payload: CreateTaskPayload) => {
+    try {
+      setErrorMsg(null)
+      const created = await createScheduled(payload)
+      if (created) {
+        if (created.trigger_type === 'webhook') {
+          toast.success(`Webhook ready: copy URL from routine detail`)
+        } else {
+          toast.success(`Routine "${created.name}" scheduled`)
+        }
+        setShowSchedule(false)
+      }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : 'Failed to create routine'); toast.error('Failed to create routine') }
   }
 
   const handleCancelTask = async (id: string) => {
@@ -113,6 +131,7 @@ export default function Tasks() {
           calendarView={calendarView}
           onToggleCalendar={() => setCalendarView(!calendarView)}
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
+          onToggleSchedule={() => setShowSchedule(!showSchedule)}
         />
 
         {/* P2.2: Active / History tab switcher */}
@@ -158,6 +177,13 @@ export default function Tasks() {
             onChange={setNewTaskPrompt}
             onSubmit={(rich) => handleStartTask(rich)}
             onCancel={() => { setShowNewTask(false); setNewTaskPrompt('') }}
+          />
+        )}
+
+        {showSchedule && (
+          <ScheduleForm
+            onSubmit={handleCreateSchedule}
+            onCancel={() => setShowSchedule(false)}
           />
         )}
 

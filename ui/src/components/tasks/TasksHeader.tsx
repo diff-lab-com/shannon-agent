@@ -11,6 +11,7 @@ interface TasksHeaderProps {
   calendarView: boolean
   onToggleCalendar: () => void
   onToggleNewTask: () => void
+  onToggleSchedule: () => void
 }
 
 export default function TasksHeader({
@@ -19,6 +20,7 @@ export default function TasksHeader({
   calendarView,
   onToggleCalendar,
   onToggleNewTask,
+  onToggleSchedule,
 }: TasksHeaderProps) {
   return (
     <div className="flex flex-col md:flex-row md:items-end justify-between mb-xl gap-md">
@@ -42,6 +44,14 @@ export default function TasksHeader({
         >
           <span className="material-symbols-outlined text-[18px]">calendar_month</span>
           {calendarView ? 'List View' : 'Month View'}
+        </Button>
+        <Button
+          aria-label="Create new scheduled routine"
+          className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors"
+          onClick={onToggleSchedule}
+        >
+          <span className="material-symbols-outlined text-[18px]">schedule</span>
+          New Routine
         </Button>
         <Button
           aria-label="Create new task"

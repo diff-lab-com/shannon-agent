@@ -1,0 +1,333 @@
+// ScheduleForm — creates a scheduled routine via Tauri create_scheduled_task.
+//
+// Covers Phase D P2.4 (webhook trigger) and P2.6 (retry policy exposure)
+// in one unified form. All four trigger types are selectable; policy fields
+// are optional with MD3-styled inputs. Live cron preview uses preview_cron.
+
+import { useEffect, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import * as api from '@/lib/tauri-api'
+import type {
+  TriggerType,
+  ExecutionPolicy,
+  CreateTaskPayload,
+  CronPreview,
+} from '@/types'
+
+interface ScheduleFormProps {
+  onSubmit: (payload: CreateTaskPayload) => void
+  onCancel: () => void
+}
+
+type TriggerOption = {
+  value: TriggerType
+  label: string
+  icon: string
+  hint: string
+}
+
+const TRIGGER_OPTIONS: TriggerOption[] = [
+  { value: 'interval', label: 'Interval', icon: 'timer', hint: 'Run every N seconds' },
+  { value: 'cron', label: 'Cron', icon: 'schedule', hint: 'Unix cron expression' },
+  { value: 'webhook', label: 'Webhook', icon: 'webhook', hint: 'Triggered by HTTP POST' },
+  { value: 'event', label: 'Event', icon: 'bolt', hint: 'Triggered by another task' },
+]
+
+const DEFAULT_POLICY: ExecutionPolicy = {
+  max_retries: 2,
+  timeout_secs: 600,
+  worktree: null,
+  notify_on_failure: true,
+  budget_usd: null,
+  auto_archive_when_empty: false,
+}
+
+export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) {
+  const [name, setName] = useState('')
+  const [prompt, setPrompt] = useState('')
+  const [triggerType, setTriggerType] = useState<TriggerType>('interval')
+  const [intervalSecs, setIntervalSecs] = useState(3600)
+  const [cronExpr, setCronExpr] = useState('0 9 * * *')
+  const [maxFires, setMaxFires] = useState<number | ''>('')
+  const [showPolicy, setShowPolicy] = useState(false)
+  const [policy, setPolicy] = useState<ExecutionPolicy>(DEFAULT_POLICY)
+  const [cronPreview, setCronPreview] = useState<CronPreview | null>(null)
+  const [cronLoading, setCronLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Live cron preview (debounced via requestIdleCallback-free simple effect)
+  useEffect(() => {
+    if (triggerType !== 'cron' || !cronExpr.trim()) {
+      setCronPreview(null)
+      return
+    }
+    let cancelled = false
+    setCronLoading(true)
+    const timer = setTimeout(() => {
+      api.previewCron(cronExpr.trim())
+        .then(p => { if (!cancelled) setCronPreview(p) })
+        .catch(e => { if (!cancelled) setCronPreview({ expression: cronExpr, valid: false, error: String(e), next_fires: [] }) })
+        .finally(() => { if (!cancelled) setCronLoading(false) })
+    }, 350)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [cronExpr, triggerType])
+
+  const valid = name.trim() && prompt.trim() && (
+    triggerType === 'webhook' ||
+    triggerType === 'event' ||
+    (triggerType === 'interval' && intervalSecs > 0) ||
+    (triggerType === 'cron' && cronExpr.trim() && cronPreview?.valid)
+  )
+
+  const submit = () => {
+    if (!valid) {
+      setError('Please fill all required fields')
+      return
+    }
+    setError(null)
+    const payload: CreateTaskPayload = {
+      name: name.trim(),
+      prompt: prompt.trim(),
+      trigger_type: triggerType,
+      ...(triggerType === 'interval' ? { interval_secs: intervalSecs } : {}),
+      ...(triggerType === 'cron' ? { cron_expr: cronExpr.trim() } : {}),
+      ...(maxFires !== '' ? { max_fires: maxFires } : {}),
+      policy,
+    }
+    onSubmit(payload)
+  }
+
+  return (
+    <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
+      <div className="flex items-center justify-between">
+        <h3 className="font-body-lg font-bold text-on-surface">Create Scheduled Routine</h3>
+        <button
+          type="button"
+          className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          onClick={() => setShowPolicy(!showPolicy)}
+          aria-expanded={showPolicy}
+          aria-controls="schedule-policy"
+        >
+          <span className="material-symbols-outlined text-[14px]">{showPolicy ? 'remove' : 'settings'}</span>
+          {showPolicy ? 'Hide policy' : 'Policy options'}
+        </button>
+      </div>
+
+      <label className="flex flex-col gap-xs">
+        <span className="font-label-md text-on-surface-variant">Name *</span>
+        <input
+          type="text"
+          placeholder="e.g. Daily standup summary"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      </label>
+
+      <label className="flex flex-col gap-xs">
+        <span className="font-label-md text-on-surface-variant">Prompt *</span>
+        <textarea
+          className="w-full h-20 p-sm bg-surface-container-low rounded-lg border border-outline-variant/30 text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30"
+          placeholder="Describe what this routine should do..."
+          value={prompt}
+          onChange={e => setPrompt(e.target.value)}
+        />
+      </label>
+
+      <fieldset className="flex flex-col gap-xs">
+        <legend className="font-label-md text-on-surface-variant mb-xs">Trigger type</legend>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-sm" role="radiogroup" aria-label="Trigger type">
+          {TRIGGER_OPTIONS.map(opt => {
+            const selected = triggerType === opt.value
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setTriggerType(opt.value)}
+                className={`flex flex-col items-start gap-xs p-sm rounded-lg border text-left cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+                  selected
+                    ? 'border-primary bg-primary/10 text-on-surface'
+                    : 'border-outline-variant/30 bg-surface-container-low text-on-surface-variant hover:bg-surface-container-low/60'
+                }`}
+              >
+                <span className="flex items-center gap-xs">
+                  <span className="material-symbols-outlined text-[16px]">{opt.icon}</span>
+                  <span className="font-label-md font-bold">{opt.label}</span>
+                </span>
+                <span className="font-label-sm text-[11px] text-on-surface-variant">{opt.hint}</span>
+              </button>
+            )
+          })}
+        </div>
+      </fieldset>
+
+      {triggerType === 'interval' ? (
+        <label className="flex flex-col gap-xs">
+          <span className="font-label-md text-on-surface-variant">Interval (seconds)</span>
+          <input
+            type="number"
+            min={1}
+            value={intervalSecs}
+            onChange={e => setIntervalSecs(Math.max(1, Number(e.target.value) || 0))}
+            className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+          <span className="font-label-sm text-[11px] text-on-surface-variant">
+            ≈ {Math.round(intervalSecs / 60)} min / {Math.round(intervalSecs / 3600)} hr
+          </span>
+        </label>
+      ) : null}
+
+      {triggerType === 'cron' ? (
+        <div className="flex flex-col gap-xs">
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-md text-on-surface-variant">Cron expression *</span>
+            <input
+              type="text"
+              placeholder="0 9 * * *"
+              value={cronExpr}
+              onChange={e => setCronExpr(e.target.value)}
+              className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </label>
+          {cronLoading ? (
+            <span className="font-label-sm text-[11px] text-on-surface-variant">Checking…</span>
+          ) : cronPreview ? (
+            cronPreview.valid ? (
+              <div className="font-label-sm text-[11px] text-on-surface-variant flex items-center gap-xs">
+                <span className="material-symbols-outlined text-[14px] text-primary">check_circle</span>
+                Next: {cronPreview.next_fires.slice(0, 3).map(n => new Date(n * 1000).toLocaleString()).join(' · ')}
+              </div>
+            ) : (
+              <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
+                <span className="material-symbols-outlined text-[14px]">error</span>
+                {cronPreview.error ?? 'Invalid cron expression'}
+              </div>
+            )
+          ) : null}
+        </div>
+      ) : null}
+
+      {triggerType === 'webhook' ? (
+        <div className="bg-tertiary/10 border border-tertiary/30 rounded-lg p-md flex gap-sm items-start">
+          <span className="material-symbols-outlined text-[18px] text-on-tertiary">info</span>
+          <div className="font-label-sm text-[12px] text-on-surface-variant">
+            On save, a webhook URL + signing secret will be generated. Trigger via <code className="font-mono">POST</code> with HMAC-SHA256 signature header.
+          </div>
+        </div>
+      ) : null}
+
+      {triggerType === 'event' ? (
+        <div className="bg-secondary/10 border border-secondary/30 rounded-lg p-md flex gap-sm items-start">
+          <span className="material-symbols-outlined text-[18px] text-secondary">info</span>
+          <div className="font-label-sm text-[12px] text-on-surface-variant">
+            Event-driven triggers fire when another routine emits a matching event. Configure event subscriptions after creation in the routine detail view.
+          </div>
+        </div>
+      ) : null}
+
+      <label className="flex flex-col gap-xs">
+        <span className="font-label-md text-on-surface-variant">Max fires (optional)</span>
+        <input
+          type="number"
+          min={1}
+          placeholder="Unlimited"
+          value={maxFires}
+          onChange={e => setMaxFires(e.target.value === '' ? '' : Math.max(1, Number(e.target.value)))}
+          className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      </label>
+
+      {showPolicy ? (
+        <div id="schedule-policy" className="grid grid-cols-1 md:grid-cols-2 gap-md p-md bg-surface-container-low/60 rounded-lg border border-outline-variant/20">
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-md text-on-surface-variant">Max retries</span>
+            <input
+              type="number"
+              min={0}
+              value={policy.max_retries}
+              onChange={e => setPolicy({ ...policy, max_retries: Math.max(0, Number(e.target.value) || 0) })}
+              className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            <span className="font-label-sm text-[11px] text-on-surface-variant">Auto-retry on failure (0 disables)</span>
+          </label>
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-md text-on-surface-variant">Timeout (seconds)</span>
+            <input
+              type="number"
+              min={1}
+              value={policy.timeout_secs}
+              onChange={e => setPolicy({ ...policy, timeout_secs: Math.max(1, Number(e.target.value) || 0) })}
+              className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </label>
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-md text-on-surface-variant">Budget (USD, optional)</span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              placeholder="No cap"
+              value={policy.budget_usd ?? ''}
+              onChange={e => setPolicy({ ...policy, budget_usd: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) })}
+              className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </label>
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-md text-on-surface-variant">Worktree path (optional)</span>
+            <input
+              type="text"
+              placeholder="/path/to/worktree"
+              value={policy.worktree ?? ''}
+              onChange={e => setPolicy({ ...policy, worktree: e.target.value || null })}
+              className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </label>
+          <label className="flex items-center gap-sm md:col-span-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={policy.notify_on_failure}
+              onChange={e => setPolicy({ ...policy, notify_on_failure: e.target.checked })}
+              className="cursor-pointer"
+            />
+            <span className="font-label-md text-on-surface">Notify on failure</span>
+          </label>
+          <label className="flex items-center gap-sm md:col-span-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={policy.auto_archive_when_empty}
+              onChange={e => setPolicy({ ...policy, auto_archive_when_empty: e.target.checked })}
+              className="cursor-pointer"
+            />
+            <span className="font-label-md text-on-surface">Auto-archive when worktree is empty</span>
+          </label>
+        </div>
+      ) : null}
+
+      {error ? (
+        <div className="font-label-md text-error flex items-center gap-sm">
+          <span className="material-symbols-outlined text-[16px]">error</span>
+          {error}
+        </div>
+      ) : null}
+
+      <div className="flex justify-end gap-sm">
+        <Button
+          variant="ghost"
+          className="px-md py-sm rounded-lg border border-outline-variant font-label-md cursor-pointer"
+          onClick={() => { setName(''); setPrompt(''); setTriggerType('interval'); setIntervalSecs(3600); setCronExpr('0 9 * * *'); setMaxFires(''); setPolicy(DEFAULT_POLICY); setShowPolicy(false); onCancel() }}
+        >
+          Cancel
+        </Button>
+        <Button
+          className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
+          onClick={submit}
+          disabled={!valid}
+        >
+          Create Routine
+        </Button>
+      </div>
+    </div>
+  )
+}
