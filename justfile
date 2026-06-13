@@ -182,3 +182,30 @@ bench:
 # 编译 release binary
 build:
     cargo build --release -p shannon-cli
+
+# ── Desktop ──────────────────────────────────────────────────────────────
+# shannon-desktop was extracted to its own repo at ../shannon-desktop.
+# Run these recipes from the shannon-code checkout; they shell into the
+# sibling repo. The desktop Cargo.toml has a [patch] override that points
+# shannon-* deps at this checkout, so engine changes are picked up locally.
+
+DESKTOP_DIR := "../shannon-desktop"
+
+# Desktop app (dev build, needs Tauri system deps)
+desktop:
+    cd {{DESKTOP_DIR}} && cargo build --features tauri
+
+# Desktop app (release build)
+desktop-release:
+    cd {{DESKTOP_DIR}} && cargo build --release --features tauri
+
+# Desktop crate tests (no system deps needed)
+desktop-test:
+    cd {{DESKTOP_DIR}} && cargo test
+
+# Desktop UI development and build
+desktop-ui:
+    cd {{DESKTOP_DIR}}/ui && pnpm install && pnpm dev
+
+desktop-build:
+    cd {{DESKTOP_DIR}}/ui && pnpm build && cd {{DESKTOP_DIR}} && cargo tauri build

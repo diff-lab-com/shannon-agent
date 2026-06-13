@@ -144,6 +144,22 @@ impl PluginManifest {
         toml::from_str(s).map_err(|e| e.to_string())
     }
 
+    /// Parse manifest from a `.claude-plugin/plugin.json` string.
+    ///
+    /// This enables Shannon to load Claude Code ecosystem plugins directly
+    /// without requiring a separate `plugin.toml`. Field names mirror the
+    /// TOML form (snake_case) so the same in-memory representation works
+    /// for both formats.
+    pub fn from_json(s: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(s)
+    }
+
+    /// Parse manifest from JSON bytes (e.g. `.claude-plugin/plugin.json`).
+    pub fn from_json_bytes(bytes: &[u8]) -> Result<Self, String> {
+        let s = str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        serde_json::from_str(s).map_err(|e| e.to_string())
+    }
+
     /// Get the typed plugin kind from the manifest fields
     pub fn kind(&self) -> Result<PluginKind, String> {
         match self.plugin_type.as_str() {
@@ -409,5 +425,138 @@ command_name = "build"
             }
             _ => panic!("Expected Command kind"),
         }
+    }
+
+    // ---------- JSON manifest tests (Claude Code ecosystem compatibility) ----------
+
+    const SAMPLE_TOOL_MANIFEST_JSON: &str = r#"{
+  "name": "example-plugin",
+  "version": "1.0.0",
+  "description": "An example plugin",
+  "author": "Shannon Team",
+  "repository": "https://github.com/shannon-code/example-plugin",
+  "type": "tool",
+  "entry": "src/main.rs",
+  "permissions": ["read_files", "network"],
+  "keywords": ["example", "demo"],
+  "transport": {
+    "type": "stdio",
+    "command": "node",
+    "args": ["index.js"]
+  }
+}"#;
+
+    #[test]
+    fn test_parse_tool_manifest_json() {
+        let manifest = PluginManifest::from_json(SAMPLE_TOOL_MANIFEST_JSON).unwrap();
+        assert_eq!(manifest.name, "example-plugin");
+        assert_eq!(manifest.version, "1.0.0");
+        assert_eq!(manifest.description, "An example plugin");
+        assert_eq!(manifest.author.as_deref(), Some("Shannon Team"));
+        assert!(manifest.permissions.contains(&PluginPermission::ReadFiles));
+        assert!(manifest.permissions.contains(&PluginPermission::Network));
+        assert_eq!(manifest.keywords, vec!["example", "demo"]);
+    }
+
+    #[test]
+    fn test_json_tool_kind() {
+        let manifest = PluginManifest::from_json(SAMPLE_TOOL_MANIFEST_JSON).unwrap();
+        let kind = manifest.kind().unwrap();
+        match kind {
+            PluginKind::Tool { transport } => {
+                assert!(transport.is_stdio());
+                assert_eq!(transport.command().unwrap(), "node");
+                assert_eq!(transport.args(), &["index.js".to_string()]);
+            }
+            _ => panic!("Expected Tool kind"),
+        }
+    }
+
+    #[test]
+    fn test_json_skill_manifest() {
+        let json = r#"{
+  "name": "hello-skill",
+  "version": "0.1.0",
+  "description": "A hello skill",
+  "type": "skill",
+  "entry": "template.md",
+  "trigger": "/hello",
+  "template": "Hello {{name}}!"
+}"#;
+        let manifest = PluginManifest::from_json(json).unwrap();
+        assert_eq!(manifest.name, "hello-skill");
+        assert_eq!(manifest.type_display_name(), "Skill");
+        match manifest.kind().unwrap() {
+            PluginKind::Skill { trigger, template } => {
+                assert_eq!(trigger, "/hello");
+                assert_eq!(template, "Hello {{name}}!");
+            }
+            _ => panic!("Expected Skill kind"),
+        }
+    }
+
+    #[test]
+    fn test_json_command_manifest() {
+        let json = r#"{
+  "name": "my-cmd",
+  "version": "1.0.0",
+  "description": "A custom command",
+  "type": "command",
+  "entry": "cmd.md",
+  "command_name": "review",
+  "command_description": "Review code"
+}"#;
+        let manifest = PluginManifest::from_json(json).unwrap();
+        assert_eq!(manifest.type_display_name(), "Command");
+        match manifest.kind().unwrap() {
+            PluginKind::Command { name, description } => {
+                assert_eq!(name, "review");
+                assert_eq!(description, "Review code");
+            }
+            _ => panic!("Expected Command kind"),
+        }
+    }
+
+    #[test]
+    fn test_json_sse_transport() {
+        let json = r#"{
+  "name": "remote-tool",
+  "version": "1.0.0",
+  "description": "SSE transport",
+  "type": "tool",
+  "entry": "x.md",
+  "transport": {"type": "sse", "url": "http://localhost:8080/sse"}
+}"#;
+        let manifest = PluginManifest::from_json(json).unwrap();
+        match manifest.kind().unwrap() {
+            PluginKind::Tool { transport } => {
+                assert!(!transport.is_stdio());
+                assert!(transport.command().is_none());
+            }
+            _ => panic!("Expected Tool kind"),
+        }
+    }
+
+    #[test]
+    fn test_from_json_bytes_invalid_utf8() {
+        let bad_bytes: &[u8] = &[0xff, 0xfe, 0x00];
+        assert!(PluginManifest::from_json_bytes(bad_bytes).is_err());
+    }
+
+    #[test]
+    fn test_from_json_bytes_invalid_json() {
+        assert!(PluginManifest::from_json_bytes(b"{not valid").is_err());
+    }
+
+    #[test]
+    fn test_json_and_toml_produce_equivalent_manifest() {
+        let toml_manifest = PluginManifest::from_toml(SAMPLE_TOOL_MANIFEST).unwrap();
+        let json_manifest = PluginManifest::from_json(SAMPLE_TOOL_MANIFEST_JSON).unwrap();
+        assert_eq!(toml_manifest.name, json_manifest.name);
+        assert_eq!(toml_manifest.version, json_manifest.version);
+        assert_eq!(toml_manifest.plugin_type, json_manifest.plugin_type);
+        assert_eq!(toml_manifest.entry, json_manifest.entry);
+        assert_eq!(toml_manifest.permissions, json_manifest.permissions);
+        assert_eq!(toml_manifest.keywords, json_manifest.keywords);
     }
 }
