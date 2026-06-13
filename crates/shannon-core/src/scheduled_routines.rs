@@ -518,7 +518,7 @@ impl RoutineManager {
         let mut blocked_by = Vec::new();
         if let Some(routine) = self.routines.get(routine_id) {
             for dep_id in &routine.depends_on {
-                if self.routines.get(dep_id).is_none() {
+                if !self.routines.contains_key(dep_id) {
                     // Deleted dependency — don't block.
                     continue;
                 }

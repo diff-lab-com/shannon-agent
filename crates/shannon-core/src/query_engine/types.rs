@@ -1152,7 +1152,7 @@ mod tests {
 
         // Negative-price model should NOT be added
         assert!(
-            table.get("malicious-model").is_none(),
+            !table.contains_key("malicious-model"),
             "negative prices should be rejected"
         );
         // Existing model should be unchanged
@@ -1168,7 +1168,7 @@ mod tests {
         apply_pricing_overrides(&mut table, json, "test");
 
         assert!(
-            table.get("bad").is_none(),
+            !table.contains_key("bad"),
             "negative output price should be rejected"
         );
     }

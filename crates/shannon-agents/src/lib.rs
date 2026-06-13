@@ -19,6 +19,7 @@ mod error;
 mod executor;
 mod isolation;
 mod message;
+pub mod message_history;
 mod multi_agent;
 mod persistence;
 mod process_manager;
@@ -46,6 +47,7 @@ pub use isolation::{
     ContextMessage, ContextRole, IsolatedContext, IsolationConfig, SubagentSummary,
 };
 pub use message::{AgentMessage, MessageContent, MessagePriority, MessageType, ProtocolMessage};
+pub use message_history::{ContentKind, HistoryError, MessageHistoryStore, MessageRecord};
 pub use multi_agent::{
     AgentConfig as SpawnAgentConfig, AgentResult as MultiAgentTaskResult, AgentResultStatus,
     DependencyError, MultiAgentConfig, MultiAgentResult, MultiAgentSpawner,
