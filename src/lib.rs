@@ -14,3 +14,6 @@ pub mod commands;
 
 #[cfg(feature = "tauri")]
 pub mod scheduled_commands;
+
+#[cfg(feature = "tauri")]
+pub mod lsp_commands;

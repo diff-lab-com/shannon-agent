@@ -89,6 +89,10 @@ fn main() {
             shannon_desktop::scheduled_commands::get_execution_detail,
             shannon_desktop::scheduled_commands::list_triggered_routines,
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
+            shannon_desktop::scheduled_commands::create_triggered_routine,
+            shannon_desktop::scheduled_commands::get_opc_metrics,
+            shannon_desktop::lsp_commands::lsp_code_actions,
+            shannon_desktop::lsp_commands::apply_code_action,
             // Worktree management (B9)
             shannon_desktop::scheduled_commands::create_task_worktree,
             shannon_desktop::scheduled_commands::list_task_worktrees,

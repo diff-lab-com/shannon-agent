@@ -3999,6 +3999,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "futures",
+ "lsp-types",
  "serde",
  "serde_json",
  "shannon-agents 0.2.0 (git+ssh://git@github.com/shannon-agent/shannon-code.git?rev=e63ae82)",
@@ -4018,6 +4019,7 @@ dependencies = [
  "tokio-test",
  "tokio-util",
  "tracing",
+ "url",
  "uuid",
 ]
 

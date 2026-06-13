@@ -89,6 +89,21 @@ export default function RoutineDetailDrawer({
               <p className="font-body-md text-error mt-xs break-words">{routine.last_error}</p>
             </div>
           )}
+          {routine.policy?.result_routing && routine.policy.result_routing.length > 0 ? (
+            <div>
+              <span className="text-label-sm text-on-surface-variant">Result routing</span>
+              <ul className="flex flex-wrap gap-xs mt-xs">
+                {routine.policy.result_routing.map(entry => (
+                  <li
+                    key={entry}
+                    className="font-label-sm text-[11px] bg-tertiary/10 text-tertiary px-sm py-0.5 rounded-full border border-tertiary/30"
+                  >
+                    {entry}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <div>
             <div className="flex items-center justify-between mb-sm">
               <span className="text-label-sm text-on-surface-variant uppercase tracking-wider">

@@ -400,6 +400,60 @@ export async function toggleTriggeredRoutine(name: string, enabled: boolean): Pr
   return invoke('toggle_triggered_routine', { name, enabled })
 }
 
+export async function createTriggeredRoutine(payload: {
+  name: string
+  trigger: string
+  command: string
+  matcher?: string
+  pattern?: string
+  description?: string
+}): Promise<TriggeredRoutineDto> {
+  return invoke('create_triggered_routine', {
+    name: payload.name,
+    trigger: payload.trigger,
+    command: payload.command,
+    matcher: payload.matcher ?? null,
+    pattern: payload.pattern ?? null,
+    description: payload.description ?? null,
+  })
+}
+
+// --- OPC analytics ---
+
+export async function getOpcMetrics(): Promise<import('@/types').OpcMetrics> {
+  return invoke('get_opc_metrics')
+}
+
+// --- LSP quick-fix ---
+
+export interface CodeActionDto {
+  title: string
+  kind?: string
+  is_preferred: boolean
+  edit?: unknown
+  command?: string
+}
+
+export interface CodeActionRequest {
+  file_path: string
+  server_cmd: string
+  server_args: string[]
+  start_line: number
+  start_character: number
+  end_line: number
+  end_character: number
+  language_id: string
+  diagnostic_messages: string[]
+}
+
+export async function lspCodeActions(req: CodeActionRequest): Promise<{ actions: CodeActionDto[] }> {
+  return invoke('lsp_code_actions', { req })
+}
+
+export async function applyCodeAction(edit: unknown): Promise<number> {
+  return invoke('apply_code_action', { edit })
+}
+
 // Worktrees (B9)
 
 export async function createTaskWorktree(taskId: string): Promise<TaskWorktreeDto> {

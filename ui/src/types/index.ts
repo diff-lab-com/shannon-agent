@@ -255,6 +255,40 @@ export interface UpdateTaskPayload {
   execution_mode?: 'serial' | 'parallel'
 }
 
+// --- OPC analytics ---
+
+export interface OpcDayBucket {
+  date: string
+  created: number
+  completed: number
+}
+
+export interface OpcStatusBucket {
+  status: string
+  count: number
+}
+
+export interface OpcAssigneeBucket {
+  assignee: string
+  total: number
+  done: number
+  in_progress: number
+}
+
+export interface OpcPriorityBucket {
+  priority: string
+  count: number
+}
+
+export interface OpcMetrics {
+  total: number
+  completion_rate: number
+  by_status: OpcStatusBucket[]
+  by_priority: OpcPriorityBucket[]
+  by_assignee: OpcAssigneeBucket[]
+  daily: OpcDayBucket[]
+}
+
 export interface BackgroundTaskInfo {
   task_id: string
   prompt: string
@@ -355,6 +389,10 @@ export interface ExecutionPolicy {
   notify_on_failure: boolean
   budget_usd?: number | null
   auto_archive_when_empty: boolean
+  /// P2.3: Result routing channels. Each entry is a target spec like
+  /// "slack:#ops", "email:ops@example.com", "notification", "log".
+  /// Empty array = log only (default behavior).
+  result_routing?: string[]
 }
 
 /// A single scheduled routine (wire-level type, matches Rust `ScheduledRoutine`).

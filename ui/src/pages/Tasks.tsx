@@ -31,6 +31,8 @@ import EfficiencyCard from '@/components/tasks/EfficiencyCard'
 import AgentAllocation from '@/components/tasks/AgentAllocation'
 import HistoryView from '@/components/tasks/HistoryView'
 import WorktreePanel from '@/components/tasks/WorktreePanel'
+import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
+import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
 type Tab = 'active' | 'history' | 'worktrees'
 
@@ -257,6 +259,10 @@ export default function Tasks() {
               />
               <EfficiencyCard percentage={efficiencyPct} variant="full" />
               <AgentAllocation agents={agents} />
+              <HookTaskPipeline />
+            </div>
+            <div className="col-span-12">
+              <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} />
             </div>
             <div className="col-span-12">
               <TaskExecutionLog tasks={backgroundTasks} onCancel={setCancelTarget} />

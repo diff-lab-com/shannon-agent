@@ -35,6 +35,8 @@ futures = "0.3"
 tempfile = "3"
 base64 = "0.22"
 dirs = "5"
+lsp-types = "0.95"
+url = "2"
 
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 tauri-plugin-shell = { version = "2", optional = true }

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { useApp } from '@/context/AppContext'
 import type { TaskItem } from '@/types'
 import * as api from '@/lib/tauri-api'
+import OpcAnalyticsDashboard from '@/components/opc/OpcAnalyticsDashboard'
 
 const AGENT_ICONS: Record<string, string> = {
   research: 'query_stats',
@@ -75,6 +76,12 @@ export default function OPC() {
   const [spawnTools, setSpawnTools] = useState<Record<string, boolean>>({ bash: true, read: true, write: true })
   const [spawnError, setSpawnError] = useState<string | null>(null)
   const [spawnSaving, setSpawnSaving] = useState(false)
+
+  // F6: Reassign modal state
+  const [reassignTarget, setReassignTarget] = useState<{ agentId: string; agentName: string; taskId: string; taskTitle: string } | null>(null)
+  const [reassignPick, setReassignPick] = useState('')
+  const [reassignSaving, setReassignSaving] = useState(false)
+  const [reassignError, setReassignError] = useState<string | null>(null)
 
   const resetSpawn = () => {
     setSpawnName(''); setSpawnModel(''); setSpawnPrompt('')
@@ -174,9 +181,49 @@ export default function OPC() {
       toast.error(`Failed to stop ${name}`)
     }
   }
-  const handleAgentAction = (action: string, name: string) => {
+
+  // F6 View Logs: navigate to OPCTask page filtered to this agent's task
+  const handleViewLogs = (agentId: string, sessionId?: string) => {
     setOpenMenuId(null)
-    toast.info(`${action} for ${name}`, { description: 'Backend wiring pending' })
+    const target = sessionId ? `/opc/task?agent=${agentId}&session=${sessionId}` : `/opc/task?agent=${agentId}`
+    navigate(target)
+  }
+
+  // F6 Pause: real pause is not yet a backend command. Surface a toast that
+  // explains what's missing so users aren't misled into thinking it worked.
+  const handlePauseAgent = (name: string) => {
+    setOpenMenuId(null)
+    toast.info(`Pause not yet supported for ${name}`, { description: 'Backend pause command pending — use Stop to halt.' })
+  }
+
+  // F6 Reassign: find the in-progress task this agent owns, open picker
+  const handleReassignOpen = (agent: { id: string; name: string }) => {
+    setOpenMenuId(null)
+    const owned = effectiveTasks.find(t => t.assignee === agent.name && (t.status === 'in_progress' || t.status === 'running' || t.status === 'pending'))
+    if (!owned) {
+      toast.info(`No active task to reassign for ${agent.name}`)
+      return
+    }
+    setReassignTarget({ agentId: agent.id, agentName: agent.name, taskId: owned.id, taskTitle: owned.title })
+    setReassignPick('')
+    setReassignError(null)
+  }
+
+  const handleReassignSubmit = async () => {
+    if (!reassignTarget) return
+    const pick = reassignPick.trim()
+    if (!pick) { setReassignError('Pick an agent'); return }
+    setReassignSaving(true); setReassignError(null)
+    try {
+      await import('@/lib/tauri-api').then(api => api.updateTask({ id: reassignTarget.taskId, assignee: pick }))
+      toast.success(`Reassigned "${reassignTarget.taskTitle}" to ${pick}`)
+      setReassignTarget(null)
+    } catch (e) {
+      console.warn('Failed to reassign:', e)
+      setReassignError(e instanceof Error ? e.message : 'Failed to reassign')
+    } finally {
+      setReassignSaving(false)
+    }
   }
 
   return (
@@ -217,6 +264,8 @@ export default function OPC() {
             {Array.from({ length: 3 }).map((_, i) => <CardSkeleton key={i} />)}
           </div>
         ) : (
+        <>
+        <OpcAnalyticsDashboard />
         <div className="flex flex-col lg:flex-row gap-lg items-start">
 
           {/* Agent Swarm Sidebar */}
@@ -310,13 +359,13 @@ export default function OPC() {
                           <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleStopAgent(agent.id, agent.name)}>
                             <span className="material-symbols-outlined text-[14px] text-error">stop_circle</span> Stop
                           </button>
-                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleAgentAction('Pause', agent.name)}>
+                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handlePauseAgent(agent.name)}>
                             <span className="material-symbols-outlined text-[14px]">pause_circle</span> Pause
                           </button>
-                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleAgentAction('View Logs', agent.name)}>
+                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleViewLogs(agent.id, agent.session_id)}>
                             <span className="material-symbols-outlined text-[14px]">description</span> View Logs
                           </button>
-                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleAgentAction('Reassign', agent.name)}>
+                          <button role="menuitem" className="w-full text-left px-3 py-1.5 text-[12px] hover:bg-surface-container-high/60 flex items-center gap-2 cursor-pointer" onClick={() => handleReassignOpen({ id: agent.id, name: agent.name })}>
                             <span className="material-symbols-outlined text-[14px]">swap_horiz</span> Reassign
                           </button>
                         </div>
@@ -463,6 +512,7 @@ export default function OPC() {
             ) : null}
           </div>
         </div>
+        </>
         )}
 
         {/* C5: Spawn Agent modal */}
@@ -563,6 +613,78 @@ export default function OPC() {
                   className="px-md rounded-lg border border-outline-variant font-label-md cursor-pointer"
                   onClick={() => { resetSpawn(); setSpawnOpen(false) }}
                   disabled={spawnSaving}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {/* F6: Reassign modal */}
+        {reassignTarget ? (
+          <div
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-md"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reassign-title"
+            onClick={() => setReassignTarget(null)}
+          >
+            <div
+              className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 w-full max-w-md p-xl space-y-md"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 id="reassign-title" className="font-headline-md text-[20px] font-bold flex items-center gap-2">
+                  <span className="material-symbols-outlined text-primary">swap_horiz</span>
+                  Reassign Task
+                </h3>
+                <button
+                  type="button"
+                  className="text-on-surface-variant hover:text-on-surface cursor-pointer"
+                  onClick={() => setReassignTarget(null)}
+                  aria-label="Close reassign dialog"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+              <p className="font-body-md text-on-surface-variant">
+                Move <strong className="text-on-surface">{reassignTarget.taskTitle}</strong> off{' '}
+                <strong className="text-on-surface">{reassignTarget.agentName}</strong>.
+              </p>
+              <div className="space-y-sm">
+                <label htmlFor="reassign-pick" className="font-label-md text-on-surface-variant block">New assignee</label>
+                <input
+                  id="reassign-pick"
+                  type="text"
+                  list="reassign-agent-options"
+                  placeholder="Pick or type an agent name"
+                  value={reassignPick}
+                  onChange={e => setReassignPick(e.target.value)}
+                  className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30 w-full"
+                  autoFocus
+                />
+                <datalist id="reassign-agent-options">
+                  {agents
+                    .map(a => a.name)
+                    .filter(n => n !== reassignTarget.agentName)
+                    .map(n => <option key={n} value={n} />)}
+                </datalist>
+              </div>
+              {reassignError ? <p role="alert" className="text-error font-label-sm">{reassignError}</p> : null}
+              <div className="flex gap-sm pt-sm">
+                <Button
+                  className="flex-1 bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
+                  onClick={handleReassignSubmit}
+                  disabled={reassignSaving || !reassignPick.trim()}
+                >
+                  {reassignSaving ? 'Reassigning…' : 'Reassign'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="px-md rounded-lg border border-outline-variant font-label-md cursor-pointer"
+                  onClick={() => setReassignTarget(null)}
+                  disabled={reassignSaving}
                 >
                   Cancel
                 </Button>
