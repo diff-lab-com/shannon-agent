@@ -7,6 +7,7 @@ import { CardSkeleton } from '@/components/SkeletonLoader'
 import { Input } from '@/components/ui/input'
 import { useApp } from '@/context/AppContext'
 import type { TaskItem } from '@/types'
+import * as api from '@/lib/tauri-api'
 
 const AGENT_ICONS: Record<string, string> = {
   research: 'query_stats',
@@ -65,6 +66,37 @@ export default function OPC() {
   const [overrides, setOverrides] = useState<Record<string, string>>({})
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+
+  // C5: Spawn Agent drawer state
+  const [spawnOpen, setSpawnOpen] = useState(false)
+  const [spawnName, setSpawnName] = useState('')
+  const [spawnModel, setSpawnModel] = useState('')
+  const [spawnPrompt, setSpawnPrompt] = useState('')
+  const [spawnTools, setSpawnTools] = useState<Record<string, boolean>>({ bash: true, read: true, write: true })
+  const [spawnError, setSpawnError] = useState<string | null>(null)
+  const [spawnSaving, setSpawnSaving] = useState(false)
+
+  const resetSpawn = () => {
+    setSpawnName(''); setSpawnModel(''); setSpawnPrompt('')
+    setSpawnTools({ bash: true, read: true, write: true })
+    setSpawnError(null); setSpawnSaving(false)
+  }
+
+  const handleSpawnAgent = async () => {
+    if (!spawnName.trim()) { setSpawnError('Agent name is required'); return }
+    setSpawnSaving(true); setSpawnError(null)
+    const tools = Object.entries(spawnTools).filter(([, v]) => v).map(([k]) => k)
+    try {
+      await api.createAgentDefinition(spawnName.trim(), spawnModel || undefined, spawnPrompt || undefined, tools)
+      toast.success(`Agent "${spawnName.trim()}" created`)
+      resetSpawn(); setSpawnOpen(false)
+    } catch (e) {
+      console.warn('Failed to create agent:', e)
+      setSpawnError(e instanceof Error ? e.message : 'Failed to create agent')
+    } finally {
+      setSpawnSaving(false)
+    }
+  }
 
   const currentFocus = config?.strategic_focus
     || (config?.provider
@@ -192,6 +224,16 @@ export default function OPC() {
             <div className="flex items-center gap-3">
               <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant">Agent Swarm</h3>
               <span className="bg-secondary text-on-secondary text-[11px] font-bold px-2 py-0.5 rounded-full">{agents.length} Active</span>
+              {/* C5: Spawn Agent button */}
+              <button
+                type="button"
+                className="ml-auto flex items-center gap-1 text-[11px] font-bold text-primary hover:bg-primary/10 rounded-md px-2 py-1 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                onClick={() => setSpawnOpen(true)}
+                aria-label="Spawn new agent"
+              >
+                <span className="material-symbols-outlined text-[14px]">add_circle</span>
+                Spawn
+              </button>
             </div>
 
             {agents.length === 0 ? (
@@ -422,6 +464,112 @@ export default function OPC() {
           </div>
         </div>
         )}
+
+        {/* C5: Spawn Agent modal */}
+        {spawnOpen ? (
+          <div
+            className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-md"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="spawn-agent-title"
+            onClick={() => setSpawnOpen(false)}
+          >
+            <div
+              className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 w-full max-w-md p-xl space-y-md"
+              onClick={e => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 id="spawn-agent-title" className="font-headline-md text-[20px] font-bold flex items-center gap-2">
+                  <span className="material-symbols-outlined text-primary">smart_toy</span>
+                  Spawn New Agent
+                </h3>
+                <button
+                  type="button"
+                  className="text-on-surface-variant hover:text-on-surface cursor-pointer"
+                  onClick={() => setSpawnOpen(false)}
+                  aria-label="Close spawn agent dialog"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+
+              <div className="space-y-sm">
+                <label htmlFor="spawn-name" className="font-label-md text-on-surface-variant block">Name</label>
+                <Input
+                  id="spawn-name"
+                  type="text"
+                  placeholder="e.g. Research Agent"
+                  value={spawnName}
+                  onChange={e => setSpawnName(e.target.value)}
+                  className="bg-surface-container-low"
+                  autoFocus
+                />
+              </div>
+
+              <div className="space-y-sm">
+                <label htmlFor="spawn-model" className="font-label-md text-on-surface-variant block">Model (optional)</label>
+                <Input
+                  id="spawn-model"
+                  type="text"
+                  placeholder="default"
+                  value={spawnModel}
+                  onChange={e => setSpawnModel(e.target.value)}
+                  className="bg-surface-container-low"
+                />
+              </div>
+
+              <div className="space-y-sm">
+                <label htmlFor="spawn-prompt" className="font-label-md text-on-surface-variant block">System Prompt</label>
+                <textarea
+                  id="spawn-prompt"
+                  className="w-full h-24 p-md bg-surface-container-low rounded-xl border border-outline-variant/30 text-body-md resize-none focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  placeholder="Describe the agent's role and capabilities..."
+                  value={spawnPrompt}
+                  onChange={e => setSpawnPrompt(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-sm">
+                <span className="font-label-md text-on-surface-variant block">Tools</span>
+                <div className="flex flex-wrap gap-md">
+                  {['bash', 'read', 'write', 'search', 'mcp'].map(tool => (
+                    <label key={tool} className="flex items-center gap-xs font-label-md cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!spawnTools[tool]}
+                        onChange={e => setSpawnTools(prev => ({ ...prev, [tool]: e.target.checked }))}
+                        className="accent-primary"
+                      />
+                      {tool.charAt(0).toUpperCase() + tool.slice(1)}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {spawnError ? (
+                <p role="alert" className="text-error font-label-sm">{spawnError}</p>
+              ) : null}
+
+              <div className="flex gap-sm pt-sm">
+                <Button
+                  className="flex-1 bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
+                  onClick={handleSpawnAgent}
+                  disabled={spawnSaving}
+                >
+                  {spawnSaving ? 'Creating…' : 'Create Agent'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="px-md rounded-lg border border-outline-variant font-label-md cursor-pointer"
+                  onClick={() => { resetSpawn(); setSpawnOpen(false) }}
+                  disabled={spawnSaving}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
       </div>
     </div>

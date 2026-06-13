@@ -255,4 +255,35 @@ describe('OPC page', () => {
     const card = screen.getByRole('button', { name: /Bot — running/ })
     expect(card).toHaveAttribute('tabindex', '0')
   })
+
+  // C5: Spawn Agent button + modal
+  it('renders Spawn button on Agent Swarm heading', () => {
+    resetCtx()
+    renderOPC()
+    expect(screen.getByRole('button', { name: /Spawn new agent/ })).toBeInTheDocument()
+  })
+
+  it('opens spawn-agent modal on Spawn click', () => {
+    resetCtx()
+    renderOPC()
+    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
+    expect(screen.getByRole('heading', { name: /Spawn New Agent/ })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText(/Research Agent/)).toBeInTheDocument()
+  })
+
+  it('validates name is required when creating agent', () => {
+    resetCtx()
+    renderOPC()
+    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Create Agent$/ }))
+    expect(screen.getByText(/Agent name is required/)).toBeInTheDocument()
+  })
+
+  it('closes modal on Cancel', () => {
+    resetCtx()
+    renderOPC()
+    fireEvent.click(screen.getByRole('button', { name: /Spawn new agent/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Cancel$/ }))
+    expect(screen.queryByRole('heading', { name: /Spawn New Agent/ })).not.toBeInTheDocument()
+  })
 })
