@@ -28,8 +28,9 @@ import TaskExecutionLog from '@/components/tasks/TaskExecutionLog'
 import EfficiencyCard from '@/components/tasks/EfficiencyCard'
 import AgentAllocation from '@/components/tasks/AgentAllocation'
 import HistoryView from '@/components/tasks/HistoryView'
+import WorktreePanel from '@/components/tasks/WorktreePanel'
 
-type Tab = 'active' | 'history'
+type Tab = 'active' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
@@ -134,9 +135,9 @@ export default function Tasks() {
           onToggleSchedule={() => setShowSchedule(!showSchedule)}
         />
 
-        {/* P2.2: Active / History tab switcher */}
+        {/* P2.2: Active / History / Worktrees tab switcher */}
         <div role="tablist" aria-label="Tasks view" className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'history'] as const).map(t => {
+          {(['active', 'history', 'worktrees'] as const).map(t => {
             const selected = tab === t
             return (
               <button
@@ -148,7 +149,7 @@ export default function Tasks() {
                   selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface'
                 }`}
               >
-                {t === 'active' ? 'Active' : 'History'}
+                {t === 'active' ? 'Active' : t === 'history' ? 'History' : 'Worktrees'}
               </button>
             )
           })}
@@ -156,6 +157,8 @@ export default function Tasks() {
 
         {tab === 'history' ? (
           <HistoryView />
+        ) : tab === 'worktrees' ? (
+          <WorktreePanel />
         ) : (
           <>
         {errorMsg && (

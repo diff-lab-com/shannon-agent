@@ -17,6 +17,7 @@ import type {
   TriageStats,
   TaskExecution,
   TaskExecutionDetail,
+  TaskWorktreeDto,
 } from '@/types'
 
 // ─── Scheduled tasks (CRUD) ────────────────────────────────────────────────
@@ -265,4 +266,72 @@ export function useTriageStats() {
   useEffect(() => { refresh() }, [refresh])
 
   return { stats, loading, error, refresh }
+}
+
+// ─── Task worktrees (P2.5) ─────────────────────────────────────────────────
+
+export function useTaskWorktrees() {
+  const [worktrees, setWorktrees] = useState<TaskWorktreeDto[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      setWorktrees(await api.listTaskWorktrees())
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setError(msg)
+      console.warn('useTaskWorktrees.refresh failed:', e)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const create = useCallback(async (taskId: string): Promise<TaskWorktreeDto | null> => {
+    try {
+      const wt = await api.createTaskWorktree(taskId)
+      toast.success(`Worktree created for "${wt.task_name}"`)
+      await refresh()
+      return wt
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to create worktree'
+      setError(msg)
+      toast.error('Failed to create worktree')
+      return null
+    }
+  }, [refresh])
+
+  const remove = useCallback(async (path: string): Promise<boolean> => {
+    try {
+      await api.removeTaskWorktree(path)
+      toast.success('Worktree removed')
+      await refresh()
+      return true
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to remove worktree'
+      setError(msg)
+      toast.error('Failed to remove worktree')
+      return false
+    }
+  }, [refresh])
+
+  const prune = useCallback(async (): Promise<string[] | null> => {
+    try {
+      const removed = await api.pruneTaskWorktrees()
+      toast.success(removed.length === 0 ? 'No stale worktrees to prune' : `Pruned ${removed.length} worktree${removed.length === 1 ? '' : 's'}`)
+      await refresh()
+      return removed
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to prune worktrees'
+      setError(msg)
+      toast.error('Failed to prune worktrees')
+      return null
+    }
+  }, [refresh])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  return { worktrees, loading, error, refresh, create, remove, prune }
 }
