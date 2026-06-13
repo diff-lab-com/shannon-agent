@@ -55,6 +55,9 @@ pub struct CreateTaskPayload {
     pub max_fires: Option<u32>,
     #[serde(default)]
     pub policy: Option<ExecutionPolicy>,
+    /// Initial dependency list. Defaults to empty when omitted.
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -81,6 +84,10 @@ pub struct UpdateTaskPayload {
     pub max_fires: Option<u32>,
     #[serde(default)]
     pub policy: Option<ExecutionPolicy>,
+    /// Replaces the dependency list wholesale when supplied. The UI sends
+    /// the full new list (add or remove); an empty vec clears all deps.
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
 }
 
 /// Result of `preview_cron`.
@@ -548,6 +555,9 @@ pub async fn create_scheduled_task(
     if payload.policy.is_some() {
         routine.policy = payload.policy.clone();
     }
+    if let Some(deps) = payload.depends_on.clone() {
+        routine.depends_on = deps;
+    }
 
     state
         .scheduled_task_store()
@@ -606,6 +616,9 @@ pub async fn update_scheduled_task(
     }
     if payload.policy.is_some() {
         routine.policy = payload.policy.clone();
+    }
+    if let Some(deps) = payload.depends_on.clone() {
+        routine.depends_on = deps;
     }
 
     store.save(&routine).map_err(|e| e.to_string())?;
@@ -953,6 +966,7 @@ mod tests {
             expires_at: None,
             max_fires: None,
             policy: None,
+            depends_on: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
@@ -972,6 +986,7 @@ mod tests {
             expires_at: None,
             max_fires: Some(260),
             policy: None,
+            depends_on: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"cron_expr\""));
@@ -985,6 +1000,43 @@ mod tests {
         assert_eq!(payload.id, "abc12345");
         assert!(payload.name.is_none());
         assert!(payload.enabled.is_none());
+        assert!(payload.depends_on.is_none());
+    }
+
+    #[test]
+    fn test_create_and_update_payloads_roundtrip_depends_on() {
+        let create = CreateTaskPayload {
+            name: "n".into(),
+            prompt: "p".into(),
+            trigger_type: None,
+            interval_secs: Some(60),
+            cron_expr: None,
+            timezone: None,
+            expires_at: None,
+            max_fires: None,
+            policy: None,
+            depends_on: Some(vec!["dep1".into(), "dep2".into()]),
+        };
+        let json = serde_json::to_string(&create).unwrap();
+        let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.depends_on.as_deref(), Some(["dep1".into(), "dep2".into()].as_slice()));
+
+        let update = UpdateTaskPayload {
+            id: "abc".into(),
+            name: None,
+            prompt: None,
+            trigger_type: None,
+            interval_secs: None,
+            cron_expr: None,
+            timezone: None,
+            enabled: None,
+            expires_at: None,
+            max_fires: None,
+            policy: None,
+            depends_on: Some(Vec::new()),
+        };
+        let ujson = serde_json::to_string(&update).unwrap();
+        assert!(ujson.contains("\"depends_on\":[]"));
     }
 
     #[test]

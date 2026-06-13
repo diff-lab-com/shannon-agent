@@ -23,6 +23,7 @@ import TaskList from '@/components/tasks/TaskList'
 import TaskCalendarView from '@/components/tasks/TaskCalendarView'
 import CalendarSidebarWidget from '@/components/tasks/CalendarSidebarWidget'
 import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
+import RoutineDetailDrawer from '@/components/tasks/RoutineDetailDrawer'
 import CancelTaskModal from '@/components/tasks/CancelTaskModal'
 import TaskExecutionLog from '@/components/tasks/TaskExecutionLog'
 import EfficiencyCard from '@/components/tasks/EfficiencyCard'
@@ -45,6 +46,7 @@ export default function Tasks() {
   const [calendarView, setCalendarView] = useState(false)
   const [selectedDay, setSelectedDay] = useState<number | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('all')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [showNewTask, setShowNewTask] = useState(false)
@@ -55,6 +57,9 @@ export default function Tasks() {
 
   const selectedTask = selectedTaskId
     ? tasks.find(t => t.id === selectedTaskId) ?? backgroundTasks.find(t => t.task_id === selectedTaskId) ?? null
+    : null
+  const selectedRoutine = selectedRoutineId
+    ? scheduledTasks.find(r => r.id === selectedRoutineId) ?? null
     : null
 
   const filteredTasks = tasks.filter(t => statusMatchesFilter(t.status, activeFilter))
@@ -227,6 +232,7 @@ export default function Tasks() {
                 tasks={tasks}
                 scheduledTasks={scheduledTasks}
                 onSelectTask={setSelectedTaskId}
+                onSelectRoutine={setSelectedRoutineId}
               />
               <EfficiencyCard percentage={efficiencyPct} variant="full" />
               <AgentAllocation agents={agents} />
@@ -241,6 +247,12 @@ export default function Tasks() {
       </div>
 
       <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTaskId(null)} />
+      <RoutineDetailDrawer
+        routine={selectedRoutine}
+        routines={scheduledTasks}
+        onClose={() => setSelectedRoutineId(null)}
+        onUpdated={() => {/* useScheduledTasks auto-refreshes via its own hook */}}
+      />
       <CancelTaskModal
         open={cancelTarget !== null}
         onCancel={() => setCancelTarget(null)}

@@ -354,6 +354,8 @@ export interface ScheduledRoutine {
   policy?: ExecutionPolicy | null
   last_run_id?: string | null
   last_error?: string | null
+  /// IDs of routines that must succeed before this one fires.
+  depends_on?: string[]
 }
 
 /// Payload for `create_scheduled_task`.
@@ -382,6 +384,8 @@ export interface UpdateTaskPayload {
   expires_at?: number
   max_fires?: number
   policy?: ExecutionPolicy
+  /// Replaces dependency list. Send the full list (add or remove); empty clears.
+  depends_on?: string[]
 }
 
 /// Result of `preview_cron`.
