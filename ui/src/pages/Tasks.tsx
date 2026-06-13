@@ -8,7 +8,7 @@
 // useScheduledTasks() and rendered into the calendar (next_fire_at). The
 // legacy background-task / agent data still comes from useApp().
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
@@ -50,6 +50,7 @@ export default function Tasks() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('all')
+  const [teamFilter, setTeamFilter] = useState<string>('all')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [showNewTask, setShowNewTask] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
@@ -64,7 +65,18 @@ export default function Tasks() {
     ? scheduledTasks.find(r => r.id === selectedRoutineId) ?? null
     : null
 
-  const filteredTasks = tasks.filter(t => statusMatchesFilter(t.status, activeFilter))
+  // G11: derive unique team list from tasks (multi-session aggregated view).
+  const teams = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of tasks) if (t.team) set.add(t.team)
+    return Array.from(set).sort()
+  }, [tasks])
+
+  const filteredTasks = tasks.filter(t => {
+    if (!statusMatchesFilter(t.status, activeFilter)) return false
+    if (teamFilter !== 'all' && (t.team ?? '') !== teamFilter) return false
+    return true
+  })
   const taskTotalPages = Math.ceil(filteredTasks.length / TASKS_PER_PAGE)
   const pagedFilteredTasks = filteredTasks.slice((taskPage - 1) * TASKS_PER_PAGE, taskPage * TASKS_PER_PAGE)
 
@@ -142,6 +154,9 @@ export default function Tasks() {
           onToggleDag={() => { setDagView(!dagView); if (!dagView) setCalendarView(false) }}
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
           onToggleSchedule={() => setShowSchedule(!showSchedule)}
+          teams={teams}
+          teamFilter={teamFilter}
+          onTeamFilterChange={setTeamFilter}
         />
 
         {/* P2.2: Active / History / Worktrees tab switcher */}

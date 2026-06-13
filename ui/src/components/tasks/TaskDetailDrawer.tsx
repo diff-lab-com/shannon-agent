@@ -5,10 +5,11 @@
 // (id/title/status/description) support inline editing of priority,
 // assignee, status, and due date through the `update_task` Tauri command.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import type { TaskItem, BackgroundTaskInfo, UpdateTaskPayload } from '@/types'
 import * as api from '@/lib/tauri-api'
+import { useApp } from '@/context/AppContext'
 
 type TaskLike = TaskItem | BackgroundTaskInfo
 
@@ -50,12 +51,24 @@ function fromDateInputValue(s: string): number | null {
 }
 
 export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetailDrawerProps) {
+  const { agents } = useApp()
   const [editing, setEditing] = useState(false)
   const [status, setStatus] = useState('')
   const [assignee, setAssignee] = useState('')
   const [priority, setPriority] = useState('')
   const [dueDate, setDueDate] = useState('')
+  const [executionMode, setExecutionMode] = useState<'serial' | 'parallel'>('serial')
   const [saving, setSaving] = useState(false)
+
+  // G8: build a sorted unique list of assignable agent names. Lets the user
+  // pick from existing agents while still allowing ad-hoc names via free text.
+  const agentNames = useMemo(() => {
+    const names = new Set<string>()
+    for (const a of agents) {
+      if (a.name) names.add(a.name)
+    }
+    return Array.from(names).sort()
+  }, [agents])
 
   useEffect(() => {
     if (!task) return
@@ -65,6 +78,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
       setAssignee(task.assignee ?? '')
       setPriority(task.priority ?? '')
       setDueDate(toDateInputValue(task.due_date ?? null))
+      setExecutionMode(task.execution_mode === 'parallel' ? 'parallel' : 'serial')
     }
   }, [task])
 
@@ -81,6 +95,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
       assignee: assignee.trim() || undefined,
       priority: priority || undefined,
       due_date: fromDateInputValue(dueDate),
+      execution_mode: executionMode,
     }
     try {
       await api.updateTask(payload)
@@ -171,19 +186,27 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
             </div>
           )}
 
-          {/* Assignee (editable) */}
+          {/* Assignee (editable, G8 — datalist of known agents + free text) */}
           {editable && (
             <div>
               <span className="text-label-sm text-on-surface-variant">Assignee</span>
               {editing ? (
-                <input
-                  type="text"
-                  value={assignee}
-                  onChange={e => setAssignee(e.target.value)}
-                  placeholder="agent name"
-                  aria-label="Assignee"
-                  className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
-                />
+                <>
+                  <input
+                    type="text"
+                    list="assignee-options"
+                    value={assignee}
+                    onChange={e => setAssignee(e.target.value)}
+                    placeholder="agent name"
+                    aria-label="Assignee"
+                    className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
+                  />
+                  <datalist id="assignee-options">
+                    {agentNames.map(n => (
+                      <option key={n} value={n} />
+                    ))}
+                  </datalist>
+                </>
               ) : (
                 <p className="font-body-md text-on-surface mt-xs">{task.assignee ?? '—'}</p>
               )}
@@ -207,6 +230,45 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                   {task.due_date
                     ? new Date(task.due_date * 1000).toLocaleDateString()
                     : '—'}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Execution mode (editable, G7 — controls how `blocks` schedule) */}
+          {editable && (
+            <div>
+              <span className="text-label-sm text-on-surface-variant">Execution</span>
+              {editing ? (
+                <div
+                  role="radiogroup"
+                  aria-label="Execution mode"
+                  className="mt-xs flex gap-sm"
+                >
+                  {(['serial', 'parallel'] as const).map(mode => {
+                    const active = executionMode === mode
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        onClick={() => setExecutionMode(mode)}
+                        className={
+                          'flex-1 px-md py-xs rounded-lg border font-label-md capitalize cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ' +
+                          (active
+                            ? 'bg-primary text-on-primary border-primary'
+                            : 'border-outline-variant/50 text-on-surface-variant hover:bg-surface-container')
+                        }
+                      >
+                        {mode}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="font-body-md text-on-surface mt-xs capitalize">
+                  {task.execution_mode ?? 'serial'}
                 </p>
               )}
             </div>
@@ -246,6 +308,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                       setAssignee(task.assignee ?? '')
                       setPriority(task.priority ?? '')
                       setDueDate(toDateInputValue(task.due_date ?? null))
+                      setExecutionMode(task.execution_mode === 'parallel' ? 'parallel' : 'serial')
                     }}
                     disabled={saving}
                     className="px-md py-xs rounded-lg text-on-surface-variant font-label-md hover:bg-surface-container cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"

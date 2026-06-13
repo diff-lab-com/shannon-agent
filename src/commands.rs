@@ -146,6 +146,15 @@ pub struct TaskInfo {
     /// Active form label for in-progress status. JSON: `activeForm`.
     #[serde(default)]
     pub active_form: Option<String>,
+    /// Execution semantics for this task's downstream chain. JSON: `executionMode`.
+    /// `serial` (default) means each task in `blocks` waits for the previous to
+    /// finish. `parallel` means all `blocks` run concurrently once this completes.
+    #[serde(default)]
+    pub execution_mode: Option<String>,
+    /// Team / session subdir name the task file lives in. Empty when the task
+    /// lives at the top level of `.claude/tasks/`.
+    #[serde(default)]
+    pub team: Option<String>,
 }
 
 /// Payload for `update_task`. All fields optional except `id`.
@@ -157,6 +166,8 @@ pub struct UpdateTaskPayload {
     pub assignee: Option<String>,
     pub priority: Option<String>,
     pub due_date: Option<i64>,
+    /// When set, writes `executionMode` to the task JSON.
+    pub execution_mode: Option<String>,
 }
 
 /// Agent info for the dashboard (derived from background tasks).
@@ -3172,7 +3183,9 @@ pub async fn list_tasks() -> Result<Vec<TaskInfo>, String> {
 }
 
 /// Recursively walk `dir`, parse any `*.json` file as a TaskInfo-like record,
-/// and append to `out`. Skips symlinks pointing outside `root`.
+/// and append to `out`. Skips symlinks pointing outside `root`. The team
+/// (session subdir name) is derived from the parent directory of each file
+/// relative to `root` and assigned to the parsed TaskInfo.
 fn collect_tasks_recursive(
     dir: &std::path::Path,
     root: &std::path::Path,
@@ -3203,7 +3216,22 @@ fn collect_tasks_recursive(
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if let Some(parsed) = parse_task_value(&task) {
+            // Derive team name from parent dir relative to root.
+            // e.g. `.claude/tasks/<session-uuid>/3.json` → team = "<session-uuid>".
+            // Top-level files (`.claude/tasks/3.json`) → team = None.
+            let team = path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .filter(|name| {
+                    // Drop when the parent IS the root.
+                    path.parent()
+                        .and_then(|p| p.canonicalize().ok())
+                        .map(|canon_parent| canon_parent != *root)
+                        .unwrap_or(true)
+                })
+                .map(String::from);
+            if let Some(parsed) = parse_task_value(&task, team) {
                 out.push(parsed);
             }
         }
@@ -3214,8 +3242,8 @@ fn collect_tasks_recursive(
 /// Convert a raw JSON value (from disk) into a `TaskInfo`. Returns `None`
 /// when the value lacks an `id` field. Field names follow the Shannon task
 /// schema: `id`, `subject`, `status`, `owner`, `description`, `priority`,
-/// `dueDate`, `activeForm`, `blocks`, `blockedBy`.
-fn parse_task_value(task: &serde_json::Value) -> Option<TaskInfo> {
+/// `dueDate`, `activeForm`, `blocks`, `blockedBy`, `executionMode`.
+fn parse_task_value(task: &serde_json::Value, team: Option<String>) -> Option<TaskInfo> {
     let id = task.get("id").and_then(|v| v.as_str())?.to_string();
     let title = task
         .get("subject")
@@ -3255,6 +3283,12 @@ fn parse_task_value(task: &serde_json::Value) -> Option<TaskInfo> {
         .get("dueDate")
         .and_then(|v| v.as_i64())
         .or_else(|| task.get("due_date").and_then(|v| v.as_i64()));
+    let execution_mode = task
+        .get("executionMode")
+        .and_then(|v| v.as_str())
+        .or_else(|| task.get("execution_mode").and_then(|v| v.as_str()))
+        .map(String::from)
+        .filter(|o| o == "parallel" || o == "serial");
     let blocked_by = collect_string_array(task, "blockedBy")
         .into_iter()
         .chain(collect_string_array(task, "blocked_by"))
@@ -3271,6 +3305,8 @@ fn parse_task_value(task: &serde_json::Value) -> Option<TaskInfo> {
         blocks,
         due_date,
         active_form,
+        execution_mode,
+        team,
     })
 }
 
@@ -3340,6 +3376,11 @@ pub async fn update_task(payload: UpdateTaskPayload) -> Result<TaskInfo, String>
     if let Some(due) = payload.due_date {
         doc["dueDate"] = serde_json::Value::Number(serde_json::Number::from(due));
     }
+    if let Some(mode) = payload.execution_mode {
+        if mode == "parallel" || mode == "serial" {
+            doc["executionMode"] = serde_json::Value::String(mode);
+        }
+    }
 
     // Atomic write: temp file + rename.
     let serialized =
@@ -3349,7 +3390,9 @@ pub async fn update_task(payload: UpdateTaskPayload) -> Result<TaskInfo, String>
     std::fs::rename(&tmp, &target_path)
         .map_err(|e| format!("Rename failed: {e}"))?;
 
-    parse_task_value(&doc).ok_or_else(|| "Updated task is missing id".into())
+    // team is derived from path during list_tasks; not recoverable here
+    // since we operate on the doc only. Pass None.
+    parse_task_value(&doc, None).ok_or_else(|| "Updated task is missing id".into())
 }
 
 /// Find the JSON file for a given task id by walking the tasks root.

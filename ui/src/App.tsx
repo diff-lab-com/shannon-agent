@@ -8,6 +8,7 @@ import { Layout } from './components/Layout';
 
 const Chat = lazy(() => import('./pages/Chat'));
 const Tasks = lazy(() => import('./pages/Tasks'));
+const MissionControl = lazy(() => import('./pages/MissionControl'));
 const Triage = lazy(() => import('./pages/Triage'));
 const Goals = lazy(() => import('./pages/Goals'));
 const Extensions = lazy(() => import('./pages/Extensions'));
@@ -39,6 +40,7 @@ export default function App() {
                 <Route path="/" element={<Navigate to="/chat" replace />} />
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/tasks" element={<Tasks />} />
+                <Route path="/mission-control" element={<MissionControl />} />
                 <Route path="/triage" element={<Triage />} />
                 <Route path="/goals" element={<Goals />} />
                 <Route path="/extensions" element={<Extensions />}>

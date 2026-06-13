@@ -239,6 +239,10 @@ export interface TaskItem {
   due_date?: number | null
   /** Active-form label for in-progress status. */
   active_form?: string
+  /** 'serial' (default) or 'parallel'. Controls scheduling of `blocks`. */
+  execution_mode?: 'serial' | 'parallel' | null
+  /** Team / session subdir name the task file lives in. */
+  team?: string | null
 }
 
 /// Payload for `update_task`. All fields optional except `id`.
@@ -248,6 +252,7 @@ export interface UpdateTaskPayload {
   assignee?: string
   priority?: string
   due_date?: number | null
+  execution_mode?: 'serial' | 'parallel'
 }
 
 export interface BackgroundTaskInfo {

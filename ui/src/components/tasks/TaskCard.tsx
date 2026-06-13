@@ -43,6 +43,15 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
                   {task.priority}
                 </span>
               ) : null}
+              {task.team ? (
+                <span
+                  title={`Team: ${task.team}`}
+                  className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-xs"
+                >
+                  <span className="material-symbols-outlined text-[14px]">groups</span>
+                  {task.team}
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
