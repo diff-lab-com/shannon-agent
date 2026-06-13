@@ -1,0 +1,102 @@
+import '@testing-library/jest-dom/vitest'
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn().mockResolvedValue(() => {}),
+  emit: vi.fn(),
+}))
+
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: vi.fn().mockImplementation((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  })),
+})
+
+class ResizeObserverMock {
+  observe = vi.fn()
+  unobserve = vi.fn()
+  disconnect = vi.fn()
+}
+global.ResizeObserver = ResizeObserverMock as any
+
+// Mock scrollIntoView for jsdom
+Element.prototype.scrollIntoView = vi.fn()
+
+// Mock getAnimations for base-ui ScrollArea
+Element.prototype.getAnimations = vi.fn().mockReturnValue([])
+
+class IntersectionObserverMock {
+  readonly root = null
+  readonly rootMargin = ''
+  readonly thresholds = []
+  observe = vi.fn()
+  unobserve = vi.fn()
+  disconnect = vi.fn()
+  takeRecords = vi.fn().mockReturnValue([])
+}
+global.IntersectionObserver = IntersectionObserverMock as any
+
+// Mock tauri-api module
+vi.mock('@/lib/tauri-api', () => ({
+  sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
+  getConversation: vi.fn().mockResolvedValue([]),
+  cancelQuery: vi.fn().mockResolvedValue(undefined),
+  getConfig: vi.fn().mockResolvedValue({
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+    api_key: 'sk-test',
+    working_dir: '/tmp',
+    approval_mode: 'normal',
+  }),
+  configure: vi.fn().mockResolvedValue(undefined),
+  switchProvider: vi.fn().mockResolvedValue(undefined),
+  listModels: vi.fn().mockResolvedValue([
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
+  ]),
+  getStatus: vi.fn().mockResolvedValue({
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+    status: 'ready',
+  }),
+  getTools: vi.fn().mockResolvedValue([]),
+  newSession: vi.fn().mockResolvedValue('session-1'),
+  listSessions: vi.fn().mockResolvedValue([]),
+  searchSessions: vi.fn().mockResolvedValue([]),
+  loadSession: vi.fn().mockResolvedValue([]),
+  switchSession: vi.fn().mockResolvedValue([]),
+  deleteSession: vi.fn().mockResolvedValue(true),
+  renameSession: vi.fn().mockResolvedValue(true),
+  duplicateSession: vi.fn().mockResolvedValue({ id: 'dup-1', title: 'Copy', created_at: 0 }),
+  exportSession: vi.fn().mockResolvedValue(''),
+  respondPermission: vi.fn().mockResolvedValue(undefined),
+  getFileDiff: vi.fn().mockResolvedValue({ path: '', hunks: [] }),
+  applyDiff: vi.fn().mockResolvedValue(undefined),
+  getFileTree: vi.fn().mockResolvedValue({ name: 'root', path: '/', is_dir: true, children: [] }),
+  getWorkingDirInfo: vi.fn().mockResolvedValue({ path: '/tmp', name: 'tmp' }),
+  listMcpServers: vi.fn().mockResolvedValue([]),
+  addMcpServer: vi.fn().mockResolvedValue({ name: 'test', command: 'test', enabled: true, connected: false, tool_count: 0, tools: [], last_connected: null }),
+  removeMcpServer: vi.fn().mockResolvedValue(true),
+  restartMcpServer: vi.fn().mockResolvedValue({ name: 'test', command: 'test', enabled: true, connected: true, tool_count: 0, tools: [], last_connected: null }),
+  getMcpServerConfig: vi.fn().mockResolvedValue({ name: 'test', command: 'test', args: [], env: {} }),
+  listSkills: vi.fn().mockResolvedValue([]),
+  getSkillDetail: vi.fn().mockResolvedValue({ name: 'test', description: '', source: '', trigger: '' }),
+  startBackgroundTask: vi.fn().mockResolvedValue('task-1'),
+  getBackgroundTasks: vi.fn().mockResolvedValue([]),
+  cancelBackgroundTask: vi.fn().mockResolvedValue(true),
+  listAgents: vi.fn().mockResolvedValue([]),
+  listTasks: vi.fn().mockResolvedValue([]),
+  getBillingPlan: vi.fn().mockResolvedValue({ name: 'Free', price: 0, token_limit: 100000, features: ['Basic models', '5 sessions'] }),
+  getCostHistory: vi.fn().mockResolvedValue([]),
+  getBillingHistory: vi.fn().mockResolvedValue([]),
+  getFileContext: vi.fn().mockResolvedValue([]),
+  getTaskDetail: vi.fn().mockResolvedValue({ id: '1', title: 'Test', status: 'pending' }),
+}))
