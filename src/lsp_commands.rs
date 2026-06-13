@@ -227,4 +227,150 @@ mod tests {
     fn uri_to_path_rejects_http() {
         assert!(uri_to_path("https://example.com/x.rs").is_err());
     }
+
+    #[test]
+    fn uri_to_path_rejects_relative() {
+        assert!(uri_to_path("file://relative/path").is_err());
+    }
+
+    #[test]
+    fn apply_code_action_rejects_missing_changes_field() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(apply_code_action(serde_json::json!({})))
+            .unwrap_err();
+        assert!(err.contains("changes"));
+    }
+
+    #[test]
+    fn apply_code_action_applies_single_line_replace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("lib.rs");
+        std::fs::write(&path, "let x = 1;\n").unwrap();
+        let uri = format!("file://{}", path.display());
+
+        let edit = serde_json::json!({
+            "changes": {
+                uri: [
+                    {
+                        "range": {
+                            "start": {"line": 0, "character": 4},
+                            "end": {"line": 0, "character": 5}
+                        },
+                        "newText": "_x"
+                    }
+                ]
+            }
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let count = rt.block_on(apply_code_action(edit)).unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "let _x = 1;\n");
+    }
+
+    #[test]
+    fn apply_code_action_applies_multiple_edits_reverse_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("lib.rs");
+        std::fs::write(&path, "a\nb\nc\n").unwrap();
+        let uri = format!("file://{}", path.display());
+
+        // Two edits on different lines — applied in reverse line order so
+        // earlier-line offsets don't shift.
+        let edit = serde_json::json!({
+            "changes": {
+                uri: [
+                    {
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 0, "character": 1}
+                        },
+                        "newText": "X"
+                    },
+                    {
+                        "range": {
+                            "start": {"line": 2, "character": 0},
+                            "end": {"line": 2, "character": 1}
+                        },
+                        "newText": "Z"
+                    }
+                ]
+            }
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let count = rt.block_on(apply_code_action(edit)).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "X\nb\nZ\n");
+    }
+
+    #[test]
+    fn apply_code_action_preserves_trailing_newline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("lib.rs");
+        std::fs::write(&path, "hello\n").unwrap();
+        let uri = format!("file://{}", path.display());
+
+        let edit = serde_json::json!({
+            "changes": {
+                uri: [{
+                    "range": {
+                        "start": {"line": 0, "character": 0},
+                        "end": {"line": 0, "character": 5}
+                    },
+                    "newText": "world"
+                }]
+            }
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(apply_code_action(edit)).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "world\n");
+    }
+
+    #[test]
+    fn apply_code_action_skips_multiline_edits() {
+        // Current implementation only handles single-line ranges.
+        // A multi-line edit should be skipped (not counted, not crash).
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("lib.rs");
+        std::fs::write(&path, "a\nb\n").unwrap();
+        let uri = format!("file://{}", path.display());
+
+        let edit = serde_json::json!({
+            "changes": {
+                uri: [{
+                    "range": {
+                        "start": {"line": 0, "character": 0},
+                        "end": {"line": 1, "character": 1}
+                    },
+                    "newText": "x"
+                }]
+            }
+        });
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let count = rt.block_on(apply_code_action(edit)).unwrap();
+        assert_eq!(count, 0, "multi-line edit skipped");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nb\n");
+    }
+
+    #[test]
+    fn apply_code_action_errors_on_missing_file() {
+        let edit = serde_json::json!({
+            "changes": {
+                "file:///nonexistent/path/lib.rs": [{
+                    "range": {
+                        "start": {"line": 0, "character": 0},
+                        "end": {"line": 0, "character": 1}
+                    },
+                    "newText": "x"
+                }]
+            }
+        });
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(apply_code_action(edit)).unwrap_err();
+        assert!(err.contains("read"));
+    }
 }

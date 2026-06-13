@@ -1748,4 +1748,206 @@ mod tests {
         let now = Utc::now();
         assert!(now.timestamp() > 1_700_000_000, "post-2023 epoch expected");
     }
+
+    // ── P4 helpers ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_completed_status_recognizes_done_variants() {
+        assert!(is_completed_status("completed"));
+        assert!(is_completed_status("Done"));
+        assert!(is_completed_status("DONE"));
+        assert!(!is_completed_status("pending"));
+        assert!(!is_completed_status("in_progress"));
+        assert!(!is_completed_status(""));
+    }
+
+    #[test]
+    fn test_is_in_progress_status_recognizes_active_variants() {
+        assert!(is_in_progress_status("in_progress"));
+        assert!(is_in_progress_status("running"));
+        assert!(is_in_progress_status("pending"));
+        assert!(is_in_progress_status("PENDING"));
+        assert!(!is_in_progress_status("completed"));
+        assert!(!is_in_progress_status("done"));
+    }
+
+    #[test]
+    fn test_toml_escape_string_plain() {
+        assert_eq!(toml_escape_string("hello"), "\"hello\"");
+    }
+
+    #[test]
+    fn test_toml_escape_string_quotes_and_backslashes() {
+        assert_eq!(toml_escape_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    }
+
+    #[test]
+    fn test_toml_escape_string_control_chars() {
+        assert_eq!(toml_escape_string("a\nb\tc"), "\"a\\nb\\tc\"");
+        // Other control chars become \uXXXX.
+        let escaped = toml_escape_string("\x01");
+        assert_eq!(escaped, "\"\\u0001\"");
+    }
+
+    #[test]
+    fn test_toml_escape_string_empty() {
+        assert_eq!(toml_escape_string(""), "\"\"");
+    }
+
+    #[test]
+    fn test_read_task_status_extracts_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("task.json");
+        std::fs::write(
+            &path,
+            r#"{"id":"abc","title":"t","status":"completed"}"#,
+        )
+        .unwrap();
+        assert_eq!(read_task_status(&path).as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn test_read_task_status_missing_field_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("task.json");
+        std::fs::write(&path, r#"{"id":"abc"}"#).unwrap();
+        assert_eq!(read_task_status(&path), None);
+    }
+
+    #[test]
+    fn test_read_task_status_invalid_json_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("task.json");
+        std::fs::write(&path, b"not json").unwrap();
+        assert_eq!(read_task_status(&path), None);
+    }
+
+    // The next two tests change cwd, which would race under parallel test
+    // execution. Serialize them with a static Mutex.
+    use std::sync::Mutex;
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_collect_daily_buckets_walks_team_dirs() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        // Two task JSONs under .claude/tasks/<team>/ — both today by mtime.
+        let team_dir = tmp.path().join(".claude/tasks/Default");
+        std::fs::create_dir_all(&team_dir).unwrap();
+        std::fs::write(
+            team_dir.join("11111111-1111-1111-1111-111111111111.json"),
+            r#"{"id":"11111111","status":"completed"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            team_dir.join("22222222-2222-2222-2222-222222222222.json"),
+            r#"{"id":"22222222","status":"pending"}"#,
+        )
+        .unwrap();
+
+        let buckets = collect_daily_buckets().unwrap();
+        std::env::set_current_dir(orig).unwrap();
+
+        // 7-day window, oldest-first ordering.
+        assert_eq!(buckets.len(), OPC_WINDOW_DAYS);
+        // Today is the LAST bucket (oldest-first means today at end).
+        let today_bucket = buckets.last().unwrap();
+        assert_eq!(today_bucket.created, 2, "both tasks counted as created");
+        assert_eq!(today_bucket.completed, 1, "only the completed one");
+    }
+
+    #[test]
+    fn test_collect_daily_buckets_no_tasks_dir_returns_empty_buckets() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let buckets = collect_daily_buckets().unwrap();
+        std::env::set_current_dir(orig).unwrap();
+
+        // No .claude/tasks dir — returns 7 empty buckets.
+        assert_eq!(buckets.len(), OPC_WINDOW_DAYS);
+        for b in &buckets {
+            assert_eq!(b.created, 0);
+            assert_eq!(b.completed, 0);
+        }
+    }
+
+    #[test]
+    fn test_append_routine_to_project_toml_creates_file() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let def = shannon_core::triggered_routines::TriggeredRoutineDef {
+            name: "lint-after-edit".into(),
+            trigger: "PostToolUse".into(),
+            matcher: Some("Edit".into()),
+            pattern: None,
+            command: "just lint".into(),
+            enabled: true,
+            timeout: 60,
+            background: true,
+            description: Some("Lint after edits".into()),
+        };
+        append_routine_to_project_toml(&def).unwrap();
+
+        let written =
+            std::fs::read_to_string(tmp.path().join(".shannon/routines.toml")).unwrap();
+        std::env::set_current_dir(orig).unwrap();
+
+        assert!(written.contains("[[routine]]"));
+        assert!(written.contains("name = \"lint-after-edit\""));
+        assert!(written.contains("trigger = \"PostToolUse\""));
+        assert!(written.contains("matcher = \"Edit\""));
+        assert!(written.contains("command = \"just lint\""));
+        assert!(written.contains("enabled = true"));
+    }
+
+    #[test]
+    fn test_append_routine_to_project_toml_appends_to_existing() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        // Pre-existing routine in the file.
+        std::fs::create_dir_all(tmp.path().join(".shannon")).unwrap();
+        std::fs::write(
+            tmp.path().join(".shannon/routines.toml"),
+            "[[routine]]\nname = \"existing\"\ntrigger = \"PreToolUse\"\ncommand = \"echo hi\"\nenabled = true\ntimeout = 60\nbackground = true\n",
+        )
+        .unwrap();
+
+        let def = shannon_core::triggered_routines::TriggeredRoutineDef {
+            name: "second".into(),
+            trigger: "PostToolUse".into(),
+            matcher: None,
+            pattern: None,
+            command: "echo bye".into(),
+            enabled: false,
+            timeout: 30,
+            background: false,
+            description: None,
+        };
+        append_routine_to_project_toml(&def).unwrap();
+
+        let written =
+            std::fs::read_to_string(tmp.path().join(".shannon/routines.toml")).unwrap();
+        std::env::set_current_dir(orig).unwrap();
+
+        // Both routines present.
+        assert!(written.contains("name = \"existing\""));
+        assert!(written.contains("name = \"second\""));
+        assert_eq!(
+            written.matches("[[routine]]").count(),
+            2,
+            "two routine blocks"
+        );
+    }
 }
