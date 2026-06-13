@@ -25,12 +25,16 @@ import CancelTaskModal from '@/components/tasks/CancelTaskModal'
 import TaskExecutionLog from '@/components/tasks/TaskExecutionLog'
 import EfficiencyCard from '@/components/tasks/EfficiencyCard'
 import AgentAllocation from '@/components/tasks/AgentAllocation'
+import HistoryView from '@/components/tasks/HistoryView'
+
+type Tab = 'active' | 'history'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
   const { tasks: scheduledTasks } = useScheduledTasks()
 
   // Cross-component state
+  const [tab, setTab] = useState<Tab>('active')
   const [running, setRunning] = useState<string | null>(null)
   const [viewMonth, setViewMonth] = useState(new Date().getMonth())
   const [viewYear, setViewYear] = useState(new Date().getFullYear())
@@ -110,6 +114,30 @@ export default function Tasks() {
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
         />
 
+        {/* P2.2: Active / History tab switcher */}
+        <div role="tablist" aria-label="Tasks view" className="flex gap-xs mb-lg border-b border-outline-variant/30">
+          {(['active', 'history'] as const).map(t => {
+            const selected = tab === t
+            return (
+              <button
+                key={t}
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setTab(t)}
+                className={`px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+                  selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface'
+                }`}
+              >
+                {t === 'active' ? 'Active' : 'History'}
+              </button>
+            )
+          })}
+        </div>
+
+        {tab === 'history' ? (
+          <HistoryView />
+        ) : (
+          <>
         {errorMsg && (
           <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md mb-lg">
             <span className="material-symbols-outlined text-[18px]">error</span>
@@ -177,6 +205,8 @@ export default function Tasks() {
               <TaskExecutionLog tasks={backgroundTasks} onCancel={setCancelTarget} />
             </div>
           </div>
+        )}
+          </>
         )}
       </div>
 
