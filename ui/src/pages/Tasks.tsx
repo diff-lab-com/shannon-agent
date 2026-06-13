@@ -63,14 +63,15 @@ export default function Tasks() {
   const prevMonth = () => { if (viewMonth === 0) { setViewMonth(11); setViewYear(viewYear - 1) } else { setViewMonth(viewMonth - 1) } }
   const nextMonth = () => { if (viewMonth === 11) { setViewMonth(0); setViewYear(viewYear + 1) } else { setViewMonth(viewMonth + 1) } }
 
-  const handleStartTask = async () => {
-    if (!newTaskPrompt.trim()) return
+  const handleStartTask = async (rich?: { prompt: string; assignee: string; priority: string }) => {
+    const body = rich?.prompt ?? newTaskPrompt.trim()
+    if (!body) return
     try {
       setErrorMsg(null)
-      await api.startBackgroundTask(newTaskPrompt.trim())
+      await api.startBackgroundTask(body)
       setNewTaskPrompt('')
       setShowNewTask(false)
-      toast.success('Task created')
+      toast.success(rich?.assignee ? `Task assigned to ${rich.assignee}` : 'Task created')
       await refreshTasks()
     } catch (e) { setErrorMsg(e instanceof Error ? e.message : 'Failed to start task'); toast.error('Failed to create task') }
   }
@@ -155,7 +156,7 @@ export default function Tasks() {
           <NewTaskForm
             value={newTaskPrompt}
             onChange={setNewTaskPrompt}
-            onSubmit={handleStartTask}
+            onSubmit={(rich) => handleStartTask(rich)}
             onCancel={() => { setShowNewTask(false); setNewTaskPrompt('') }}
           />
         )}
