@@ -21,6 +21,7 @@ const OPC = lazy(() => import('./pages/OPC'));
 const OPCTask = lazy(() => import('./pages/OPCTask'));
 const QuickFix = lazy(() => import('./pages/QuickFix'));
 const Editor = lazy(() => import('./pages/Editor'));
+const Perf = lazy(() => import('./pages/Perf'));
 const ExtensionsHub = lazy(() => import('./components/extensions/ExtensionsHub'));
 const MyAgents = lazy(() => import('./components/extensions/MyAgents'));
 const DataSources = lazy(() => import('./components/extensions/DataSources'));
@@ -63,6 +64,7 @@ export default function App() {
                 <Route path="/opc/task" element={<OPCTask />} />
                 <Route path="/quickfix" element={<QuickFix />} />
                 <Route path="/editor" element={<Editor />} />
+                <Route path="/perf" element={<Perf />} />
                 <Route path="/settings" element={<Settings />}>
                   <Route index element={<Navigate to="general" replace />} />
                   <Route path="general" element={<GeneralSettings />} />
