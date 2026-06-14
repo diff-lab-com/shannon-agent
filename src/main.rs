@@ -249,7 +249,7 @@ fn main() {
                     });
                     let _ = handle.emit("update-available", payload);
                 } else {
-                    println!("No updates available or update check failed");
+                    tracing::info!("No updates available or update check failed");
                 }
                 Ok::<(), tauri_plugin_updater::Error>(())
             });
