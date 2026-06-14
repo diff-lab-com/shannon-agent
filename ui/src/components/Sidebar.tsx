@@ -218,6 +218,18 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
             <span className="material-symbols-outlined text-[20px]">build</span>
             <span>Quick Fix</span>
           </NavLink>
+          <NavLink
+            to="/editor"
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-lg font-label-md text-label-md transition-all duration-200",
+              location.pathname === '/editor'
+                ? "bg-primary/10 text-primary font-bold"
+                : "text-on-surface-variant hover:bg-surface-container-high/50 hover:text-primary",
+            )}
+          >
+            <span className="material-symbols-outlined text-[20px]">code</span>
+            <span>Editor</span>
+          </NavLink>
         </div>
         </ScrollArea>
       </nav>

@@ -93,6 +93,7 @@ fn main() {
             shannon_desktop::scheduled_commands::get_opc_metrics,
             shannon_desktop::lsp_commands::lsp_code_actions,
             shannon_desktop::lsp_commands::apply_code_action,
+            shannon_desktop::lsp_commands::read_source_file,
             // Worktree management (B9)
             shannon_desktop::scheduled_commands::create_task_worktree,
             shannon_desktop::scheduled_commands::list_task_worktrees,

@@ -203,6 +203,56 @@ fn uri_to_path(uri: &str) -> Result<std::path::PathBuf, String> {
         .map_err(|_| format!("uri not a file path: {uri}"))
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceFileDto {
+    pub path: String,
+    pub content: String,
+    pub language_id: String,
+}
+
+/// Map a file extension to an LSP language id. Matches the keys used by
+/// `LspQuickFixPanel`'s DEFAULT_SERVERS so the same server binary is selected
+/// when the user later asks for quick-fixes on a squiggle.
+pub fn language_id_from_extension(ext: &str) -> String {
+    match ext.to_ascii_lowercase().as_str() {
+        "rs" => "rust",
+        "ts" | "mts" | "cts" => "typescript",
+        "tsx" => "typescriptreact",
+        "js" | "mjs" | "cjs" => "javascript",
+        "jsx" => "javascriptreact",
+        "go" => "go",
+        "py" => "python",
+        "java" => "java",
+        "rb" => "ruby",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => "cpp",
+        _ => "plaintext",
+    }
+    .to_string()
+}
+
+/// Read a source file from disk and return its content plus a best-effort
+/// language id derived from the extension. Refuses paths that don't exist or
+/// aren't valid UTF-8.
+#[tauri::command]
+pub async fn read_source_file(path: String) -> Result<SourceFileDto, String> {
+    let p = Path::new(&path);
+    if !p.is_file() {
+        return Err(format!("not a file: {path}"));
+    }
+    let content = std::fs::read_to_string(p)
+        .map_err(|e| format!("read {}: {e}", p.display()))?;
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    Ok(SourceFileDto {
+        path: path.clone(),
+        content,
+        language_id: language_id_from_extension(ext),
+    })
+}
+
 use url::Url;
 trait PathUrlExt {
     fn to_url(&self) -> Result<url::Url, String>;
@@ -372,5 +422,59 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let err = rt.block_on(apply_code_action(edit)).unwrap_err();
         assert!(err.contains("read"));
+    }
+
+    #[test]
+    fn language_id_maps_known_extensions() {
+        assert_eq!(language_id_from_extension("rs"), "rust");
+        assert_eq!(language_id_from_extension("ts"), "typescript");
+        assert_eq!(language_id_from_extension("tsx"), "typescriptreact");
+        assert_eq!(language_id_from_extension("js"), "javascript");
+        assert_eq!(language_id_from_extension("go"), "go");
+        assert_eq!(language_id_from_extension("py"), "python");
+    }
+
+    #[test]
+    fn language_id_is_case_insensitive() {
+        assert_eq!(language_id_from_extension("RS"), "rust");
+        assert_eq!(language_id_from_extension("Py"), "python");
+    }
+
+    #[test]
+    fn language_id_falls_back_to_plaintext() {
+        assert_eq!(language_id_from_extension("xyz"), "plaintext");
+        assert_eq!(language_id_from_extension(""), "plaintext");
+    }
+
+    #[test]
+    fn read_source_file_returns_content_and_language() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("demo.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dto = rt
+            .block_on(read_source_file(path.to_string_lossy().into_owned()))
+            .unwrap();
+        assert_eq!(dto.content, "fn main() {}\n");
+        assert_eq!(dto.language_id, "rust");
+    }
+
+    #[test]
+    fn read_source_file_rejects_missing_path() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(read_source_file("/no/such/file.rs".into()))
+            .unwrap_err();
+        assert!(err.contains("not a file"));
+    }
+
+    #[test]
+    fn read_source_file_rejects_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(read_source_file(tmp.path().to_string_lossy().into_owned()))
+            .unwrap_err();
+        assert!(err.contains("not a file"));
     }
 }

@@ -454,6 +454,16 @@ export async function applyCodeAction(edit: unknown): Promise<number> {
   return invoke('apply_code_action', { edit })
 }
 
+export interface SourceFile {
+  path: string
+  content: string
+  language_id: string
+}
+
+export async function readSourceFile(path: string): Promise<SourceFile> {
+  return invoke('read_source_file', { path })
+}
+
 // Worktrees (B9)
 
 export async function createTaskWorktree(taskId: string): Promise<TaskWorktreeDto> {
