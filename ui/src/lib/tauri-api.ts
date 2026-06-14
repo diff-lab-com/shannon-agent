@@ -418,6 +418,36 @@ export async function createTriggeredRoutine(payload: {
   })
 }
 
+// Hook events + permission profiles
+
+export async function listHookEvents(): Promise<import('@/types').HookEventInfo[]> {
+  return invoke('list_hook_events')
+}
+
+export async function listPermissionProfiles(): Promise<import('@/types').ProfilesList> {
+  return invoke('list_permission_profiles')
+}
+
+export async function saveCustomProfile(payload: {
+  name: string
+  description?: string
+  auto_approve: string[]
+  confirm: string[]
+  deny: string[]
+}): Promise<import('@/types').CustomProfileInfo> {
+  return invoke('save_custom_profile', {
+    name: payload.name,
+    description: payload.description ?? null,
+    auto_approve: payload.auto_approve,
+    confirm: payload.confirm,
+    deny: payload.deny,
+  })
+}
+
+export async function deleteCustomProfile(name: string): Promise<string[]> {
+  return invoke('delete_custom_profile', { name })
+}
+
 // --- OPC analytics ---
 
 export async function getOpcMetrics(): Promise<import('@/types').OpcMetrics> {

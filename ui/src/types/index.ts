@@ -525,6 +525,42 @@ export interface TriggeredRoutineDto {
   description?: string
 }
 
+/// Hook event catalog entry. Mirrors `automation_commands::HookEventInfo`.
+export interface HookEventInfo {
+  name: string
+  category: string
+  description: string
+  payload_fields: string[]
+}
+
+/// Built-in permission profile summary (Strict / Balanced / Permissive).
+export interface BuiltinProfileInfo {
+  id: string
+  description: string
+  auto_approve_read: boolean
+  auto_approve_write: boolean
+  auto_approve_bash: boolean
+  auto_approve_delete: boolean
+  auto_approve_network: boolean
+  deny_destructive: string[]
+}
+
+/// User-defined custom profile row.
+export interface CustomProfileInfo {
+  name: string
+  description: string
+  auto_approve: string[]
+  confirm: string[]
+  deny: string[]
+  source_path?: string
+}
+
+/// Response from `list_permission_profiles`.
+export interface ProfilesList {
+  builtin: BuiltinProfileInfo[]
+  custom: CustomProfileInfo[]
+}
+
 /// DTO mirroring Rust `TaskWorktreeDto`.
 export interface TaskWorktreeDto {
   task_id: string
