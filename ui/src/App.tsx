@@ -6,6 +6,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
 
+const Welcome = lazy(() => import('./pages/Welcome'));
 const Chat = lazy(() => import('./pages/Chat'));
 const Tasks = lazy(() => import('./pages/Tasks'));
 const MissionControl = lazy(() => import('./pages/MissionControl'));
@@ -38,6 +39,7 @@ export default function App() {
         <BrowserRouter>
           <Suspense fallback={<PageLoader />}>
             <Routes>
+              <Route path="/welcome" element={<Welcome />} />
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/chat" replace />} />
                 <Route path="/chat" element={<Chat />} />
