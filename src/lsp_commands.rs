@@ -50,6 +50,7 @@ pub struct CodeActionRequest {
 /// the document, and sending `textDocument/codeAction`. Returns a flat list
 /// of action DTOs the frontend can render as quick-fix buttons.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn lsp_code_actions(req: CodeActionRequest) -> Result<CodeActionsResponse, String> {
     timeout(LSP_TIMEOUT, run_code_actions(req))
         .await
@@ -140,6 +141,7 @@ async fn run_code_actions(req: CodeActionRequest) -> Result<CodeActionsResponse,
 /// `TextEdit` entries against the document the diagnostic came from. Other
 /// resource changes (renames, creates, deletes) are skipped with a log line.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn apply_code_action(edit: serde_json::Value) -> Result<u32, String> {
     // Parse minimal shape: { changes?: { [uri]: TextEdit[] } }
     let changes = edit
@@ -264,6 +266,7 @@ pub fn language_id_from_extension(ext: &str) -> String {
 /// language id derived from the extension. Refuses paths that don't exist or
 /// aren't valid UTF-8.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn read_source_file(path: String) -> Result<SourceFileDto, String> {
     let p = Path::new(&path);
     if !p.is_file() {
@@ -288,6 +291,7 @@ pub async fn read_source_file(path: String) -> Result<SourceFileDto, String> {
 /// server stops sending). The `timed_out` flag is `true` when we exited due
 /// to the deadline rather than server shutdown.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn run_file_diagnostics(
     req: FileDiagnosticsRequest,
 ) -> Result<FileDiagnosticsResponse, String> {

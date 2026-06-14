@@ -1021,8 +1021,21 @@ pub struct OpcMetrics {
 const OPC_WINDOW_DAYS: usize = 7;
 
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn get_opc_metrics() -> Result<OpcMetrics, String> {
     let tasks = crate::commands::list_tasks().await?;
+    let daily = collect_daily_buckets()?;
+    Ok(compute_opc_metrics(&tasks, daily))
+}
+
+/// Pure aggregation of per-task counts into the OPC metric buckets.
+///
+/// Extracted so load benchmarks can exercise it without Tauri state or a
+/// filesystem walk for daily buckets — `daily` is passed in.
+pub fn compute_opc_metrics(
+    tasks: &[crate::commands::TaskInfo],
+    daily: Vec<OpcDayBucket>,
+) -> OpcMetrics {
     let total = tasks.len() as u32;
 
     let mut status_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
@@ -1031,7 +1044,7 @@ pub async fn get_opc_metrics() -> Result<OpcMetrics, String> {
         std::collections::HashMap::new();
     let mut completed_total = 0u32;
 
-    for t in &tasks {
+    for t in tasks {
         *status_counts.entry(t.status.clone()).or_insert(0) += 1;
         if let Some(p) = &t.priority {
             *priority_counts.entry(p.clone()).or_insert(0) += 1;
@@ -1082,17 +1095,14 @@ pub async fn get_opc_metrics() -> Result<OpcMetrics, String> {
         .collect();
     by_assignee.sort_by(|a, b| b.total.cmp(&a.total).then(a.assignee.cmp(&b.assignee)));
 
-    // Daily buckets: walk .claude/tasks/ again and group file mtimes by local date.
-    let daily = collect_daily_buckets()?;
-
-    Ok(OpcMetrics {
+    OpcMetrics {
         total,
         completion_rate,
         by_status,
         by_priority,
         by_assignee,
         daily,
-    })
+    }
 }
 
 fn is_completed_status(s: &str) -> bool {

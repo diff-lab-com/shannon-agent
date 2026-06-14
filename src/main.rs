@@ -14,6 +14,27 @@ fn main() {
     };
     use tauri_plugin_updater::UpdaterExt;
 
+    // E5: tracing-subscriber with JSON exporter for offline performance
+    // analysis. SHANNON_LOG_FORMAT=json → newline-delimited JSON to stderr;
+    // any other value (or unset) → pretty human-readable output.
+    let log_format = std::env::var("SHANNON_LOG_FORMAT").unwrap_or_default();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,shannon_desktop=debug"));
+    if log_format.eq_ignore_ascii_case("json") {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .json()
+            .with_target(true)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(true)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .init();
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

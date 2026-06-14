@@ -29,6 +29,7 @@ tokio = { version = "1.43", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
 anyhow = "1.0"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 uuid = { version = "1.12", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
@@ -50,6 +51,12 @@ tauri-build = { version = "2", optional = true, features = [] }
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "load_tests"
+harness = false
+path = "benches/load_tests.rs"
 
 [package.metadata.dist]
 dist = false

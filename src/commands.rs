@@ -413,6 +413,7 @@ impl AppState {
 
 /// Send a user message and stream the AI response via Tauri events.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn send_message(
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
@@ -735,6 +736,7 @@ pub async fn get_conversation(
 
 /// List available models for the current provider.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
     let provider = state.provider.lock().await;
     Ok(match provider.as_str() {
@@ -809,6 +811,7 @@ pub async fn list_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelI
 
 /// Get current application status.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn get_status(state: tauri::State<'_, AppState>) -> Result<StatusResponse, String> {
     let model = state.model.lock().await;
     let provider = state.provider.lock().await;
@@ -2597,6 +2600,7 @@ fn provider_from_str(s: &str) -> shannon_core::api::types::LlmProvider {
 
 /// Apply diff with hunk actions.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn apply_diff(file_path: String, hunks: Vec<HunkAction>) -> Result<(), String> {
     use std::fs;
     use std::io::Write;
