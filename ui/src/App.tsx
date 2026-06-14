@@ -12,6 +12,7 @@ const Tasks = lazy(() => import('./pages/Tasks'));
 const MissionControl = lazy(() => import('./pages/MissionControl'));
 const Triage = lazy(() => import('./pages/Triage'));
 const Goals = lazy(() => import('./pages/Goals'));
+const Routines = lazy(() => import('./pages/Routines'));
 const Extensions = lazy(() => import('./pages/Extensions'));
 const Settings = lazy(() => import('./pages/Settings'));
 const OPC = lazy(() => import('./pages/OPC'));
@@ -47,6 +48,7 @@ export default function App() {
                 <Route path="/mission-control" element={<MissionControl />} />
                 <Route path="/triage" element={<Triage />} />
                 <Route path="/goals" element={<Goals />} />
+                <Route path="/routines" element={<Routines />} />
                 <Route path="/extensions" element={<Extensions />}>
                   <Route index element={<Navigate to="skills" replace />} />
                   <Route path="skills" element={<ExtensionsHub />} />
