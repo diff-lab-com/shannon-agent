@@ -1,5 +1,13 @@
 // Mission Control — full-screen kanban grid aggregating tasks across all teams.
 //
+// SCOPE: READ-ONLY observation surface. No create/edit/cancel actions.
+// Click a card to open the TaskDetailDrawer (which itself has the write actions).
+//
+// DISTINCTION from Tasks and OPC:
+//   - Tasks: full CRUD for scheduled routines + history + worktrees.
+//   - OPC: agent-orchestration workspace with optimistic DnD (write surface).
+//   - MissionControl (this page): cross-team status grid — observation only.
+//
 // G12. Columns are by status family (queued, active, blocked, done, failed).
 // Cards are clickable to surface the task ID via onSelectTask (parent wires to
 // the TaskDetailDrawer). Drag-and-drop is intentionally out of scope: this is

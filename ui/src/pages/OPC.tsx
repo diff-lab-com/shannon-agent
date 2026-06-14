@@ -1,3 +1,19 @@
+// OPC (One Person Company) — agent-orchestration workspace.
+//
+// SCOPE: write surface for orchestrating agents + their work. Has Spawn Agent,
+// Stop/Pause/Reassign actions, optimistic DnD on the Kanban board (local
+// override — backend update_task_status pending).
+//
+// DISTINCTION from Tasks and MissionControl:
+//   - Tasks: full CRUD for scheduled routines + history + worktrees.
+//   - MissionControl: read-only kanban across all teams (observation).
+//   - OPC (this page): agent-orchestration workspace with optimistic DnD.
+//
+// Composition: this file is a thin shell. Logic lives in components/opc/:
+//   - OPCMissionFocus: editable strategic-focus statement.
+//   - OPCAgentSwarm: agent sidebar + Spawn/Reassign modals + action menu.
+//   - OPCKanbanBoard: 5-column kanban with bucketFor() status mapping.
+
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { useApp } from '@/context/AppContext'
 import OpcAnalyticsDashboard from '@/components/opc/OpcAnalyticsDashboard'

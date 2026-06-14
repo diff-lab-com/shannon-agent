@@ -1,5 +1,14 @@
 // Tasks page — thin orchestrator for the Sprint 2 scheduled-tasks UI.
 //
+// SCOPE: calendar-driven management of SCHEDULED + TRIGGERED routines and
+// one-off background tasks. Has create/schedule/cancel write actions,
+// calendar/DAG views, and team + status filters.
+//
+// DISTINCTION from MissionControl and OPC:
+//   - MissionControl: read-only kanban across all teams (observation).
+//   - OPC: agent-orchestration workspace with optimistic DnD (write surface).
+//   - Tasks (this page): full CRUD for scheduled routines + history + worktrees.
+//
 // Cross-component state (selectedTaskId, filter, calendarView, showFilters)
 // lives here; component-local state stays in the components. All visual
 // behavior of the original 584-line monolith is preserved.
