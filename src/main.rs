@@ -94,6 +94,7 @@ fn main() {
             shannon_desktop::lsp_commands::lsp_code_actions,
             shannon_desktop::lsp_commands::apply_code_action,
             shannon_desktop::lsp_commands::read_source_file,
+            shannon_desktop::lsp_commands::run_file_diagnostics,
             // Worktree management (B9)
             shannon_desktop::scheduled_commands::create_task_worktree,
             shannon_desktop::scheduled_commands::list_task_worktrees,

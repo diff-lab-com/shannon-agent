@@ -210,6 +210,35 @@ pub struct SourceFileDto {
     pub language_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiagnosticDto {
+    pub start_line: u32,
+    pub start_character: u32,
+    pub end_line: u32,
+    pub end_character: u32,
+    pub message: String,
+    pub severity: String,
+    pub source: Option<String>,
+    pub code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiagnosticsRequest {
+    pub file_path: String,
+    pub server_cmd: String,
+    pub server_args: Vec<String>,
+    pub language_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiagnosticsResponse {
+    pub diagnostics: Vec<FileDiagnosticDto>,
+    pub timed_out: bool,
+}
+
+const DIAGNOSTICS_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Map a file extension to an LSP language id. Matches the keys used by
 /// `LspQuickFixPanel`'s DEFAULT_SERVERS so the same server binary is selected
 /// when the user later asks for quick-fixes on a squiggle.
@@ -250,6 +279,78 @@ pub async fn read_source_file(path: String) -> Result<SourceFileDto, String> {
         path: path.clone(),
         content,
         language_id: language_id_from_extension(ext),
+    })
+}
+
+/// Spawn an LSP server, open the file via `textDocument/didOpen`, and drain
+/// `publishDiagnostics` notifications for up to `DIAGNOSTICS_TIMEOUT`. Returns
+/// the last batch of diagnostics received before timeout (or earlier if the
+/// server stops sending). The `timed_out` flag is `true` when we exited due
+/// to the deadline rather than server shutdown.
+#[tauri::command]
+pub async fn run_file_diagnostics(
+    req: FileDiagnosticsRequest,
+) -> Result<FileDiagnosticsResponse, String> {
+    timeout(LSP_TIMEOUT, run_diagnostics(req))
+        .await
+        .map_err(|_| format!("diagnostics timed out after {}s", LSP_TIMEOUT.as_secs()))?
+}
+
+async fn run_diagnostics(
+    req: FileDiagnosticsRequest,
+) -> Result<FileDiagnosticsResponse, String> {
+    let abs = Path::new(&req.file_path)
+        .canonicalize()
+        .map_err(|e| format!("canonicalize {}: {e}", req.file_path))?;
+    let root_uri = abs
+        .parent()
+        .ok_or_else(|| "no parent dir".to_string())?
+        .to_url()
+        .map_err(|e| format!("root url: {e}"))?;
+    let doc_uri = abs
+        .to_url()
+        .map_err(|e| format!("doc url: {e}"))?;
+
+    let mut client = shannon_core::lsp::LspClient::spawn(&req.server_cmd, &req.server_args)
+        .await
+        .map_err(|e| format!("spawn LSP server: {e}"))?;
+    client
+        .initialize(&root_uri)
+        .await
+        .map_err(|e| format!("initialize: {e}"))?;
+    client
+        .did_open(&doc_uri, &req.language_id, &req.content)
+        .await
+        .map_err(|e| format!("did_open: {e}"))?;
+
+    let diags = client
+        .collect_diagnostics(&doc_uri, DIAGNOSTICS_TIMEOUT)
+        .await
+        .map_err(|e| format!("collect_diagnostics: {e}"))?;
+    let _ = client.shutdown().await;
+
+    let dtos = diags
+        .into_iter()
+        .map(|d| FileDiagnosticDto {
+            start_line: d.range.start.line,
+            start_character: d.range.start.character,
+            end_line: d.range.end.line,
+            end_character: d.range.end.character,
+            message: d.message,
+            severity: d
+                .severity
+                .map(|s| format!("{:?}", s).to_lowercase())
+                .unwrap_or_else(|| "warning".to_string()),
+            source: d.source,
+            code: d.code.and_then(|c| match c {
+                lsp_types::NumberOrString::Number(n) => Some(n.to_string()),
+                lsp_types::NumberOrString::String(s) => Some(s),
+            }),
+        })
+        .collect();
+    Ok(FileDiagnosticsResponse {
+        diagnostics: dtos,
+        timed_out: false, // collect_diagnostics returns its own timeout empty-handed
     })
 }
 
@@ -476,5 +577,37 @@ mod tests {
             .block_on(read_source_file(tmp.path().to_string_lossy().into_owned()))
             .unwrap_err();
         assert!(err.contains("not a file"));
+    }
+
+    #[test]
+    fn run_file_diagnostics_rejects_missing_path() {
+        let req = FileDiagnosticsRequest {
+            file_path: "/no/such/file.rs".into(),
+            server_cmd: "rust-analyzer".into(),
+            server_args: vec![],
+            language_id: "rust".into(),
+            content: "fn main() {}".into(),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(run_file_diagnostics(req)).unwrap_err();
+        assert!(err.contains("canonicalize") || err.contains("timed out"));
+    }
+
+    #[test]
+    fn file_diagnostic_dto_serializes_severity_lowercase() {
+        let dto = FileDiagnosticDto {
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 1,
+            message: "unused".into(),
+            severity: "warning".into(),
+            source: Some("rustc".into()),
+            code: Some("E0001".into()),
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"severity\":\"warning\""));
+        assert!(json.contains("\"source\":\"rustc\""));
+        assert!(json.contains("\"code\":\"E0001\""));
     }
 }

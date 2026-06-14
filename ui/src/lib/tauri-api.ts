@@ -464,6 +464,57 @@ export async function readSourceFile(path: string): Promise<SourceFile> {
   return invoke('read_source_file', { path })
 }
 
+export interface FileDiagnostic {
+  start_line: number
+  start_character: number
+  end_line: number
+  end_character: number
+  message: string
+  severity: string
+  source?: string
+  code?: string
+}
+
+export interface FileDiagnosticsRequest {
+  file_path: string
+  server_cmd: string
+  server_args: string[]
+  language_id: string
+  content: string
+}
+
+export interface FileDiagnosticsResponse {
+  diagnostics: FileDiagnostic[]
+  timed_out: boolean
+}
+
+const DEFAULT_DIAGNOSTICS_SERVERS: Record<
+  string,
+  { cmd: string; args: string[] }
+> = {
+  rust: { cmd: 'rust-analyzer', args: [] },
+  typescript: { cmd: 'typescript-language-server', args: ['--stdio'] },
+  typescriptreact: { cmd: 'typescript-language-server', args: ['--stdio'] },
+  javascript: { cmd: 'typescript-language-server', args: ['--stdio'] },
+  go: { cmd: 'gopls', args: [] },
+  python: { cmd: 'pylsp', args: [] },
+}
+
+export function defaultDiagnosticsServer(languageId: string): {
+  cmd: string
+  args: string[]
+} {
+  return (
+    DEFAULT_DIAGNOSTICS_SERVERS[languageId] ?? { cmd: '', args: [] }
+  )
+}
+
+export async function runFileDiagnostics(
+  req: FileDiagnosticsRequest,
+): Promise<FileDiagnosticsResponse> {
+  return invoke('run_file_diagnostics', { req })
+}
+
 // Worktrees (B9)
 
 export async function createTaskWorktree(taskId: string): Promise<TaskWorktreeDto> {
