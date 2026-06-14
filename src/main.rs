@@ -113,6 +113,11 @@ fn main() {
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
             shannon_desktop::scheduled_commands::create_triggered_routine,
             shannon_desktop::scheduled_commands::get_opc_metrics,
+            // Automation: hook-event catalog + custom permission profiles
+            shannon_desktop::automation_commands::list_hook_events,
+            shannon_desktop::automation_commands::list_permission_profiles,
+            shannon_desktop::automation_commands::save_custom_profile,
+            shannon_desktop::automation_commands::delete_custom_profile,
             shannon_desktop::lsp_commands::lsp_code_actions,
             shannon_desktop::lsp_commands::apply_code_action,
             shannon_desktop::lsp_commands::read_source_file,
