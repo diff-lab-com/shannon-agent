@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { useApp } from '@/context/AppContext'
 
@@ -41,10 +42,31 @@ export default function Welcome() {
   const [provider, setProvider] = useState<string>('anthropic')
   const [apiKey, setApiKey] = useState('')
   const [saving, setSaving] = useState(false)
+  const [pickedDir, setPickedDir] = useState<string | null>(null)
 
   const finish = () => {
     markWelcomeSeen()
     navigate('/chat', { replace: true })
+  }
+
+  const pickDirectory = async () => {
+    try {
+      const sel = await open({ directory: true, multiple: false })
+      if (typeof sel === 'string') {
+        setPickedDir(sel)
+        try {
+          await api.configure({ key: 'working_dir', value: sel })
+          await refreshConfig()
+          toast.success('Working directory updated')
+        } catch (e) {
+          console.warn('configure working_dir failed:', e)
+          toast.error('Could not save working directory — restart Shannon with --working-dir to apply')
+        }
+      }
+    } catch (e) {
+      console.warn('Welcome folder picker failed:', e)
+      toast.error('Folder picker failed')
+    }
   }
 
   const handleProviderSubmit = async () => {
@@ -162,11 +184,21 @@ export default function Welcome() {
             >
               <div className="bg-surface-container-low rounded-xl p-md mb-md">
                 <div className="font-label-sm text-on-surface-variant mb-xs">Current working directory</div>
-                <div className="font-mono text-on-surface text-sm break-all">{config?.working_dir ?? '(not set — defaults to home dir)'}</div>
+                <div className="font-mono text-on-surface text-sm break-all">{pickedDir ?? config?.working_dir ?? '(not set — defaults to home dir)'}</div>
               </div>
-              <p className="font-body-sm text-on-surface-variant mb-md">
-                To work in a specific project, restart Shannon from that folder, or launch with{' '}
-                <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">--working-dir &lt;path&gt;</code>.
+              <button
+                onClick={pickDirectory}
+                className="w-full px-md py-sm bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 rounded-lg font-label-md text-on-surface cursor-pointer transition-colors flex items-center justify-center gap-sm mb-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+              >
+                <span className="material-symbols-outlined text-[18px]">folder_open</span>
+                {pickedDir ? 'Choose a different folder' : 'Choose folder'}
+              </button>
+              <p className="font-body-sm text-on-surface-variant">
+                Prefer a different autonomy level? Adjust it in{' '}
+                <button onClick={() => { markWelcomeSeen(); navigate('/settings/general') }} className="text-primary hover:underline cursor-pointer">
+                  Settings → General
+                </button>{' '}
+                (Suggest / Plan / Auto Edit / Full Auto).
               </p>
               <p className="font-body-sm text-on-surface-variant">
                 Prefer a different autonomy level? Adjust it in{' '}

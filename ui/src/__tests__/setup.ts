@@ -9,6 +9,10 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(),
 }))
 
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn().mockResolvedValue(null),
+}))
+
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({
