@@ -17,30 +17,56 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
-  const { sessions, models } = useApp()
+  const { sessions, models, tasks, agents } = useApp()
 
   const items = useMemo<PaletteItem[]>(() => {
+    const actions: PaletteItem[] = [
+      { id: 'a-new-chat', label: 'Start new chat', icon: 'add_comment', category: 'Actions', action: () => navigate('/chat') },
+      { id: 'a-new-task', label: 'Create scheduled task', icon: 'add_task', category: 'Actions', action: () => navigate('/tasks') },
+      { id: 'a-new-routine', label: 'Create routine', icon: 'schedule', category: 'Actions', action: () => navigate('/routines') },
+      { id: 'a-new-agent', label: 'Browse agents', icon: 'smart_toy', category: 'Actions', action: () => navigate('/agents') },
+      { id: 'a-toggle-theme', label: 'Change theme', icon: 'palette', category: 'Actions', action: () => navigate('/settings/theme') },
+    ]
     const pages: PaletteItem[] = [
       { id: 'p-chat', label: 'Chat', icon: 'chat_bubble', category: 'Pages', action: () => navigate('/chat') },
-      { id: 'p-goals', label: 'Goals', icon: 'ads_click', category: 'Pages', action: () => navigate('/goals') },
+      { id: 'p-today', label: 'Today', icon: 'today', category: 'Pages', action: () => navigate('/today') },
       { id: 'p-tasks', label: 'Scheduled', icon: 'task_alt', category: 'Pages', action: () => navigate('/tasks') },
-      { id: 'p-opc', label: 'One Person Company', icon: 'auto_awesome', category: 'Pages', action: () => navigate('/opc') },
+      { id: 'p-conversations', label: 'Conversations', icon: 'forum', category: 'Pages', action: () => navigate('/conversations') },
       { id: 'p-ext', label: 'Extensions Hub', icon: 'grid_view', category: 'Pages', action: () => navigate('/extensions') },
+      { id: 'p-routines', label: 'Routines', icon: 'schedule', category: 'Pages', action: () => navigate('/routines') },
+      { id: 'p-hooks', label: 'Hooks', icon: 'webhook', category: 'Pages', action: () => navigate('/hooks') },
+      { id: 'p-profiles', label: 'Permission Profiles', icon: 'shield', category: 'Pages', action: () => navigate('/profiles') },
+      { id: 'p-editor', label: 'Code Editor', icon: 'code', category: 'Pages', action: () => navigate('/editor') },
+      { id: 'p-perf', label: 'Performance', icon: 'speed', category: 'Pages', action: () => navigate('/perf') },
       { id: 'p-set', label: 'Settings', icon: 'settings', category: 'Pages', action: () => navigate('/settings') },
       { id: 'p-theme', label: 'Theme Settings', icon: 'palette', category: 'Settings', action: () => navigate('/settings/theme') },
       { id: 'p-models', label: 'Model Settings', icon: 'neurology', category: 'Settings', action: () => navigate('/settings/models') },
       { id: 'p-billing', label: 'Usage & Billing', icon: 'credit_card', category: 'Settings', action: () => navigate('/settings/billing') },
     ]
+    const taskItems: PaletteItem[] = tasks.slice(0, 8).map(t => ({
+      id: `t-${t.id}`,
+      label: t.title,
+      icon: t.status === 'completed' ? 'task_alt' : t.status === 'in_progress' ? 'pending' : 'radio_button_unchecked',
+      category: 'Tasks',
+      action: () => navigate('/tasks'),
+    }))
+    const agentItems: PaletteItem[] = agents.slice(0, 5).map(a => ({
+      id: `ag-${a.id}`,
+      label: a.name,
+      icon: 'smart_toy',
+      category: 'Agents',
+      action: () => navigate('/agents'),
+    }))
     const sessionItems: PaletteItem[] = sessions.slice(0, 10).map(s => ({
-      id: `s-${s.id}`, label: s.title || 'Untitled', icon: 'history', category: 'Sessions', action: () => navigate('/chat'),
+      id: `s-${s.id}`, label: s.title || 'Untitled', icon: 'history', category: 'Recent chats', action: () => navigate('/chat'),
     }))
     const modelItems: PaletteItem[] = models.slice(0, 5).map(m => ({
-      id: `m-${m.id}`, label: m.name, icon: 'smart_toy', category: 'Models', action: () => {
+      id: `m-${m.id}`, label: m.name, icon: 'neurology', category: 'Switch model', action: () => {
         api.switchProvider({ provider: m.provider, model: m.id }).then(() => toast.success(`Switched to ${m.name}`)).catch(() => toast.error('Failed to switch model'))
       },
     }))
-    return [...pages, ...sessionItems, ...modelItems]
-  }, [navigate, sessions, models])
+    return [...actions, ...pages, ...taskItems, ...agentItems, ...sessionItems, ...modelItems]
+  }, [navigate, sessions, models, tasks, agents])
 
   const filtered = query
     ? items.filter(i => i.label.toLowerCase().includes(query.toLowerCase()))
