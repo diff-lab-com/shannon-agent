@@ -1,196 +1,245 @@
-# ADR: Pluggable MCP Integrations (G1 Email + G2 Notion/Obsidian)
+# ADR: Pluggable Integrations (G1 Email + G2 Notion/Obsidian)
 
-**Status**: Proposed (2026-06) — awaiting user approval before implementation.
-**Context**: PM roadmap G1/G2 — Email and Notion/Obsidian MCP integrations.
-**Constraint (user-stated)**: MCP integrations must be **pluggable**. Users
-opt in per integration. The base installer cannot ship them bundled — we
-cannot let the download grow every time we add an integration.
+**Status**: Revised (2026-06) — supersedes the prior 2026-06 proposal.
+Based on a deep-research pass over competitor integrations (Claude
+Desktop, ChatGPT Desktop, Cursor, Raycast, Hermes Desktop) and the
+current MCP ecosystem. Awaiting user approval before implementation.
+**Context**: PM roadmap G1/G2. **Constraint (user-stated)**: integrations
+must be **pluggable**, user opt-in per integration, base installer cannot
+bundle them.
 
-## Decision
+## Research summary (what changed my mind)
 
-Three layers, each with one job. None of the layers know about specific
-integrations.
+My prior proposal invented a three-layer "Shannon-hosted integration
+catalog" architecture from first principles. The research killed it.
+Three findings forced a rewrite:
 
-### Layer 1 — Base installer (ships with the app)
+1. **MCP won the protocol war.** As of April 2026, 10 major AI agents
+   support remote MCP with native OAuth 2.1: Claude Desktop, Claude Code,
+   ChatGPT, VS Code/Copilot, Zed, Kiro, Amazon Q, OpenCode, Docker MCP
+   Toolkit, Cursor. 97M+ monthly SDK downloads, 10,000+ public MCP
+   servers. Building a proprietary "Shannon integration protocol" would
+   ignore this.
+2. **Vendors host their own MCP servers.** Notion, Linear, Slack,
+   GitHub, Atlassian, Asana — they all run hosted remote MCP servers
+   with OAuth. Shannon does not need to write Gmail/Notion/Linear
+   clients. We need an Integrations UI that wires the user to these
+   existing endpoints.
+3. **MCP's stdio transport has a documented critical CVE class.** The
+   April 2026 OX Security "Mother of All AI Supply Chains" advisory
+   showed systemic RCE: CVE-2026-30623 in Anthropic's own MCP SDK
+   affected 150M+ downloads because `StdioServerParameters` executes
+   whatever `command` it's handed. Anthropic declined to fix it. This
+   reshapes the local-vs-remote trade-off.
 
-Contains the MCP runtime only: process spawning, stdio JSON-RPC framing,
-tool-result normalization. **Zero integrations.** A user who never opts
-into anything still gets the full AI workspace — they just don't have
-email/notion/etc. tools.
+Full research report is at `docs/research/2026-06-mcp-integrations.md`
+(see References). Decision below is based on it.
 
-### Layer 2 — Integration catalog (fetched on demand)
+## Decision — three tiers, none bundled
 
-A JSON manifest hosted at `https://shannon.ai/integrations/index.json`. Each
-entry has:
+Shannon ships **zero integrations in the base installer**. Every
+integration is opt-in. The architecture splits integrations into three
+tiers based on what they touch and how:
 
-```json
-{
-  "id": "gmail",
-  "name": "Gmail",
-  "category": "email",
-  "description": "Read, send, and search Gmail.",
-  "runtime": "node",
-  "package": "@shannon/mcp-gmail",
-  "version": "1.2.3",
-  "size_bytes": 4_800_000,
-  "permissions": ["network:googleapis.com", "credentials:oauth"],
-  "auth": "oauth-google",
-  "screenshot": "...",
-  "homepage": "..."
-}
-```
+### Tier 1 — Native in-process Rust tools (no MCP, no subprocess)
 
-The Integrations page (`/integrations`, **not** the base Settings page)
-fetches this catalog. The user sees a list with install buttons and sizes.
-Nothing is installed by default.
+For integrations that are better as native code than as MCP servers:
 
-### Layer 3 — Per-user install dir
+- **Obsidian** — vault is just `*.md` files on disk. The existing
+  Shannon filesystem tool already does this. We add a "Connect Obsidian
+  Vault" flow that grants the tool access to a vault directory the user
+  picks. No MCP, no subprocess, no new dependencies.
+- **Email (Gmail IMAP, Fastmail, Outlook, self-hosted)** — implement
+  IMAP + SMTP directly in `shannon-tools` using the `imap` and `lettre`
+  crates. Shannon is Rust; we don't need to spawn a Node or Python MCP
+  server to read mail. This **completely avoids the stdio
+  command-injection CVE class** because there is no subprocess.
 
-Installed integrations land in `~/.shannon/integrations/<id>/`. This dir is
-**outside** the app bundle, so:
+Why native over MCP for these two:
+- Obsidian doesn't have an official MCP server (it's filesystem).
+- Email MCP servers exist (`tecnologicachile/mail-mcp`, etc.) but
+  spawning one gives us all the subprocess attack surface for zero
+  benefit — Shannon is already a long-running Rust process.
 
-- App updates don't touch installed integrations.
-- Uninstalling the app leaves user data intact (or a cleanup script can
-  remove just the integrations dir).
-- Each integration is a separate npm package, isolated from the others.
+### Tier 2 — Vendor-hosted remote MCP (OAuth 2.1, no subprocess)
 
-## Why pluggable, not bundled
+For integrations whose vendors run their own MCP servers:
 
-The user's constraint is correct for three reasons:
+| Integration | Endpoint | Auth |
+|-------------|----------|------|
+| **Notion** | `https://mcp.notion.com/mcp` | OAuth 2.1 (Notion integration) |
+| **Linear** | `https://mcp.linear.app/mcp` | OAuth 2.1 with PKCE |
+| **Slack** | Slack MCP server (released Jan 2026) | OAuth 2.1 (workspace install) |
+| **GitHub** | `https://api.githubcopilot.com/mcp/` | PAT or OAuth |
+| **Gmail (OAuth path)** | community `taylorwilsdon/google_workspace_mcp` hosted URL | OAuth 2.1 (Google) |
 
-1. **Installer bloat compounds.** Bundling Email (5 MB) + Notion (8 MB) +
-   Obsidian (3 MB) + GitHub (6 MB) + Linear (4 MB) = 26 MB on a 60 MB
-   app = 43% growth before we ship anything new. After 10 integrations
-   the installer is bigger than Slack.
-2. **Dependency attack surface.** Every bundled MCP server ships its own
-   transitive deps. A vuln in `imapflow@1.2.0` (used only by Email)
-   becomes a CVE in Shannon Core. Opt-in means the user only takes on
-   risk for integrations they actually use.
-3. **License drift.** Email MCP might be MIT, Notion MCP might be
-   Apache-2.0, some future integration might be GPL. Bundling forces us
-   to track all of them. Opt-in keeps the base installer under one
-   license.
+Shannon's job here is the **Integrations UI**, not the integration code:
 
-## The three integrations in scope
+1. Show a catalog of vendor-hosted servers (one row per integration).
+2. User clicks "Connect".
+3. Shannon opens the OAuth flow in the system browser.
+4. Token comes back, stored in the OS keychain (Tauri has `keyring-rs`).
+5. Shannon's existing MCP runtime (`shannon-mcp` crate) connects to the
+   server and discovers tools via `tools/list`.
 
-### G1 — Email (read + send)
+No subprocess. No command injection surface. Vendor maintains the
+server — Shannon maintains the OAuth plumbing.
 
-**Audience**: Users who live in their inbox. "Draft a reply to this
-thread" or "summarize unread since yesterday" should just work.
+### Tier 3 — User-installed custom MCP servers (escape hatch)
 
-**Suppliers** (pick one at install time):
-- **Gmail** via Google APIs (oauth-google). Most common.
-- **IMAP/SMTP** generic. For Outlook, Fastmail, self-hosted. Requires
-  app-specific password.
-- **Sendgrid/Postmark** outbound-only. For users who want Shannon to
-  send but read elsewhere.
+For users who want to wire up something we don't curate:
 
-**Tools exposed**: `email.search`, `email.read`, `email.send`,
-`email.reply`, `email.mark_read`. Five tools, no destructive ops
-(`email.delete` is intentionally excluded — destructive email ops belong
-in the real client).
+- **Remote URL field**: paste any Streamable HTTP MCP URL. Shannon
+  treats it like a Tier 2 server.
+- **Local stdio server** — supported but **gated behind a strict
+  command allowlist**. We will not accept arbitrary `command` fields
+  (lesson from CVE-2026-30623). Curated allowlist of safe invokers:
+  `npx`, `uvx`, `docker`, `node`, `python`. Anything else requires the
+  user to type the binary name manually and confirm a warning dialog.
 
-**Auth**: OAuth for Gmail. App-specific password for IMAP. Stored in the
-OS keychain (not on disk).
+## Security posture
 
-### G2 — Notion (read + write)
+The research documented a sustained CVE wave in MCP-adjacent code.
+Shannon's mitigations:
 
-**Audience**: Users who run their life/team on Notion. "Add this to my
-Weekly Notes" or "find the PRD for project X" should just work.
+| Attack class | Mitigation |
+|--------------|------------|
+| **stdio command injection** (CVE-2026-30623) | Tier 1 has no subprocess. Tier 2 has no subprocess. Tier 3 allows stdio but with command allowlist + manual override. |
+| **Indirect prompt injection via tool result** | Tool result content is treated as untrusted. Shannon's existing `LlmPermissionClassifier` will inspect tool results for embedded `command:`-style instructions before re-injecting into context. |
+| **Tool poisoning** (malicious tool descriptions) | Tier 2 catalog is curated (we only ship entries pointing at vendor-owned domains). Tier 3 shows tool descriptions in a review panel before activation. |
+| **DNS rebinding against localhost MCP** | We do not auto-trust localhost. All Tier 3 servers require explicit user activation. |
+| **Stolen OAuth token** | Tokens live in OS keychain, not on disk. Revocation flow in the Integrations UI. |
 
-**Tools exposed**: `notion.search`, `notion.read_page`, `notion.create_page`,
-`notion.update_block`, `notion.append_block`. Five tools.
+These are not nice-to-haves. They are the reason Shannon should not
+spawn subprocess MCP servers casually.
 
-**Auth**: Notion OAuth (notion.com/integrations).
+## Why this approach
 
-**Scope**: User picks which databases/pages to expose at install time.
-Don't request access to the entire workspace by default.
-
-### G2b — Obsidian (read + write)
-
-**Audience**: Users who keep their notes local. Different supplier
-pattern from Notion — Obsidian is file-based, no API.
-
-**Pattern**: Shannon reads/writes directly in the user's vault directory
-(no separate MCP server needed). The "integration" is really just a
-config UI that asks "where is your vault?" and a tool module that reads
-`*.md` files.
-
-**Tools exposed**: `obsidian.search`, `obsidian.read_note`,
-`obsidian.create_note`, `obsidian.update_note`, `obsidian.list_backlinks`.
-
-**Auth**: None — it's the filesystem. Permission prompt: "Allow Shannon
-to read and write files in `/path/to/vault`?" → user confirms in the
-standard file-permission dialog.
+1. **Aligns with where the ecosystem actually is.** Every major AI
+   desktop competitor except Alfred uses MCP. Building proprietary would
+   re-invent a solved problem and lock Shannon out of 10,000+ servers.
+2. **Vendor-hosted remote servers shift maintenance burden.** Notion's
+   server breaks → Notion fixes it. We don't write or maintain Gmail /
+   Notion / Linear clients.
+3. **Native Rust for Obsidian + email is the right architecture.**
+   Shannon is Rust. Obsidian is filesystem. Email has mature Rust
+   crates. Subprocess MCP servers add zero value here and all the CVE
+   risk.
+4. **Honors the user's pluggable constraint.** Base installer ships no
+   integrations and no MCP server runtimes. Tier 1 ships as part of
+   Shannon but is inert until the user grants it a path / credentials.
+   Tier 2 and 3 are pure opt-in.
+5. **Builds on Shannon's existing MCP infrastructure.** `shannon-mcp`
+   crate already supports `mcpServers` config in `.mcp.json`,
+   `~/.claude/settings.json`, `~/.shannon/settings.json`. The work is
+   UX + catalog + keychain plumbing, not new protocol implementation.
 
 ## What to avoid
 
-- **Don't bundle any of these in the base installer.** Even "tiny" ones.
-  The pattern breaks the moment we make an exception.
-- **Don't auto-install on first use.** If the user asks Shannon to "email
-  Alice" and Email isn't installed, Shannon says so and links to the
-  Integrations page. Silent install crosses the opt-in line.
-- **Don't share credentials across integrations.** Each integration has
-  its own keychain slot. Gmail's OAuth token can't leak into Notion.
-- **Don't ship `email.delete` or `notion.delete_page`.** Destructive ops
-  on external systems are out of scope. User does those in the real
-  client.
+- **Don't bundle any MCP server runtime in the installer.** No
+  built-in Node.js for `.mcpb`-style install (Claude Desktop does this;
+  it adds 50-100 MB and exposes the CVE surface). Users who want local
+  stdio servers install Node themselves.
+- **Don't ship a Shannon-hosted integration catalog at `shannon.ai/integrations/index.json`.**
+  Use the existing PulseMCP / mcpservers.org directories instead.
+  Self-hosting a catalog is maintenance cost without value.
+- **Don't auto-install on first tool use.** If the user asks Shannon to
+  "email Alice" and Email isn't configured, Shannon says so and links
+  to `/integrations`. Silent install crosses the opt-in line.
+- **Don't allow arbitrary `command` strings in stdio MCP config.**
+  Allowlist only. Manual override requires typing the binary name +
+  confirming a warning.
+- **Don't share credentials across integrations.** Each integration
+  gets its own keychain slot.
+- **Don't ship destructive tools** (`email.delete`, `notion.delete_page`).
+  Destructive ops on external systems belong in the real client.
 
-## Trade-offs we considered and rejected
+## Trade-offs we considered and rejected (updated with research)
 
-| Option | Why rejected |
-|--------|-------------|
-| Bundle top 3 integrations in installer | Sets a precedent that defeats the pluggable model; 26 MB+ on day one |
-| Auto-install on first tool-call use | Breaks opt-in; user has no chance to review permissions before install |
-| Run all MCP servers in-process (no subprocess) | Loses the crash isolation MCP gives us; one bad integration takes down the app |
-| Build our own email/notion clients (no MCP) | Locks us into maintaining those clients forever; MCP servers already exist and update independently |
+| Option | Why rejected (with research) |
+|--------|------------------------------|
+| Build our own integration protocol instead of MCP | Every competitor adopted MCP (Truthifi 2026 report). Proprietary would isolate Shannon. |
+| Bundle top 3 integrations in the installer | Claude Desktop's 13 GB Cowork VM download is the cautionary tale (Reddit r/ClaudeAI thread, 2026). Opt-in wins. |
+| Spawn community MCP servers for Obsidian and email | Obsidian has no official server and 88+ uneven community ones (PulseMCP). Email MCP servers exist but add subprocess CVE surface for no benefit when Shannon is already Rust. Native is better here. |
+| Support `.mcpb` Desktop Extensions format | Requires shipping Node.js runtime (50-100 MB installer tax). Defer until users ask for it; Tier 3 stdio allowlist covers the same need. |
+| Auto-install on first tool-call use | Breaks opt-in; user has no chance to review permissions. |
+| Trust localhost MCP without confirmation | DNS rebinding attacks documented (endorlabs 2026 analysis). |
 
 ## Implementation phasing
 
-If approved, ship in this order. Each phase is independently mergeable:
+Each phase is independently mergeable. Cut after any phase.
 
-1. **Catalog + Integrations page shell.** Empty page at `/integrations`
-   that fetches the catalog JSON, lists entries with install buttons.
-   No actual install logic yet — buttons are disabled. 1-2 days.
-2. **Installer runtime.** The `~/.shannon/integrations/<id>/` layout,
-   npm-pack download, signature verification, MCP-spawn. 3-4 days.
-3. **G1 Email — Gmail OAuth path first.** Smallest user base, simplest
-   auth. 2-3 days.
-4. **G1 Email — IMAP path.** 1-2 days (protocol is the hard part; auth
-   is just a password).
-5. **G2 Notion.** Similar shape to Gmail OAuth. 2-3 days.
-6. **G2b Obsidian.** Different shape (filesystem, not API). 2 days.
+1. **Integrations page shell** (`/integrations`). Empty catalog UI,
+   fetches entries from a built-in constant (no remote catalog). Tier 2
+   row renders but Connect button is disabled. 1-2 days.
+2. **OAuth + keychain plumbing.** Tier 2 Connect works for Notion only
+   (canonical test case). Token stored via `keyring-rs`. Shannon's MCP
+   runtime connects to the URL with the token. 3-4 days.
+3. **Expand Tier 2 catalog**: Linear, Slack, GitHub. Each one is a
+   catalog entry + maybe a per-vendor OAuth quirk. 1 day each.
+4. **Obsidian Connect Vault** (Tier 1). UI to pick a vault directory,
+   grant filesystem tool access to it. 1-2 days.
+5. **Native IMAP/SMTP** (Tier 1). New `EmailTool` in `shannon-tools`,
+   IMAP search/read + SMTP send. App-specific password storage in
+   keychain. 3-4 days.
+6. **Gmail OAuth** (Tier 2 via `google_workspace_mcp` hosted URL).
+   1-2 days.
+7. **Tier 3 escape hatch** — custom URL field with allowlisted stdio.
+   2-3 days.
+8. **Security hardening pass** — prompt-injection inspection in
+   `LlmPermissionClassifier` for tool results; per-integration
+   revocation UI; tool-description review panel for Tier 3. 2-3 days.
 
-Total: ~2-3 weeks if all six phases land. Can be cut after any phase —
-phase 1 alone gives us a usable Integrations page even with zero
-integrations available.
+Total: ~3-4 weeks for all phases. Phases 1-3 alone give a usable
+Integrations page with 4 vendors wired up — that is the meaningful
+milestone.
 
 ## Open questions for the user
 
-1. **Catalog hosting**: do we host `shannon.ai/integrations/index.json`
-   ourselves, or use a static GitHub repo with a CDN? (Self-host = more
-   control; GitHub = free, community PRs.)
-2. **First integration to ship**: G1 Gmail, G1 IMAP, G2 Notion, or G2b
-   Obsidian? The phasing above assumes Gmail first because OAuth is
-   well-understood, but if the user's primary audience is Obsidian
-   users we should ship that first.
-3. **Integration sandboxing**: do we run installed MCP servers with
-   reduced filesystem/network permissions (e.g. via seccomp on Linux),
-   or trust the catalog signature? Sandboxing is safer but adds
-   complexity.
-4. **Paid vs free**: are integrations free for all users, or paid-tier
-   only? Billing decision, not architectural, but it affects how we
-   gate the Integrations page.
-5. **Self-host**: should users be able to install an MCP server from a
-   git URL (not just our catalog)? Power users will want this. Adds
-   security review burden.
+1. **Tier 1 email: IMAP-first or Gmail OAuth-first?** Research says
+   both are shippable. IMAP covers Gmail/Fastmail/Outlook/self-hosted
+   with one implementation. Gmail OAuth covers only Gmail but is what
+   most users will want. My recommendation: ship IMAP first (broadest
+   coverage, no Google Cloud project setup needed), then add Gmail
+   OAuth.
+2. **Tier 2 catalog: which vendors first?** Notion has the most mature
+   official MCP server (`makenotion/notion-mcp-server`, 4.1k stars,
+   active). Recommend Notion → Linear → Slack → GitHub order, based on
+   ecosystem maturity.
+3. **Tier 3 stdio allowlist**: ship with `npx`, `uvx`, `docker`, `node`,
+   `python`? Or start narrower (just `npx` + `uvx`) and expand on
+   request?
+4. **Tier 3 manual override**: when a user wants to run a stdio MCP
+   server with a binary not in the allowlist, how scary is the warning?
+   (Just text? Type-the-binary-name-to-confirm? Both?)
+5. **Paid vs free**: are Tier 2 integrations free for all Shannon users,
+   or paid-tier only? (Same open question as before — billing decision,
+   not architectural, but affects how we gate the Integrations page.)
+6. **Catalog source**: hard-code the Tier 2 catalog in the Shannon
+   binary (my recommendation — updates ship with app updates), or fetch
+   from a remote URL at runtime (faster iteration but adds a network
+   dependency)?
+
+## Migration
+
+No migration needed — this is greenfield. Existing `add_mcp_server` /
+`remove_mcp_server` Tauri commands in `src/commands.rs` continue to work
+for power users; the Integrations UI calls them under the hood for Tier
+2/3 entries.
 
 ## References
 
+- `docs/research/2026-06-mcp-integrations.md` — full deep-research
+  report (competitor matrix, MCP ecosystem readiness, security findings,
+  installer-size data, sources)
 - `src/mcp.rs` — current MCP runtime (subprocess + JSON-RPC over stdio)
-- `src/commands.rs` `add_mcp_server` / `remove_mcp_server` — manual MCP
-  registration that exists today; the Integrations page would call
-  these after downloading the package
-- `ui/src/pages/Settings.tsx` — current MCP servers UI; Integrations
-  page will be a separate route (`/integrations`), not a Settings tab,
-  because the install flow is too heavy for inline settings
+- `src/commands.rs` `add_mcp_server` / `remove_mcp_server` — existing
+  manual MCP registration; Integrations UI calls these after OAuth
+- `ui/src/pages/Settings.tsx` — current MCP servers UI; the Integrations
+  page is a separate `/integrations` route (install flow is too heavy
+  for inline settings)
+- OX Security April 2026 advisory — `mother-of-all-ai-supply-chains`
+  CVE-2026-30623 and related
+- LiteLLM April 2026 fix — reference implementation of stdio command
+  allowlisting
+- Truthifi State of MCP 2026 report — competitor adoption data

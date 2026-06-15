@@ -1,6 +1,9 @@
 # ADR: Landing Page (G5)
 
-**Status**: Proposed (2026-06) — awaiting user approval before implementation.
+**Status**: **Deferred** (2026-06) — wait until development is
+substantially complete before revisiting. Per user direction: "请等开发
+基本完成后最后考虑". Document kept as a placeholder so the design notes
+survive; will be revived when the rest of the roadmap lands.
 **Context**: PM roadmap G5 — marketing landing page that reflects the
 Sprint 1 repositioning from "AI Code Assistant" to "Your AI Workspace".
 
