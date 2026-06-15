@@ -358,7 +358,6 @@ async fn run_diagnostics(
     })
 }
 
-use url::Url;
 trait PathUrlExt {
     fn to_url(&self) -> Result<url::Url, String>;
 }

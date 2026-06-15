@@ -1134,7 +1134,7 @@ fn collect_daily_buckets() -> Result<Vec<OpcDayBucket>, String> {
     }
     let earliest = buckets.last().map(|(d, _, _)| *d).unwrap_or(today);
 
-    let mut visit = |dir: &std::path::Path, buckets: &mut Vec<(chrono::NaiveDate, u32, u32)>| -> Result<(), String> {
+    let visit = |dir: &std::path::Path, buckets: &mut Vec<(chrono::NaiveDate, u32, u32)>| -> Result<(), String> {
         let entries = std::fs::read_dir(dir)
             .map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
         for entry in entries.flatten() {

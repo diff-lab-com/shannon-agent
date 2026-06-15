@@ -8,6 +8,9 @@ use tracing::{error, info};
 /// MCP manager that wraps the process pool and handles desktop-specific concerns.
 pub struct McpManager {
     pool: Arc<McpProcessPool>,
+    // KEEP: working_dir is accepted by ::new() for future per-server CWD
+    // control. Not yet plumbed through to McpProcessPool.spawn().
+    #[allow(dead_code)]
     working_dir: String,
 }
 

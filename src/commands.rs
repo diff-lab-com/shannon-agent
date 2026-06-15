@@ -65,6 +65,10 @@ pub struct AppState {
     /// Tool registry with default tools.
     tools: Arc<ToolRegistry>,
     /// Permission manager.
+    // KEEP: AppState owns the PermissionManager so the desktop shell can
+    // eventually consult it before dispatching tool calls. Hooked into
+    // send_message / request_permission once the permission-prompt UI lands.
+    #[allow(dead_code)]
     permissions: Arc<RwLock<PermissionManager>>,
     /// Session state manager.
     state_manager: Arc<StateManager>,
@@ -230,51 +234,6 @@ fn file_to_base64(path: &str) -> Result<(String, String), String> {
     let base64_string = base64::engine::general_purpose::STANDARD.encode(&bytes);
 
     Ok((base64_string, media_type))
-}
-
-/// Convert ChatMessage to shannon_core Message, handling image attachments.
-fn chat_message_to_core_message(msg: &ChatMessage) -> shannon_core::api::Message {
-    use shannon_core::api::{ContentBlock, ImageSource, MessageContent};
-
-    // Check if message has image attachments
-    if let Some(ref attachments) = msg.file_attachments {
-        if !attachments.is_empty() {
-            let has_images = attachments.iter().any(|a| {
-                a.media_type
-                    .as_ref()
-                    .map_or(false, |mt| mt.starts_with("image/"))
-            });
-
-            if has_images {
-                let mut blocks = vec![ContentBlock::Text {
-                    text: msg.content.clone(),
-                }];
-
-                for attachment in attachments {
-                    if let Some(ref media_type) = attachment.media_type {
-                        if media_type.starts_with("image/") {
-                            if let Some(ref base64_data) = attachment.base64_data {
-                                blocks.push(ContentBlock::Image {
-                                    source: ImageSource::base64(media_type, base64_data),
-                                });
-                            }
-                        }
-                    }
-                }
-
-                return shannon_core::api::Message {
-                    role: msg.role.clone(),
-                    content: MessageContent::Blocks(blocks),
-                };
-            }
-        }
-    }
-
-    // Default to text-only message
-    shannon_core::api::Message {
-        role: msg.role.clone(),
-        content: MessageContent::Text(msg.content.clone()),
-    }
 }
 
 /// Status response for the desktop UI.
@@ -2346,125 +2305,6 @@ pub async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillI
     Ok(skill_infos)
 }
 
-/// Helper function to scan a directory for skill files.
-fn scan_directory_for_skills(
-    dir: &std::path::Path,
-    source: &str,
-    skills: &mut Vec<SkillInfo>,
-) -> Result<(), String> {
-    use std::fs;
-
-    let entries = fs::read_dir(dir)
-        .map_err(|e| format!("Failed to read directory {}: {}", dir.display(), e))?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        let path = entry.path();
-
-        // Only process regular files
-        if !path.is_file() {
-            continue;
-        }
-
-        // Read file content
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
-
-        // Extract skill information from file content
-        if let Some(skill_info) = parse_skill_file(&path, &content, source) {
-            skills.push(skill_info);
-        }
-    }
-
-    Ok(())
-}
-
-/// Parse a skill file to extract skill information.
-fn parse_skill_file(path: &std::path::Path, content: &str, source: &str) -> Option<SkillInfo> {
-    // Try to determine file type and parse accordingly
-    let extension = path.extension()?.to_str()?;
-
-    match extension {
-        "toml" => parse_toml_skill(path, content, source),
-        "md" => parse_markdown_skill(path, content, source),
-        _ => None,
-    }
-}
-
-/// Parse TOML skill file.
-fn parse_toml_skill(path: &std::path::Path, content: &str, source: &str) -> Option<SkillInfo> {
-    // Parse basic skill name from filename
-    let name = path.file_stem()?.to_str()?.to_string();
-
-    // Try to extract description from TOML content
-    let description =
-        extract_description_from_content(content).unwrap_or_else(|| "Custom skill".to_string());
-
-    // Extract trigger command (usually /skillname or similar)
-    let trigger = format!("/{}", name);
-
-    Some(SkillInfo {
-        name,
-        description,
-        trigger,
-        source: source.to_string(),
-        category: None,
-    })
-}
-
-/// Parse Markdown skill file.
-fn parse_markdown_skill(path: &std::path::Path, content: &str, source: &str) -> Option<SkillInfo> {
-    // Extract skill name from filename
-    let name = path.file_stem()?.to_str()?.to_string();
-
-    // Extract description from content (look for first heading or paragraph)
-    let description = extract_description_from_content(content)
-        .unwrap_or_else(|| "Custom command skill".to_string());
-
-    // Extract trigger command
-    let trigger = format!("/{}", name);
-
-    Some(SkillInfo {
-        name,
-        description,
-        trigger,
-        source: source.to_string(),
-        category: None,
-    })
-}
-
-/// Extract description from file content.
-fn extract_description_from_content(content: &str) -> Option<String> {
-    // Look for description field in TOML or first heading/paragraph in Markdown
-    if content.contains("description") {
-        // Try to extract description field
-        if let Some(start) = content.find("description") {
-            if let Some(eq_pos) = content[start..].find('=') {
-                let after_eq = &content[start + eq_pos + 1..];
-                if let Some(quote_end) = after_eq.find('"') {
-                    let desc_content = &after_eq[quote_end + 1..];
-                    if let Some(end_quote) = desc_content.find('"') {
-                        return Some(desc_content[..end_quote].to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    // For markdown, look for first heading or paragraph
-    for line in content.lines() {
-        let line = line.trim();
-        if !line.is_empty() && !line.starts_with('#') {
-            // Skip metadata fields like "---" or "title:"
-            if !line.starts_with('-') && !line.contains(':') && line.len() > 3 {
-                return Some(line.to_string());
-            }
-        }
-    }
-
-    None
-}
-
 /// Get detailed information about a specific skill.
 #[tauri::command]
 pub async fn get_skill_detail(
@@ -2495,84 +2335,6 @@ pub async fn get_skill_detail(
         source: skill.id.to_string(),
         category: None,
     })
-}
-
-/// Find a skill file by name in a directory.
-fn find_skill_file(dir: &std::path::Path, name: &str) -> Result<std::path::PathBuf, String> {
-    use std::fs;
-
-    let entries = fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
-        let path = entry.path();
-
-        if !path.is_file() {
-            continue;
-        }
-
-        if let Some(stem) = path.file_stem() {
-            if stem.to_str() == Some(name) {
-                return Ok(path);
-            }
-        }
-    }
-
-    Err(format!("Skill file not found: {}", name))
-}
-
-/// Parse detailed skill information from file content.
-fn parse_skill_detail(
-    path: &std::path::Path,
-    content: &str,
-    source: &str,
-) -> Result<SkillDetail, String> {
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .ok_or("Invalid skill file name")?
-        .to_string();
-
-    let description =
-        extract_description_from_content(content).unwrap_or_else(|| "Custom skill".to_string());
-
-    let trigger = format!("/{}", name);
-
-    // Extract parameters (look for common patterns)
-    let parameters = extract_parameters(content);
-
-    Ok(SkillDetail {
-        name: name.clone(),
-        description,
-        trigger,
-        content: content.to_string(),
-        parameters,
-        source: source.to_string(),
-        category: None,
-    })
-}
-
-/// Extract parameters from skill content.
-fn extract_parameters(content: &str) -> Vec<String> {
-    let mut parameters = Vec::new();
-
-    // Look for common parameter patterns in the content
-    for line in content.lines() {
-        let line = line.trim();
-        if line.contains("parameter") || line.contains("arg") || line.contains("argument") {
-            // Extract parameter names
-            if let Some(colon_pos) = line.find(':') {
-                let param_part = &line[..colon_pos];
-                for word in param_part.split_whitespace() {
-                    if word.len() > 2 && !word.starts_with('#') && !word.starts_with('-') {
-                        parameters.push(word.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    parameters
 }
 
 fn chrono_timestamp() -> i64 {
@@ -3227,7 +2989,7 @@ fn collect_tasks_recursive(
                 .parent()
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
-                .filter(|name| {
+                .filter(|_name| {
                     // Drop when the parent IS the root.
                     path.parent()
                         .and_then(|p| p.canonicalize().ok())
