@@ -18,6 +18,11 @@ function isToday(epochMs: number): boolean {
     && d.getDate() === now.getDate()
 }
 
+function isWithinDays(epochMs: number, days: number): boolean {
+  if (!epochMs) return false
+  return Date.now() - epochMs < days * 86_400_000
+}
+
 function relativeTime(epochMs: number): string {
   if (!epochMs) return ''
   const diff = Date.now() - epochMs
@@ -38,6 +43,15 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
 
   const todaySessions = useMemo(
     () => sessions.filter(s => isToday(s.created_at)).sort((a, b) => b.created_at - a.created_at),
+    [sessions],
+  )
+
+  // North-star metric: Weekly Active Conversations (WAC) — unique chat
+  // sessions touched in the last 7 days. Cheap client-side approximation
+  // off the sessions list; replace with a server-side aggregate when the
+  // backend exposes it.
+  const wac = useMemo(
+    () => sessions.filter(s => isWithinDays(s.created_at, 7)).length,
     [sessions],
   )
 
@@ -69,6 +83,21 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
 
   return (
     <div className="flex-1 overflow-y-auto px-lg py-lg space-y-xl">
+      {/* North-star metric: Weekly Active Conversations */}
+      <section
+        aria-label="Weekly Active Conversations"
+        className="p-lg rounded-2xl bg-gradient-to-br from-primary-container/40 via-primary/10 to-transparent border border-primary/30 flex items-center gap-lg"
+      >
+        <div className="w-14 h-14 rounded-2xl bg-primary/15 flex items-center justify-center shrink-0">
+          <span className="material-symbols-outlined text-primary text-[32px]">insights</span>
+        </div>
+        <div className="flex-1">
+          <div className="font-label-sm text-on-surface-variant uppercase tracking-wider">Weekly Active Conversations</div>
+          <div className="font-headline-lg text-on-surface text-[40px] leading-none mt-xs">{wac}</div>
+          <div className="font-label-sm text-on-surface-variant mt-xs">chats in the last 7 days</div>
+        </div>
+      </section>
+
       {/* Hero stats */}
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-md">
         <StatCard

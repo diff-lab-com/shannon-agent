@@ -49,6 +49,30 @@ describe('ConversationsToday', () => {
     expect(stat).toBeInTheDocument()
   })
 
+  it('renders Weekly Active Conversations hero card', () => {
+    render(wrap(<ConversationsToday sessions={sessions} tasks={tasks} />))
+    expect(screen.getByText('Weekly Active Conversations')).toBeInTheDocument()
+    expect(screen.getByText(/chats in the last 7 days/i)).toBeInTheDocument()
+  })
+
+  it('WAC counts sessions touched in last 7 days', () => {
+    const old = today - 8 * 86_400_000 // 8 days ago — outside WAC window
+    const mixedSessions: SessionInfo[] = [
+      ...sessions,
+      { id: 'sold', title: 'Old chat', created_at: old, message_count: 1 },
+    ]
+    render(wrap(<ConversationsToday sessions={mixedSessions} tasks={tasks} />))
+    // sessions has 3 (today, today-1h, yesterday); old is 8d so excluded → WAC = 3
+    const wacSection = screen.getByLabelText('Weekly Active Conversations')
+    expect(wacSection).toHaveTextContent('3')
+  })
+
+  it('WAC is 0 when no sessions in last 7 days', () => {
+    render(wrap(<ConversationsToday sessions={[]} tasks={tasks} />))
+    const wacSection = screen.getByLabelText('Weekly Active Conversations')
+    expect(wacSection).toHaveTextContent('0')
+  })
+
   it('renders running tasks stat', () => {
     render(wrap(<ConversationsToday sessions={sessions} tasks={tasks} />))
     expect(screen.getByText('Running tasks')).toBeInTheDocument()
