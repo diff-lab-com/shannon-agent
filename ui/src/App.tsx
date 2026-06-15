@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { AppProvider } from './context/AppContext';
 import { ThemeProvider } from './context/ThemeContext';
+import { I18nProvider } from './i18n';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
 
@@ -43,6 +44,7 @@ function PageLoader() {
 
 export default function App() {
   return (
+    <I18nProvider>
     <ThemeProvider>
       <AppProvider>
         <ErrorBoundary>
@@ -97,5 +99,6 @@ export default function App() {
         </ErrorBoundary>
       </AppProvider>
     </ThemeProvider>
+    </I18nProvider>
   );
 }

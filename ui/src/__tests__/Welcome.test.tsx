@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import * as api from '@/lib/tauri-api'
 import Welcome, { shouldShowWelcome, markWelcomeSeen, WELCOME_SEEN_KEY } from '@/pages/Welcome'
+import { I18nProvider } from '@/i18n'
 
 // Mock AppContext to avoid AppProvider's heavy API surface; Welcome only
 // needs refreshConfig/refreshStatus/config from the context.
@@ -67,9 +68,11 @@ describe('Welcome component — 4-step flow', () => {
 
   function wrap() {
     return render(
-      <MemoryRouter>
-        <Welcome />
-      </MemoryRouter>
+      <I18nProvider>
+        <MemoryRouter>
+          <Welcome />
+        </MemoryRouter>
+      </I18nProvider>
     )
   }
 

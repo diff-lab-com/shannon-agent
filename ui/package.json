@@ -34,6 +34,7 @@
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "react-intl": "^7.1.14",
     "react-markdown": "^9",
     "react-router-dom": "^7.17.0",
     "rehype-highlight": "^7",
