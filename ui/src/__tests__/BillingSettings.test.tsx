@@ -25,6 +25,12 @@ describe('BillingSettings', () => {
     expect(screen.getByRole('heading', { name: /Usage & Billing/ })).toBeInTheDocument()
   })
 
+  it('shows demo mode banner warning', async () => {
+    await renderReady()
+    expect(screen.getByText('Demo mode')).toBeInTheDocument()
+    expect(screen.getByText(/illustrative sample data/i)).toBeInTheDocument()
+  })
+
   it('renders usage quota overview section', async () => {
     await renderReady()
     expect(screen.getByText('Usage Quota Overview')).toBeInTheDocument()
