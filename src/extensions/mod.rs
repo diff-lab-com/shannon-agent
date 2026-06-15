@@ -14,6 +14,8 @@ pub mod skill_catalog;
 pub mod skill_installers;
 pub mod agent_catalog;
 pub mod agent_installers;
+pub mod data_source_catalog;
+pub mod data_source_installers;
 
 pub use types::{
     AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
@@ -44,4 +46,12 @@ pub use agent_catalog::{
 pub use agent_installers::{
     is_agent_installed, list_installed_agents, AgentRepoInstaller, AgentMarkdownInstaller,
     remove_installed_agent, InstalledAgent,
+};
+pub use data_source_catalog::{
+    data_source_adapters, data_source_catalog_entries, DataSourceAdapter, DataSourceField,
+    DataSourceKind,
+};
+pub use data_source_installers::{
+    install_data_source, is_data_source_installed, list_installed_data_sources,
+    read_data_source_config, remove_installed_data_source, InstalledDataSource,
 };

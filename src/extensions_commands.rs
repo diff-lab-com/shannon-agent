@@ -25,6 +25,7 @@ use crate::extensions::{
     MarketplacePluginInstaller, McpRegistryClient, ReqwestFetch, ResolvedMcpInstaller,
     SkillCatalogClient, SkillMarkdownInstaller, StdioMcpInstaller, StdioMcpSpec,
     AgentCatalogClient, AgentRepoInstaller, AgentMarkdownInstaller,
+    DataSourceAdapter,
 };
 
 /// Featured vendor list — baked into the app, no network fetch.
@@ -403,6 +404,60 @@ pub async fn list_installed_agent_plugins() -> Result<Vec<extensions::InstalledA
 #[tauri::command]
 pub async fn uninstall_agent_plugin(name: String) -> Result<(), String> {
     extensions::remove_installed_agent(&name).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// P5: Native data sources (Obsidian + Email IMAP)
+// ---------------------------------------------------------------------------
+
+/// Fetch the static data source catalog (no network — adapter metadata only).
+#[tauri::command]
+pub async fn list_data_source_catalog() -> Result<Vec<extensions::CatalogEntry>, String> {
+    Ok(extensions::data_source_catalog_entries())
+}
+
+/// Static adapter list — used by the UI to render install forms dynamically.
+#[tauri::command]
+pub async fn list_data_source_adapters() -> Result<Vec<DataSourceAdapter>, String> {
+    Ok(extensions::data_source_adapters())
+}
+
+/// Persist a data source config to `~/.shannon/data-sources/<slug>.toml`.
+#[tauri::command]
+pub async fn install_data_source(
+    slug: String,
+    kind: String,
+    name: String,
+    config: std::collections::BTreeMap<String, String>,
+) -> Result<InstallResult, String> {
+    extensions::install_data_source(&slug, &kind, &name, &config)
+        .map(|installed| InstallResult {
+            id: format!("native:data-source-{}", installed.slug),
+            name: installed.name,
+            install_path: Some(installed.path),
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Scan `~/.shannon/data-sources/` for installed configs.
+#[tauri::command]
+pub async fn list_installed_data_sources() -> Result<Vec<extensions::InstalledDataSource>, String> {
+    Ok(extensions::list_installed_data_sources())
+}
+
+/// Remove an installed data source config.
+#[tauri::command]
+pub async fn uninstall_data_source(slug: String) -> Result<(), String> {
+    extensions::remove_installed_data_source(&slug).map_err(|e| e.to_string())
+}
+
+/// Read back the config block for an installed data source. Used by the
+/// "Test connection" button and by adapters at query time.
+#[tauri::command]
+pub async fn read_data_source_config(
+    slug: String,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    extensions::read_data_source_config(&slug).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------

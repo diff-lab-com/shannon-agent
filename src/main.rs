@@ -95,6 +95,13 @@ fn main() {
             extensions_commands::install_native_agent,
             extensions_commands::list_installed_agent_plugins,
             extensions_commands::uninstall_agent_plugin,
+            // Extensions hub P5 — Native data sources (Obsidian + Email IMAP)
+            extensions_commands::list_data_source_catalog,
+            extensions_commands::list_data_source_adapters,
+            extensions_commands::install_data_source,
+            extensions_commands::list_installed_data_sources,
+            extensions_commands::uninstall_data_source,
+            extensions_commands::read_data_source_config,
             // Plugin management (A.3)
             commands::list_plugins,
             commands::install_plugin,

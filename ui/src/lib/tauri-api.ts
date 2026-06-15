@@ -381,6 +381,91 @@ export async function uninstallAgentPlugin(name: string): Promise<void> {
   return invoke('uninstall_agent_plugin', { name })
 }
 
+// --- Extensions Hub (P5: Native data sources — Obsidian + Email IMAP) ---
+
+export interface DataSourceCatalogEntry {
+  id: string
+  kind: 'data_source'
+  name: string
+  description: string
+  author: string | null
+  version: string | null
+  homepage_url: string | null
+  license: string | null
+  stars: number | null
+  last_updated: string | null
+  source: { type: 'native' }
+  trust: 'verified' | 'official' | 'community' | 'unknown'
+  metadata: {
+    kind?: string
+    fields?: DataSourceField[]
+    [k: string]: unknown
+  }
+  tags: string[]
+}
+
+export interface DataSourceField {
+  key: string
+  label: string
+  kind: 'text' | 'password' | 'path' | 'number' | string
+  required: boolean
+  placeholder?: string | null
+  help?: string | null
+}
+
+export interface DataSourceAdapter {
+  slug: string
+  kind: string
+  name: string
+  description: string
+  homepage_url: string | null
+  fields: DataSourceField[]
+}
+
+export interface InstalledDataSource {
+  slug: string
+  kind: string
+  name: string
+  path: string
+  installed_at: string | null
+}
+
+export async function listDataSourceCatalog(): Promise<DataSourceCatalogEntry[]> {
+  return invoke('list_data_source_catalog')
+}
+
+export async function listDataSourceAdapters(): Promise<DataSourceAdapter[]> {
+  return invoke('list_data_source_adapters')
+}
+
+export async function installDataSource(
+  slug: string,
+  kind: string,
+  name: string,
+  config: Record<string, string>,
+): Promise<InstallResult> {
+  return invoke('install_data_source', {
+    slug,
+    kind,
+    name,
+    config,
+  })
+}
+
+export async function listInstalledDataSources(): Promise<InstalledDataSource[]> {
+  return invoke('list_installed_data_sources')
+}
+
+export async function uninstallDataSource(slug: string): Promise<void> {
+  return invoke('uninstall_data_source', { slug })
+}
+
+export async function readDataSourceConfig(
+  slug: string,
+): Promise<Record<string, string>> {
+  return invoke('read_data_source_config', { slug })
+}
+
 // --- Plugins (A.3 ecosystem compatibility) ---
 
 export interface PluginInfo {
