@@ -5,6 +5,55 @@ import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { useApp } from '@/context/AppContext'
 
+// ─── Task taxonomy ──────────────────────────────────────────────────────────
+// Drives Step 0 (primary use case). Each task carries a model recommendation
+// and a tool preset surfaced in Step 2.
+type TaskId = 'code' | 'writing' | 'research' | 'general'
+
+interface TaskOption {
+  id: TaskId
+  label: string
+  icon: string
+  blurb: string
+  recommendedProvider: string
+  tools: string[]
+}
+
+const TASKS: TaskOption[] = [
+  {
+    id: 'code',
+    label: 'Code',
+    icon: 'code',
+    blurb: 'Build apps, write scripts, debug and refactor.',
+    recommendedProvider: 'anthropic',
+    tools: ['filesystem', 'git', 'playwright'],
+  },
+  {
+    id: 'writing',
+    label: 'Writing',
+    icon: 'edit_note',
+    blurb: 'Draft docs, articles, posts, and emails.',
+    recommendedProvider: 'anthropic',
+    tools: ['web_search'],
+  },
+  {
+    id: 'research',
+    label: 'Research',
+    icon: 'search',
+    blurb: 'Search, summarize, and cite sources.',
+    recommendedProvider: 'openai',
+    tools: ['web_search', 'tavily'],
+  },
+  {
+    id: 'general',
+    label: 'General',
+    icon: 'auto_awesome',
+    blurb: 'A bit of everything — start here if unsure.',
+    recommendedProvider: 'anthropic',
+    tools: ['filesystem', 'web_search'],
+  },
+]
+
 const PROVIDERS = [
   { id: 'anthropic', label: 'Anthropic', description: 'Claude Sonnet 4.6 — recommended for coding' },
   { id: 'openai', label: 'OpenAI', description: 'GPT-4o / o1 — strong reasoning, multi-modal' },
@@ -12,10 +61,18 @@ const PROVIDERS = [
   { id: 'deepseek', label: 'DeepSeek', description: 'Cost-effective, long-context tasks' },
 ] as const
 
+const TOOL_CATALOG: Record<string, { label: string; icon: string; description: string }> = {
+  filesystem: { label: 'Filesystem', icon: 'folder', description: 'Read and write files in your workspace.' },
+  git: { label: 'Git', icon: 'commit', description: 'Branch, commit, diff, and merge.' },
+  playwright: { label: 'Playwright', icon: 'web', description: 'Automate the browser for end-to-end tests.' },
+  web_search: { label: 'Web Search', icon: 'travel_explore', description: 'Look up current information on the web.' },
+  tavily: { label: 'Tavily Research', icon: 'menu_book', description: 'Cited research with deeper extraction.' },
+}
+
 const TOP_SHORTCUTS = [
   { keys: '⌘ K', action: 'Open command palette' },
   { keys: '⌘ N', action: 'New chat' },
-  { keys: '⌘ 1 / 2 / 3', action: 'Jump to Chat / Goals / Tasks' },
+  { keys: '⌘ 1 / 2 / 3', action: 'Jump to Chat / Projects / Scheduled' },
   { keys: '?', action: 'Show all shortcuts' },
   { keys: 'Esc', action: 'Cancel running query' },
 ]
@@ -33,16 +90,21 @@ export function markWelcomeSeen() {
   window.localStorage.setItem(WELCOME_SEEN_KEY, '1')
 }
 
-const STEPS = ['Provider', 'Workspace', 'Shortcuts'] as const
+const STEPS = ['Task', 'Model', 'Tools', 'Done'] as const
 
 export default function Welcome() {
   const navigate = useNavigate()
   const { refreshConfig, refreshStatus, config } = useApp()
   const [step, setStep] = useState(0)
+  const [task, setTask] = useState<TaskId>('general')
   const [provider, setProvider] = useState<string>('anthropic')
   const [apiKey, setApiKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [pickedDir, setPickedDir] = useState<string | null>(null)
+  const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({})
+
+  const currentTask = TASKS.find(t => t.id === task)!
+  const recommendedProvider = PROVIDERS.find(p => p.id === currentTask.recommendedProvider)
 
   const finish = () => {
     markWelcomeSeen()
@@ -69,7 +131,7 @@ export default function Welcome() {
     }
   }
 
-  const handleProviderSubmit = async () => {
+  const handleModelSubmit = async () => {
     setSaving(true)
     try {
       if (provider !== 'ollama' && apiKey) {
@@ -77,12 +139,20 @@ export default function Welcome() {
       }
       await api.switchProvider({ provider, model: '' }).catch(e => console.warn('switchProvider in welcome:', e))
       await Promise.all([refreshConfig(), refreshStatus()])
-      setStep(1)
+      // Pre-check tools recommended for this task so the user can opt in/out.
+      const initial: Record<string, boolean> = {}
+      for (const t of currentTask.tools) initial[t] = true
+      setEnabledTools(prev => ({ ...initial, ...prev }))
+      setStep(2)
     } catch (e) {
       console.warn('Welcome provider setup failed:', e)
       toast.error('Failed to configure provider. You can finish setup in Settings.')
     }
     setSaving(false)
+  }
+
+  const toggleTool = (id: string) => {
+    setEnabledTools(prev => ({ ...prev, [id]: !prev[id] }))
   }
 
   return (
@@ -105,15 +175,69 @@ export default function Welcome() {
         <div className="w-full max-w-xl">
           <Stepper step={step} />
 
+          {/* Step 0: Task */}
           {step === 0 && (
             <Card
-              title="Choose your AI provider"
-              subtitle="You can change this any time in Settings → Models."
+              title="What will you use Shannon for?"
+              subtitle="Pick a starting point. You can change anything later."
               footer={
                 <>
                   <span />
                   <button
-                    onClick={handleProviderSubmit}
+                    onClick={() => {
+                      // Default provider to the task recommendation when advancing.
+                      setProvider(currentTask.recommendedProvider)
+                      setStep(1)
+                    }}
+                    className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                  >
+                    Continue →
+                  </button>
+                </>
+              }
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm mb-lg">
+                {TASKS.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTask(t.id)}
+                    aria-pressed={task === t.id}
+                    className={`text-left p-md rounded-xl border cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
+                      task === t.id
+                        ? 'border-2 border-primary bg-primary-container/5'
+                        : 'border-outline-variant/50 hover:border-primary/50'
+                    }`}
+                  >
+                    <div className="flex items-start gap-sm">
+                      <span className="material-symbols-outlined text-primary shrink-0">{t.icon}</span>
+                      <div className="flex-1">
+                        <div className="font-headline-md text-on-surface">{t.label}</div>
+                        <div className="font-body-sm text-on-surface-variant mt-xs">{t.blurb}</div>
+                      </div>
+                      <div className={`w-5 h-5 rounded-full border-2 shrink-0 ${task === t.id ? 'border-primary bg-primary' : 'border-outline-variant'}`} />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Step 1: Model */}
+          {step === 1 && (
+            <Card
+              title="Choose your AI provider"
+              subtitle={
+                recommendedProvider
+                  ? `For ${currentTask.label}, we recommend ${recommendedProvider.label}.`
+                  : 'You can change this any time in Settings → Models.'
+              }
+              footer={
+                <>
+                  <button onClick={() => setStep(0)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+                    ← Back
+                  </button>
+                  <button
+                    onClick={handleModelSubmit}
                     disabled={saving || (provider !== 'ollama' && !apiKey)}
                     className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
@@ -164,17 +288,18 @@ export default function Welcome() {
             </Card>
           )}
 
-          {step === 1 && (
+          {/* Step 2: Tools */}
+          {step === 2 && (
             <Card
-              title="Workspace"
-              subtitle="Shannon will read and modify files in this directory."
+              title="Pick your tools"
+              subtitle="Recommended for your task. Toggle off anything you don't need — you can change this in Extensions."
               footer={
                 <>
-                  <button onClick={() => setStep(0)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+                  <button onClick={() => setStep(1)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
                     ← Back
                   </button>
                   <button
-                    onClick={() => setStep(2)}
+                    onClick={() => setStep(3)}
                     className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
                     Continue →
@@ -182,34 +307,58 @@ export default function Welcome() {
                 </>
               }
             >
-              <div className="bg-surface-container-low rounded-xl p-md mb-md">
-                <div className="font-label-sm text-on-surface-variant mb-xs">Current working directory</div>
-                <div className="font-mono text-on-surface text-sm break-all">{pickedDir ?? config?.working_dir ?? '(not set — defaults to home dir)'}</div>
+              <div className="space-y-sm mb-lg">
+                {Object.entries(TOOL_CATALOG).map(([id, meta]) => {
+                  const enabled = !!enabledTools[id]
+                  const recommended = currentTask.tools.includes(id)
+                  return (
+                    <label
+                      key={id}
+                      className={`flex items-start gap-md p-md rounded-xl border cursor-pointer transition-all ${
+                        enabled ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50 hover:border-primary/50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={() => toggleTool(id)}
+                        className="mt-xs accent-primary"
+                        aria-label={`Enable ${meta.label}`}
+                      />
+                      <span className="material-symbols-outlined text-on-surface-variant shrink-0">{meta.icon}</span>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-xs">
+                          <span className="font-headline-md text-on-surface">{meta.label}</span>
+                          {recommended && (
+                            <span className="text-[10px] uppercase tracking-wider font-bold text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                              Recommended
+                            </span>
+                          )}
+                        </div>
+                        <div className="font-body-sm text-on-surface-variant mt-xs">{meta.description}</div>
+                      </div>
+                    </label>
+                  )
+                })}
               </div>
-              <button
-                onClick={pickDirectory}
-                className="w-full px-md py-sm bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 rounded-lg font-label-md text-on-surface cursor-pointer transition-colors flex items-center justify-center gap-sm mb-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-              >
-                <span className="material-symbols-outlined text-[18px]">folder_open</span>
-                {pickedDir ? 'Choose a different folder' : 'Choose folder'}
-              </button>
               <p className="font-body-sm text-on-surface-variant">
-                Prefer a different autonomy level? Adjust it in{' '}
+                Need a different working directory? Adjust it in{' '}
                 <button onClick={() => { markWelcomeSeen(); navigate('/settings/general') }} className="text-primary hover:underline cursor-pointer">
                   Settings → General
-                </button>{' '}
-                (Suggest / Plan / Auto Edit / Full Auto).
+                </button>
+                .
               </p>
             </Card>
           )}
 
-          {step === 2 && (
+          {/* Step 3: Done */}
+          {step === 3 && (
             <Card
-              title="Shortcuts"
-              subtitle="The most important keys to know."
+              title="You're all set"
+              subtitle="Here are the keys to know. You can change anything in Settings."
               footer={
                 <>
-                  <button onClick={() => setStep(1)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
+                  <button onClick={() => setStep(2)} className="px-lg py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded">
                     ← Back
                   </button>
                   <button
@@ -221,7 +370,43 @@ export default function Welcome() {
                 </>
               }
             >
-              <div className="space-y-sm mb-lg">
+              {/* Summary */}
+              <div className="bg-surface-container-low rounded-xl p-md mb-md">
+                <div className="font-label-sm text-on-surface-variant mb-xs">Your setup</div>
+                <ul className="space-y-xs text-body-sm text-on-surface">
+                  <li className="flex items-center gap-sm">
+                    <span className="material-symbols-outlined text-[18px] text-primary">{currentTask.icon}</span>
+                    <span>{currentTask.label}</span>
+                  </li>
+                  <li className="flex items-center gap-sm">
+                    <span className="material-symbols-outlined text-[18px] text-primary">memory</span>
+                    <span>{PROVIDERS.find(p => p.id === provider)?.label ?? provider}</span>
+                  </li>
+                  <li className="flex items-center gap-sm">
+                    <span className="material-symbols-outlined text-[18px] text-primary">build</span>
+                    <span>
+                      {Object.entries(enabledTools).filter(([, on]) => on).length} tool{Object.entries(enabledTools).filter(([, on]) => on).length === 1 ? '' : 's'} enabled
+                    </span>
+                  </li>
+                </ul>
+              </div>
+
+              {/* Optional workspace picker */}
+              <div className="bg-surface-container-low rounded-xl p-md mb-md">
+                <div className="font-label-sm text-on-surface-variant mb-xs">Working directory</div>
+                <div className="font-mono text-on-surface text-sm break-all mb-sm">{pickedDir ?? config?.working_dir ?? '(defaults to home dir)'}</div>
+                <button
+                  onClick={pickDirectory}
+                  className="px-md py-sm bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 rounded-lg font-label-md text-on-surface cursor-pointer transition-colors flex items-center gap-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                >
+                  <span className="material-symbols-outlined text-[18px]">folder_open</span>
+                  {pickedDir ? 'Choose a different folder' : 'Choose folder'}
+                </button>
+              </div>
+
+              {/* Shortcuts */}
+              <div className="space-y-sm">
+                <div className="font-label-md text-on-surface-variant mb-xs">Shortcuts</div>
                 {TOP_SHORTCUTS.map(s => (
                   <div key={s.keys} className="flex items-center justify-between py-xs">
                     <span className="font-body-sm text-on-surface-variant">{s.action}</span>
@@ -229,7 +414,7 @@ export default function Welcome() {
                   </div>
                 ))}
               </div>
-              <p className="font-body-sm text-on-surface-variant">
+              <p className="font-body-sm text-on-surface-variant mt-md">
                 Press <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono">?</kbd> any time for the full list.
               </p>
             </Card>
