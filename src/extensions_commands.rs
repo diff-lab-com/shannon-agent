@@ -24,6 +24,7 @@ use crate::extensions::{
     self, catalog::FeaturedVendor, installer::AddonInstaller, FeaturedInstallKind,
     MarketplacePluginInstaller, McpRegistryClient, ReqwestFetch, ResolvedMcpInstaller,
     SkillCatalogClient, SkillMarkdownInstaller, StdioMcpInstaller, StdioMcpSpec,
+    AgentCatalogClient, AgentRepoInstaller, AgentMarkdownInstaller,
 };
 
 /// Featured vendor list — baked into the app, no network fetch.
@@ -297,6 +298,111 @@ pub async fn list_installed_skill_plugins() -> Result<Vec<extensions::InstalledS
 #[tauri::command]
 pub async fn uninstall_skill_plugin(name: String) -> Result<(), String> {
     extensions::remove_installed_skill(&name).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// P4: Agents federated catalog + marketplace
+// ---------------------------------------------------------------------------
+
+/// Fetch the federated agent catalog (native + GitHub upstreams, 24h cache).
+#[tauri::command]
+pub async fn list_agent_catalog() -> Result<Vec<extensions::CatalogEntry>, String> {
+    let fetcher: Arc<dyn extensions::HttpFetch> = Arc::new(ReqwestFetch::new());
+    let client = AgentCatalogClient::new(fetcher);
+    client.list_agents().await.map_err(|e| e.to_string())
+}
+
+/// Clone a GitHub agent collection into `~/.shannon/agents/<plugin>/`.
+#[tauri::command]
+pub async fn install_agent_from_repo(
+    plugin_name: String,
+    repo: String,
+    ref_: String,
+) -> Result<InstallResult, String> {
+    let installer = AgentRepoInstaller {
+        plugin_name: plugin_name.clone(),
+        repo,
+        ref_,
+    };
+    let entry = extensions::CatalogEntry {
+        id: format!("agent-repo:{}", plugin_name),
+        kind: extensions::AddonKind::Agent,
+        name: plugin_name.clone(),
+        description: String::new(),
+        author: None,
+        version: None,
+        homepage_url: None,
+        license: None,
+        stars: None,
+        last_updated: None,
+        source: extensions::CatalogSource::GitHubRepo {
+            repo: installer.repo.clone(),
+            ref_: Some(installer.ref_.clone()),
+        },
+        trust: extensions::TrustLevel::Community,
+        metadata: Default::default(),
+        tags: vec![],
+    };
+    let sink = extensions::ProgressSink::null();
+    let installed = installer
+        .install(&entry, &extensions::InstallTarget::ShannonAgentsDir { plugin: plugin_name.clone() }, &sink)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(InstallResult {
+        id: installed.id,
+        name: installed.name,
+        install_path: installed.install_path,
+    })
+}
+
+/// Write a built-in agent's `.md` body to `~/.shannon/agents/<plugin>/agent.md`.
+#[tauri::command]
+pub async fn install_native_agent(
+    plugin_name: String,
+    body: String,
+) -> Result<InstallResult, String> {
+    let installer = AgentMarkdownInstaller {
+        plugin_name: plugin_name.clone(),
+        body,
+    };
+    let entry = extensions::CatalogEntry {
+        id: format!("native:agent-{}", plugin_name),
+        kind: extensions::AddonKind::Agent,
+        name: plugin_name.clone(),
+        description: String::new(),
+        author: None,
+        version: None,
+        homepage_url: None,
+        license: None,
+        stars: None,
+        last_updated: None,
+        source: extensions::CatalogSource::Native,
+        trust: extensions::TrustLevel::Verified,
+        metadata: Default::default(),
+        tags: vec![],
+    };
+    let sink = extensions::ProgressSink::null();
+    let installed = installer
+        .install(&entry, &extensions::InstallTarget::ShannonAgentsDir { plugin: plugin_name.clone() }, &sink)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(InstallResult {
+        id: installed.id,
+        name: installed.name,
+        install_path: installed.install_path,
+    })
+}
+
+/// Scan `~/.shannon/agents/` for installed agent plugins.
+#[tauri::command]
+pub async fn list_installed_agent_plugins() -> Result<Vec<extensions::InstalledAgent>, String> {
+    Ok(extensions::list_installed_agents())
+}
+
+/// Remove an installed agent plugin.
+#[tauri::command]
+pub async fn uninstall_agent_plugin(name: String) -> Result<(), String> {
+    extensions::remove_installed_agent(&name).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------

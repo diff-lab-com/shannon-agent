@@ -12,6 +12,8 @@ pub mod mcpb;
 pub mod mcp_installers;
 pub mod skill_catalog;
 pub mod skill_installers;
+pub mod agent_catalog;
+pub mod agent_installers;
 
 pub use types::{
     AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
@@ -35,4 +37,11 @@ pub use skill_catalog::{
 pub use skill_installers::{
     is_skill_installed, list_installed_skills, MarketplacePluginInstaller,
     remove_installed_skill, SkillMarkdownInstaller, InstalledSkill,
+};
+pub use agent_catalog::{
+    agent_upstreams, AgentCatalogClient, AgentManifest, AgentManifestEntry, AgentUpstream,
+};
+pub use agent_installers::{
+    is_agent_installed, list_installed_agents, AgentRepoInstaller, AgentMarkdownInstaller,
+    remove_installed_agent, InstalledAgent,
 };

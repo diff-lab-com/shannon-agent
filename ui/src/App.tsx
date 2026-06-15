@@ -28,6 +28,7 @@ const DataSources = lazy(() => import('./components/extensions/DataSources'));
 const Featured = lazy(() => import('./components/extensions/Featured'));
 const McpServers = lazy(() => import('./components/extensions/McpServers'));
 const Skills = lazy(() => import('./components/extensions/Skills'));
+const Agents = lazy(() => import('./components/extensions/Agents'));
 const Plugins = lazy(() => import('./components/extensions/Plugins'));
 const Installed = lazy(() => import('./components/extensions/Installed'));
 const GeneralSettings = lazy(() => import('./components/settings/GeneralSettings'));
@@ -69,7 +70,7 @@ export default function App() {
                   <Route path="featured" element={<Featured />} />
                   <Route path="mcp-servers" element={<McpServers />} />
                   <Route path="skills" element={<Skills />} />
-                  <Route path="agents" element={<MyAgents />} />
+                  <Route path="agents" element={<Agents />} />
                   <Route path="datasources" element={<DataSources />} />
                   <Route path="plugins" element={<Plugins />} />
                   <Route path="installed" element={<Installed />} />

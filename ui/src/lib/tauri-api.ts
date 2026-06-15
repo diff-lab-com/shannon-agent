@@ -317,6 +317,70 @@ export async function uninstallSkillPlugin(name: string): Promise<void> {
   return invoke('uninstall_skill_plugin', { name })
 }
 
+// --- Extensions Hub (P4: Agents catalog + installer) ---
+
+export interface AgentCatalogEntry {
+  id: string
+  kind: 'agent'
+  name: string
+  description: string
+  author: string | null
+  version: string | null
+  homepage_url: string | null
+  license: string | null
+  stars: number | null
+  last_updated: string | null
+  source:
+    | { type: 'mcp_registry'; publisher: string }
+    | { type: 'featured_vendor' }
+    | { type: 'git_hub_repo'; repo: string; ref_?: string | null }
+    | { type: 'custom'; url: string }
+    | { type: 'native' }
+  trust: 'unknown' | 'community' | 'official' | 'verified'
+  metadata: {
+    trigger?: string
+    model?: string
+    tools?: string[]
+    system_prompt?: string
+    upstream?: string
+    [k: string]: unknown
+  }
+  tags: string[]
+}
+
+export interface InstalledAgent {
+  name: string
+  path: string
+  installed_at: string | null
+}
+
+export async function listAgentCatalog(): Promise<AgentCatalogEntry[]> {
+  return invoke('list_agent_catalog')
+}
+
+export async function installAgentFromRepo(
+  pluginName: string,
+  repo: string,
+  ref_: string,
+): Promise<InstallResult> {
+  return invoke('install_agent_from_repo', { pluginName, repo, ref_ })
+}
+
+export async function installNativeAgent(
+  pluginName: string,
+  body: string,
+): Promise<InstallResult> {
+  return invoke('install_native_agent', { pluginName, body })
+}
+
+export async function listInstalledAgentPlugins(): Promise<InstalledAgent[]> {
+  return invoke('list_installed_agent_plugins')
+}
+
+export async function uninstallAgentPlugin(name: string): Promise<void> {
+  return invoke('uninstall_agent_plugin', { name })
+}
+
 // --- Plugins (A.3 ecosystem compatibility) ---
 
 export interface PluginInfo {

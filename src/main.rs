@@ -89,6 +89,12 @@ fn main() {
             extensions_commands::install_native_skill,
             extensions_commands::list_installed_skill_plugins,
             extensions_commands::uninstall_skill_plugin,
+            // Extensions hub P4 — Agents catalog + installer
+            extensions_commands::list_agent_catalog,
+            extensions_commands::install_agent_from_repo,
+            extensions_commands::install_native_agent,
+            extensions_commands::list_installed_agent_plugins,
+            extensions_commands::uninstall_agent_plugin,
             // Plugin management (A.3)
             commands::list_plugins,
             commands::install_plugin,
