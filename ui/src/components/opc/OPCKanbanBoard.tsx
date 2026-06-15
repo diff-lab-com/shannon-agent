@@ -1,27 +1,39 @@
-import { useState, useMemo } from 'react'
+// OPC Kanban Board — agent-orchestration workspace surface.
+//
+// This component was refactored to consume the shared KanbanBoard primitive
+// (mode='interact') and the unified status taxonomy in lib/task-status.ts.
+//
+// What changed:
+//   - Column taxonomy is identical to Mission Control now (queued, active,
+//     blocked, done, failed). Previously OPC used todo/pending/doing/done/
+//     deprecated with different status mappings — moving a card between
+//     Mission Control and OPC changed its meaning.
+//   - The optimistic local-override mechanism and variant card visuals are
+//     preserved (progress bar on active, red accent on blocked, etc.) by
+//     passing a custom renderCard to the shared primitive.
+//   - bucketFor() is kept as a thin wrapper over classifyStatus() so existing
+//     callers (and tests) keep working. It now returns the unified family.
+
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import EmptyState from '@/components/ui/empty-state'
 import * as api from '@/lib/tauri-api'
 import type { TaskItem } from '@/types'
+import { KanbanBoard } from '@/components/shared/KanbanBoard'
+import {
+  classifyStatus,
+  canonicalStatusFor,
+  STATUS_FAMILY,
+  type TaskStatusFamily,
+} from '@/lib/task-status'
 
-export type ColumnId = 'todo' | 'pending' | 'doing' | 'done' | 'deprecated'
+export type ColumnId = TaskStatusFamily
 
-const COLUMN_STATUSES: Record<ColumnId, string[]> = {
-  todo: ['pending', 'todo'],
-  pending: ['review', 'blocked'],
-  doing: ['in_progress', 'running'],
-  done: ['completed'],
-  deprecated: ['deprecated'],
-}
-
+/** Legacy alias: maps any raw status to a unified column family. */
 export function bucketFor(status: string): ColumnId {
-  for (const [col, statuses] of Object.entries(COLUMN_STATUSES)) {
-    if (statuses.includes(status)) return col as ColumnId
-  }
-  return 'todo'
+  return classifyStatus(status)
 }
 
 interface Props {
@@ -38,12 +50,6 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
     [tasks, overrides],
   )
 
-  const todoTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'todo')
-  const pendingTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'pending')
-  const inProgressTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'doing')
-  const doneTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'done')
-  const deprecatedTasks = effectiveTasks.filter(t => bucketFor(t.status) === 'deprecated')
-
   const handleQuickTask = async () => {
     const trimmed = quickTask.trim()
     if (!trimmed) return
@@ -58,68 +64,53 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
   }
 
   // Optimistic local override — backend update_task_status is not wired yet
-  const handleDrop = (taskId: string, target: ColumnId) => {
+  const handleMoveTask = (taskId: string, target: TaskStatusFamily) => {
     const task = effectiveTasks.find(t => t.id === taskId)
     if (!task) return
-    const current = bucketFor(task.status)
+    const current = classifyStatus(task.status)
     if (current === target) return
-    const newStatus = COLUMN_STATUSES[target][0]
+    const newStatus = canonicalStatusFor(target)
     setOverrides(prev => ({ ...prev, [taskId]: newStatus }))
-    toast.success(`Moved to ${target}`, { description: 'Local override — backend persistence pending' })
+    toast.success(`Moved to ${STATUS_FAMILY[target].title}`, {
+      description: 'Local override — backend persistence pending',
+    })
   }
+
+  const toolbar = (
+    <div className="relative">
+      <Input
+        type="text"
+        placeholder="Add task..."
+        value={quickTask}
+        onChange={e => setQuickTask(e.target.value)}
+        className="bg-surface-container-low border-none rounded-lg py-1.5 pl-3 pr-8 w-[200px] text-[13px] font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
+        aria-label="Add task"
+      />
+      <Button
+        aria-label="Create task"
+        className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-primary text-on-primary rounded-[4px] flex items-center justify-center hover:bg-primary/90 transition-colors"
+        onClick={handleQuickTask}
+      >
+        <span className="material-symbols-outlined text-[16px]">add</span>
+      </Button>
+    </div>
+  )
 
   return (
     <div className="flex-1 w-full flex flex-col min-w-0">
-      <div className="flex justify-between items-center mb-4">
-        <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest">KANBAN</h3>
-        <div className="flex items-center gap-xs">
-          <div className="relative">
-            <Input
-              type="text"
-              placeholder="Quick inject task..."
-              value={quickTask}
-              onChange={e => setQuickTask(e.target.value)}
-              className="bg-surface-container-low border-none rounded-lg py-1.5 pl-3 pr-8 w-[200px] text-[13px] font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
-              aria-label="Quick inject task"
-            />
-            <Button
-              aria-label="Create task"
-              className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-primary text-on-primary rounded-[4px] flex items-center justify-center hover:bg-primary/90 transition-colors"
-              onClick={handleQuickTask}
-            >
-              <span className="material-symbols-outlined text-[16px]">add</span>
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex gap-4 overflow-x-auto pb-4 custom-scrollbar items-start min-h-[600px]">
-        <KanbanColumn title="To Do" color="bg-secondary" count={todoTasks.length} onDrop={id => handleDrop(id, 'todo')}>
-          {todoTasks.map(task => <KanbanCard key={task.id} task={task} draggable />)}
-        </KanbanColumn>
-
-        <KanbanColumn title="Pending" color="bg-secondary" count={pendingTasks.length} onDrop={id => handleDrop(id, 'pending')}>
-          {pendingTasks.map(task => <PendingCard key={task.id} task={task} />)}
-        </KanbanColumn>
-
-        <KanbanColumn title="Doing" color="bg-primary" count={inProgressTasks.length} onDrop={id => handleDrop(id, 'doing')}>
-          {inProgressTasks.map(task => <DoingCard key={task.id} task={task} />)}
-        </KanbanColumn>
-
-        <KanbanColumn title="Done" color="bg-tertiary" count={doneTasks.length} onDrop={id => handleDrop(id, 'done')}>
-          {doneTasks.map(task => <DoneCard key={task.id} task={task} />)}
-        </KanbanColumn>
-
-        <KanbanColumn title="Deprecated" color="bg-outline-variant" count={deprecatedTasks.length} onDrop={id => handleDrop(id, 'deprecated')}>
-          {deprecatedTasks.length === 0 ? (
-            <div className="flex items-center justify-center p-xl mt-xl">
-              <EmptyState icon="archive" title="No deprecated tasks." description="Completed or cancelled tasks will appear here." />
-            </div>
-          ) : (
-            deprecatedTasks.map(task => <KanbanCard key={task.id} task={task} draggable />)
-          )}
-        </KanbanColumn>
-      </div>
+      <KanbanBoard
+        tasks={effectiveTasks}
+        mode="interact"
+        boardTitle="KANBAN"
+        toolbar={toolbar}
+        onMoveTask={handleMoveTask}
+        renderCard={(task, family) => (
+          <VariantCard key={task.id} task={task} family={family} />
+        )}
+        emptyLabel={family => family === 'failed'
+          ? 'No deprecated tasks.'
+          : undefined}
+      />
 
       {Object.keys(overrides).length > 0 ? (
         <div className="mt-sm flex justify-end">
@@ -135,54 +126,27 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
   )
 }
 
-function KanbanColumn({
-  title,
-  color,
-  count,
-  children,
-  onDrop,
-}: {
-  title: string
-  color: string
-  count: number
-  children: React.ReactNode
-  onDrop?: (taskId: string) => void
-}) {
-  const [isOver, setIsOver] = useState(false)
-  return (
-    <div
-      className={`w-[300px] shrink-0 rounded-xl p-xs border transition-colors ${isOver ? 'bg-surface-container-high/40 border-primary/40' : 'bg-surface-container-lowest/50 border-transparent hover:bg-surface-container-low/30'}`}
-      onDragOver={e => { e.preventDefault(); setIsOver(true) }}
-      onDragLeave={() => setIsOver(false)}
-      onDrop={e => {
-        e.preventDefault()
-        setIsOver(false)
-        const taskId = e.dataTransfer.getData('text/plain')
-        if (taskId && onDrop) onDrop(taskId)
-      }}
-    >
-      <div className="flex justify-between items-center px-2 py-3 mb-1">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${color}`} />
-          <span className="font-label-md text-[14px] font-bold">{title}</span>
-        </div>
-        <span className="font-label-sm text-[11px] text-on-surface-variant">{count}</span>
-      </div>
-      {children}
-      {count === 0 && title !== 'Deprecated' ? (
-        <div className="flex items-center justify-center p-xl mt-xl">
-          <p className="font-label-sm text-[12px] text-on-surface-variant italic opacity-60">Empty</p>
-        </div>
-      ) : null}
-    </div>
-  )
+/**
+ * Dispatches to a variant card based on column family, preserving the visual
+ * language the OPC board already had: red accent on blocked, progress bar on
+ * active, check row on done, etc. Default falls through to a draggable card
+ * that matches the old "todo" / "deprecated" look.
+ */
+function VariantCard({ task, family }: { task: TaskItem; family: TaskStatusFamily }) {
+  switch (family) {
+    case 'blocked': return <BlockedCard task={task} />
+    case 'active':  return <ActiveCard task={task} />
+    case 'done':    return <DoneCard task={task} />
+    case 'failed':  return <FailedCard task={task} />
+    default:        return <DefaultDraggableCard task={task} />
+  }
 }
 
-function KanbanCard({ task, draggable }: { task: { id: string; title: string; description?: string; assignee?: string; priority?: string }; draggable?: boolean }) {
+function DefaultDraggableCard({ task }: { task: TaskItem }) {
   return (
     <div
-      draggable={draggable}
-      onDragStart={draggable ? (e => e.dataTransfer.setData('text/plain', task.id)) : undefined}
+      draggable
+      onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
       className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/30 shadow-sm mb-3 cursor-pointer hover:border-primary/50 hover:shadow-md transition-all group/card focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       tabIndex={0}
       role="button"
@@ -207,7 +171,7 @@ function KanbanCard({ task, draggable }: { task: { id: string; title: string; de
   )
 }
 
-function PendingCard({ task }: { task: TaskItem }) {
+function BlockedCard({ task }: { task: TaskItem }) {
   return (
     <div
       draggable
@@ -232,7 +196,7 @@ function PendingCard({ task }: { task: TaskItem }) {
   )
 }
 
-function DoingCard({ task }: { task: TaskItem }) {
+function ActiveCard({ task }: { task: TaskItem }) {
   return (
     <div
       draggable
@@ -280,5 +244,23 @@ function DoneCard({ task }: { task: TaskItem }) {
         <span className="font-label-sm text-[10px] text-on-surface-variant">Done</span>
       </div>
     </Link>
+  )
+}
+
+function FailedCard({ task }: { task: TaskItem }) {
+  return (
+    <div
+      draggable
+      onDragStart={e => e.dataTransfer.setData('text/plain', task.id)}
+      className="bg-surface-container-lowest/50 rounded-xl p-md border border-outline-variant/30 shadow-sm mb-3 cursor-grab active:cursor-grabbing hover:bg-surface-container-lowest transition-colors opacity-70"
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-[16px] text-on-surface-variant">archive</span>
+          <span className="font-label-md text-[13px] text-on-surface-variant line-through">{task.title}</span>
+        </div>
+        <span className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">Archived</span>
+      </div>
+    </div>
   )
 }
