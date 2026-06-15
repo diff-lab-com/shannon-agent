@@ -7,6 +7,7 @@
 #[cfg(feature = "tauri")]
 fn main() {
     use shannon_desktop::commands;
+    use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -73,6 +74,15 @@ fn main() {
             commands::list_skills,
             commands::get_skill_detail,
             commands::list_installed_addons,
+            // Extensions hub P2 — MCP installers (see extensions_commands.rs)
+            extensions_commands::list_featured_vendors,
+            extensions_commands::list_mcp_registry_servers,
+            extensions_commands::featured_vendor_to_entry,
+            extensions_commands::install_mcp_stdio,
+            extensions_commands::install_mcp_mcpb,
+            extensions_commands::install_mcp_oauth_authorize_url,
+            extensions_commands::install_mcp_oauth_complete,
+            extensions_commands::uninstall_mcp_server,
             // Plugin management (A.3)
             commands::list_plugins,
             commands::install_plugin,

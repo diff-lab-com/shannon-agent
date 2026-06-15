@@ -9,10 +9,7 @@ use std::fmt;
 
 use async_trait::async_trait;
 
-use super::types::{
-    AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
-    ProgressSink, TrustLevel,
-};
+use super::types::{CatalogEntry, ConfirmationLevel, InstallTarget, InstalledAddon, ProgressSink};
 
 /// Error returned by installer operations.
 ///
@@ -110,6 +107,7 @@ pub trait AddonInstaller: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::extensions::types::{AddonKind, CatalogSource, TrustLevel};
 
     #[test]
     fn install_error_display_is_human_readable() {
