@@ -16,13 +16,24 @@ import { useState } from 'react'
 import { useApp } from '@/context/AppContext'
 import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
 import { KanbanBoard, STATUS_FAMILY, type TaskStatusFamily } from '@/components/shared/KanbanBoard'
+import ConversationsToday from '@/components/conversations/ConversationsToday'
+import ConversationsList from '@/components/conversations/ConversationsList'
+
+type TabKey = 'today' | 'all' | 'board'
+
+const TABS: { key: TabKey; label: string; icon: string }[] = [
+  { key: 'today', label: 'Today', icon: 'today' },
+  { key: 'all', label: 'All', icon: 'forum' },
+  { key: 'board', label: 'Board', icon: 'dashboard' },
+]
 
 interface MissionControlProps {
   onSelectTask?: (id: string) => void
 }
 
 export default function MissionControl({ onSelectTask }: MissionControlProps) {
-  const { tasks, refreshTasks } = useApp()
+  const { tasks, sessions, refreshTasks } = useApp()
+  const [tab, setTab] = useState<TabKey>('today')
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null)
   const selectedTask = localSelectedId ? tasks.find(t => t.id === localSelectedId) ?? null : null
 
@@ -79,13 +90,44 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
         </div>
       </header>
 
-      <div className="flex-1 flex min-h-0 px-lg py-lg">
-        <KanbanBoard
-          tasks={tasks}
-          mode="observe"
-          onSelectTask={handleSelect}
-        />
-      </div>
+      <nav
+        aria-label="Conversations view tabs"
+        className="flex items-center gap-xs px-lg pt-md border-b border-outline-variant/20 bg-surface-container-lowest/40"
+      >
+        {TABS.map(t => {
+          const active = tab === t.key
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`flex items-center gap-sm px-md py-sm rounded-t-lg font-label-md text-label-md transition-all cursor-pointer ${
+                active
+                  ? 'text-primary border-b-2 border-primary -mb-px font-bold'
+                  : 'text-on-surface-variant hover:text-primary hover:bg-surface-container-low'
+              }`}
+              aria-current={active ? 'page' : undefined}
+              aria-pressed={active}
+              aria-label={`${t.label} tab`}
+            >
+              <span className="material-symbols-outlined text-[18px]">{t.icon}</span>
+              <span>{t.label}</span>
+            </button>
+          )
+        })}
+      </nav>
+
+      {tab === 'today' && <ConversationsToday sessions={sessions} tasks={tasks} />}
+      {tab === 'all' && <ConversationsList sessions={sessions} />}
+
+      {tab === 'board' && (
+        <div className="flex-1 flex min-h-0 px-lg py-lg">
+          <KanbanBoard
+            tasks={tasks}
+            mode="observe"
+            onSelectTask={handleSelect}
+          />
+        </div>
+      )}
 
       <TaskDetailDrawer
         task={selectedTask}

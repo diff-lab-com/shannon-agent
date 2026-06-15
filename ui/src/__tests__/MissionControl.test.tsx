@@ -1,7 +1,8 @@
-// Tests for G12 Mission Control kanban page.
+// Tests for Mission Control / Conversations page — tabs + Board (kanban).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import MissionControl from '@/pages/MissionControl'
 import type { TaskItem } from '@/types'
 
@@ -34,13 +35,48 @@ function makeTask(overrides: Partial<TaskItem>): TaskItem {
   } as TaskItem
 }
 
+function wrap(ui: React.ReactElement) {
+  return <MemoryRouter>{ui}</MemoryRouter>
+}
+
 beforeEach(() => {
-  useAppSpy.mockReturnValue({ tasks: [], refreshTasks: vi.fn() })
+  useAppSpy.mockReturnValue({ tasks: [], sessions: [], agents: [], refreshTasks: vi.fn() })
 })
 
-describe('MissionControl', () => {
-  it('renders all five status columns', () => {
-    render(<MissionControl />)
+// Helper: switch to the Board tab where kanban columns live.
+function switchToBoard() {
+  fireEvent.click(screen.getByRole('button', { name: /Board tab/ }))
+}
+
+describe('MissionControl — tabs', () => {
+  it('renders Today/All/Board tabs', () => {
+    render(wrap(<MissionControl />))
+    expect(screen.getByRole('button', { name: /Today tab/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /All tab/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Board tab/ })).toBeInTheDocument()
+  })
+
+  it('defaults to Today tab', () => {
+    render(wrap(<MissionControl />))
+    expect(screen.getByRole('button', { name: /Today tab/ })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('Today tab shows Chats today stat', () => {
+    render(wrap(<MissionControl />))
+    expect(screen.getByText('Chats today')).toBeInTheDocument()
+  })
+
+  it('All tab shows search input', () => {
+    render(wrap(<MissionControl />))
+    fireEvent.click(screen.getByRole('button', { name: /All tab/ }))
+    expect(screen.getByPlaceholderText('Search conversations...')).toBeInTheDocument()
+  })
+})
+
+describe('MissionControl — Board tab', () => {
+  it('renders all five status columns after switching to Board', () => {
+    render(wrap(<MissionControl />))
+    switchToBoard()
     expect(screen.getByRole('row', { name: 'Queued' })).toBeInTheDocument()
     expect(screen.getByRole('row', { name: 'In Progress' })).toBeInTheDocument()
     expect(screen.getByRole('row', { name: 'Blocked' })).toBeInTheDocument()
@@ -48,17 +84,21 @@ describe('MissionControl', () => {
     expect(screen.getByRole('row', { name: 'Failed' })).toBeInTheDocument()
   })
 
-  it('shows empty-state hint for an empty column', () => {
-    render(<MissionControl />)
+  it('shows empty-state hint for an empty column on Board', () => {
+    render(wrap(<MissionControl />))
+    switchToBoard()
     expect(screen.getAllByText('Nothing here.').length).toBeGreaterThan(0)
   })
 
   it('classifies in_progress into the In Progress column', () => {
     useAppSpy.mockReturnValue({
       tasks: [makeTask({ id: 'a', title: 'Active Task', status: 'in_progress' })],
+      sessions: [],
+      agents: [],
       refreshTasks: vi.fn(),
     })
-    render(<MissionControl />)
+    render(wrap(<MissionControl />))
+    switchToBoard()
     const col = screen.getByRole('row', { name: 'In Progress' })
     expect(within(col).getByText('Active Task')).toBeInTheDocument()
   })
@@ -66,9 +106,12 @@ describe('MissionControl', () => {
   it('classifies blocked into the Blocked column', () => {
     useAppSpy.mockReturnValue({
       tasks: [makeTask({ id: 'b', title: 'Stuck Task', status: 'blocked' })],
+      sessions: [],
+      agents: [],
       refreshTasks: vi.fn(),
     })
-    render(<MissionControl />)
+    render(wrap(<MissionControl />))
+    switchToBoard()
     const col = screen.getByRole('row', { name: 'Blocked' })
     expect(within(col).getByText('Stuck Task')).toBeInTheDocument()
   })
@@ -79,9 +122,12 @@ describe('MissionControl', () => {
         makeTask({ id: 'f1', title: 'Boom', status: 'failed' }),
         makeTask({ id: 'f2', title: 'Aborted', status: 'cancelled' }),
       ],
+      sessions: [],
+      agents: [],
       refreshTasks: vi.fn(),
     })
-    render(<MissionControl />)
+    render(wrap(<MissionControl />))
+    switchToBoard()
     const col = screen.getByRole('row', { name: 'Failed' })
     expect(within(col).getByText('Boom')).toBeInTheDocument()
     expect(within(col).getByText('Aborted')).toBeInTheDocument()
@@ -94,9 +140,12 @@ describe('MissionControl', () => {
         makeTask({ id: 'b', title: 'B', status: 'pending' }),
         makeTask({ id: 'c', title: 'C', status: 'queued' }),
       ],
+      sessions: [],
+      agents: [],
       refreshTasks: vi.fn(),
     })
-    render(<MissionControl />)
+    render(wrap(<MissionControl />))
+    switchToBoard()
     const col = screen.getByRole('row', { name: 'Queued' })
     expect(within(col).getByText('3')).toBeInTheDocument()
   })
@@ -108,9 +157,12 @@ describe('MissionControl', () => {
         makeTask({ id: 'crit', title: 'Critical', status: 'pending', priority: 'critical' }),
         makeTask({ id: 'norm', title: 'Norm', status: 'pending', priority: 'normal' }),
       ],
+      sessions: [],
+      agents: [],
       refreshTasks: vi.fn(),
     })
-    render(<MissionControl />)
+    render(wrap(<MissionControl />))
+    switchToBoard()
     const col = screen.getByRole('row', { name: 'Queued' })
     const cards = within(col).getAllByRole('button')
     expect(cards[0]).toHaveTextContent('Critical')
@@ -121,9 +173,12 @@ describe('MissionControl', () => {
   it('opens detail drawer when a card is clicked', () => {
     useAppSpy.mockReturnValue({
       tasks: [makeTask({ id: 't-click', title: 'Clickable', status: 'pending' })],
+      sessions: [],
+      agents: [],
       refreshTasks: vi.fn(),
     })
-    render(<MissionControl />)
+    render(wrap(<MissionControl />))
+    switchToBoard()
     expect(screen.queryByTestId('drawer')).not.toBeInTheDocument()
     fireEvent.click(screen.getByText('Clickable'))
     expect(screen.getByTestId('drawer')).toHaveTextContent('drawer:t-click')
@@ -135,18 +190,22 @@ describe('MissionControl', () => {
         makeTask({ id: 'a', status: 'pending' }),
         makeTask({ id: 'b', status: 'completed' }),
       ],
+      sessions: [],
+      agents: [],
       refreshTasks: vi.fn(),
     })
-    render(<MissionControl />)
+    render(wrap(<MissionControl />))
     expect(screen.getByText(/Aggregated view across 2 tasks/)).toBeInTheDocument()
   })
 
   it('uses singular "task" for one task', () => {
     useAppSpy.mockReturnValue({
       tasks: [makeTask({ id: 'only', status: 'pending' })],
+      sessions: [],
+      agents: [],
       refreshTasks: vi.fn(),
     })
-    render(<MissionControl />)
+    render(wrap(<MissionControl />))
     expect(screen.getByText(/Aggregated view across 1 task /)).toBeInTheDocument()
   })
 })
