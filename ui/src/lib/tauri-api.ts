@@ -185,6 +185,81 @@ export async function listInstalledAddons(): Promise<InstalledAddonSummary[]> {
   return invoke('list_installed_addons')
 }
 
+// --- Extensions Hub (P2: MCP installers) ---
+
+export interface FeaturedVendor {
+  slug: string
+  display_name: string
+  description: string
+  icon: string
+  category: 'productivity' | 'communication' | 'developer_tools' | 'data_sources'
+  trust: 'unknown' | 'community' | 'official' | 'verified'
+  install_kind:
+    | { type: 'oauth_remote'; authorize_url: string; token_url: string; mcp_endpoint: string; client_id_env: string; default_scopes: string[]; display_name: string }
+    | { type: 'stdio'; command: string; args: string[]; env_vars: [string, string][]; display_name: string }
+  homepage_url: string
+}
+
+export interface RegistryServer {
+  id: string
+  name: string
+  description: string | null
+  repository: string | null
+  version: string | null
+  homepage_url: string | null
+  license: string | null
+  stars: number | null
+  last_updated: string | null
+  verified: boolean
+}
+
+export interface InstallResult {
+  id: string
+  name: string
+  install_path: string | null
+}
+
+export interface OAuthAuthorizeUrl {
+  url: string
+  verifier: string
+  state: string
+}
+
+export interface StdioMcpSpecPayload {
+  server_name: string
+  command: string
+  args: string[]
+  env: [string, string][]
+}
+
+export async function listFeaturedVendors(): Promise<FeaturedVendor[]> {
+  return invoke('list_featured_vendors')
+}
+
+export async function listMcpRegistryServers(): Promise<RegistryServer[]> {
+  return invoke('list_mcp_registry_servers')
+}
+
+export async function installMcpStdio(spec: StdioMcpSpecPayload): Promise<InstallResult> {
+  return invoke('install_mcp_stdio', { spec })
+}
+
+export async function installMcpMcpb(serverName: string, archiveBytes: number[]): Promise<InstallResult> {
+  return invoke('install_mcp_mcpb', { serverName, archiveBytes })
+}
+
+export async function installMcpOAuthAuthorizeUrl(vendorSlug: string, redirectUri: string): Promise<OAuthAuthorizeUrl> {
+  return invoke('install_mcp_oauth_authorize_url', { vendorSlug, redirectUri })
+}
+
+export async function installMcpOAuthComplete(vendorSlug: string, accessToken: string): Promise<InstallResult> {
+  return invoke('install_mcp_oauth_complete', { vendorSlug, accessToken })
+}
+
+export async function uninstallMcpServer(serverName: string): Promise<void> {
+  return invoke('uninstall_mcp_server', { serverName })
+}
+
 // --- Plugins (A.3 ecosystem compatibility) ---
 
 export interface PluginInfo {
