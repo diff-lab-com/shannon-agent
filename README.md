@@ -1,19 +1,37 @@
 # Shannon — Your AI Workspace
 
-> One workspace for the work you do with AI: draft an email, research a topic,
-> summarize a doc, write code, schedule routines that run while you sleep.
-> Shannon is the AI workspace for people who do all of the above.
+> Chat with any model. Deploy agents on any task. Automate anything.
 
-Shannon started life as a developer tool (an open-source Claude Code clone in
-Rust). It still writes code — but the same agent now also handles email,
-research, summaries, and the routine work you'd otherwise hand to an intern.
-Same engine, broader surface.
+Shannon is a cross-platform **AI workspace** for knowledge workers — not just
+coders. Same Rust engine that writes code also drafts email, researches
+topics, summarizes docs, and runs on schedules. One product, many jobs to
+be done.
+
+## Why Shannon
+
+The AI desktop market splits between general chat tools (ChatGPT Desktop)
+and single-purpose coding tools (Claude Code, Cursor). Shannon is built
+around four structural advantages that are hard to copy:
+
+| Advantage | What it means | vs. closed competitors |
+|-----------|---------------|------------------------|
+| **Multi-provider** | Anthropic, OpenAI, Ollama, DeepSeek — switch any time | vs Claude Desktop (Claude only), Codex (OpenAI only) |
+| **Multi-agent teams** | Real agent-swarm coordination with worktree isolation | vs ChatGPT Desktop (single agent), Hermes (no team) |
+| **Automations as a first-class surface** | Hooks, routines, and permission profiles have their own nav | vs Cursor (no automation), Claude Desktop (no hooks) |
+| **Local-first** | Oullama runs alongside cloud models; Tauri not Electron | vs all Electron-based rivals |
+
+These aren't features — they're **anti-fragility**. Multi-provider means
+upstream API price hikes don't kill us. Multi-user-group means a single
+audience shrinking doesn't kill us. Local-first means connectivity loss
+doesn't kill us. Open-source means even the company shutting down doesn't
+kill the product.
 
 ## What's in this repo
 
 This is the **desktop app** (Tauri + React 19 + TypeScript). The Rust agent
-engine lives in [`shannon-code`](https://github.com/shannon-agent/shannon-code)
-and is pulled in as a git subpath dependency.
+engine lives in
+[`shannon-code`](https://github.com/shannon-agent/shannon-code) and is
+pulled in as a git subpath dependency.
 
 | Area | Where |
 |------|-------|
@@ -30,8 +48,19 @@ pnpm install --dir ui
 cargo run
 ```
 
-For full setup, contributions, and architecture guides see
+For full setup, contribution guide, and engine architecture, see
 [`shannon-code`](https://github.com/shannon-agent/shannon-code).
+
+## Product strategy
+
+For the full positioning analysis — competitive matrix, blue-ocean ERRC,
+renaming plan, 12-week roadmap, and KPI definitions — see
+[`docs/product-review/04-product-repositioning.md`](docs/product-review/04-product-repositioning.md).
+
+The TL;DR: Shannon keeps everything developers rely on (mission control,
+OPC, hooks, worktrees, permission profiles) but surfaces a simpler "AI
+workspace" identity to non-coders via a dual-mode sidebar (Simple default,
+Developer opt-in via the Welcome wizard).
 
 ## License
 
