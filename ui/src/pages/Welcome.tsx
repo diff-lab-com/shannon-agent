@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { useApp } from '@/context/AppContext'
+import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 
 // ─── Task taxonomy ──────────────────────────────────────────────────────────
 // Drives Step 0 (primary use case). Each task carries a model recommendation
@@ -102,12 +103,16 @@ export default function Welcome() {
   const [saving, setSaving] = useState(false)
   const [pickedDir, setPickedDir] = useState<string | null>(null)
   const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({})
+  const [devMode, setDevMode] = useState(false)
 
   const currentTask = TASKS.find(t => t.id === task)!
   const recommendedProvider = PROVIDERS.find(p => p.id === currentTask.recommendedProvider)
 
   const finish = () => {
     markWelcomeSeen()
+    if (devMode) {
+      window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
+    }
     navigate('/chat', { replace: true })
   }
 
@@ -417,6 +422,23 @@ export default function Welcome() {
               <p className="font-body-sm text-on-surface-variant mt-md">
                 Press <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono">?</kbd> any time for the full list.
               </p>
+
+              {/* Developer mode opt-in */}
+              <label className="mt-md flex items-start gap-sm p-md rounded-xl border border-outline-variant/50 hover:border-primary/50 cursor-pointer transition-all">
+                <input
+                  type="checkbox"
+                  checked={devMode}
+                  onChange={() => setDevMode(v => !v)}
+                  className="mt-xs accent-primary"
+                  aria-label="Enable developer features"
+                />
+                <div>
+                  <div className="font-headline-md text-on-surface">I'm a developer — show advanced features</div>
+                  <div className="font-body-sm text-on-surface-variant mt-xs">
+                    Reveals the Schedules, Triggers, Permission Modes, and Extensions sections in the sidebar. You can toggle this later.
+                  </div>
+                </div>
+              </label>
             </Card>
           )}
         </div>
