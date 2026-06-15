@@ -92,6 +92,12 @@ export interface SessionInfo {
   title: string
   created_at: number
   message_count: number
+  /** True if this conversation was initiated by an agent (not a direct user prompt). */
+  is_agent_run?: boolean
+  /** True if this conversation is tied to a scheduled/routine trigger. */
+  is_scheduled?: boolean
+  /** True if the user has pinned this conversation. */
+  is_pinned?: boolean
 }
 
 export interface StatusResponse {

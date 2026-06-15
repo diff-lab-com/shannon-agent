@@ -8,25 +8,46 @@ import { useNavigate } from 'react-router-dom'
 import type { SessionInfo } from '@/types'
 
 type SortKey = 'recent' | 'messages'
+type FilterKey = 'all' | 'agent_run' | 'scheduled' | 'pinned'
 
 interface Props {
   sessions: SessionInfo[]
 }
 
+const FILTER_TABS: { key: FilterKey; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'agent_run', label: 'Agent-run' },
+  { key: 'scheduled', label: 'Scheduled' },
+  { key: 'pinned', label: 'Pinned' },
+]
+
 export default function ConversationsList({ sessions }: Props) {
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('recent')
+  const [filter, setFilter] = useState<FilterKey>('all')
+
+  const counts = useMemo(() => ({
+    all: sessions.length,
+    agent_run: sessions.filter(s => s.is_agent_run).length,
+    scheduled: sessions.filter(s => s.is_scheduled).length,
+    pinned: sessions.filter(s => s.is_pinned).length,
+  }), [sessions])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    const list = q
-      ? sessions.filter(s => (s.title ?? '').toLowerCase().includes(q))
-      : sessions.slice()
+    const matchesFilter = (s: SessionInfo) => {
+      if (filter === 'agent_run') return !!s.is_agent_run
+      if (filter === 'scheduled') return !!s.is_scheduled
+      if (filter === 'pinned') return !!s.is_pinned
+      return true
+    }
+    const matchesQuery = (s: SessionInfo) => !q || (s.title ?? '').toLowerCase().includes(q)
+    const list = sessions.filter(s => matchesFilter(s) && matchesQuery(s))
     if (sort === 'recent') list.sort((a, b) => b.created_at - a.created_at)
     else list.sort((a, b) => b.message_count - a.message_count)
     return list
-  }, [sessions, query, sort])
+  }, [sessions, query, sort, filter])
 
   const groupByDate = useMemo(() => {
     const groups: Record<string, SessionInfo[]> = {}
@@ -40,6 +61,29 @@ export default function ConversationsList({ sessions }: Props) {
 
   return (
     <div className="flex-1 overflow-y-auto px-lg py-lg">
+      {/* Filter tabs */}
+      <div role="tablist" aria-label="Filter conversations" className="flex items-center gap-xs mb-md flex-wrap">
+        {FILTER_TABS.map(t => {
+          const active = filter === t.key
+          return (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={active}
+              aria-label={`${t.label} tab`}
+              onClick={() => setFilter(t.key)}
+              className={`px-md py-xs rounded-full text-[12px] font-label-md cursor-pointer transition-colors ${
+                active
+                  ? 'bg-primary text-on-primary'
+                  : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high'
+              }`}
+            >
+              {t.label} <span className={active ? 'text-on-primary/80' : 'text-outline'}>({counts[t.key]})</span>
+            </button>
+          )
+        })}
+      </div>
+
       {/* Controls */}
       <div className="flex items-center gap-sm mb-lg sticky top-0 bg-background/80 backdrop-blur-sm py-sm z-10">
         <div className="flex-1 relative">
@@ -72,7 +116,11 @@ export default function ConversationsList({ sessions }: Props) {
         <div className="p-xl rounded-xl bg-surface-container-lowest border border-dashed border-outline-variant/50 flex flex-col items-center text-center mt-xl">
           <span className="material-symbols-outlined text-outline-variant mb-sm">search_off</span>
           <p className="font-body-md text-on-surface-variant">
-            {query ? `No conversations matching "${query}"` : 'No conversations yet.'}
+            {query
+              ? `No conversations matching "${query}"`
+              : filter === 'all'
+                ? 'No conversations yet.'
+                : `No ${FILTER_TABS.find(t => t.key === filter)?.label.toLowerCase()} conversations yet.`}
           </p>
         </div>
       ) : (
