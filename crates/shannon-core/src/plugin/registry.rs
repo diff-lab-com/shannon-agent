@@ -66,7 +66,11 @@ impl PluginRegistry {
         Ok(())
     }
 
-    /// Load all plugins from the plugins directory
+    /// Load all plugins from the plugins directory.
+    ///
+    /// Each subdirectory is probed for `plugin.toml` first, then
+    /// `.claude-plugin/plugin.json`. Directories with neither are skipped
+    /// silently (matching the previous behavior for malformed plugins).
     pub async fn load_all(&mut self) -> PluginResult<()> {
         self.ensure_dir().await?;
 
@@ -80,22 +84,19 @@ impl PluginRegistry {
                 continue;
             }
 
-            // Try to load plugin manifest
-            let manifest_path = path.join("plugin.toml");
-            if let Ok(manifest_bytes) = fs::read(&manifest_path).await {
-                if let Ok(manifest) = PluginManifest::from_toml_bytes(&manifest_bytes) {
-                    let name = manifest.name.clone();
-                    let enabled = self.config.is_enabled(&name);
+            // Try to load manifest (Shannon TOML first, then Claude JSON)
+            if let Ok(manifest) = self.load_manifest_from_dir(&path).await {
+                let name = manifest.name.clone();
+                let enabled = self.config.is_enabled(&name);
 
-                    self.plugins.insert(
-                        name,
-                        InstalledPlugin {
-                            manifest,
-                            path,
-                            enabled,
-                        },
-                    );
-                }
+                self.plugins.insert(
+                    name,
+                    InstalledPlugin {
+                        manifest,
+                        path,
+                        enabled,
+                    },
+                );
             }
         }
 
@@ -312,22 +313,30 @@ impl PluginRegistry {
         self.plugins.is_empty()
     }
 
-    /// Load manifest from a directory
+    /// Load manifest from a directory.
+    ///
+    /// Tries Shannon-native `plugin.toml` first, then falls back to the
+    /// Claude Code ecosystem format at `.claude-plugin/plugin.json`. This
+    /// lets Shannon load plugins authored for Claude Code directly.
     async fn load_manifest_from_dir(&self, dir: &Path) -> PluginResult<PluginManifest> {
-        let manifest_path = dir.join("plugin.toml");
-
-        if !manifest_path.exists() {
-            return Err(PluginError::InvalidManifest(format!(
-                "plugin.toml not found in {}",
-                dir.display()
-            )));
+        let toml_path = dir.join("plugin.toml");
+        if toml_path.exists() {
+            let manifest_bytes = fs::read(&toml_path).await?;
+            return PluginManifest::from_toml_bytes(&manifest_bytes)
+                .map_err(PluginError::InvalidManifest);
         }
 
-        let manifest_bytes = fs::read(&manifest_path).await?;
-        let manifest = PluginManifest::from_toml_bytes(&manifest_bytes)
-            .map_err(PluginError::InvalidManifest)?;
+        let claude_json_path = dir.join(".claude-plugin").join("plugin.json");
+        if claude_json_path.exists() {
+            let manifest_bytes = fs::read(&claude_json_path).await?;
+            return PluginManifest::from_json_bytes(&manifest_bytes)
+                .map_err(PluginError::InvalidManifest);
+        }
 
-        Ok(manifest)
+        Err(PluginError::InvalidManifest(format!(
+            "neither plugin.toml nor .claude-plugin/plugin.json found in {}",
+            dir.display()
+        )))
     }
 
     /// Extract plugin name from git URL
@@ -566,5 +575,85 @@ permissions = [\"read_files\"]\n";
         assert_eq!(name, "installed-plugin");
         assert_eq!(registry.len(), 1);
         assert!(registry.contains("installed-plugin"));
+    }
+
+    #[tokio::test]
+    async fn test_load_all_loads_claude_plugin_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("claude-ecosystem-plugin");
+        let claude_dir = plugin_dir.join(".claude-plugin");
+        fs::create_dir_all(&claude_dir).await.unwrap();
+
+        let json = "{\n\
+            \"name\": \"claude-ecosystem-plugin\",\n\
+            \"version\": \"0.4.2\",\n\
+            \"description\": \"Authored as a Claude Code plugin\",\n\
+            \"type\": \"skill\",\n\
+            \"entry\": \"template.md\",\n\
+            \"trigger\": \"/hi\",\n\
+            \"template\": \"Hi!\"\n\
+        }";
+        fs::write(claude_dir.join("plugin.json"), json)
+            .await
+            .unwrap();
+
+        let mut registry = PluginRegistry::new(temp_dir.path().to_path_buf());
+        registry.load_all().await.unwrap();
+
+        assert_eq!(registry.len(), 1);
+        assert!(registry.contains("claude-ecosystem-plugin"));
+
+        let plugin = registry.get("claude-ecosystem-plugin").unwrap();
+        assert_eq!(plugin.manifest.version, "0.4.2");
+        assert_eq!(plugin.manifest.type_display_name(), "Skill");
+        assert!(matches!(
+            plugin.manifest.kind().unwrap(),
+            PluginKind::Skill { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_toml_takes_precedence_over_claude_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let plugin_dir = temp_dir.path().join("dual-plugin");
+        let claude_dir = plugin_dir.join(".claude-plugin");
+        fs::create_dir_all(&claude_dir).await.unwrap();
+
+        fs::write(
+            plugin_dir.join("plugin.toml"),
+            "name = \"dual-plugin\"\nversion = \"1.0.0\"\n\
+             description = \"from toml\"\ntype = \"skill\"\n\
+             entry = \"t.md\"\ntrigger = \"/a\"\ntemplate = \"A\"\n",
+        )
+        .await
+        .unwrap();
+        fs::write(
+            claude_dir.join("plugin.json"),
+            "{\"name\":\"dual-plugin\",\"version\":\"2.0.0\",\
+             \"description\":\"from json\",\"type\":\"skill\",\
+             \"entry\":\"t.md\",\"trigger\":\"/b\",\"template\":\"B\"}",
+        )
+        .await
+        .unwrap();
+
+        let mut registry = PluginRegistry::new(temp_dir.path().to_path_buf());
+        registry.load_all().await.unwrap();
+
+        let plugin = registry.get("dual-plugin").unwrap();
+        assert_eq!(plugin.manifest.version, "1.0.0");
+        assert_eq!(plugin.manifest.description, "from toml");
+    }
+
+    #[tokio::test]
+    async fn test_load_manifest_from_dir_errors_when_neither_exists() {
+        let temp_dir = TempDir::new().unwrap();
+        let empty_dir = temp_dir.path().join("empty");
+        fs::create_dir_all(&empty_dir).await.unwrap();
+
+        let registry = PluginRegistry::new(temp_dir.path().to_path_buf());
+        let result = registry.load_manifest_from_dir(&empty_dir).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("neither plugin.toml nor .claude-plugin/plugin.json"));
     }
 }

@@ -28,9 +28,12 @@ Install: `cargo install just cargo-nextest`. Config in `.config/nextest.toml` ha
 | `shannon-mcp` | MCP (Model Context Protocol) server integration | ~373 |
 | `shannon-types` | Shared types (re-exported by shannon-core) | ~22 |
 | `shannon-tool-interface` | Tool trait definitions | ~24 |
-| `shannon-desktop` | Tauri desktop app (scaffolded) | ~24 |
 | `shannon-codegen` | Code generation utilities | ~102 |
 | `shannon-agent` | Single agent runtime (binary crate) | ~65 |
+
+> **Note**: `shannon-desktop` was extracted to a separate repo (`../shannon-desktop`).
+> Its Cargo.toml pulls shannon-* via git subpath dep with a `[patch]` override
+> pointing back at this checkout for dev. See `justfile` desktop recipes.
 
 ## Key Patterns
 

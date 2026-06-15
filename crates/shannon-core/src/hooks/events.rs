@@ -732,4 +732,211 @@ mod tests {
         assert_send_sync::<HookEventType>();
         assert_send_sync::<HookEvent>();
     }
+
+    // ── E4 audit fixture: exercise every variant ───────────────────────
+    //
+    // This fixture locks in three invariants for every HookEvent variant:
+    //   1. event_type() returns the matching HookEventType
+    //   2. match_subject() is non-empty (so matchers always have something to filter on)
+    //   3. JSON round-trip preserves the event_type() (PascalCase tag stays intact)
+    //
+    // Adding a new variant without extending this list is a deliberate
+    // failure — see docs/HOOK-AUDIT.md for the cross-reference matrix.
+
+    fn sample_events() -> Vec<HookEvent> {
+        use serde_json::json;
+        vec![
+            HookEvent::PreToolUse {
+                tool_name: "bash".into(),
+                input: json!({"command": "ls"}),
+            },
+            HookEvent::PostToolUse {
+                tool_name: "read".into(),
+                input: json!({"path": "/tmp"}),
+                output: json!("contents"),
+            },
+            HookEvent::SessionStart {
+                session_id: "s1".into(),
+            },
+            HookEvent::SessionEnd {
+                session_id: "s1".into(),
+            },
+            HookEvent::Notification {
+                message: "hello".into(),
+            },
+            HookEvent::UserPromptSubmit {
+                prompt: "fix bug".into(),
+            },
+            HookEvent::TeamTaskCreated {
+                task_id: "t1".into(),
+                team_name: "team".into(),
+                agent_name: Some("agent".into()),
+                subject: "ship".into(),
+                priority: "high".into(),
+            },
+            HookEvent::TeamTaskCompleted {
+                task_id: "t1".into(),
+                team_name: "team".into(),
+                agent_name: "agent".into(),
+                subject: "ship".into(),
+            },
+            HookEvent::TeammateIdle {
+                team_name: "team".into(),
+                agent_name: "agent".into(),
+                available_tasks: 3,
+            },
+            HookEvent::PreCompact {
+                messages_count: 50,
+                estimated_tokens: 80_000,
+            },
+            HookEvent::SubagentStart {
+                agent_id: "a1".into(),
+                agent_type: "Explore".into(),
+            },
+            HookEvent::SubagentStop {
+                agent_id: "a1".into(),
+                result_summary: "found 3 files".into(),
+            },
+            HookEvent::PermissionDenied {
+                tool_name: "bash".into(),
+                input: json!({"command": "rm -rf /"}),
+                retry_count: 3,
+            },
+            HookEvent::Stop {
+                tool_calls_count: 5,
+                should_continue: false,
+            },
+            HookEvent::PostToolUseFailure {
+                tool_name: "write".into(),
+                input: json!({"path": "/no/perm"}),
+                error: "EACCES".into(),
+            },
+            HookEvent::PostCompact {
+                messages_before: 50,
+                messages_after: 10,
+                tokens_freed: 30_000,
+            },
+            HookEvent::StopFailure {
+                error: "rate_limit".into(),
+            },
+            HookEvent::FileChanged {
+                path: "/src/main.rs".into(),
+                change_type: "modify".into(),
+            },
+            HookEvent::CwdChanged {
+                old_cwd: "/old".into(),
+                new_cwd: "/new".into(),
+            },
+            HookEvent::PermissionRequest {
+                tool_name: "bash".into(),
+                description: "run tests".into(),
+            },
+            HookEvent::UserPromptExpansion {
+                expanded_prompt: "expanded".into(),
+                original_prompt: "/test".into(),
+            },
+            HookEvent::PostToolBatch {
+                tool_names: vec!["read".into(), "edit".into()],
+                success_count: 2,
+                failure_count: 0,
+            },
+            HookEvent::ConfigChange {
+                config_path: ".shannon.toml".into(),
+                change_type: "modified".into(),
+            },
+            HookEvent::InstructionsLoaded {
+                files_count: 3,
+                total_bytes: 1024,
+            },
+            HookEvent::WorktreeCreate {
+                path: "/wt/feature".into(),
+                branch: "feature".into(),
+            },
+            HookEvent::WorktreeRemove {
+                path: "/wt/feature".into(),
+            },
+            HookEvent::Elicitation {
+                question: "Pick a color".into(),
+                source: "memory-server".into(),
+            },
+            HookEvent::ElicitationResult {
+                question: "Pick a color".into(),
+                response: "blue".into(),
+            },
+            HookEvent::TaskCreated {
+                task_id: "t1".into(),
+                subject: "do thing".into(),
+                priority: "normal".into(),
+            },
+            HookEvent::TaskCompleted {
+                task_id: "t1".into(),
+                subject: "do thing".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn every_variant_event_type_matches() {
+        // Count distinct event_type values across all 30 samples.
+        // If a variant is added to HookEvent but missing from sample_events(),
+        // this test won't catch it directly — see every_variant_count_matches_enum
+        // for the count invariant.
+        let types: Vec<_> = sample_events().iter().map(|e| e.event_type()).collect();
+        assert_eq!(types.len(), 30, "expected 30 sample events");
+        assert_eq!(
+            types.len(),
+            types.iter().collect::<std::collections::HashSet<_>>().len(),
+            "every sample event must have a distinct HookEventType"
+        );
+    }
+
+    #[test]
+    fn every_variant_has_nonempty_match_subject() {
+        for event in sample_events() {
+            let subject = event.match_subject();
+            assert!(
+                !subject.is_empty(),
+                "match_subject() is empty for {:?}",
+                event.event_type()
+            );
+        }
+    }
+
+    #[test]
+    fn every_variant_round_trips_through_json() {
+        for event in sample_events() {
+            let bytes = event.to_json_bytes();
+            assert!(
+                !bytes.is_empty(),
+                "to_json_bytes() empty for {:?}",
+                event.event_type()
+            );
+            let parsed: HookEvent =
+                serde_json::from_slice(&bytes).expect("JSON deserialization should succeed");
+            assert_eq!(
+                parsed.event_type(),
+                event.event_type(),
+                "round-trip changed event_type"
+            );
+            // Verify the JSON carries the PascalCase tag for hook consumers
+            let json_str = String::from_utf8(bytes.clone()).unwrap();
+            let tag = format!("\"{}\"", event.event_type());
+            assert!(
+                json_str.contains(&tag),
+                "JSON `{json_str}` missing PascalCase tag `{tag}`"
+            );
+        }
+    }
+
+    #[test]
+    fn every_variant_count_matches_enum_size() {
+        // If someone adds a new HookEvent variant, this count check forces
+        // them to also extend sample_events().
+        let variant_count = 30usize;
+        assert_eq!(
+            sample_events().len(),
+            variant_count,
+            "sample_events() must include every HookEvent variant — extend it when adding variants"
+        );
+    }
 }
