@@ -1485,6 +1485,20 @@ pub async fn export_session(
     }
 }
 
+/// Save a text payload (e.g. an exported session) to disk. The frontend
+/// pairs this with @tauri-apps/plugin-dialog's save() to let the user
+/// choose the destination — the backend stays out of UI concerns.
+#[tauri::command]
+pub async fn save_text_file(path: String, content: String) -> Result<(), String> {
+    let target = std::path::Path::new(&path);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    }
+    std::fs::write(target, content)
+        .map_err(|e| format!("Failed to write {}: {e}", target.display()))
+}
+
 /// Switch to a different session, saving the current one first.
 #[tauri::command]
 pub async fn switch_session(

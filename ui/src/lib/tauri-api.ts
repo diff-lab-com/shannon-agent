@@ -116,6 +116,12 @@ export async function exportSession(id: string, format: 'markdown' | 'json'): Pr
   return invoke('export_session', { id, format })
 }
 
+// Save a UTF-8 text payload (e.g. an exported Markdown blob) to an absolute
+// path chosen by the user via @tauri-apps/plugin-dialog's save().
+export async function saveTextFile(path: string, content: string): Promise<void> {
+  await invoke('save_text_file', { path, content })
+}
+
 // --- Permissions ---
 
 export async function respondPermission(requestId: string, allow: boolean, note?: string): Promise<void> {

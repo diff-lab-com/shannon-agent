@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import * as dialog from '@tauri-apps/plugin-dialog'
+import * as api from '@/lib/tauri-api'
 import Chat from '@/pages/Chat'
 
 const ctx = vi.hoisted(() => ({
@@ -53,6 +54,10 @@ function renderChat() {
 }
 
 describe('Chat page', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('renders new chat button', () => {
     resetCtx()
     renderChat()
@@ -290,5 +295,87 @@ describe('Chat page', () => {
     resetCtx()
     renderChat()
     expect(document.querySelector('input[type="file"]')).toBeNull()
+  })
+
+  // F2: Export conversation as Markdown via native save dialog.
+  it('renders export button per session', () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Sess One', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    renderChat()
+    expect(screen.getByLabelText('Export Sess One')).toBeInTheDocument()
+  })
+
+  it('clicking export opens save dialog and writes file on confirm', async () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Sess One', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    vi.mocked(api.exportSession).mockResolvedValueOnce('# Title\n\nbody')
+    vi.mocked(dialog.save).mockResolvedValueOnce('/tmp/sess.md')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Export Sess One'))
+    await waitFor(() => {
+      expect(api.exportSession).toHaveBeenCalledWith('s1', 'markdown')
+      expect(dialog.save).toHaveBeenCalledWith(expect.objectContaining({
+        filters: [{ name: 'Markdown', extensions: ['md'] }],
+      }))
+      expect(api.saveTextFile).toHaveBeenCalledWith('/tmp/sess.md', '# Title\n\nbody')
+    })
+  })
+
+  it('export is a no-op when user cancels save dialog', async () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Sess One', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    vi.mocked(api.exportSession).mockResolvedValueOnce('body')
+    vi.mocked(dialog.save).mockResolvedValueOnce(null)
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Export Sess One'))
+    await waitFor(() => {
+      expect(dialog.save).toHaveBeenCalled()
+    })
+    expect(api.saveTextFile).not.toHaveBeenCalled()
+  })
+
+  // F2: Print / PDF opens a new window. jsdom returns null from window.open
+  // unless stubbed — the test stubs a minimal fake window and only verifies
+  // the call + that print() fires.
+  it('renders print button per session', () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Sess One', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    renderChat()
+    expect(screen.getByLabelText('Print or save as PDF Sess One')).toBeInTheDocument()
+  })
+
+  it('clicking print opens a new window', async () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Sess One', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    vi.mocked(api.exportSession).mockResolvedValueOnce('# Title')
+    const fakeEl: any = { textContent: '', appendChild: vi.fn() }
+    const fakeDoc: any = {
+      title: '',
+      head: { appendChild: vi.fn() },
+      body: { appendChild: vi.fn() },
+      createElement: vi.fn(() => ({ ...fakeEl })),
+    }
+    const fakeWin: any = {
+      document: fakeDoc,
+      focus: vi.fn(),
+      print: vi.fn(),
+    }
+    const spy = vi.spyOn(window, 'open').mockReturnValueOnce(fakeWin)
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Print or save as PDF Sess One'))
+    await waitFor(() => {
+      expect(api.exportSession).toHaveBeenCalledWith('s1', 'markdown')
+      expect(spy).toHaveBeenCalledWith('', '_blank', 'width=900,height=700')
+    })
   })
 })

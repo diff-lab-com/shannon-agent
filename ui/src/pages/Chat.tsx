@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import { toast } from 'sonner'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -13,6 +13,67 @@ import DiffDialog from '@/components/diff/DiffDialog'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, FileContext } from '@/types'
+
+// Render a tiny subset of Markdown (headings, paragraphs, hr, fenced code,
+// **bold**, `code`) into an existing DOM node. Built with createElement +
+// textContent so all user content is auto-escaped — never use innerHTML with
+// raw conversation bytes.
+function appendMarkdownToElement(parent: HTMLElement, md: string) {
+  const doc = parent.ownerDocument
+  if (!doc) return
+  const lines = md.split('\n')
+  let i = 0
+  let inCode = false
+  let codeBuffer: string[] = []
+
+  const flushCode = () => {
+    if (codeBuffer.length === 0) return
+    const pre = doc.createElement('pre')
+    const code = doc.createElement('code')
+    code.textContent = codeBuffer.join('\n')
+    pre.appendChild(code)
+    parent.appendChild(pre)
+    codeBuffer = []
+  }
+
+  while (i < lines.length) {
+    const line = lines[i]
+    if (line.startsWith('```')) {
+      if (inCode) {
+        flushCode()
+        inCode = false
+      } else {
+        inCode = true
+      }
+      i++
+      continue
+    }
+    if (inCode) {
+      codeBuffer.push(line)
+      i++
+      continue
+    }
+    if (line.startsWith('# ')) {
+      const h = doc.createElement('h1')
+      h.textContent = line.slice(2)
+      parent.appendChild(h)
+    } else if (line.startsWith('### ')) {
+      const h = doc.createElement('h3')
+      h.textContent = line.slice(4)
+      parent.appendChild(h)
+    } else if (/^(\s*)(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      parent.appendChild(doc.createElement('hr'))
+    } else if (line.trim() === '') {
+      // paragraph break — skip
+    } else {
+      const p = doc.createElement('p')
+      p.textContent = line
+      parent.appendChild(p)
+    }
+    i++
+  }
+  if (inCode) flushCode()
+}
 
 export default function Chat() {
   const {
@@ -109,9 +170,59 @@ export default function Chat() {
 
   const handleExport = async (id: string) => {
     try {
-      await api.exportSession(id, 'markdown')
-      toast.success('Session exported')
-    } catch (e) { console.warn('Export failed:', e); toast.error('Export failed') }
+      const md = await api.exportSession(id, 'markdown')
+      const session = sessions.find(s => s.id === id)
+      const defaultName = `${(session?.title || 'session').replace(/[^a-z0-9-_]+/gi, '_').slice(0, 60)}.md`
+      const target = await saveDialog({ defaultPath: defaultName, filters: [{ name: 'Markdown', extensions: ['md'] }] })
+      if (!target) return // user cancelled
+      await api.saveTextFile(target, md)
+      toast.success('Exported to Markdown', { description: target })
+    } catch (e) {
+      console.warn('Export failed:', e)
+      toast.error('Export failed', { description: String(e) })
+    }
+  }
+
+  // Open a print-friendly window with the rendered conversation. The system
+  // print dialog exposes "Save as PDF" on every desktop OS, which gives us
+  // PDF export without dragging in a PDF library. DOM is built via
+  // createElement + textContent so user content is auto-escaped — no string
+  // interpolation into HTML.
+  const handlePrint = async (id: string) => {
+    try {
+      const md = await api.exportSession(id, 'markdown')
+      const session = sessions.find(s => s.id === id)
+      const title = session?.title || 'Conversation'
+      const printWindow = window.open('', '_blank', 'width=900,height=700')
+      if (!printWindow) {
+        toast.error('Pop-up blocked', { description: 'Allow pop-ups to use Print / PDF.' })
+        return
+      }
+      const doc = printWindow.document
+      doc.title = title
+      const style = doc.createElement('style')
+      style.textContent = `
+        body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; color: #111; max-width: 760px; margin: 0 auto; }
+        h1 { font-size: 22px; margin-bottom: 4px; }
+        h3 { font-size: 14px; margin-top: 24px; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+        hr { border: 0; border-top: 1px solid #ddd; margin: 16px 0; }
+        pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
+        code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 13px; }
+        p { white-space: pre-wrap; }
+        strong { font-weight: 600; }
+      `
+      doc.head.appendChild(style)
+      const h1 = doc.createElement('h1')
+      h1.textContent = title
+      doc.body.appendChild(h1)
+      appendMarkdownToElement(doc.body, md)
+      printWindow.focus()
+      // Give the new window a tick to lay out before opening the print dialog.
+      setTimeout(() => printWindow.print(), 250)
+    } catch (e) {
+      console.warn('Print failed:', e)
+      toast.error('Print failed', { description: String(e) })
+    }
   }
 
   const formatTime = (ts: number) => {
@@ -204,8 +315,11 @@ export default function Chat() {
                       <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); togglePin(session.id) }} title={pinnedIds.has(session.id) ? 'Unpin' : 'Pin'} aria-pressed={pinnedIds.has(session.id)}>
                         <span className="material-symbols-outlined text-[14px]">{pinnedIds.has(session.id) ? 'push_pin' : 'keep'}</span>
                       </button>
-                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handleExport(session.id) }} title="Export">
+                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handleExport(session.id) }} title="Export" aria-label={`Export ${session.title || 'session'}`}>
                         <span className="material-symbols-outlined text-[14px]">download</span>
+                      </button>
+                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handlePrint(session.id) }} title="Print / PDF" aria-label={`Print or save as PDF ${session.title || 'session'}`}>
+                        <span className="material-symbols-outlined text-[14px]">print</span>
                       </button>
                     </div>
                   </div>

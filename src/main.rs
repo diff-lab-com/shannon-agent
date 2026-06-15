@@ -56,6 +56,7 @@ fn main() {
             commands::search_sessions,
             commands::load_session,
             commands::export_session,
+            commands::save_text_file,
             commands::switch_session,
             commands::delete_session,
             commands::rename_session,
