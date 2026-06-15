@@ -17,7 +17,7 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
           <span className="material-symbols-outlined text-[32px] text-primary">auto_awesome</span>
         </div>
         <h2 className="font-headline-lg text-headline-lg text-on-surface mb-sm">What can I help with?</h2>
-        <p className="font-body-md text-on-surface-variant mb-xl">Pick a starting point or type your own. Shannon handles email, research, summaries, and code.</p>
+        <p className="font-body-md text-on-surface-variant mb-xl">Your AI workspace. Pick a starting point or type your own — Shannon handles email, research, summaries, and code.</p>
         <div className="grid grid-cols-2 gap-sm">
           {EXAMPLES.map(ex => (
             <button
