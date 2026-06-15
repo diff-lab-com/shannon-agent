@@ -10,6 +10,23 @@ const MIN_W = 200
 const MAX_W = 400
 const DEFAULT_W = 280
 const STORAGE_KEY = 'shannon-sidebar-width'
+export const SIDEBAR_MODE_KEY = 'shannon-sidebar-mode'
+export type SidebarMode = 'simple' | 'dev'
+
+export function useSidebarMode(): [SidebarMode, () => void] {
+  const [mode, setMode] = useState<SidebarMode>(() => {
+    if (typeof window === 'undefined') return 'simple'
+    return (window.localStorage.getItem(SIDEBAR_MODE_KEY) as SidebarMode) || 'simple'
+  })
+  const toggle = useCallback(() => {
+    setMode(prev => {
+      const next = prev === 'simple' ? 'dev' : 'simple'
+      window.localStorage.setItem(SIDEBAR_MODE_KEY, next)
+      return next
+    })
+  }, [])
+  return [mode, toggle]
+}
 
 export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const { close: closeMobile } = useSidebar();
@@ -17,6 +34,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const [extensionsOpen, setExtensionsOpen] = useState(true);
   const [automationOpen, setAutomationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mode, toggleMode] = useSidebarMode();
   const [width, setWidth] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
     return stored ? Math.min(MAX_W, Math.max(MIN_W, parseInt(stored, 10) || DEFAULT_W)) : DEFAULT_W
@@ -137,6 +155,8 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="material-symbols-outlined">flag</span>
            <span className="flex-1">Inbox</span>
         </NavLink>
+        {mode === 'dev' && (
+        <>
         <div className="space-y-1">
           <Button
             variant="ghost"
@@ -288,10 +308,25 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
             <span>Performance</span>
           </NavLink>
         </div>
+        </>
+        )}
         </ScrollArea>
       </nav>
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-1">
+        <button
+          onClick={toggleMode}
+          className="w-full flex items-center justify-between gap-3 px-4 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all"
+          aria-label={`Switch to ${mode === 'simple' ? 'Dev' : 'Simple'} mode`}
+          aria-pressed={mode === 'dev'}
+          title={mode === 'simple' ? 'Simple mode — core navigation. Click for Dev mode.' : 'Dev mode — all features visible. Click for Simple mode.'}
+        >
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[18px]">{mode === 'simple' ? 'tune' : 'developer_mode'}</span>
+            <span>{mode === 'simple' ? 'Simple' : 'Dev'} mode</span>
+          </div>
+          <span className="text-[10px] uppercase tracking-wider text-outline-variant">{mode === 'simple' ? 'default' : 'all features'}</span>
+        </button>
         <Button
           variant="ghost"
           onClick={() => setSettingsOpen(!settingsOpen)}
