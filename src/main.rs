@@ -165,6 +165,8 @@ fn main() {
             shannon_desktop::scheduled_commands::list_task_worktrees,
             shannon_desktop::scheduled_commands::remove_task_worktree,
             shannon_desktop::scheduled_commands::prune_task_worktrees,
+            // Onboarding seed (#75) — first-run sample tasks
+            commands::seed_sample_data,
         ])
         .setup(|app| {
             let state = commands::AppState::new();

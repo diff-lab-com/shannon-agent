@@ -108,10 +108,17 @@ export default function Welcome() {
   const currentTask = TASKS.find(t => t.id === task)!
   const recommendedProvider = PROVIDERS.find(p => p.id === currentTask.recommendedProvider)
 
-  const finish = () => {
+  const finish = async () => {
     markWelcomeSeen()
     if (devMode) {
       window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
+    }
+    // Seed sample tasks on first run so Tasks / Today isn't empty. Idempotent
+    // backend-side; failure is non-fatal — just log and continue.
+    try {
+      await api.seedSampleData()
+    } catch (e) {
+      console.warn('seedSampleData failed:', e)
     }
     navigate('/chat', { replace: true })
   }

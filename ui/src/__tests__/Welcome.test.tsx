@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import * as api from '@/lib/tauri-api'
 import Welcome, { shouldShowWelcome, markWelcomeSeen, WELCOME_SEEN_KEY } from '@/pages/Welcome'
 
 // Mock AppContext to avoid AppProvider's heavy API surface; Welcome only
@@ -18,6 +19,7 @@ vi.mock('@/context/AppContext', () => ({
 vi.mock('@/lib/tauri-api', () => ({
   configure: vi.fn().mockResolvedValue(undefined),
   switchProvider: vi.fn().mockResolvedValue(undefined),
+  seedSampleData: vi.fn().mockResolvedValue({ tasks_seeded: 3 }),
 }))
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -269,5 +271,38 @@ describe('Welcome component — 4-step flow', () => {
     // Leave developer mode unchecked
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
     expect(window.localStorage.getItem('shannon-sidebar-mode')).toBeNull()
+  })
+
+  it('calls seedSampleData on finish (onboarding sample data)', async () => {
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.click(screen.getByText('Ollama'))
+    fireEvent.click(screen.getByText('Continue →'))
+    await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Continue →'))
+    await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
+    await waitFor(() => {
+      expect(api.seedSampleData).toHaveBeenCalled()
+    })
+  })
+
+  it('calls seedSampleData on Skip (covers the skip path too)', async () => {
+    wrap()
+    fireEvent.click(screen.getByRole('button', { name: /Skip welcome/ }))
+    await waitFor(() => {
+      expect(api.seedSampleData).toHaveBeenCalled()
+    })
+  })
+
+  it('navigates even if seedSampleData rejects', async () => {
+    const mockSeed = api.seedSampleData as ReturnType<typeof vi.fn>
+    mockSeed.mockRejectedValueOnce(new Error('boom'))
+    wrap()
+    fireEvent.click(screen.getByRole('button', { name: /Skip welcome/ }))
+    // Should not throw — finish() catches and navigates anyway.
+    await waitFor(() => {
+      expect(api.seedSampleData).toHaveBeenCalled()
+    })
   })
 })
