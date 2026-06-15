@@ -227,6 +227,22 @@ export interface SkillDetail {
   category?: string
 }
 
+// --- Extensions Hub Types (P1) ---
+
+export type AddonKind = 'mcp' | 'skill' | 'agent' | 'data_source' | 'plugin'
+
+export type TrustLevel = 'unknown' | 'community' | 'official' | 'verified'
+
+export interface InstalledAddonSummary {
+  id: string
+  kind: AddonKind
+  name: string
+  install_path?: string
+  installed_at?: string
+  version?: string
+  enabled: boolean
+}
+
 // --- Task Types ---
 
 export interface TaskItem {

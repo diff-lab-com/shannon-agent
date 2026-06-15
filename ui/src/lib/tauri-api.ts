@@ -14,6 +14,7 @@ import type {
   McpServerConfig,
   SkillInfo,
   SkillDetail,
+  InstalledAddonSummary,
   TaskItem,
   BackgroundTaskInfo,
   AgentInfo,
@@ -176,6 +177,12 @@ export async function listSkills(): Promise<SkillInfo[]> {
 
 export async function getSkillDetail(name: string): Promise<SkillDetail> {
   return invoke('get_skill_detail', { name })
+}
+
+// --- Extensions Hub (P1) ---
+
+export async function listInstalledAddons(): Promise<InstalledAddonSummary[]> {
+  return invoke('list_installed_addons')
 }
 
 // --- Plugins (A.3 ecosystem compatibility) ---

@@ -38,6 +38,7 @@ base64 = "0.22"
 dirs = "5"
 lsp-types = "0.95"
 url = "2"
+async-trait = "0.1"
 
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 tauri-plugin-shell = { version = "2", optional = true }

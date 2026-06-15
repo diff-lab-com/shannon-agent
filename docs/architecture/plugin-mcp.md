@@ -1,9 +1,11 @@
 # ADR: Pluggable Integrations (G1 Email + G2 Notion/Obsidian)
 
-**Status**: Revised (2026-06) — supersedes the prior 2026-06 proposal.
-Based on a deep-research pass over competitor integrations (Claude
-Desktop, ChatGPT Desktop, Cursor, Raycast, Hermes Desktop) and the
-current MCP ecosystem. Awaiting user approval before implementation.
+**Status**: **Superseded** (2026-06) by `unified-hub.md`, which expands
+scope from MCP-only to a unified hub covering MCP servers, skills,
+agents, and native data sources. The MCP-specific findings below are
+still accurate and are incorporated by reference into the new ADR.
+Kept as a historical reference and for the security section, which the
+new ADR cites verbatim.
 **Context**: PM roadmap G1/G2. **Constraint (user-stated)**: integrations
 must be **pluggable**, user opt-in per integration, base installer cannot
 bundle them.

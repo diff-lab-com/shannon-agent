@@ -4224,6 +4224,7 @@ name = "shannon-desktop"
 version = "0.2.4"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "criterion",

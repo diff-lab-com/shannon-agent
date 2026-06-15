@@ -25,6 +25,10 @@ const Perf = lazy(() => import('./pages/Perf'));
 const ExtensionsHub = lazy(() => import('./components/extensions/ExtensionsHub'));
 const MyAgents = lazy(() => import('./components/extensions/MyAgents'));
 const DataSources = lazy(() => import('./components/extensions/DataSources'));
+const Featured = lazy(() => import('./components/extensions/Featured'));
+const McpServers = lazy(() => import('./components/extensions/McpServers'));
+const Plugins = lazy(() => import('./components/extensions/Plugins'));
+const Installed = lazy(() => import('./components/extensions/Installed'));
 const GeneralSettings = lazy(() => import('./components/settings/GeneralSettings'));
 const ThemeSettings = lazy(() => import('./components/settings/ThemeSettings'));
 const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings'));
@@ -60,10 +64,14 @@ export default function App() {
                 <Route path="/hooks" element={<Hooks />} />
                 <Route path="/profiles" element={<Profiles />} />
                 <Route path="/extensions" element={<Extensions />}>
-                  <Route index element={<Navigate to="skills" replace />} />
+                  <Route index element={<Navigate to="featured" replace />} />
+                  <Route path="featured" element={<Featured />} />
+                  <Route path="mcp-servers" element={<McpServers />} />
                   <Route path="skills" element={<ExtensionsHub />} />
                   <Route path="agents" element={<MyAgents />} />
                   <Route path="datasources" element={<DataSources />} />
+                  <Route path="plugins" element={<Plugins />} />
+                  <Route path="installed" element={<Installed />} />
                 </Route>
                 <Route path="/opc" element={<OPC />} />
                 <Route path="/opc/task" element={<OPCTask />} />

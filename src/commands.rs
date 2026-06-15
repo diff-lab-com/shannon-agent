@@ -2266,6 +2266,15 @@ pub async fn list_plugin_marketplace(
         .collect())
 }
 
+/// List all locally-installed extensions across MCP / Skills / Agents /
+/// Data Sources. P1 of the unified extensions hub — reads existing configs
+/// (`~/.shannon/settings.json`, `~/.shannon/skills/`, `~/.shannon/agents/`)
+/// and returns a flat list for the Installed tab.
+#[tauri::command]
+pub async fn list_installed_addons() -> Result<Vec<crate::extensions::InstalledAddonSummary>, String> {
+    Ok(crate::extensions::aggregate_installed())
+}
+
 /// List all available skills from shannon-skills registry.
 #[tauri::command]
 pub async fn list_skills(state: tauri::State<'_, AppState>) -> Result<Vec<SkillInfo>, String> {

@@ -72,6 +72,7 @@ fn main() {
             commands::list_mcp_servers,
             commands::list_skills,
             commands::get_skill_detail,
+            commands::list_installed_addons,
             // Plugin management (A.3)
             commands::list_plugins,
             commands::install_plugin,
