@@ -100,7 +100,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
   return (
     <div className="w-full lg:w-[320px] shrink-0 space-y-4">
       <div className="flex items-center gap-3">
-        <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant">Agent Swarm</h3>
+        <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant">Active Agents</h3>
         <span className="bg-secondary text-on-secondary text-[11px] font-bold px-2 py-0.5 rounded-full">{agents.length} Active</span>
         <button
           type="button"

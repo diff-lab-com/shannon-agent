@@ -58,6 +58,10 @@ export default function BillingSettings() {
       <div className="mb-xl">
         <h2 className="font-headline-lg text-[32px] font-semibold text-on-surface mb-xs">Usage &amp; Billing</h2>
         <p className="font-body-md text-on-surface-variant">Manage your subscription plans, view usage metrics, and update payment information.</p>
+        <div className="mt-sm inline-flex items-center gap-xs px-sm py-xs bg-warning/10 text-warning rounded-full font-label-sm text-[12px]">
+          <span className="material-symbols-outlined text-[14px]">science</span>
+          Demo data — billing integration not yet connected. Figures shown are illustrative.
+        </div>
       </div>
 
       <div className="space-y-lg">

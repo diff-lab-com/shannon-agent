@@ -28,16 +28,16 @@ function renderOPC() {
 }
 
 describe('OPC page', () => {
-  it('renders strategic focus section', () => {
+  it('renders today\'s mission section', () => {
     resetCtx()
     renderOPC()
-    expect(screen.getByText('Strategic Focus')).toBeInTheDocument()
+    expect(screen.getByText("Today's Mission")).toBeInTheDocument()
   })
 
-  it('renders agent swarm heading', () => {
+  it('renders active agents heading', () => {
     resetCtx()
     renderOPC()
-    expect(screen.getByText('Agent Swarm')).toBeInTheDocument()
+    expect(screen.getByText('Active Agents')).toBeInTheDocument()
   })
 
   it('renders kanban section', () => {
@@ -49,17 +49,17 @@ describe('OPC page', () => {
   it('renders quick task input', () => {
     resetCtx()
     renderOPC()
-    expect(screen.getByPlaceholderText('Quick inject task...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Add task...')).toBeInTheDocument()
   })
 
   it('renders all kanban columns', () => {
     resetCtx()
     renderOPC()
-    expect(screen.getByText('To Do')).toBeInTheDocument()
-    expect(screen.getByText('Pending')).toBeInTheDocument()
-    expect(screen.getByText('Doing')).toBeInTheDocument()
-    expect(screen.getByText('Done')).toBeInTheDocument()
-    expect(screen.getByText('Deprecated')).toBeInTheDocument()
+    expect(screen.getByText('Queued')).toBeInTheDocument()
+    expect(screen.getByText('Blocked')).toBeInTheDocument()
+    expect(screen.getByText('In Progress')).toBeInTheDocument()
+    expect(screen.getByText('Completed')).toBeInTheDocument()
+    expect(screen.getByText('Failed')).toBeInTheDocument()
   })
 
   it('renders no agents message when empty', () => {
@@ -95,7 +95,7 @@ describe('OPC page', () => {
     expect(screen.getByText('Research Agent')).toBeInTheDocument()
   })
 
-  it('renders todo tasks in To Do column', () => {
+  it('renders todo tasks in Queued column', () => {
     resetCtx()
     ctx.tasks = [{ id: 'task-1-abc', title: 'Todo Item', status: 'todo', priority: 'high' }]
     renderOPC()
@@ -103,7 +103,7 @@ describe('OPC page', () => {
     expect(screen.getByText('high')).toBeInTheDocument()
   })
 
-  it('renders pending tasks in Pending column', () => {
+  it('renders review tasks in Blocked column', () => {
     resetCtx()
     ctx.tasks = [{ id: 'task-2-xyz', title: 'Review Item', status: 'review', assignee: 'Bot' }]
     renderOPC()
@@ -111,7 +111,7 @@ describe('OPC page', () => {
     expect(screen.getByText(/Review$/)).toBeInTheDocument()
   })
 
-  it('renders blocked tasks in Pending column', () => {
+  it('renders blocked tasks in Blocked column', () => {
     resetCtx()
     ctx.tasks = [{ id: 'task-3-def', title: 'Blocked Item', status: 'blocked', priority: 'high' }]
     renderOPC()
@@ -119,14 +119,14 @@ describe('OPC page', () => {
     expect(screen.getByText('Critical')).toBeInTheDocument()
   })
 
-  it('renders in-progress tasks in Doing column', () => {
+  it('renders in-progress tasks in In Progress column', () => {
     resetCtx()
     ctx.tasks = [{ id: 'task-4-ghi', title: 'Active Item', status: 'in_progress', assignee: 'Agent1' }]
     renderOPC()
     expect(screen.getByText('Active Item')).toBeInTheDocument()
   })
 
-  it('renders completed tasks in Done column', () => {
+  it('renders completed tasks in Completed column', () => {
     resetCtx()
     ctx.tasks = [{ id: 'task-5-jkl', title: 'Done Item', status: 'completed' }]
     renderOPC()
@@ -136,7 +136,7 @@ describe('OPC page', () => {
   it('quick task input accepts text', () => {
     resetCtx()
     renderOPC()
-    const input = screen.getByPlaceholderText('Quick inject task...')
+    const input = screen.getByPlaceholderText('Add task...')
     fireEvent.change(input, { target: { value: 'Test quick task' } })
     expect(input).toHaveValue('Test quick task')
   })
@@ -148,17 +148,19 @@ describe('OPC page', () => {
     expect(screen.getByText('idle')).toBeInTheDocument()
   })
 
-  it('renders empty state in Deprecated column', () => {
+  it('renders empty state in Failed column', () => {
     resetCtx()
     renderOPC()
     expect(screen.getByText('No deprecated tasks.')).toBeInTheDocument()
   })
 
-  it('renders Empty state for empty columns', () => {
+  it('renders empty placeholders for empty columns', () => {
     resetCtx()
     renderOPC()
-    const emptyMessages = screen.getAllByText('Empty')
-    expect(emptyMessages.length).toBeGreaterThan(0)
+    // 4 of 5 columns are empty (the Failed column has its own message); each
+    // shows the unified "Nothing here." placeholder via KanbanBoard.
+    const placeholders = screen.getAllByText('Nothing here.')
+    expect(placeholders.length).toBe(4)
   })
 
   // US-OPC-04: Strategic Focus editing
@@ -222,17 +224,17 @@ describe('OPC page', () => {
   })
 
   // F4: HTML5 drag-and-drop moves cards between columns optimistically
-  it('moves a todo card to Doing column on drop (local override)', () => {
+  it('moves a queued card to In Progress column on drop (local override)', () => {
     resetCtx()
     ctx.tasks = [{ id: 'task-99', title: 'Draggable Task', status: 'todo' }]
     renderOPC()
-    // Verify card initially in To Do
+    // Verify card initially in Queued
     expect(screen.getByText('Draggable Task')).toBeInTheDocument()
-    // Simulate drop on the Doing column — jsdom lacks DataTransfer, stub it
-    const doingColumn = screen.getByText('Doing').closest('div[class*="shrink-0"]') as HTMLElement
-    expect(doingColumn).toBeTruthy()
+    // Simulate drop on the In Progress column — unified columns are <section aria-label="…">
+    const inProgressSection = document.querySelector('section[aria-label="In Progress"]') as HTMLElement
+    expect(inProgressSection).toBeTruthy()
     const dt = { getData: (type: string) => (type === 'text/plain' ? 'task-99' : '') }
-    fireEvent.drop(doingColumn!, { dataTransfer: dt as unknown as DataTransfer })
+    fireEvent.drop(inProgressSection!, { dataTransfer: dt as unknown as DataTransfer })
     // The card should still be in the document (moved column) — title persists
     expect(screen.getByText('Draggable Task')).toBeInTheDocument()
   })
@@ -241,10 +243,10 @@ describe('OPC page', () => {
     resetCtx()
     ctx.tasks = [{ id: 'task-1', title: 'Item', status: 'todo' }]
     renderOPC()
-    const todoColumn = screen.getByText('To Do').closest('div[class*="shrink-0"]') as HTMLElement
-    fireEvent.dragOver(todoColumn, { dataTransfer: {} as DataTransfer })
+    const queuedSection = document.querySelector('section[aria-label="Queued"]') as HTMLElement
+    fireEvent.dragOver(queuedSection, { dataTransfer: {} as DataTransfer })
     // Should not error and column should still be present
-    expect(todoColumn).toBeInTheDocument()
+    expect(queuedSection).toBeInTheDocument()
   })
 
   // F5: clicking agent card calls navigate (smoke test — navigate requires router context)
@@ -257,7 +259,7 @@ describe('OPC page', () => {
   })
 
   // C5: Spawn Agent button + modal
-  it('renders Spawn button on Agent Swarm heading', () => {
+  it('renders Spawn button on Active Agents heading', () => {
     resetCtx()
     renderOPC()
     expect(screen.getByRole('button', { name: /Spawn new agent/ })).toBeInTheDocument()

@@ -22,7 +22,7 @@ describe('Sidebar', () => {
 
   it('renders subtitle', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('AI Code Assistant')).toBeInTheDocument()
+    expect(screen.getByText('Your AI Workspace')).toBeInTheDocument()
   })
 
   it('renders New Chat button', () => {
@@ -33,7 +33,7 @@ describe('Sidebar', () => {
   it('renders primary nav links', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Goals')).toBeInTheDocument()
+    expect(screen.getByText('Projects')).toBeInTheDocument()
     expect(screen.getByText('Scheduled')).toBeInTheDocument()
   })
 

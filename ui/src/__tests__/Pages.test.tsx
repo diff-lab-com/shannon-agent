@@ -64,14 +64,14 @@ describe('OPC page', () => {
   it('renders kanban columns', async () => {
     render(wrap(<OPC />))
     await waitFor(() => {
-      expect(screen.getByText('To Do')).toBeInTheDocument()
-      expect(screen.getByText('Doing')).toBeInTheDocument()
-      expect(screen.getByText('Done')).toBeInTheDocument()
+      expect(screen.getByText('Queued')).toBeInTheDocument()
+      expect(screen.getByText('In Progress')).toBeInTheDocument()
+      expect(screen.getByText('Completed')).toBeInTheDocument()
     })
   })
 
   it('renders agent swarm section', async () => {
     render(wrap(<OPC />))
-    await waitFor(() => expect(screen.getByText('Agent Swarm')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Active Agents')).toBeInTheDocument())
   })
 })

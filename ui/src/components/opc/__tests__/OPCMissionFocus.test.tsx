@@ -30,9 +30,9 @@ describe('OPCMissionFocus', () => {
     expect(screen.getByText(/Anthropic Agent Orchestration/)).toBeInTheDocument()
   })
 
-  it('shows strategic focus label', () => {
+  it('shows today\'s mission label', () => {
     renderFocus()
-    expect(screen.getByText('Strategic Focus')).toBeInTheDocument()
+    expect(screen.getByText("Today's Mission")).toBeInTheDocument()
   })
 
   it('shows Edit button', () => {
@@ -44,7 +44,7 @@ describe('OPCMissionFocus', () => {
     renderFocus()
     fireEvent.click(screen.getByText('Edit'))
     expect(screen.getByText('Save Focus')).toBeInTheDocument()
-    expect(screen.getByLabelText('Edit strategic focus')).toBeInTheDocument()
+    expect(screen.getByLabelText("Edit today's mission")).toBeInTheDocument()
   })
 
   it('reverts to display mode on Cancel', () => {

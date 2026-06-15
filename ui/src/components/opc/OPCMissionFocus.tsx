@@ -29,7 +29,7 @@ export default function OPCMissionFocus({ config }: Props) {
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2 uppercase font-label-md text-[13px] tracking-widest text-on-surface-variant font-bold">
           <span className="w-1.5 h-1.5 bg-outline-variant rotate-45 block" />
-          Strategic Focus
+          Today&apos;s Mission
         </div>
         <button
           className="text-label-sm text-primary hover:underline cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
@@ -45,7 +45,7 @@ export default function OPCMissionFocus({ config }: Props) {
             className="w-full h-24 p-md bg-surface-container-low rounded-xl border border-outline-variant/30 text-body-md resize-none focus:outline-none focus:ring-2 focus:ring-primary/30"
             value={text}
             onChange={e => setText(e.target.value)}
-            aria-label="Edit strategic focus"
+            aria-label="Edit today's mission"
           />
           <button
             className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"

@@ -29,9 +29,9 @@ function renderSwarm(agents: AgentInfo[] = [], tasks: TaskItem[] = []) {
 }
 
 describe('OPCAgentSwarm', () => {
-  it('renders Agent Swarm heading', () => {
+  it('renders Active Agents heading', () => {
     renderSwarm()
-    expect(screen.getByText('Agent Swarm')).toBeInTheDocument()
+    expect(screen.getByText('Active Agents')).toBeInTheDocument()
   })
 
   it('shows 0 Active when no agents', () => {

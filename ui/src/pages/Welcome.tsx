@@ -200,13 +200,6 @@ export default function Welcome() {
                 </button>{' '}
                 (Suggest / Plan / Auto Edit / Full Auto).
               </p>
-              <p className="font-body-sm text-on-surface-variant">
-                Prefer a different autonomy level? Adjust it in{' '}
-                <button onClick={() => { markWelcomeSeen(); navigate('/settings/general') }} className="text-primary hover:underline cursor-pointer">
-                  Settings → General
-                </button>{' '}
-                (Suggest / Plan / Auto Edit / Full Auto).
-              </p>
             </Card>
           )}
 

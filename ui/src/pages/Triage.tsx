@@ -197,7 +197,7 @@ export default function Triage() {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-xl gap-md">
           <div>
-            <h2 className="font-headline-lg text-headline-lg text-on-surface">Triage</h2>
+            <h2 className="font-headline-lg text-headline-lg text-on-surface">Inbox</h2>
             <p className="text-on-surface-variant mt-xs">Items needing your attention.</p>
           </div>
           <div className="flex items-center gap-md">

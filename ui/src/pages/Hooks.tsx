@@ -3,6 +3,17 @@ import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import type { HookEventInfo } from '@/types'
 
+// Events that are defined in the backend enum but never actually emitted in
+// production (per Phase E E4 audit, commit 03343c1). Hide them from the catalog
+// so users don't wire routines to events that will never fire.
+const DEAD_EVENTS = new Set([
+  'UserPromptExpansion',
+  'ConfigChange',
+  'InstructionsLoaded',
+  'Elicitation',
+  'ElicitationResult',
+])
+
 const CATEGORY_ORDER = [
   'Tools',
   'Session',
@@ -31,14 +42,16 @@ export default function Hooks() {
     })()
   }, [])
 
+  const liveEvents = useMemo(() => events.filter(e => !DEAD_EVENTS.has(e.name)), [events])
+
   const categories = useMemo(() => {
-    const seen = new Set(events.map(e => e.category))
+    const seen = new Set(liveEvents.map(e => e.category))
     return CATEGORY_ORDER.filter(c => seen.has(c))
-  }, [events])
+  }, [liveEvents])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return events.filter(e => {
+    return liveEvents.filter(e => {
       if (activeCategory !== 'all' && e.category !== activeCategory) return false
       if (!q) return true
       return (
@@ -47,14 +60,14 @@ export default function Hooks() {
         e.payload_fields.some(f => f.toLowerCase().includes(q))
       )
     })
-  }, [events, query, activeCategory])
+  }, [liveEvents, query, activeCategory])
 
   return (
     <div className="p-xl space-y-lg max-w-5xl">
       <header>
         <h1 className="font-headline-lg text-on-surface mb-xs">Hook Events</h1>
         <p className="font-body-md text-on-surface-variant max-w-2xl">
-          Shannon can run shell commands on {events.length || 'many'} lifecycle events. Browse the catalog, then head to{' '}
+          Shannon can run shell commands on {liveEvents.length || 'many'} lifecycle events. Browse the catalog, then head to{' '}
           <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">/routines</code>{' '}
           to wire a command to one of them.
         </p>

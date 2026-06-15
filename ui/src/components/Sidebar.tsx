@@ -98,7 +98,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         </div>
         <div>
           <h1 className="font-headline-md text-[20px] font-bold text-primary leading-tight">Shannon</h1>
-          <p className="font-body-sm text-[12px] text-on-surface-variant leading-none">AI Code Assistant</p>
+          <p className="font-body-sm text-[12px] text-on-surface-variant leading-none">Your AI Workspace</p>
         </div>
       </div>
 
@@ -120,7 +120,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         </NavLink>
         <NavLink to="/goals" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">ads_click</span>
-           <span className="flex-1">Goals</span>
+           <span className="flex-1">Projects</span>
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
         </NavLink>
         <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
@@ -130,12 +130,12 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         </NavLink>
         <NavLink to="/mission-control" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">dashboard</span>
-           <span className="flex-1">Mission Control</span>
+           <span className="flex-1">Conversations</span>
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘4</kbd>
         </NavLink>
         <NavLink to="/triage" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">flag</span>
-           <span className="flex-1">Triage</span>
+           <span className="flex-1">Inbox</span>
         </NavLink>
         <div className="space-y-1">
           <Button
