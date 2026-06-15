@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import MissionControl from '@/pages/MissionControl'
+import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 import type { TaskItem } from '@/types'
 
 const useAppSpy = vi.hoisted(() => vi.fn())
@@ -41,7 +42,13 @@ function wrap(ui: React.ReactElement) {
 
 beforeEach(() => {
   useAppSpy.mockReturnValue({ tasks: [], sessions: [], agents: [], refreshTasks: vi.fn() })
+  window.localStorage.removeItem(SIDEBAR_MODE_KEY)
 })
+
+// Helper: enable dev sidebar mode so the Board tab renders.
+function enableDevMode() {
+  window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
+}
 
 // Helper: switch to the Board tab where kanban columns live.
 function switchToBoard() {
@@ -49,31 +56,43 @@ function switchToBoard() {
 }
 
 describe('MissionControl — tabs', () => {
-  it('renders Today/All/Board tabs', () => {
+  it('renders only Today/All tabs in simple mode (default)', () => {
+    render(wrap(<MissionControl />))
+    expect(screen.getByRole('button', { name: /Today tab/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /All tab/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Board tab/ })).not.toBeInTheDocument()
+  })
+
+  it('renders Today/All/Board tabs in dev mode', () => {
+    enableDevMode()
     render(wrap(<MissionControl />))
     expect(screen.getByRole('button', { name: /Today tab/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /All tab/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Board tab/ })).toBeInTheDocument()
   })
 
-  it('defaults to Today tab', () => {
+  it('defaults to All tab (list replaces board as default)', () => {
     render(wrap(<MissionControl />))
-    expect(screen.getByRole('button', { name: /Today tab/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: /All tab/ })).toHaveAttribute('aria-pressed', 'true')
   })
 
-  it('Today tab shows Chats today stat', () => {
+  it('Today tab shows Chats today stat after switching', () => {
     render(wrap(<MissionControl />))
+    fireEvent.click(screen.getByRole('button', { name: /Today tab/ }))
     expect(screen.getByText('Chats today')).toBeInTheDocument()
   })
 
-  it('All tab shows search input', () => {
+  it('All tab shows search input (default)', () => {
     render(wrap(<MissionControl />))
-    fireEvent.click(screen.getByRole('button', { name: /All tab/ }))
     expect(screen.getByPlaceholderText('Search conversations...')).toBeInTheDocument()
   })
 })
 
 describe('MissionControl — Board tab', () => {
+  beforeEach(() => {
+    enableDevMode()
+  })
+
   it('renders all five status columns after switching to Board', () => {
     render(wrap(<MissionControl />))
     switchToBoard()

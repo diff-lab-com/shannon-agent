@@ -18,13 +18,14 @@ import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
 import { KanbanBoard, STATUS_FAMILY, type TaskStatusFamily } from '@/components/shared/KanbanBoard'
 import ConversationsToday from '@/components/conversations/ConversationsToday'
 import ConversationsList from '@/components/conversations/ConversationsList'
+import { useSidebarMode } from '@/components/Sidebar'
 
 type TabKey = 'today' | 'all' | 'board'
 
-const TABS: { key: TabKey; label: string; icon: string }[] = [
+const ALL_TABS: { key: TabKey; label: string; icon: string; devOnly?: boolean }[] = [
   { key: 'today', label: 'Today', icon: 'today' },
   { key: 'all', label: 'All', icon: 'forum' },
-  { key: 'board', label: 'Board', icon: 'dashboard' },
+  { key: 'board', label: 'Board', icon: 'dashboard', devOnly: true },
 ]
 
 interface MissionControlProps {
@@ -33,8 +34,13 @@ interface MissionControlProps {
 
 export default function MissionControl({ onSelectTask }: MissionControlProps) {
   const { tasks, sessions, refreshTasks } = useApp()
-  const [tab, setTab] = useState<TabKey>('today')
+  const [sidebarMode] = useSidebarMode()
+  const isDev = sidebarMode === 'dev'
+  const tabs = ALL_TABS.filter(t => !t.devOnly || isDev)
+  const [tab, setTab] = useState<TabKey>('all')
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null)
+  // If the active tab is dev-only but the user is in simple mode, fall back.
+  const activeTab: TabKey = tab === 'board' && !isDev ? 'all' : tab
   const selectedTask = localSelectedId ? tasks.find(t => t.id === localSelectedId) ?? null : null
 
   const handleSelect = (id: string) => {
@@ -94,8 +100,8 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
         aria-label="Conversations view tabs"
         className="flex items-center gap-xs px-lg pt-md border-b border-outline-variant/20 bg-surface-container-lowest/40"
       >
-        {TABS.map(t => {
-          const active = tab === t.key
+        {tabs.map(t => {
+          const active = activeTab === t.key
           return (
             <button
               key={t.key}
@@ -116,10 +122,10 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
         })}
       </nav>
 
-      {tab === 'today' && <ConversationsToday sessions={sessions} tasks={tasks} />}
-      {tab === 'all' && <ConversationsList sessions={sessions} />}
+      {activeTab === 'today' && <ConversationsToday sessions={sessions} tasks={tasks} />}
+      {activeTab === 'all' && <ConversationsList sessions={sessions} />}
 
-      {tab === 'board' && (
+      {activeTab === 'board' && (
         <div className="flex-1 flex min-h-0 px-lg py-lg">
           <KanbanBoard
             tasks={tasks}
