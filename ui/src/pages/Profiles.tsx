@@ -111,7 +111,7 @@ export default function Profiles() {
     <div className="p-xl space-y-lg max-w-4xl">
       <header className="flex items-start justify-between gap-md">
         <div>
-          <h1 className="font-headline-lg text-on-surface mb-xs">Permission Profiles</h1>
+          <h1 className="font-headline-lg text-on-surface mb-xs">Permission Modes</h1>
           <p className="font-body-md text-on-surface-variant">
             Switch profiles via the{' '}
             <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">/profile</code>{' '}

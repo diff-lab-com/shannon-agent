@@ -65,7 +65,7 @@ export default function Hooks() {
   return (
     <div className="p-xl space-y-lg max-w-5xl">
       <header>
-        <h1 className="font-headline-lg text-on-surface mb-xs">Hook Events</h1>
+        <h1 className="font-headline-lg text-on-surface mb-xs">Triggers</h1>
         <p className="font-body-md text-on-surface-variant max-w-2xl">
           Shannon can run shell commands on {liveEvents.length || 'many'} lifecycle events. Browse the catalog, then head to{' '}
           <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">/routines</code>{' '}

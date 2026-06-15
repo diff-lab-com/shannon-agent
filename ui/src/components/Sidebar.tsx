@@ -155,6 +155,53 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="material-symbols-outlined">flag</span>
            <span className="flex-1">Inbox</span>
         </NavLink>
+
+        {/* Automations — top-level (visible in Simple + Dev) */}
+        <div className="space-y-1">
+          <Button
+            variant="ghost"
+            onClick={() => setAutomationOpen(!automationOpen)}
+            aria-label="Automations section toggle"
+            aria-expanded={automationOpen}
+            className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isAutomationActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
+          >
+            <div className="flex items-center gap-3">
+              <span className="material-symbols-outlined">bolt</span>
+              <span>Automations</span>
+            </div>
+            <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: automationOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+          </Button>
+
+          {automationOpen && (
+            <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label="Automations">
+               <NavLink to="/routines" className={getSubNavClass}>
+                  {({ isActive }) => (
+                    <>
+                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
+                      Schedules
+                    </>
+                  )}
+               </NavLink>
+               <NavLink to="/hooks" className={getSubNavClass}>
+                  {({ isActive }) => (
+                    <>
+                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
+                      Triggers
+                    </>
+                  )}
+               </NavLink>
+               <NavLink to="/profiles" className={getSubNavClass}>
+                  {({ isActive }) => (
+                    <>
+                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
+                      Permission Modes
+                    </>
+                  )}
+               </NavLink>
+            </div>
+          )}
+        </div>
+
         {mode === 'dev' && (
         <>
         <div className="space-y-1">
@@ -193,49 +240,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
                     <>
                       <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
                       Data Sources
-                    </>
-                  )}
-               </NavLink>
-            </div>
-          )}
-        </div>
-
-        <div className="space-y-1">
-          <Button
-            variant="ghost"
-            onClick={() => setAutomationOpen(!automationOpen)}
-            className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isAutomationActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
-          >
-            <div className="flex items-center gap-3">
-              <span className="material-symbols-outlined">bolt</span>
-              <span>Automation</span>
-            </div>
-            <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: automationOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
-          </Button>
-
-          {automationOpen && (
-            <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label="Automation">
-               <NavLink to="/routines" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      Routines
-                    </>
-                  )}
-               </NavLink>
-               <NavLink to="/hooks" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      Hook Events
-                    </>
-                  )}
-               </NavLink>
-               <NavLink to="/profiles" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      Profiles
                     </>
                   )}
                </NavLink>

@@ -102,9 +102,9 @@ export default function Routines() {
     <div className="p-xl space-y-lg max-w-4xl">
       <header className="flex items-start justify-between gap-md">
         <div>
-          <h1 className="font-headline-lg text-on-surface mb-xs">Routines</h1>
+          <h1 className="font-headline-lg text-on-surface mb-xs">Schedules</h1>
           <p className="font-body-md text-on-surface-variant">
-            Triggered routines fire automatically on Shannon events (PostToolUse, PreCompact, WorktreeCreate, …). Scheduled routines live in <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">/tasks</code>.
+            Triggered schedules fire automatically on Shannon events (PostToolUse, PreCompact, WorktreeCreate, …). Scheduled routines live in <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">/tasks</code>.
           </p>
         </div>
         <button

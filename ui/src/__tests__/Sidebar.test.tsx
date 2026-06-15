@@ -76,12 +76,21 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
   })
 
-  it('hides Automation section in Simple mode', () => {
+  it('shows Automations section in Simple mode (collapsed by default)', () => {
     render(wrap(<Sidebar />))
-    expect(screen.queryByText('Automation')).not.toBeInTheDocument()
-    expect(screen.queryByText('Routines')).not.toBeInTheDocument()
-    expect(screen.queryByText('Hook Events')).not.toBeInTheDocument()
-    expect(screen.queryByText('Profiles')).not.toBeInTheDocument()
+    expect(screen.getByText('Automations')).toBeInTheDocument()
+    // Sub-links hidden until expanded
+    expect(screen.queryByText('Schedules')).not.toBeInTheDocument()
+    expect(screen.queryByText('Triggers')).not.toBeInTheDocument()
+    expect(screen.queryByText('Permission Modes')).not.toBeInTheDocument()
+  })
+
+  it('expands Automations in Simple mode on click', () => {
+    render(wrap(<Sidebar />))
+    fireEvent.click(screen.getByText('Automations'))
+    expect(screen.getByText('Schedules')).toBeInTheDocument()
+    expect(screen.getByText('Triggers')).toBeInTheDocument()
+    expect(screen.getByText('Permission Modes')).toBeInTheDocument()
   })
 
   it('hides OPC section in Simple mode', () => {
