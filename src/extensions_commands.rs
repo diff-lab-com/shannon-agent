@@ -471,6 +471,21 @@ pub async fn scan_prompt_injection(text: String) -> Result<extensions::Injection
     Ok(extensions::scan_prompt_injection(&text))
 }
 
+/// D1: Scan description + README body. Fetches `readme_url` (lazy, 24h
+/// cached, 32KB truncated, 10s timeout) and combines with `description`
+/// before scanning. Falls back to description-only on any fetch error.
+#[tauri::command]
+pub async fn scan_prompt_injection_with_readme(
+    description: String,
+    readme_url: Option<String>,
+) -> Result<extensions::InjectionReport, String> {
+    let readme = match readme_url.as_deref().filter(|u| !u.is_empty()) {
+        Some(url) => extensions::fetch_readme_cached(url).await,
+        None => None,
+    };
+    Ok(extensions::scan_with_readme(&description, readme.as_deref()))
+}
+
 /// Verify a signature body (typically the contents of `.mcpb/SIGNATURE.txt`).
 #[tauri::command]
 pub async fn verify_signature(

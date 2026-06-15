@@ -504,6 +504,16 @@ export async function scanPromptInjection(text: string): Promise<InjectionReport
   return invoke('scan_prompt_injection', { text })
 }
 
+export async function scanPromptInjectionWithReadme(
+  description: string,
+  readmeUrl: string | null,
+): Promise<InjectionReport> {
+  return invoke('scan_prompt_injection_with_readme', {
+    description,
+    readmeUrl: readmeUrl ?? null,
+  })
+}
+
 export async function verifySignature(
   signatureBody: string | null,
 ): Promise<SignatureReport> {

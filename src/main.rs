@@ -104,6 +104,7 @@ fn main() {
             extensions_commands::read_data_source_config,
             // Extensions hub P6 — Security hardening
             extensions_commands::scan_prompt_injection,
+            extensions_commands::scan_prompt_injection_with_readme,
             extensions_commands::verify_signature,
             extensions_commands::report_catalog_entry,
             extensions_commands::list_catalog_reports,

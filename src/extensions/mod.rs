@@ -57,7 +57,7 @@ pub use data_source_installers::{
     read_data_source_config, remove_installed_data_source, InstalledDataSource,
 };
 pub use security::{
-    add_report, is_reported, load_reports, remove_report, scan_prompt_injection,
-    verify_signature, CatalogReport, InjectionMatch, InjectionReport, InjectionRisk,
-    ReportStore, SignatureReport, SignatureStatus,
+    add_report, fetch_readme_cached, is_reported, load_reports, remove_report,
+    scan_prompt_injection, scan_with_readme, verify_signature, CatalogReport, InjectionMatch,
+    InjectionReport, InjectionRisk, ReportStore, SignatureReport, SignatureStatus,
 };
