@@ -120,6 +120,48 @@ describe('Triage page', () => {
     await waitFor(() => expect(archive).toHaveBeenCalledTimes(2))
   })
 
+  it('Delete bulk action opens confirmation modal then deletes on confirm', async () => {
+    const { archive } = setItems([makeItem({ id: 'x' }), makeItem({ id: 'y' })])
+    render(<Triage />)
+    fireEvent.click(screen.getByLabelText('Select all visible items'))
+    const bar = screen.getByRole('region', { name: 'Bulk actions' })
+    fireEvent.click(within(bar).getByRole('button', { name: /Delete/ }))
+    // Confirmation dialog appears
+    const dialog = await screen.findByRole('dialog', { name: 'Bulk delete items' })
+    expect(dialog).toHaveTextContent(/Delete 2 items/)
+    // Confirm
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Delete$/ }))
+    await waitFor(() => expect(archive).toHaveBeenCalledTimes(2))
+  })
+
+  it('Cancel in bulk delete modal does NOT call archive', () => {
+    const { archive } = setItems([makeItem({ id: 'x' })])
+    render(<Triage />)
+    fireEvent.click(screen.getByLabelText('Select all visible items'))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Bulk actions' })).getByRole('button', { name: /Delete/ }))
+    const dialog = screen.getByRole('dialog', { name: 'Bulk delete items' })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/ }))
+    expect(archive).not.toHaveBeenCalled()
+  })
+
+  it('per-item Delete button opens single-item confirm and deletes on confirm', async () => {
+    const { archive } = setItems([makeItem({ id: 'only' })])
+    render(<Triage />)
+    fireEvent.click(screen.getByLabelText('Delete item'))
+    const dialog = await screen.findByRole('dialog', { name: 'Delete item' })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Delete$/ }))
+    await waitFor(() => expect(archive).toHaveBeenCalledWith('only'))
+  })
+
+  it('Cancel in single-item delete modal does NOT call archive', () => {
+    const { archive } = setItems([makeItem({ id: 'only' })])
+    render(<Triage />)
+    fireEvent.click(screen.getByLabelText('Delete item'))
+    const dialog = screen.getByRole('dialog', { name: 'Delete item' })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/ }))
+    expect(archive).not.toHaveBeenCalled()
+  })
+
   it('read filter hides read items when "unread" is selected', () => {
     setItems([
       makeItem({ id: 'a', message: 'unread one', read: false }),
