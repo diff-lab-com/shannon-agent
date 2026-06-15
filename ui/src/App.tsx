@@ -46,6 +46,11 @@ export default function App() {
               <Route path="/welcome" element={<Welcome />} />
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/chat" replace />} />
+                {/* Legacy route redirects — keep old bookmarks/links working. */}
+                <Route path="/strategic-focus" element={<Navigate to="/opc" replace />} />
+                <Route path="/agent-swarm" element={<Navigate to="/opc" replace />} />
+                <Route path="/quick-inject" element={<Navigate to="/tasks" replace />} />
+                <Route path="/background-tasks" element={<Navigate to="/tasks" replace />} />
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/mission-control" element={<MissionControl />} />
