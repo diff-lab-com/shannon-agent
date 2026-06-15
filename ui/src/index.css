@@ -568,8 +568,8 @@
   --card-foreground: #93a1a1;
   --popover: #073642;
   --popover-foreground: #93a1a1;
-  --primary: #268bd2;
-  --primary-foreground: #002b36;
+  --primary: #1a5f8a;
+  --primary-foreground: #ffffff;
   --secondary: #2aa198;
   --secondary-foreground: #002b36;
   --muted: #073642;
@@ -579,11 +579,11 @@
   --destructive: #dc322f;
   --border: #073642;
   --input: #073642;
-  --ring: #268bd2;
+  --ring: #1a5f8a;
 
-  --color-primary: #268bd2;
+  --color-primary: #1a5f8a;
   --color-primary-container: #1c5a82;
-  --color-on-primary: #002b36;
+  --color-on-primary: #ffffff;
   --color-on-primary-container: #c5e4f5;
   --color-primary-fixed: #c5e4f5;
   --color-on-primary-fixed: #002b36;
@@ -731,7 +731,7 @@
   --popover: #eee8d5;
   --popover-foreground: #586e75;
   --primary: #268bd2;
-  --primary-foreground: #fdf6e3;
+  --primary-foreground: #000000;
   --secondary: #2aa198;
   --secondary-foreground: #fdf6e3;
   --muted: #eee8d5;
@@ -745,7 +745,7 @@
 
   --color-primary: #268bd2;
   --color-primary-container: #c5e4f5;
-  --color-on-primary: #fdf6e3;
+  --color-on-primary: #000000;
   --color-on-primary-container: #0d3b5c;
   --color-primary-fixed: #c5e4f5;
   --color-on-primary-fixed: #0d3b5c;
@@ -785,7 +785,7 @@
   --popover: #ebdbb2;
   --popover-foreground: #3c3836;
   --primary: #b57614;
-  --primary-foreground: #fbf1c7;
+  --primary-foreground: #000000;
   --secondary: #8f3f71;
   --secondary-foreground: #fbf1c7;
   --muted: #d5c4a1;
@@ -799,7 +799,7 @@
 
   --color-primary: #b57614;
   --color-primary-container: #f5e0b5;
-  --color-on-primary: #fbf1c7;
+  --color-on-primary: #000000;
   --color-on-primary-container: #3a2607;
   --color-primary-fixed: #f5e0b5;
   --color-on-primary-fixed: #3a2607;
