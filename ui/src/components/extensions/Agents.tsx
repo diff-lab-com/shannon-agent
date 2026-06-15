@@ -9,6 +9,7 @@ import {
   type AgentCatalogEntry,
   type InstalledAgent,
 } from "@/lib/tauri-api";
+import { SecurityBadge } from "./SecurityBadge";
 
 /**
  * P4 Agents tab — federated catalog + install/remove.
@@ -221,11 +222,14 @@ function AgentCard({
   const tools = Array.isArray(entry.metadata.tools) ? entry.metadata.tools : [];
   return (
     <div className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/40 flex flex-col">
-      <div className="flex items-start justify-between mb-xs">
+      <div className="flex items-start justify-between mb-xs gap-xs">
         <h4 className="font-bold text-label-md text-on-surface">{entry.name}</h4>
-        <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls}`}>
-          {trustLabel.text}
-        </span>
+        <div className="flex items-center gap-[4px] shrink-0">
+          <SecurityBadge text={entry.description} trust={entry.trust} />
+          <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls}`}>
+            {trustLabel.text}
+          </span>
+        </div>
       </div>
       <p className="text-label-sm text-on-surface-variant flex-1 mb-sm line-clamp-2">
         {entry.description}

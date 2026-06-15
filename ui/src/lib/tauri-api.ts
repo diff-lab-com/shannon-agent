@@ -466,6 +466,65 @@ export async function readDataSourceConfig(
   return invoke('read_data_source_config', { slug })
 }
 
+// --- Extensions Hub (P6: Security hardening) ---
+
+export type InjectionRisk = 'clean' | 'suspicious' | 'dangerous'
+
+export interface InjectionMatch {
+  pattern: string
+  matched_substring: string
+  category: string
+}
+
+export interface InjectionReport {
+  risk: InjectionRisk
+  matches: InjectionMatch[]
+  match_count: number
+}
+
+export type SignatureStatus =
+  | 'trusted'
+  | 'untrusted_signature'
+  | 'unsigned'
+  | 'malformed'
+
+export interface SignatureReport {
+  status: SignatureStatus
+  signer: string | null
+  note: string
+}
+
+export interface CatalogReport {
+  entry_id: string
+  reason: string
+  created_at: string
+}
+
+export async function scanPromptInjection(text: string): Promise<InjectionReport> {
+  return invoke('scan_prompt_injection', { text })
+}
+
+export async function verifySignature(
+  signatureBody: string | null,
+): Promise<SignatureReport> {
+  return invoke('verify_signature', { signatureBody })
+}
+
+export async function reportCatalogEntry(
+  entryId: string,
+  reason: string,
+): Promise<CatalogReport> {
+  return invoke('report_catalog_entry', { entryId, reason })
+}
+
+export async function listCatalogReports(): Promise<CatalogReport[]> {
+  return invoke('list_catalog_reports')
+}
+
+export async function clearCatalogReport(entryId: string): Promise<number> {
+  return invoke('clear_catalog_report', { entryId })
+}
+
 // --- Plugins (A.3 ecosystem compatibility) ---
 
 export interface PluginInfo {

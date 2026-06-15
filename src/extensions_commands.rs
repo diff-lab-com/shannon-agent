@@ -461,6 +461,48 @@ pub async fn read_data_source_config(
 }
 
 // ---------------------------------------------------------------------------
+// P6: Security hardening — prompt injection, signature verify, reports
+// ---------------------------------------------------------------------------
+
+/// Scan free-form text for prompt injection patterns. Used by the UI before
+/// showing install confirmation for community/repo entries.
+#[tauri::command]
+pub async fn scan_prompt_injection(text: String) -> Result<extensions::InjectionReport, String> {
+    Ok(extensions::scan_prompt_injection(&text))
+}
+
+/// Verify a signature body (typically the contents of `.mcpb/SIGNATURE.txt`).
+#[tauri::command]
+pub async fn verify_signature(
+    signature_body: Option<String>,
+) -> Result<extensions::SignatureReport, String> {
+    Ok(extensions::verify_signature(signature_body.as_deref()))
+}
+
+/// Append a report about a catalog entry to `~/.shannon/reports.json`.
+#[tauri::command]
+pub async fn report_catalog_entry(
+    entry_id: String,
+    reason: String,
+) -> Result<extensions::CatalogReport, String> {
+    extensions::add_report(&entry_id, &reason).map_err(|e| e.to_string())
+}
+
+/// List all reports the user has filed.
+#[tauri::command]
+pub async fn list_catalog_reports() -> Result<Vec<extensions::CatalogReport>, String> {
+    extensions::load_reports()
+        .map(|s| s.reports)
+        .map_err(|e| e.to_string())
+}
+
+/// Clear a previously filed report by entry id.
+#[tauri::command]
+pub async fn clear_catalog_report(entry_id: String) -> Result<usize, String> {
+    extensions::remove_report(&entry_id).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Wire types
 // ---------------------------------------------------------------------------
 

@@ -16,6 +16,7 @@ pub mod agent_catalog;
 pub mod agent_installers;
 pub mod data_source_catalog;
 pub mod data_source_installers;
+pub mod security;
 
 pub use types::{
     AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
@@ -54,4 +55,9 @@ pub use data_source_catalog::{
 pub use data_source_installers::{
     install_data_source, is_data_source_installed, list_installed_data_sources,
     read_data_source_config, remove_installed_data_source, InstalledDataSource,
+};
+pub use security::{
+    add_report, is_reported, load_reports, remove_report, scan_prompt_injection,
+    verify_signature, CatalogReport, InjectionMatch, InjectionReport, InjectionRisk,
+    ReportStore, SignatureReport, SignatureStatus,
 };

@@ -102,6 +102,12 @@ fn main() {
             extensions_commands::list_installed_data_sources,
             extensions_commands::uninstall_data_source,
             extensions_commands::read_data_source_config,
+            // Extensions hub P6 — Security hardening
+            extensions_commands::scan_prompt_injection,
+            extensions_commands::verify_signature,
+            extensions_commands::report_catalog_entry,
+            extensions_commands::list_catalog_reports,
+            extensions_commands::clear_catalog_report,
             // Plugin management (A.3)
             commands::list_plugins,
             commands::install_plugin,

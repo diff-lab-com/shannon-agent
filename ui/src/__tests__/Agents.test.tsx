@@ -12,6 +12,7 @@ const listInstalledAgentPlugins = vi.hoisted(() => vi.fn())
 const installNativeAgent = vi.hoisted(() => vi.fn())
 const installAgentFromRepo = vi.hoisted(() => vi.fn())
 const uninstallAgentPlugin = vi.hoisted(() => vi.fn())
+const scanPromptInjection = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -20,6 +21,7 @@ vi.mock('@/lib/tauri-api', () => ({
   installNativeAgent: (...a: unknown[]) => installNativeAgent(...a),
   installAgentFromRepo: (...a: unknown[]) => installAgentFromRepo(...a),
   uninstallAgentPlugin: (...a: unknown[]) => uninstallAgentPlugin(...a),
+  scanPromptInjection: (...a: unknown[]) => scanPromptInjection(...a),
 }))
 
 function renderWithRouter() {
@@ -87,6 +89,8 @@ beforeEach(() => {
   installNativeAgent.mockReset()
   installAgentFromRepo.mockReset()
   uninstallAgentPlugin.mockReset()
+  scanPromptInjection.mockReset()
+  scanPromptInjection.mockResolvedValue({ risk: 'clean', matches: [], match_count: 0 })
 })
 
 describe('Agents (P4 federated catalog)', () => {
