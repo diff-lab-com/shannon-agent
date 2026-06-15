@@ -10,12 +10,31 @@ const MIN_W = 200
 const MAX_W = 400
 const DEFAULT_W = 280
 const STORAGE_KEY = 'shannon-sidebar-width'
+export const SIDEBAR_MODE_KEY = 'shannon-sidebar-mode'
+export type SidebarMode = 'simple' | 'dev'
+
+export function useSidebarMode(): [SidebarMode, () => void] {
+  const [mode, setMode] = useState<SidebarMode>(() => {
+    if (typeof window === 'undefined') return 'simple'
+    return (window.localStorage.getItem(SIDEBAR_MODE_KEY) as SidebarMode) || 'simple'
+  })
+  const toggle = useCallback(() => {
+    setMode(prev => {
+      const next = prev === 'simple' ? 'dev' : 'simple'
+      window.localStorage.setItem(SIDEBAR_MODE_KEY, next)
+      return next
+    })
+  }, [])
+  return [mode, toggle]
+}
 
 export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const { close: closeMobile } = useSidebar();
   const [opcOpen, setOpcOpen] = useState(true);
   const [extensionsOpen, setExtensionsOpen] = useState(true);
+  const [automationOpen, setAutomationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mode, toggleMode] = useSidebarMode();
   const [width, setWidth] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
     return stored ? Math.min(MAX_W, Math.max(MIN_W, parseInt(stored, 10) || DEFAULT_W)) : DEFAULT_W
@@ -59,6 +78,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
   const isOpcActive = location.pathname.includes('/opc') && !location.pathname.includes('/extensions');
   const isExtensionsActive = location.pathname.includes('/extensions');
+  const isAutomationActive = location.pathname.includes('/routines') || location.pathname.includes('/hooks') || location.pathname.includes('/profiles');
   const isSettingsActive = location.pathname.includes('/settings');
 
   const getNavClass = ({ isActive }: { isActive: boolean }) =>
@@ -96,7 +116,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         </div>
         <div>
           <h1 className="font-headline-md text-[20px] font-bold text-primary leading-tight">Shannon</h1>
-          <p className="font-body-sm text-[12px] text-on-surface-variant leading-none">AI Code Assistant</p>
+          <p className="font-body-sm text-[12px] text-on-surface-variant leading-none">Your AI Workspace</p>
         </div>
       </div>
 
@@ -118,7 +138,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         </NavLink>
         <NavLink to="/goals" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">ads_click</span>
-           <span className="flex-1">Goals</span>
+           <span className="flex-1">Projects</span>
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
         </NavLink>
         <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
@@ -126,10 +146,64 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="flex-1">Scheduled</span>
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘3</kbd>
         </NavLink>
+        <NavLink to="/mission-control" className={getNavClass} onClick={handleNavClick}>
+           <span className="material-symbols-outlined">dashboard</span>
+           <span className="flex-1">Conversations</span>
+           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘4</kbd>
+        </NavLink>
         <NavLink to="/triage" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">flag</span>
-           <span className="flex-1">Triage</span>
+           <span className="flex-1">Inbox</span>
         </NavLink>
+
+        {/* Automations — top-level (visible in Simple + Dev) */}
+        <div className="space-y-1">
+          <Button
+            variant="ghost"
+            onClick={() => setAutomationOpen(!automationOpen)}
+            aria-label="Automations section toggle"
+            aria-expanded={automationOpen}
+            className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isAutomationActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
+          >
+            <div className="flex items-center gap-3">
+              <span className="material-symbols-outlined">bolt</span>
+              <span>Automations</span>
+            </div>
+            <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: automationOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+          </Button>
+
+          {automationOpen && (
+            <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label="Automations">
+               <NavLink to="/routines" className={getSubNavClass}>
+                  {({ isActive }) => (
+                    <>
+                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
+                      Schedules
+                    </>
+                  )}
+               </NavLink>
+               <NavLink to="/hooks" className={getSubNavClass}>
+                  {({ isActive }) => (
+                    <>
+                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
+                      Triggers
+                    </>
+                  )}
+               </NavLink>
+               <NavLink to="/profiles" className={getSubNavClass}>
+                  {({ isActive }) => (
+                    <>
+                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
+                      Permission Modes
+                    </>
+                  )}
+               </NavLink>
+            </div>
+          )}
+        </div>
+
+        {mode === 'dev' && (
+        <>
         <div className="space-y-1">
           <Button
             variant="ghost"
@@ -199,10 +273,64 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
             </div>
           )}
         </div>
+
+        <div className="space-y-1">
+          <NavLink
+            to="/quickfix"
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-lg font-label-md text-label-md transition-all duration-200",
+              location.pathname === '/quickfix'
+                ? "bg-primary/10 text-primary font-bold"
+                : "text-on-surface-variant hover:bg-surface-container-high/50 hover:text-primary",
+            )}
+          >
+            <span className="material-symbols-outlined text-[20px]">build</span>
+            <span>Quick Fix</span>
+          </NavLink>
+          <NavLink
+            to="/editor"
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-lg font-label-md text-label-md transition-all duration-200",
+              location.pathname === '/editor'
+                ? "bg-primary/10 text-primary font-bold"
+                : "text-on-surface-variant hover:bg-surface-container-high/50 hover:text-primary",
+            )}
+          >
+            <span className="material-symbols-outlined text-[20px]">code</span>
+            <span>Editor</span>
+          </NavLink>
+          <NavLink
+            to="/perf"
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-lg font-label-md text-label-md transition-all duration-200",
+              location.pathname === '/perf'
+                ? "bg-primary/10 text-primary font-bold"
+                : "text-on-surface-variant hover:bg-surface-container-high/50 hover:text-primary",
+            )}
+          >
+            <span className="material-symbols-outlined text-[20px]">bar_chart</span>
+            <span>Performance</span>
+          </NavLink>
+        </div>
+        </>
+        )}
         </ScrollArea>
       </nav>
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-1">
+        <button
+          onClick={toggleMode}
+          className="w-full flex items-center justify-between gap-3 px-4 py-2 rounded-lg font-label-md text-[12px] text-on-surface-variant hover:bg-surface-container-low hover:text-primary cursor-pointer transition-all"
+          aria-label={`Switch to ${mode === 'simple' ? 'Dev' : 'Simple'} mode`}
+          aria-pressed={mode === 'dev'}
+          title={mode === 'simple' ? 'Simple mode — core navigation. Click for Dev mode.' : 'Dev mode — all features visible. Click for Simple mode.'}
+        >
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[18px]">{mode === 'simple' ? 'tune' : 'developer_mode'}</span>
+            <span>{mode === 'simple' ? 'Simple' : 'Dev'} mode</span>
+          </div>
+          <span className="text-[10px] uppercase tracking-wider text-outline-variant">{mode === 'simple' ? 'default' : 'all features'}</span>
+        </button>
         <Button
           variant="ghost"
           onClick={() => setSettingsOpen(!settingsOpen)}

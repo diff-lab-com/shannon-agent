@@ -6,17 +6,31 @@ import { ThemeProvider } from './context/ThemeContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
 
+const Welcome = lazy(() => import('./pages/Welcome'));
 const Chat = lazy(() => import('./pages/Chat'));
 const Tasks = lazy(() => import('./pages/Tasks'));
+const MissionControl = lazy(() => import('./pages/MissionControl'));
 const Triage = lazy(() => import('./pages/Triage'));
 const Goals = lazy(() => import('./pages/Goals'));
+const Routines = lazy(() => import('./pages/Routines'));
+const Hooks = lazy(() => import('./pages/Hooks'));
+const Profiles = lazy(() => import('./pages/Profiles'));
 const Extensions = lazy(() => import('./pages/Extensions'));
 const Settings = lazy(() => import('./pages/Settings'));
 const OPC = lazy(() => import('./pages/OPC'));
 const OPCTask = lazy(() => import('./pages/OPCTask'));
+const QuickFix = lazy(() => import('./pages/QuickFix'));
+const Editor = lazy(() => import('./pages/Editor'));
+const Perf = lazy(() => import('./pages/Perf'));
 const ExtensionsHub = lazy(() => import('./components/extensions/ExtensionsHub'));
 const MyAgents = lazy(() => import('./components/extensions/MyAgents'));
 const DataSources = lazy(() => import('./components/extensions/DataSources'));
+const Featured = lazy(() => import('./components/extensions/Featured'));
+const McpServers = lazy(() => import('./components/extensions/McpServers'));
+const Skills = lazy(() => import('./components/extensions/Skills'));
+const Agents = lazy(() => import('./components/extensions/Agents'));
+const Plugins = lazy(() => import('./components/extensions/Plugins'));
+const Installed = lazy(() => import('./components/extensions/Installed'));
 const GeneralSettings = lazy(() => import('./components/settings/GeneralSettings'));
 const ThemeSettings = lazy(() => import('./components/settings/ThemeSettings'));
 const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings'));
@@ -35,20 +49,37 @@ export default function App() {
         <BrowserRouter>
           <Suspense fallback={<PageLoader />}>
             <Routes>
+              <Route path="/welcome" element={<Welcome />} />
               <Route element={<Layout />}>
                 <Route path="/" element={<Navigate to="/chat" replace />} />
+                {/* Legacy route redirects — keep old bookmarks/links working. */}
+                <Route path="/strategic-focus" element={<Navigate to="/opc" replace />} />
+                <Route path="/agent-swarm" element={<Navigate to="/opc" replace />} />
+                <Route path="/quick-inject" element={<Navigate to="/tasks" replace />} />
+                <Route path="/background-tasks" element={<Navigate to="/tasks" replace />} />
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/tasks" element={<Tasks />} />
+                <Route path="/mission-control" element={<MissionControl />} />
                 <Route path="/triage" element={<Triage />} />
                 <Route path="/goals" element={<Goals />} />
+                <Route path="/routines" element={<Routines />} />
+                <Route path="/hooks" element={<Hooks />} />
+                <Route path="/profiles" element={<Profiles />} />
                 <Route path="/extensions" element={<Extensions />}>
-                  <Route index element={<Navigate to="skills" replace />} />
-                  <Route path="skills" element={<ExtensionsHub />} />
-                  <Route path="agents" element={<MyAgents />} />
+                  <Route index element={<Navigate to="featured" replace />} />
+                  <Route path="featured" element={<Featured />} />
+                  <Route path="mcp-servers" element={<McpServers />} />
+                  <Route path="skills" element={<Skills />} />
+                  <Route path="agents" element={<Agents />} />
                   <Route path="datasources" element={<DataSources />} />
+                  <Route path="plugins" element={<Plugins />} />
+                  <Route path="installed" element={<Installed />} />
                 </Route>
                 <Route path="/opc" element={<OPC />} />
                 <Route path="/opc/task" element={<OPCTask />} />
+                <Route path="/quickfix" element={<QuickFix />} />
+                <Route path="/editor" element={<Editor />} />
+                <Route path="/perf" element={<Perf />} />
                 <Route path="/settings" element={<Settings />}>
                   <Route index element={<Navigate to="general" replace />} />
                   <Route path="general" element={<GeneralSettings />} />

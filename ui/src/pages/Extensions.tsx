@@ -4,9 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 const subTabs = [
+  { to: '/extensions/featured', icon: 'auto_awesome', label: 'Featured' },
+  { to: '/extensions/mcp-servers', icon: 'cloud', label: 'MCP Servers' },
   { to: '/extensions/skills', icon: 'extension', label: 'Skills' },
   { to: '/extensions/agents', icon: 'smart_toy', label: 'My Agents' },
   { to: '/extensions/datasources', icon: 'database', label: 'Data Sources' },
+  { to: '/extensions/plugins', icon: 'workspaces', label: 'Plugins' },
+  { to: '/extensions/installed', icon: 'download', label: 'Installed' },
 ] as const
 
 export default function Extensions() {
@@ -37,7 +41,7 @@ export default function Extensions() {
       {/* Top Bar with tabs + search + CTA */}
       <div className="flex justify-between items-center w-full px-lg py-sm border-b border-outline-variant/20 bg-surface/80 backdrop-blur-md sticky top-0 z-30">
         <div className="flex items-center gap-lg">
-          <nav aria-label="Extensions tabs" className="flex items-center gap-xs">
+          <nav aria-label="Extensions tabs" className="flex items-center gap-xs flex-wrap">
             {subTabs.map(tab => (
               <NavLink
                 key={tab.to}

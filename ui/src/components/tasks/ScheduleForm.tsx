@@ -6,6 +6,9 @@
 
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import ResultRoutingEditor from './ResultRoutingEditor'
+import ScheduleTemplates from './ScheduleTemplates'
+import { parseNlCron } from '@/lib/nl-cron'
 import * as api from '@/lib/tauri-api'
 import type {
   TriggerType,
@@ -40,6 +43,7 @@ const DEFAULT_POLICY: ExecutionPolicy = {
   notify_on_failure: true,
   budget_usd: null,
   auto_archive_when_empty: false,
+  result_routing: [],
 }
 
 export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) {
@@ -54,6 +58,9 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
   const [cronPreview, setCronPreview] = useState<CronPreview | null>(null)
   const [cronLoading, setCronLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [nlInput, setNlInput] = useState('')
+  const [nlError, setNlError] = useState<string | null>(null)
+  const [nlMatch, setNlMatch] = useState<string | null>(null)
 
   // Live cron preview (debounced via requestIdleCallback-free simple effect)
   useEffect(() => {
@@ -97,6 +104,26 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
     onSubmit(payload)
   }
 
+  const applyTemplate = (t: { fields: { name?: string; prompt?: string; trigger_type?: TriggerType; interval_secs?: number; cron_expr?: string } }) => {
+    if (t.fields.name !== undefined) setName(t.fields.name)
+    if (t.fields.prompt !== undefined) setPrompt(t.fields.prompt)
+    if (t.fields.trigger_type) setTriggerType(t.fields.trigger_type)
+    if (t.fields.interval_secs !== undefined) setIntervalSecs(t.fields.interval_secs)
+    if (t.fields.cron_expr !== undefined) setCronExpr(t.fields.cron_expr)
+  }
+
+  const tryParseNl = () => {
+    setNlError(null)
+    setNlMatch(null)
+    const parsed = parseNlCron(nlInput)
+    if (!parsed) {
+      setNlError('Could not parse. Try "every 15 minutes", "weekdays at 9am", "daily at 09:30", "monthly on day 1 at 8am".')
+      return
+    }
+    setCronExpr(parsed.expression)
+    setNlMatch(parsed.description)
+  }
+
   return (
     <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
       <div className="flex items-center justify-between">
@@ -112,6 +139,8 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           {showPolicy ? 'Hide policy' : 'Policy options'}
         </button>
       </div>
+
+      <ScheduleTemplates onApply={applyTemplate} />
 
       <label className="flex flex-col gap-xs">
         <span className="font-label-md text-on-surface-variant">Name *</span>
@@ -205,6 +234,40 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                 {cronPreview.error ?? 'Invalid cron expression'}
               </div>
             )
+          ) : null}
+          <div className="flex gap-xs items-end">
+            <label className="flex flex-col gap-xs flex-1">
+              <span className="font-label-sm text-[11px] text-on-surface-variant">Natural language</span>
+              <input
+                type="text"
+                aria-label="Natural language cron input"
+                placeholder='e.g. "weekdays at 9am"'
+                value={nlInput}
+                onChange={e => { setNlInput(e.target.value); setNlError(null); setNlMatch(null) }}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); tryParseNl() } }}
+                className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={tryParseNl}
+              disabled={!nlInput.trim()}
+              className="px-sm py-sm rounded-lg border border-primary/40 bg-primary/10 text-primary font-label-md text-[12px] hover:bg-primary/20 disabled:opacity-40 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            >
+              Parse
+            </button>
+          </div>
+          {nlError ? (
+            <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
+              <span className="material-symbols-outlined text-[14px]">error</span>
+              {nlError}
+            </div>
+          ) : null}
+          {nlMatch ? (
+            <div className="font-label-sm text-[11px] text-tertiary flex items-center gap-xs">
+              <span className="material-symbols-outlined text-[14px]">check_circle</span>
+              Parsed: {nlMatch}
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -302,6 +365,12 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             />
             <span className="font-label-md text-on-surface">Auto-archive when worktree is empty</span>
           </label>
+          <div className="md:col-span-2">
+            <ResultRoutingEditor
+              value={policy.result_routing ?? []}
+              onChange={next => setPolicy({ ...policy, result_routing: next })}
+            />
+          </div>
         </div>
       ) : null}
 

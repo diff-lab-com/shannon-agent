@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, createContext, useContext } from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useNavigate } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -7,6 +7,7 @@ import CommandPalette from './CommandPalette';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
 import { useApp } from '@/context/AppContext';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { shouldShowWelcome } from '@/pages/Welcome';
 
 interface SidebarContextValue {
   open: boolean
@@ -18,7 +19,8 @@ const SidebarContext = createContext<SidebarContextValue>({ open: false, toggle:
 export const useSidebar = () => useContext(SidebarContext)
 
 export function Layout() {
-  const { usage, agents, status, sessions, backgroundTasks, config } = useApp();
+  const { usage, agents, status, sessions, backgroundTasks, config, loading } = useApp();
+  const navigate = useNavigate();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -33,6 +35,12 @@ export function Layout() {
     window.addEventListener('shannon:toggle-help', handler)
     return () => window.removeEventListener('shannon:toggle-help', handler)
   }, [])
+
+  useEffect(() => {
+    if (shouldShowWelcome(loading, !!config?.provider)) {
+      navigate('/welcome', { replace: true })
+    }
+  }, [loading, config, navigate])
 
   const activeBgTasks = backgroundTasks.filter(t => t.status === 'running').length
   const version = config?.version ?? ''

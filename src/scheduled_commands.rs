@@ -55,6 +55,9 @@ pub struct CreateTaskPayload {
     pub max_fires: Option<u32>,
     #[serde(default)]
     pub policy: Option<ExecutionPolicy>,
+    /// Initial dependency list. Defaults to empty when omitted.
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
 }
 
 /// Payload for `update_scheduled_task`. All fields optional except `id`.
@@ -81,6 +84,10 @@ pub struct UpdateTaskPayload {
     pub max_fires: Option<u32>,
     #[serde(default)]
     pub policy: Option<ExecutionPolicy>,
+    /// Replaces the dependency list wholesale when supplied. The UI sends
+    /// the full new list (add or remove); an empty vec clears all deps.
+    #[serde(default)]
+    pub depends_on: Option<Vec<String>>,
 }
 
 /// Result of `preview_cron`.
@@ -548,6 +555,9 @@ pub async fn create_scheduled_task(
     if payload.policy.is_some() {
         routine.policy = payload.policy.clone();
     }
+    if let Some(deps) = payload.depends_on.clone() {
+        routine.depends_on = deps;
+    }
 
     state
         .scheduled_task_store()
@@ -606,6 +616,9 @@ pub async fn update_scheduled_task(
     }
     if payload.policy.is_some() {
         routine.policy = payload.policy.clone();
+    }
+    if let Some(deps) = payload.depends_on.clone() {
+        routine.depends_on = deps;
     }
 
     store.save(&routine).map_err(|e| e.to_string())?;
@@ -844,6 +857,421 @@ pub async fn toggle_triggered_routine(
     Ok(next)
 }
 
+/// Create a new triggered routine by appending it to `.shannon/routines.toml`.
+///
+/// Persists the routine to the project-local config file, then hot-reloads the
+/// in-memory registry so the new routine is immediately visible to subsequent
+/// `list_triggered_routines` calls. Returns the new routine as a DTO.
+#[tauri::command]
+pub async fn create_triggered_routine(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    trigger: String,
+    command: String,
+    matcher: Option<String>,
+    pattern: Option<String>,
+    description: Option<String>,
+) -> Result<TriggeredRoutineDto, String> {
+    {
+        let registry = state.triggered_registry().read().await;
+        if registry.all().contains_key(&name) {
+            return Err(format!("triggered routine already exists: {name}"));
+        }
+    }
+
+    let def = shannon_core::triggered_routines::TriggeredRoutineDef {
+        name: name.clone(),
+        trigger: trigger.clone(),
+        matcher: matcher.filter(|s| !s.trim().is_empty()),
+        pattern: pattern.filter(|s| !s.trim().is_empty()),
+        command: command.clone(),
+        enabled: true,
+        timeout: 60,
+        background: true,
+        description: description.filter(|s| !s.trim().is_empty()),
+    };
+
+    append_routine_to_project_toml(&def)?;
+
+    // Hot-reload the registry from disk so the new entry is live immediately.
+    let reloaded = shannon_core::triggered_routines::TriggeredRoutineRegistry::load_from_dirs();
+    *state.triggered_registry().write().await = reloaded;
+
+    Ok(TriggeredRoutineDto {
+        name: def.name,
+        trigger: def.trigger,
+        matcher: def.matcher,
+        pattern: def.pattern,
+        command: def.command,
+        enabled: def.enabled,
+        description: def.description,
+    })
+}
+
+/// Append a `[[routine]]` block to `.shannon/routines.toml`, creating the
+/// file (and parent dir) if missing.
+fn append_routine_to_project_toml(
+    def: &shannon_core::triggered_routines::TriggeredRoutineDef,
+) -> Result<(), String> {
+    let path = std::path::Path::new(".shannon").join("routines.toml");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("create .shannon/: {e}"))?;
+    }
+
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut doc = existing.trim_end().to_string();
+    if !doc.is_empty() {
+        doc.push('\n');
+    } else {
+        doc.push_str("# Triggered routines — managed by shannon-desktop.\n");
+    }
+    doc.push_str("\n[[routine]]\n");
+    doc.push_str(&format!("name = {}\n", toml_escape_string(&def.name)));
+    doc.push_str(&format!("trigger = {}\n", toml_escape_string(&def.trigger)));
+    if let Some(m) = &def.matcher {
+        doc.push_str(&format!("matcher = {}\n", toml_escape_string(m)));
+    }
+    if let Some(p) = &def.pattern {
+        doc.push_str(&format!("pattern = {}\n", toml_escape_string(p)));
+    }
+    doc.push_str(&format!("command = {}\n", toml_escape_string(&def.command)));
+    doc.push_str(&format!("enabled = {}\n", def.enabled));
+    doc.push_str(&format!("timeout = {}\n", def.timeout));
+    doc.push_str(&format!("background = {}\n", def.background));
+    if let Some(d) = &def.description {
+        doc.push_str(&format!("description = {}\n", toml_escape_string(d)));
+    }
+
+    std::fs::write(&path, doc).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(())
+}
+
+/// Render a TOML basic string literal. Wraps in double quotes, escapes control
+/// chars, quotes, and backslashes. Other Unicode passes through as UTF-8 — TOML
+/// files are UTF-8 by spec.
+fn toml_escape_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+// ─── OPC analytics (P4) ──────────────────────────────────────────────────────
+//
+// Aggregates over the `.claude/tasks/` tree. The 7-day time series uses the
+// file mtime of each task JSON as a proxy for activity (the task schema has no
+// created/updated timestamps). Completed-day buckets are derived from the
+// mtime of completed tasks; created-day buckets from all task files.
+
+/// Daily activity bucket for the OPC analytics panel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpcDayBucket {
+    /// YYYY-MM-DD in local time.
+    pub date: String,
+    pub created: u32,
+    pub completed: u32,
+}
+
+/// Per-status breakdown entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpcStatusBucket {
+    pub status: String,
+    pub count: u32,
+}
+
+/// Per-assignee workload entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpcAssigneeBucket {
+    pub assignee: String,
+    pub total: u32,
+    pub done: u32,
+    pub in_progress: u32,
+}
+
+/// Per-priority count.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpcPriorityBucket {
+    pub priority: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OpcMetrics {
+    pub total: u32,
+    pub completion_rate: f32,
+    pub by_status: Vec<OpcStatusBucket>,
+    pub by_priority: Vec<OpcPriorityBucket>,
+    pub by_assignee: Vec<OpcAssigneeBucket>,
+    pub daily: Vec<OpcDayBucket>,
+}
+
+const OPC_WINDOW_DAYS: usize = 7;
+
+#[tauri::command]
+#[tracing::instrument(skip_all)]
+pub async fn get_opc_metrics() -> Result<OpcMetrics, String> {
+    let tasks = crate::commands::list_tasks().await?;
+    let daily = collect_daily_buckets()?;
+    Ok(compute_opc_metrics(&tasks, daily))
+}
+
+/// Pure aggregation of per-task counts into the OPC metric buckets.
+///
+/// Extracted so load benchmarks can exercise it without Tauri state or a
+/// filesystem walk for daily buckets — `daily` is passed in.
+pub fn compute_opc_metrics(
+    tasks: &[crate::commands::TaskInfo],
+    daily: Vec<OpcDayBucket>,
+) -> OpcMetrics {
+    let total = tasks.len() as u32;
+
+    let mut status_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut priority_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut assignee_map: std::collections::HashMap<String, (u32, u32, u32)> =
+        std::collections::HashMap::new();
+    let mut completed_total = 0u32;
+
+    for t in tasks {
+        *status_counts.entry(t.status.clone()).or_insert(0) += 1;
+        if let Some(p) = &t.priority {
+            *priority_counts.entry(p.clone()).or_insert(0) += 1;
+        }
+        let is_done = is_completed_status(&t.status);
+        let is_inprog = is_in_progress_status(&t.status);
+        if is_done {
+            completed_total += 1;
+        }
+        if let Some(a) = &t.assignee {
+            let entry = assignee_map.entry(a.clone()).or_insert((0, 0, 0));
+            entry.0 += 1;
+            if is_done {
+                entry.1 += 1;
+            }
+            if is_inprog {
+                entry.2 += 1;
+            }
+        }
+    }
+
+    let completion_rate = if total == 0 {
+        0.0
+    } else {
+        (completed_total as f32) * 100.0 / (total as f32)
+    };
+
+    let mut by_status: Vec<OpcStatusBucket> = status_counts
+        .into_iter()
+        .map(|(status, count)| OpcStatusBucket { status, count })
+        .collect();
+    by_status.sort_by(|a, b| b.count.cmp(&a.count).then(a.status.cmp(&b.status)));
+
+    let mut by_priority: Vec<OpcPriorityBucket> = priority_counts
+        .into_iter()
+        .map(|(priority, count)| OpcPriorityBucket { priority, count })
+        .collect();
+    by_priority.sort_by(|a, b| b.count.cmp(&a.count).then(a.priority.cmp(&b.priority)));
+
+    let mut by_assignee: Vec<OpcAssigneeBucket> = assignee_map
+        .into_iter()
+        .map(|(assignee, (total, done, in_progress))| OpcAssigneeBucket {
+            assignee,
+            total,
+            done,
+            in_progress,
+        })
+        .collect();
+    by_assignee.sort_by(|a, b| b.total.cmp(&a.total).then(a.assignee.cmp(&b.assignee)));
+
+    OpcMetrics {
+        total,
+        completion_rate,
+        by_status,
+        by_priority,
+        by_assignee,
+        daily,
+    }
+}
+
+fn is_completed_status(s: &str) -> bool {
+    matches!(s.to_ascii_lowercase().as_str(), "completed" | "done")
+}
+
+fn is_in_progress_status(s: &str) -> bool {
+    matches!(
+        s.to_ascii_lowercase().as_str(),
+        "in_progress" | "running" | "pending"
+    )
+}
+
+fn collect_daily_buckets() -> Result<Vec<OpcDayBucket>, String> {
+    let tasks_dir = std::path::Path::new(".claude/tasks");
+    if !tasks_dir.is_dir() {
+        return Ok(empty_daily_buckets());
+    }
+    let canonical_root = tasks_dir
+        .canonicalize()
+        .map_err(|e| format!("Invalid tasks dir: {e}"))?;
+
+    // Start of today (local) and the (OPC_WINDOW_DAYS - 1) days before it.
+    let today = today_ymd_local()?;
+    let mut buckets: Vec<(chrono::NaiveDate, u32, u32)> = Vec::with_capacity(OPC_WINDOW_DAYS);
+    for i in 0..OPC_WINDOW_DAYS {
+        let day = today - chrono::Duration::days(i as i64);
+        buckets.push((day, 0, 0));
+    }
+    let earliest = buckets.last().map(|(d, _, _)| *d).unwrap_or(today);
+
+    let visit = |dir: &std::path::Path, buckets: &mut Vec<(chrono::NaiveDate, u32, u32)>| -> Result<(), String> {
+        let entries = std::fs::read_dir(dir)
+            .map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let canonical = match path.canonicalize() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if !canonical.starts_with(&canonical_root) {
+                continue;
+            }
+            if canonical.is_dir() {
+                // Recurse inline — closures can't easily recurse, so we iterate a stack.
+                continue;
+            }
+            if path.extension().map(|e| e == "json").unwrap_or(false) {
+                let mtime = match std::fs::metadata(&path).and_then(|m| m.modified()) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let date = systemtime_to_local_naive(mtime)?;
+                if date < earliest {
+                    continue;
+                }
+                let status = read_task_status(&path).unwrap_or_default();
+                let is_done = is_completed_status(&status);
+                for (day, created, completed) in buckets.iter_mut() {
+                    if *day == date {
+                        *created += 1;
+                        if is_done {
+                            *completed += 1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(())
+    };
+
+    // Walk with an explicit stack to avoid recursive closure limits.
+    let mut stack: Vec<std::path::PathBuf> = vec![canonical_root.clone()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let canonical = match path.canonicalize() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if !canonical.starts_with(&canonical_root) {
+                continue;
+            }
+            if canonical.is_dir() {
+                stack.push(canonical);
+                continue;
+            }
+            if path.extension().map(|e| e == "json").unwrap_or(false) {
+                let mtime = match std::fs::metadata(&path).and_then(|m| m.modified()) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let date = match systemtime_to_local_naive(mtime) {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+                if date < earliest {
+                    continue;
+                }
+                let status = read_task_status(&path).unwrap_or_default();
+                let is_done = is_completed_status(&status);
+                for (day, created, completed) in buckets.iter_mut() {
+                    if *day == date {
+                        *created += 1;
+                        if is_done {
+                            *completed += 1;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let _ = visit; // suppress unused closure (kept for future single-dir use)
+
+    let mut out: Vec<OpcDayBucket> = buckets
+        .into_iter()
+        .map(|(date, created, completed)| OpcDayBucket {
+            date: date.format("%Y-%m-%d").to_string(),
+            created,
+            completed,
+        })
+        .collect();
+    // Reverse so oldest day is first in the array (left-to-right chart order).
+    out.reverse();
+    Ok(out)
+}
+
+fn empty_daily_buckets() -> Vec<OpcDayBucket> {
+    let today = match today_ymd_local() {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<OpcDayBucket> = (0..OPC_WINDOW_DAYS)
+        .map(|i| {
+            let day = today - chrono::Duration::days(i as i64);
+            OpcDayBucket {
+                date: day.format("%Y-%m-%d").to_string(),
+                created: 0,
+                completed: 0,
+            }
+        })
+        .collect();
+    out.reverse();
+    out
+}
+
+fn today_ymd_local() -> Result<chrono::NaiveDate, String> {
+    let local = chrono::Local::now();
+    Ok(local.date_naive())
+}
+
+fn systemtime_to_local_naive(t: std::time::SystemTime) -> Result<chrono::NaiveDate, String> {
+    let dt_local: chrono::DateTime<chrono::Local> =
+        t.into();
+    Ok(dt_local.date_naive())
+}
+
+fn read_task_status(path: &std::path::Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    v.get("status").and_then(|s| s.as_str()).map(String::from)
+}
+
 // ─── Worktree management (B9) ───────────────────────────────────────────────
 //
 // `ExecutionPolicy.worktree` (bool) on a ScheduledRoutine decides whether the
@@ -953,6 +1381,7 @@ mod tests {
             expires_at: None,
             max_fires: None,
             policy: None,
+            depends_on: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
@@ -972,6 +1401,7 @@ mod tests {
             expires_at: None,
             max_fires: Some(260),
             policy: None,
+            depends_on: None,
         };
         let json = serde_json::to_string(&payload).unwrap();
         assert!(json.contains("\"cron_expr\""));
@@ -985,6 +1415,43 @@ mod tests {
         assert_eq!(payload.id, "abc12345");
         assert!(payload.name.is_none());
         assert!(payload.enabled.is_none());
+        assert!(payload.depends_on.is_none());
+    }
+
+    #[test]
+    fn test_create_and_update_payloads_roundtrip_depends_on() {
+        let create = CreateTaskPayload {
+            name: "n".into(),
+            prompt: "p".into(),
+            trigger_type: None,
+            interval_secs: Some(60),
+            cron_expr: None,
+            timezone: None,
+            expires_at: None,
+            max_fires: None,
+            policy: None,
+            depends_on: Some(vec!["dep1".into(), "dep2".into()]),
+        };
+        let json = serde_json::to_string(&create).unwrap();
+        let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.depends_on.as_deref(), Some(["dep1".into(), "dep2".into()].as_slice()));
+
+        let update = UpdateTaskPayload {
+            id: "abc".into(),
+            name: None,
+            prompt: None,
+            trigger_type: None,
+            interval_secs: None,
+            cron_expr: None,
+            timezone: None,
+            enabled: None,
+            expires_at: None,
+            max_fires: None,
+            policy: None,
+            depends_on: Some(Vec::new()),
+        };
+        let ujson = serde_json::to_string(&update).unwrap();
+        assert!(ujson.contains("\"depends_on\":[]"));
     }
 
     #[test]
@@ -997,6 +1464,7 @@ mod tests {
             notify_on_failure: true,
             budget_usd: Some(10.0),
             auto_archive_when_empty: false,
+            result_routing: Vec::new(),
         };
         let json = serde_json::to_string(&policy).unwrap();
         assert!(json.contains("budget_usd"));
@@ -1289,5 +1757,207 @@ mod tests {
     fn test_chrono_timestamp_in_modern_era() {
         let now = Utc::now();
         assert!(now.timestamp() > 1_700_000_000, "post-2023 epoch expected");
+    }
+
+    // ── P4 helpers ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_completed_status_recognizes_done_variants() {
+        assert!(is_completed_status("completed"));
+        assert!(is_completed_status("Done"));
+        assert!(is_completed_status("DONE"));
+        assert!(!is_completed_status("pending"));
+        assert!(!is_completed_status("in_progress"));
+        assert!(!is_completed_status(""));
+    }
+
+    #[test]
+    fn test_is_in_progress_status_recognizes_active_variants() {
+        assert!(is_in_progress_status("in_progress"));
+        assert!(is_in_progress_status("running"));
+        assert!(is_in_progress_status("pending"));
+        assert!(is_in_progress_status("PENDING"));
+        assert!(!is_in_progress_status("completed"));
+        assert!(!is_in_progress_status("done"));
+    }
+
+    #[test]
+    fn test_toml_escape_string_plain() {
+        assert_eq!(toml_escape_string("hello"), "\"hello\"");
+    }
+
+    #[test]
+    fn test_toml_escape_string_quotes_and_backslashes() {
+        assert_eq!(toml_escape_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
+    }
+
+    #[test]
+    fn test_toml_escape_string_control_chars() {
+        assert_eq!(toml_escape_string("a\nb\tc"), "\"a\\nb\\tc\"");
+        // Other control chars become \uXXXX.
+        let escaped = toml_escape_string("\x01");
+        assert_eq!(escaped, "\"\\u0001\"");
+    }
+
+    #[test]
+    fn test_toml_escape_string_empty() {
+        assert_eq!(toml_escape_string(""), "\"\"");
+    }
+
+    #[test]
+    fn test_read_task_status_extracts_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("task.json");
+        std::fs::write(
+            &path,
+            r#"{"id":"abc","title":"t","status":"completed"}"#,
+        )
+        .unwrap();
+        assert_eq!(read_task_status(&path).as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn test_read_task_status_missing_field_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("task.json");
+        std::fs::write(&path, r#"{"id":"abc"}"#).unwrap();
+        assert_eq!(read_task_status(&path), None);
+    }
+
+    #[test]
+    fn test_read_task_status_invalid_json_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("task.json");
+        std::fs::write(&path, b"not json").unwrap();
+        assert_eq!(read_task_status(&path), None);
+    }
+
+    // The next two tests change cwd, which would race under parallel test
+    // execution. Serialize them with a static Mutex.
+    use std::sync::Mutex;
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_collect_daily_buckets_walks_team_dirs() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        // Two task JSONs under .claude/tasks/<team>/ — both today by mtime.
+        let team_dir = tmp.path().join(".claude/tasks/Default");
+        std::fs::create_dir_all(&team_dir).unwrap();
+        std::fs::write(
+            team_dir.join("11111111-1111-1111-1111-111111111111.json"),
+            r#"{"id":"11111111","status":"completed"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            team_dir.join("22222222-2222-2222-2222-222222222222.json"),
+            r#"{"id":"22222222","status":"pending"}"#,
+        )
+        .unwrap();
+
+        let buckets = collect_daily_buckets().unwrap();
+        std::env::set_current_dir(orig).unwrap();
+
+        // 7-day window, oldest-first ordering.
+        assert_eq!(buckets.len(), OPC_WINDOW_DAYS);
+        // Today is the LAST bucket (oldest-first means today at end).
+        let today_bucket = buckets.last().unwrap();
+        assert_eq!(today_bucket.created, 2, "both tasks counted as created");
+        assert_eq!(today_bucket.completed, 1, "only the completed one");
+    }
+
+    #[test]
+    fn test_collect_daily_buckets_no_tasks_dir_returns_empty_buckets() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let buckets = collect_daily_buckets().unwrap();
+        std::env::set_current_dir(orig).unwrap();
+
+        // No .claude/tasks dir — returns 7 empty buckets.
+        assert_eq!(buckets.len(), OPC_WINDOW_DAYS);
+        for b in &buckets {
+            assert_eq!(b.created, 0);
+            assert_eq!(b.completed, 0);
+        }
+    }
+
+    #[test]
+    fn test_append_routine_to_project_toml_creates_file() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let def = shannon_core::triggered_routines::TriggeredRoutineDef {
+            name: "lint-after-edit".into(),
+            trigger: "PostToolUse".into(),
+            matcher: Some("Edit".into()),
+            pattern: None,
+            command: "just lint".into(),
+            enabled: true,
+            timeout: 60,
+            background: true,
+            description: Some("Lint after edits".into()),
+        };
+        append_routine_to_project_toml(&def).unwrap();
+
+        let written =
+            std::fs::read_to_string(tmp.path().join(".shannon/routines.toml")).unwrap();
+        std::env::set_current_dir(orig).unwrap();
+
+        assert!(written.contains("[[routine]]"));
+        assert!(written.contains("name = \"lint-after-edit\""));
+        assert!(written.contains("trigger = \"PostToolUse\""));
+        assert!(written.contains("matcher = \"Edit\""));
+        assert!(written.contains("command = \"just lint\""));
+        assert!(written.contains("enabled = true"));
+    }
+
+    #[test]
+    fn test_append_routine_to_project_toml_appends_to_existing() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let orig = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        // Pre-existing routine in the file.
+        std::fs::create_dir_all(tmp.path().join(".shannon")).unwrap();
+        std::fs::write(
+            tmp.path().join(".shannon/routines.toml"),
+            "[[routine]]\nname = \"existing\"\ntrigger = \"PreToolUse\"\ncommand = \"echo hi\"\nenabled = true\ntimeout = 60\nbackground = true\n",
+        )
+        .unwrap();
+
+        let def = shannon_core::triggered_routines::TriggeredRoutineDef {
+            name: "second".into(),
+            trigger: "PostToolUse".into(),
+            matcher: None,
+            pattern: None,
+            command: "echo bye".into(),
+            enabled: false,
+            timeout: 30,
+            background: false,
+            description: None,
+        };
+        append_routine_to_project_toml(&def).unwrap();
+
+        let written =
+            std::fs::read_to_string(tmp.path().join(".shannon/routines.toml")).unwrap();
+        std::env::set_current_dir(orig).unwrap();
+
+        // Both routines present.
+        assert!(written.contains("name = \"existing\""));
+        assert!(written.contains("name = \"second\""));
+        assert_eq!(
+            written.matches("[[routine]]").count(),
+            2,
+            "two routine blocks"
+        );
     }
 }

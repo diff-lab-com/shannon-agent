@@ -7,6 +7,7 @@
 #[cfg(feature = "tauri")]
 fn main() {
     use shannon_desktop::commands;
+    use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},
@@ -14,11 +15,33 @@ fn main() {
     };
     use tauri_plugin_updater::UpdaterExt;
 
+    // E5: tracing-subscriber with JSON exporter for offline performance
+    // analysis. SHANNON_LOG_FORMAT=json → newline-delimited JSON to stderr;
+    // any other value (or unset) → pretty human-readable output.
+    let log_format = std::env::var("SHANNON_LOG_FORMAT").unwrap_or_default();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,shannon_desktop=debug"));
+    if log_format.eq_ignore_ascii_case("json") {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .json()
+            .with_target(true)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(true)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .init();
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::send_message,
             commands::get_conversation,
@@ -34,6 +57,7 @@ fn main() {
             commands::search_sessions,
             commands::load_session,
             commands::export_session,
+            commands::save_text_file,
             commands::switch_session,
             commands::delete_session,
             commands::rename_session,
@@ -49,6 +73,41 @@ fn main() {
             commands::list_mcp_servers,
             commands::list_skills,
             commands::get_skill_detail,
+            commands::list_installed_addons,
+            // Extensions hub P2 — MCP installers (see extensions_commands.rs)
+            extensions_commands::list_featured_vendors,
+            extensions_commands::list_mcp_registry_servers,
+            extensions_commands::featured_vendor_to_entry,
+            extensions_commands::install_mcp_stdio,
+            extensions_commands::install_mcp_mcpb,
+            extensions_commands::install_mcp_oauth_authorize_url,
+            extensions_commands::install_mcp_oauth_complete,
+            extensions_commands::uninstall_mcp_server,
+            // Extensions hub P3 — Skills catalog + installer
+            extensions_commands::list_skill_catalog,
+            extensions_commands::install_skill_from_repo,
+            extensions_commands::install_native_skill,
+            extensions_commands::list_installed_skill_plugins,
+            extensions_commands::uninstall_skill_plugin,
+            // Extensions hub P4 — Agents catalog + installer
+            extensions_commands::list_agent_catalog,
+            extensions_commands::install_agent_from_repo,
+            extensions_commands::install_native_agent,
+            extensions_commands::list_installed_agent_plugins,
+            extensions_commands::uninstall_agent_plugin,
+            // Extensions hub P5 — Native data sources (Obsidian + Email IMAP)
+            extensions_commands::list_data_source_catalog,
+            extensions_commands::list_data_source_adapters,
+            extensions_commands::install_data_source,
+            extensions_commands::list_installed_data_sources,
+            extensions_commands::uninstall_data_source,
+            extensions_commands::read_data_source_config,
+            // Extensions hub P6 — Security hardening
+            extensions_commands::scan_prompt_injection,
+            extensions_commands::verify_signature,
+            extensions_commands::report_catalog_entry,
+            extensions_commands::list_catalog_reports,
+            extensions_commands::clear_catalog_report,
             // Plugin management (A.3)
             commands::list_plugins,
             commands::install_plugin,
@@ -65,7 +124,12 @@ fn main() {
             commands::list_agent_definitions,
             commands::create_agent_definition,
             commands::delete_agent_definition,
+            // Inter-agent message history (Phase D C3)
+            commands::list_agent_messages,
+            commands::list_agent_message_teams,
+            commands::record_agent_message,
             commands::list_tasks,
+            commands::update_task,
             commands::get_file_tree,
             commands::get_working_dir_info,
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)
@@ -84,6 +148,17 @@ fn main() {
             shannon_desktop::scheduled_commands::get_execution_detail,
             shannon_desktop::scheduled_commands::list_triggered_routines,
             shannon_desktop::scheduled_commands::toggle_triggered_routine,
+            shannon_desktop::scheduled_commands::create_triggered_routine,
+            shannon_desktop::scheduled_commands::get_opc_metrics,
+            // Automation: hook-event catalog + custom permission profiles
+            shannon_desktop::automation_commands::list_hook_events,
+            shannon_desktop::automation_commands::list_permission_profiles,
+            shannon_desktop::automation_commands::save_custom_profile,
+            shannon_desktop::automation_commands::delete_custom_profile,
+            shannon_desktop::lsp_commands::lsp_code_actions,
+            shannon_desktop::lsp_commands::apply_code_action,
+            shannon_desktop::lsp_commands::read_source_file,
+            shannon_desktop::lsp_commands::run_file_diagnostics,
             // Worktree management (B9)
             shannon_desktop::scheduled_commands::create_task_worktree,
             shannon_desktop::scheduled_commands::list_task_worktrees,
@@ -217,7 +292,7 @@ fn main() {
                     });
                     let _ = handle.emit("update-available", payload);
                 } else {
-                    println!("No updates available or update check failed");
+                    tracing::info!("No updates available or update check failed");
                 }
                 Ok::<(), tauri_plugin_updater::Error>(())
             });

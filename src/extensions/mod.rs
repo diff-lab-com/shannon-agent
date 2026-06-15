@@ -1,0 +1,63 @@
+//! Unified extensions hub — catalog, installers, aggregator.
+//!
+//! See `docs/architecture/unified-hub.md` for the ADR. The hub UI calls the
+//! installer trait; per-kind adapters handle the actual install mechanics.
+
+pub mod types;
+pub mod aggregator;
+pub mod installer;
+pub mod catalog;
+pub mod oauth;
+pub mod mcpb;
+pub mod mcp_installers;
+pub mod skill_catalog;
+pub mod skill_installers;
+pub mod agent_catalog;
+pub mod agent_installers;
+pub mod data_source_catalog;
+pub mod data_source_installers;
+pub mod security;
+
+pub use types::{
+    AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
+    ProgressSink, ProgressEvent, TrustLevel,
+};
+pub use aggregator::{aggregate_installed, InstalledAddonSummary};
+pub use installer::{AddonInstaller, InstallError};
+pub use catalog::{
+    featured_vendors, FeaturedCategory, FeaturedInstallKind, FeaturedVendor, HttpFetch,
+    McpRegistryClient, RegistryResponse, RegistryServer, ReqwestFetch, StaticFetch,
+};
+pub use mcpb::{extract_mcpb, McpbManifest, McpbServer};
+pub use oauth::{OAuthError, PkceContext};
+pub use mcp_installers::{
+    remove_mcp_server_config, write_mcp_server_config, McpbInstaller, OAuthRemoteMcpInstaller,
+    ResolvedMcpInstaller, StdioMcpInstaller, StdioMcpSpec,
+};
+pub use skill_catalog::{
+    skill_upstreams, SkillCatalogClient, SkillManifest, SkillManifestEntry, SkillUpstream,
+};
+pub use skill_installers::{
+    is_skill_installed, list_installed_skills, MarketplacePluginInstaller,
+    remove_installed_skill, SkillMarkdownInstaller, InstalledSkill,
+};
+pub use agent_catalog::{
+    agent_upstreams, AgentCatalogClient, AgentManifest, AgentManifestEntry, AgentUpstream,
+};
+pub use agent_installers::{
+    is_agent_installed, list_installed_agents, AgentRepoInstaller, AgentMarkdownInstaller,
+    remove_installed_agent, InstalledAgent,
+};
+pub use data_source_catalog::{
+    data_source_adapters, data_source_catalog_entries, DataSourceAdapter, DataSourceField,
+    DataSourceKind,
+};
+pub use data_source_installers::{
+    install_data_source, is_data_source_installed, list_installed_data_sources,
+    read_data_source_config, remove_installed_data_source, InstalledDataSource,
+};
+pub use security::{
+    add_report, is_reported, load_reports, remove_report, scan_prompt_injection,
+    verify_signature, CatalogReport, InjectionMatch, InjectionReport, InjectionRisk,
+    ReportStore, SignatureReport, SignatureStatus,
+};

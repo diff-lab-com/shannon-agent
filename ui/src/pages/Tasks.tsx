@@ -1,5 +1,14 @@
 // Tasks page — thin orchestrator for the Sprint 2 scheduled-tasks UI.
 //
+// SCOPE: calendar-driven management of SCHEDULED + TRIGGERED routines and
+// one-off background tasks. Has create/schedule/cancel write actions,
+// calendar/DAG views, and team + status filters.
+//
+// DISTINCTION from MissionControl and OPC:
+//   - MissionControl: read-only kanban across all teams (observation).
+//   - OPC: agent-orchestration workspace with optimistic DnD (write surface).
+//   - Tasks (this page): full CRUD for scheduled routines + history + worktrees.
+//
 // Cross-component state (selectedTaskId, filter, calendarView, showFilters)
 // lives here; component-local state stays in the components. All visual
 // behavior of the original 584-line monolith is preserved.
@@ -8,7 +17,7 @@
 // useScheduledTasks() and rendered into the calendar (next_fire_at). The
 // legacy background-task / agent data still comes from useApp().
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
@@ -21,15 +30,20 @@ import NewTaskForm from '@/components/tasks/NewTaskForm'
 import ScheduleForm from '@/components/tasks/ScheduleForm'
 import TaskList from '@/components/tasks/TaskList'
 import TaskCalendarView from '@/components/tasks/TaskCalendarView'
+import TaskDAGView from '@/components/tasks/TaskDAGView'
 import CalendarSidebarWidget from '@/components/tasks/CalendarSidebarWidget'
 import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
+import RoutineDetailDrawer from '@/components/tasks/RoutineDetailDrawer'
 import CancelTaskModal from '@/components/tasks/CancelTaskModal'
 import TaskExecutionLog from '@/components/tasks/TaskExecutionLog'
 import EfficiencyCard from '@/components/tasks/EfficiencyCard'
 import AgentAllocation from '@/components/tasks/AgentAllocation'
 import HistoryView from '@/components/tasks/HistoryView'
+import WorktreePanel from '@/components/tasks/WorktreePanel'
+import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
+import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 
-type Tab = 'active' | 'history'
+type Tab = 'active' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
@@ -42,9 +56,12 @@ export default function Tasks() {
   const [viewYear, setViewYear] = useState(new Date().getFullYear())
   const [showFilters, setShowFilters] = useState(false)
   const [calendarView, setCalendarView] = useState(false)
+  const [dagView, setDagView] = useState(false)
   const [selectedDay, setSelectedDay] = useState<number | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [selectedRoutineId, setSelectedRoutineId] = useState<string | null>(null)
   const [activeFilter, setActiveFilter] = useState<FilterStatus>('all')
+  const [teamFilter, setTeamFilter] = useState<string>('all')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [showNewTask, setShowNewTask] = useState(false)
   const [showSchedule, setShowSchedule] = useState(false)
@@ -55,8 +72,22 @@ export default function Tasks() {
   const selectedTask = selectedTaskId
     ? tasks.find(t => t.id === selectedTaskId) ?? backgroundTasks.find(t => t.task_id === selectedTaskId) ?? null
     : null
+  const selectedRoutine = selectedRoutineId
+    ? scheduledTasks.find(r => r.id === selectedRoutineId) ?? null
+    : null
 
-  const filteredTasks = tasks.filter(t => statusMatchesFilter(t.status, activeFilter))
+  // G11: derive unique team list from tasks (multi-session aggregated view).
+  const teams = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of tasks) if (t.team) set.add(t.team)
+    return Array.from(set).sort()
+  }, [tasks])
+
+  const filteredTasks = tasks.filter(t => {
+    if (!statusMatchesFilter(t.status, activeFilter)) return false
+    if (teamFilter !== 'all' && (t.team ?? '') !== teamFilter) return false
+    return true
+  })
   const taskTotalPages = Math.ceil(filteredTasks.length / TASKS_PER_PAGE)
   const pagedFilteredTasks = filteredTasks.slice((taskPage - 1) * TASKS_PER_PAGE, taskPage * TASKS_PER_PAGE)
 
@@ -129,14 +160,19 @@ export default function Tasks() {
           showFilters={showFilters}
           onToggleFilters={() => setShowFilters(!showFilters)}
           calendarView={calendarView}
-          onToggleCalendar={() => setCalendarView(!calendarView)}
+          onToggleCalendar={() => { setCalendarView(!calendarView); if (!calendarView) setDagView(false) }}
+          dagView={dagView}
+          onToggleDag={() => { setDagView(!dagView); if (!dagView) setCalendarView(false) }}
           onToggleNewTask={() => setShowNewTask(!showNewTask)}
           onToggleSchedule={() => setShowSchedule(!showSchedule)}
+          teams={teams}
+          teamFilter={teamFilter}
+          onTeamFilterChange={setTeamFilter}
         />
 
-        {/* P2.2: Active / History tab switcher */}
+        {/* P2.2: Active / History / Worktrees tab switcher */}
         <div role="tablist" aria-label="Tasks view" className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'history'] as const).map(t => {
+          {(['active', 'history', 'worktrees'] as const).map(t => {
             const selected = tab === t
             return (
               <button
@@ -148,7 +184,7 @@ export default function Tasks() {
                   selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface'
                 }`}
               >
-                {t === 'active' ? 'Active' : 'History'}
+                {t === 'active' ? 'Active' : t === 'history' ? 'History' : 'Worktrees'}
               </button>
             )
           })}
@@ -156,6 +192,8 @@ export default function Tasks() {
 
         {tab === 'history' ? (
           <HistoryView />
+        ) : tab === 'worktrees' ? (
+          <WorktreePanel />
         ) : (
           <>
         {errorMsg && (
@@ -189,7 +227,9 @@ export default function Tasks() {
 
         {showFilters && <TasksFilters active={activeFilter} onChange={setActiveFilter} />}
 
-        {calendarView ? (
+        {dagView ? (
+          <TaskDAGView tasks={tasks} onSelectTask={setSelectedTaskId} />
+        ) : calendarView ? (
           <TaskCalendarView
             viewMonth={viewMonth}
             viewYear={viewYear}
@@ -224,9 +264,14 @@ export default function Tasks() {
                 tasks={tasks}
                 scheduledTasks={scheduledTasks}
                 onSelectTask={setSelectedTaskId}
+                onSelectRoutine={setSelectedRoutineId}
               />
               <EfficiencyCard percentage={efficiencyPct} variant="full" />
               <AgentAllocation agents={agents} />
+              <HookTaskPipeline />
+            </div>
+            <div className="col-span-12">
+              <ScheduleDAGView routines={scheduledTasks} onSelectRoutine={setSelectedRoutineId} />
             </div>
             <div className="col-span-12">
               <TaskExecutionLog tasks={backgroundTasks} onCancel={setCancelTarget} />
@@ -237,7 +282,17 @@ export default function Tasks() {
         )}
       </div>
 
-      <TaskDetailDrawer task={selectedTask} onClose={() => setSelectedTaskId(null)} />
+      <TaskDetailDrawer
+        task={selectedTask}
+        onClose={() => setSelectedTaskId(null)}
+        onUpdated={() => void refreshTasks()}
+      />
+      <RoutineDetailDrawer
+        routine={selectedRoutine}
+        routines={scheduledTasks}
+        onClose={() => setSelectedRoutineId(null)}
+        onUpdated={() => {/* useScheduledTasks auto-refreshes via its own hook */}}
+      />
       <CancelTaskModal
         open={cancelTarget !== null}
         onCancel={() => setCancelTarget(null)}

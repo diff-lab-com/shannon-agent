@@ -3,10 +3,10 @@ interface WelcomeStateProps {
 }
 
 const EXAMPLES = [
-  { icon: 'code', title: 'Write code', prompt: 'Help me build a REST API endpoint in Rust' },
-  { icon: 'bug_report', title: 'Debug an issue', prompt: 'Debug why my React component is re-rendering infinitely' },
-  { icon: 'school', title: 'Explain a concept', prompt: 'Explain how async/await works in Rust' },
-  { icon: 'auto_fix_high', title: 'Refactor', prompt: 'Refactor this function to be more idiomatic' },
+  { icon: 'mail', title: 'Draft an email', prompt: 'Draft a friendly follow-up email to a candidate who went silent after the onsite. Keep it short and warm.' },
+  { icon: 'summarize', title: 'Summarize', prompt: 'Summarize the document below into 5 bullet points and a one-paragraph TL;DR for a busy exec.' },
+  { icon: 'travel_explore', title: 'Research', prompt: 'Research the top 3 Rust web frameworks in 2026. Compare them on ecosystem, async support, and learning curve. Cite sources.' },
+  { icon: 'code', title: 'Write code', prompt: 'Build a REST API endpoint in Rust that accepts JSON, validates input, and returns a typed response.' },
 ]
 
 export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
@@ -17,7 +17,7 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
           <span className="material-symbols-outlined text-[32px] text-primary">auto_awesome</span>
         </div>
         <h2 className="font-headline-lg text-headline-lg text-on-surface mb-sm">What can I help with?</h2>
-        <p className="font-body-md text-on-surface-variant mb-xl">Ask me to write, debug, explain, or refactor code.</p>
+        <p className="font-body-md text-on-surface-variant mb-xl">Your AI workspace. Pick a starting point or type your own — Shannon handles email, research, summaries, and code.</p>
         <div className="grid grid-cols-2 gap-sm">
           {EXAMPLES.map(ex => (
             <button

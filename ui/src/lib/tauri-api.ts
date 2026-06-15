@@ -14,6 +14,7 @@ import type {
   McpServerConfig,
   SkillInfo,
   SkillDetail,
+  InstalledAddonSummary,
   TaskItem,
   BackgroundTaskInfo,
   AgentInfo,
@@ -116,6 +117,12 @@ export async function exportSession(id: string, format: 'markdown' | 'json'): Pr
   return invoke('export_session', { id, format })
 }
 
+// Save a UTF-8 text payload (e.g. an exported Markdown blob) to an absolute
+// path chosen by the user via @tauri-apps/plugin-dialog's save().
+export async function saveTextFile(path: string, content: string): Promise<void> {
+  await invoke('save_text_file', { path, content })
+}
+
 // --- Permissions ---
 
 export async function respondPermission(requestId: string, allow: boolean, note?: string): Promise<void> {
@@ -170,6 +177,352 @@ export async function listSkills(): Promise<SkillInfo[]> {
 
 export async function getSkillDetail(name: string): Promise<SkillDetail> {
   return invoke('get_skill_detail', { name })
+}
+
+// --- Extensions Hub (P1) ---
+
+export async function listInstalledAddons(): Promise<InstalledAddonSummary[]> {
+  return invoke('list_installed_addons')
+}
+
+// --- Extensions Hub (P2: MCP installers) ---
+
+export interface FeaturedVendor {
+  slug: string
+  display_name: string
+  description: string
+  icon: string
+  category: 'productivity' | 'communication' | 'developer_tools' | 'data_sources'
+  trust: 'unknown' | 'community' | 'official' | 'verified'
+  install_kind:
+    | { type: 'oauth_remote'; authorize_url: string; token_url: string; mcp_endpoint: string; client_id_env: string; default_scopes: string[]; display_name: string }
+    | { type: 'stdio'; command: string; args: string[]; env_vars: [string, string][]; display_name: string }
+  homepage_url: string
+}
+
+export interface RegistryServer {
+  id: string
+  name: string
+  description: string | null
+  repository: string | null
+  version: string | null
+  homepage_url: string | null
+  license: string | null
+  stars: number | null
+  last_updated: string | null
+  verified: boolean
+}
+
+export interface InstallResult {
+  id: string
+  name: string
+  install_path: string | null
+}
+
+export interface OAuthAuthorizeUrl {
+  url: string
+  verifier: string
+  state: string
+}
+
+export interface StdioMcpSpecPayload {
+  server_name: string
+  command: string
+  args: string[]
+  env: [string, string][]
+}
+
+export async function listFeaturedVendors(): Promise<FeaturedVendor[]> {
+  return invoke('list_featured_vendors')
+}
+
+export async function listMcpRegistryServers(): Promise<RegistryServer[]> {
+  return invoke('list_mcp_registry_servers')
+}
+
+export async function installMcpStdio(spec: StdioMcpSpecPayload): Promise<InstallResult> {
+  return invoke('install_mcp_stdio', { spec })
+}
+
+export async function installMcpMcpb(serverName: string, archiveBytes: number[]): Promise<InstallResult> {
+  return invoke('install_mcp_mcpb', { serverName, archiveBytes })
+}
+
+export async function installMcpOAuthAuthorizeUrl(vendorSlug: string, redirectUri: string): Promise<OAuthAuthorizeUrl> {
+  return invoke('install_mcp_oauth_authorize_url', { vendorSlug, redirectUri })
+}
+
+export async function installMcpOAuthComplete(vendorSlug: string, accessToken: string): Promise<InstallResult> {
+  return invoke('install_mcp_oauth_complete', { vendorSlug, accessToken })
+}
+
+export async function uninstallMcpServer(serverName: string): Promise<void> {
+  return invoke('uninstall_mcp_server', { serverName })
+}
+
+// --- Extensions Hub (P3: Skills catalog + installer) ---
+
+export interface SkillCatalogEntry {
+  id: string
+  kind: 'skill'
+  name: string
+  description: string
+  author: string | null
+  version: string | null
+  homepage_url: string | null
+  license: string | null
+  stars: number | null
+  last_updated: string | null
+  source:
+    | { type: 'mcp_registry'; publisher: string }
+    | { type: 'featured_vendor' }
+    | { type: 'git_hub_repo'; repo: string; ref_?: string | null }
+    | { type: 'custom'; url: string }
+    | { type: 'native' }
+  trust: 'unknown' | 'community' | 'official' | 'verified'
+  metadata: Record<string, unknown>
+  tags: string[]
+}
+
+export interface InstalledSkill {
+  name: string
+  path: string
+  installed_at: string | null
+}
+
+export async function listSkillCatalog(): Promise<SkillCatalogEntry[]> {
+  return invoke('list_skill_catalog')
+}
+
+export async function installSkillFromRepo(
+  pluginName: string,
+  repo: string,
+  ref_: string,
+): Promise<InstallResult> {
+  return invoke('install_skill_from_repo', { pluginName, repo, ref_ })
+}
+
+export async function installNativeSkill(
+  pluginName: string,
+  body: string,
+): Promise<InstallResult> {
+  return invoke('install_native_skill', { pluginName, body })
+}
+
+export async function listInstalledSkillPlugins(): Promise<InstalledSkill[]> {
+  return invoke('list_installed_skill_plugins')
+}
+
+export async function uninstallSkillPlugin(name: string): Promise<void> {
+  return invoke('uninstall_skill_plugin', { name })
+}
+
+// --- Extensions Hub (P4: Agents catalog + installer) ---
+
+export interface AgentCatalogEntry {
+  id: string
+  kind: 'agent'
+  name: string
+  description: string
+  author: string | null
+  version: string | null
+  homepage_url: string | null
+  license: string | null
+  stars: number | null
+  last_updated: string | null
+  source:
+    | { type: 'mcp_registry'; publisher: string }
+    | { type: 'featured_vendor' }
+    | { type: 'git_hub_repo'; repo: string; ref_?: string | null }
+    | { type: 'custom'; url: string }
+    | { type: 'native' }
+  trust: 'unknown' | 'community' | 'official' | 'verified'
+  metadata: {
+    trigger?: string
+    model?: string
+    tools?: string[]
+    system_prompt?: string
+    upstream?: string
+    [k: string]: unknown
+  }
+  tags: string[]
+}
+
+export interface InstalledAgent {
+  name: string
+  path: string
+  installed_at: string | null
+}
+
+export async function listAgentCatalog(): Promise<AgentCatalogEntry[]> {
+  return invoke('list_agent_catalog')
+}
+
+export async function installAgentFromRepo(
+  pluginName: string,
+  repo: string,
+  ref_: string,
+): Promise<InstallResult> {
+  return invoke('install_agent_from_repo', { pluginName, repo, ref_ })
+}
+
+export async function installNativeAgent(
+  pluginName: string,
+  body: string,
+): Promise<InstallResult> {
+  return invoke('install_native_agent', { pluginName, body })
+}
+
+export async function listInstalledAgentPlugins(): Promise<InstalledAgent[]> {
+  return invoke('list_installed_agent_plugins')
+}
+
+export async function uninstallAgentPlugin(name: string): Promise<void> {
+  return invoke('uninstall_agent_plugin', { name })
+}
+
+// --- Extensions Hub (P5: Native data sources — Obsidian + Email IMAP) ---
+
+export interface DataSourceCatalogEntry {
+  id: string
+  kind: 'data_source'
+  name: string
+  description: string
+  author: string | null
+  version: string | null
+  homepage_url: string | null
+  license: string | null
+  stars: number | null
+  last_updated: string | null
+  source: { type: 'native' }
+  trust: 'verified' | 'official' | 'community' | 'unknown'
+  metadata: {
+    kind?: string
+    fields?: DataSourceField[]
+    [k: string]: unknown
+  }
+  tags: string[]
+}
+
+export interface DataSourceField {
+  key: string
+  label: string
+  kind: 'text' | 'password' | 'path' | 'number' | string
+  required: boolean
+  placeholder?: string | null
+  help?: string | null
+}
+
+export interface DataSourceAdapter {
+  slug: string
+  kind: string
+  name: string
+  description: string
+  homepage_url: string | null
+  fields: DataSourceField[]
+}
+
+export interface InstalledDataSource {
+  slug: string
+  kind: string
+  name: string
+  path: string
+  installed_at: string | null
+}
+
+export async function listDataSourceCatalog(): Promise<DataSourceCatalogEntry[]> {
+  return invoke('list_data_source_catalog')
+}
+
+export async function listDataSourceAdapters(): Promise<DataSourceAdapter[]> {
+  return invoke('list_data_source_adapters')
+}
+
+export async function installDataSource(
+  slug: string,
+  kind: string,
+  name: string,
+  config: Record<string, string>,
+): Promise<InstallResult> {
+  return invoke('install_data_source', {
+    slug,
+    kind,
+    name,
+    config,
+  })
+}
+
+export async function listInstalledDataSources(): Promise<InstalledDataSource[]> {
+  return invoke('list_installed_data_sources')
+}
+
+export async function uninstallDataSource(slug: string): Promise<void> {
+  return invoke('uninstall_data_source', { slug })
+}
+
+export async function readDataSourceConfig(
+  slug: string,
+): Promise<Record<string, string>> {
+  return invoke('read_data_source_config', { slug })
+}
+
+// --- Extensions Hub (P6: Security hardening) ---
+
+export type InjectionRisk = 'clean' | 'suspicious' | 'dangerous'
+
+export interface InjectionMatch {
+  pattern: string
+  matched_substring: string
+  category: string
+}
+
+export interface InjectionReport {
+  risk: InjectionRisk
+  matches: InjectionMatch[]
+  match_count: number
+}
+
+export type SignatureStatus =
+  | 'trusted'
+  | 'untrusted_signature'
+  | 'unsigned'
+  | 'malformed'
+
+export interface SignatureReport {
+  status: SignatureStatus
+  signer: string | null
+  note: string
+}
+
+export interface CatalogReport {
+  entry_id: string
+  reason: string
+  created_at: string
+}
+
+export async function scanPromptInjection(text: string): Promise<InjectionReport> {
+  return invoke('scan_prompt_injection', { text })
+}
+
+export async function verifySignature(
+  signatureBody: string | null,
+): Promise<SignatureReport> {
+  return invoke('verify_signature', { signatureBody })
+}
+
+export async function reportCatalogEntry(
+  entryId: string,
+  reason: string,
+): Promise<CatalogReport> {
+  return invoke('report_catalog_entry', { entryId, reason })
+}
+
+export async function listCatalogReports(): Promise<CatalogReport[]> {
+  return invoke('list_catalog_reports')
+}
+
+export async function clearCatalogReport(entryId: string): Promise<number> {
+  return invoke('clear_catalog_report', { entryId })
 }
 
 // --- Plugins (A.3 ecosystem compatibility) ---
@@ -237,6 +590,35 @@ export async function listAgents(): Promise<AgentInfo[]> {
   return invoke('list_agents')
 }
 
+// --- Inter-agent message history (Phase D C3) ---
+
+export async function listAgentMessages(
+  team?: string,
+  limit?: number,
+): Promise<import('@/types').AgentMessageEntry[]> {
+  return invoke('list_agent_messages', { team: team ?? null, limit: limit ?? null })
+}
+
+export async function listAgentMessageTeams(): Promise<string[]> {
+  return invoke('list_agent_message_teams')
+}
+
+export async function recordAgentMessage(
+  team: string,
+  from: string,
+  to: string,
+  content: string,
+  priority?: 'low' | 'normal' | 'high' | 'critical',
+): Promise<string> {
+  return invoke('record_agent_message', {
+    team,
+    from,
+    to,
+    content,
+    priority: priority ?? null,
+  })
+}
+
 export interface AgentDefinitionInfo {
   name: string
   description: string
@@ -265,6 +647,10 @@ export async function deleteAgentDefinition(name: string): Promise<boolean> {
 
 export async function listTasks(): Promise<TaskItem[]> {
   return invoke('list_tasks')
+}
+
+export async function updateTask(payload: import('@/types').UpdateTaskPayload): Promise<TaskItem> {
+  return invoke('update_task', { payload })
 }
 
 // --- Billing ---
@@ -365,6 +751,151 @@ export async function listTriggeredRoutines(): Promise<TriggeredRoutineDto[]> {
 
 export async function toggleTriggeredRoutine(name: string, enabled: boolean): Promise<boolean> {
   return invoke('toggle_triggered_routine', { name, enabled })
+}
+
+export async function createTriggeredRoutine(payload: {
+  name: string
+  trigger: string
+  command: string
+  matcher?: string
+  pattern?: string
+  description?: string
+}): Promise<TriggeredRoutineDto> {
+  return invoke('create_triggered_routine', {
+    name: payload.name,
+    trigger: payload.trigger,
+    command: payload.command,
+    matcher: payload.matcher ?? null,
+    pattern: payload.pattern ?? null,
+    description: payload.description ?? null,
+  })
+}
+
+// Hook events + permission profiles
+
+export async function listHookEvents(): Promise<import('@/types').HookEventInfo[]> {
+  return invoke('list_hook_events')
+}
+
+export async function listPermissionProfiles(): Promise<import('@/types').ProfilesList> {
+  return invoke('list_permission_profiles')
+}
+
+export async function saveCustomProfile(payload: {
+  name: string
+  description?: string
+  auto_approve: string[]
+  confirm: string[]
+  deny: string[]
+}): Promise<import('@/types').CustomProfileInfo> {
+  return invoke('save_custom_profile', {
+    name: payload.name,
+    description: payload.description ?? null,
+    auto_approve: payload.auto_approve,
+    confirm: payload.confirm,
+    deny: payload.deny,
+  })
+}
+
+export async function deleteCustomProfile(name: string): Promise<string[]> {
+  return invoke('delete_custom_profile', { name })
+}
+
+// --- OPC analytics ---
+
+export async function getOpcMetrics(): Promise<import('@/types').OpcMetrics> {
+  return invoke('get_opc_metrics')
+}
+
+// --- LSP quick-fix ---
+
+export interface CodeActionDto {
+  title: string
+  kind?: string
+  is_preferred: boolean
+  edit?: unknown
+  command?: string
+}
+
+export interface CodeActionRequest {
+  file_path: string
+  server_cmd: string
+  server_args: string[]
+  start_line: number
+  start_character: number
+  end_line: number
+  end_character: number
+  language_id: string
+  diagnostic_messages: string[]
+}
+
+export async function lspCodeActions(req: CodeActionRequest): Promise<{ actions: CodeActionDto[] }> {
+  return invoke('lsp_code_actions', { req })
+}
+
+export async function applyCodeAction(edit: unknown): Promise<number> {
+  return invoke('apply_code_action', { edit })
+}
+
+export interface SourceFile {
+  path: string
+  content: string
+  language_id: string
+}
+
+export async function readSourceFile(path: string): Promise<SourceFile> {
+  return invoke('read_source_file', { path })
+}
+
+export interface FileDiagnostic {
+  start_line: number
+  start_character: number
+  end_line: number
+  end_character: number
+  message: string
+  severity: string
+  source?: string
+  code?: string
+}
+
+export interface FileDiagnosticsRequest {
+  file_path: string
+  server_cmd: string
+  server_args: string[]
+  language_id: string
+  content: string
+}
+
+export interface FileDiagnosticsResponse {
+  diagnostics: FileDiagnostic[]
+  timed_out: boolean
+}
+
+const DEFAULT_DIAGNOSTICS_SERVERS: Record<
+  string,
+  { cmd: string; args: string[] }
+> = {
+  rust: { cmd: 'rust-analyzer', args: [] },
+  typescript: { cmd: 'typescript-language-server', args: ['--stdio'] },
+  typescriptreact: { cmd: 'typescript-language-server', args: ['--stdio'] },
+  javascript: { cmd: 'typescript-language-server', args: ['--stdio'] },
+  go: { cmd: 'gopls', args: [] },
+  python: { cmd: 'pylsp', args: [] },
+}
+
+export function defaultDiagnosticsServer(languageId: string): {
+  cmd: string
+  args: string[]
+} {
+  return (
+    DEFAULT_DIAGNOSTICS_SERVERS[languageId] ?? { cmd: '', args: [] }
+  )
+}
+
+export async function runFileDiagnostics(
+  req: FileDiagnosticsRequest,
+): Promise<FileDiagnosticsResponse> {
+  return invoke('run_file_diagnostics', { req })
 }
 
 // Worktrees (B9)

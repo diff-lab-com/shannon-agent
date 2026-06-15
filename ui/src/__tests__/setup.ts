@@ -9,6 +9,11 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(),
 }))
 
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn().mockResolvedValue(null),
+  save: vi.fn().mockResolvedValue(null),
+}))
+
 Object.defineProperty(window, 'matchMedia', {
   writable: true,
   value: vi.fn().mockImplementation((query: string) => ({
@@ -77,6 +82,7 @@ vi.mock('@/lib/tauri-api', () => ({
   renameSession: vi.fn().mockResolvedValue(true),
   duplicateSession: vi.fn().mockResolvedValue({ id: 'dup-1', title: 'Copy', created_at: 0 }),
   exportSession: vi.fn().mockResolvedValue(''),
+  saveTextFile: vi.fn().mockResolvedValue(undefined),
   respondPermission: vi.fn().mockResolvedValue(undefined),
   getFileDiff: vi.fn().mockResolvedValue({ path: '', hunks: [] }),
   applyDiff: vi.fn().mockResolvedValue(undefined),

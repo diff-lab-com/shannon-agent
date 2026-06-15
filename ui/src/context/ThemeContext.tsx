@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import * as api from '@/lib/tauri-api'
 
-export type ThemeName = 'material' | 'tokyo-night' | 'tokyo-night-light' | 'catppuccin' | 'nord' | 'ember' | 'slate' | 'system'
+export type ThemeName = 'material' | 'tokyo-night' | 'tokyo-night-light' | 'catppuccin' | 'nord' | 'ember' | 'slate' | 'solarized' | 'solarized-light' | 'dracula' | 'gruvbox' | 'gruvbox-light' | 'system'
 
 type ResolvedTheme = Exclude<ThemeName, 'system'>
 
@@ -29,6 +29,11 @@ const THEMES: { id: ThemeName; label: string }[] = [
   { id: 'nord', label: 'Nord' },
   { id: 'ember', label: 'Ember' },
   { id: 'slate', label: 'Slate' },
+  { id: 'solarized', label: 'Solarized Dark' },
+  { id: 'solarized-light', label: 'Solarized Light' },
+  { id: 'dracula', label: 'Dracula' },
+  { id: 'gruvbox', label: 'Gruvbox' },
+  { id: 'gruvbox-light', label: 'Gruvbox Light' },
 ]
 
 function getSystemTheme(): ResolvedTheme {

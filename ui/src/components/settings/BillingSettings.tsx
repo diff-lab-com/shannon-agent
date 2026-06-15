@@ -60,6 +60,21 @@ export default function BillingSettings() {
         <p className="font-body-md text-on-surface-variant">Manage your subscription plans, view usage metrics, and update payment information.</p>
       </div>
 
+      {/* Demo mode banner */}
+      <div
+        role="alert"
+        data-testid="demo-banner"
+        className="mb-lg flex items-start gap-md p-md rounded-xl bg-warning/10 border border-warning/30 text-on-surface"
+      >
+        <span className="material-symbols-outlined text-warning shrink-0">science</span>
+        <div className="flex-1">
+          <div className="font-label-md text-warning font-bold">Demo mode</div>
+          <p className="font-body-sm text-on-surface-variant mt-xs">
+            Billing integration is not yet connected. Plan, cost, and history figures shown here are illustrative sample data, not real usage.
+          </p>
+        </div>
+      </div>
+
       <div className="space-y-lg">
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-12 gap-lg">

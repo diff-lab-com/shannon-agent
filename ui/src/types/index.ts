@@ -92,6 +92,12 @@ export interface SessionInfo {
   title: string
   created_at: number
   message_count: number
+  /** True if this conversation was initiated by an agent (not a direct user prompt). */
+  is_agent_run?: boolean
+  /** True if this conversation is tied to a scheduled/routine trigger. */
+  is_scheduled?: boolean
+  /** True if the user has pinned this conversation. */
+  is_pinned?: boolean
 }
 
 export interface StatusResponse {
@@ -221,6 +227,22 @@ export interface SkillDetail {
   category?: string
 }
 
+// --- Extensions Hub Types (P1) ---
+
+export type AddonKind = 'mcp' | 'skill' | 'agent' | 'data_source' | 'plugin'
+
+export type TrustLevel = 'unknown' | 'community' | 'official' | 'verified'
+
+export interface InstalledAddonSummary {
+  id: string
+  kind: AddonKind
+  name: string
+  install_path?: string
+  installed_at?: string
+  version?: string
+  enabled: boolean
+}
+
 // --- Task Types ---
 
 export interface TaskItem {
@@ -231,6 +253,62 @@ export interface TaskItem {
   priority?: string
   description?: string
   progress?: number
+  /** IDs of tasks this task waits on. Backend JSON key: blockedBy. */
+  blocked_by?: string[]
+  /** IDs of tasks waiting on this task. Backend JSON key: blocks. */
+  blocks?: string[]
+  /** Optional due date as unix seconds. */
+  due_date?: number | null
+  /** Active-form label for in-progress status. */
+  active_form?: string
+  /** 'serial' (default) or 'parallel'. Controls scheduling of `blocks`. */
+  execution_mode?: 'serial' | 'parallel' | null
+  /** Team / session subdir name the task file lives in. */
+  team?: string | null
+}
+
+/// Payload for `update_task`. All fields optional except `id`.
+export interface UpdateTaskPayload {
+  id: string
+  status?: string
+  assignee?: string
+  priority?: string
+  due_date?: number | null
+  execution_mode?: 'serial' | 'parallel'
+}
+
+// --- OPC analytics ---
+
+export interface OpcDayBucket {
+  date: string
+  created: number
+  completed: number
+}
+
+export interface OpcStatusBucket {
+  status: string
+  count: number
+}
+
+export interface OpcAssigneeBucket {
+  assignee: string
+  total: number
+  done: number
+  in_progress: number
+}
+
+export interface OpcPriorityBucket {
+  priority: string
+  count: number
+}
+
+export interface OpcMetrics {
+  total: number
+  completion_rate: number
+  by_status: OpcStatusBucket[]
+  by_priority: OpcPriorityBucket[]
+  by_assignee: OpcAssigneeBucket[]
+  daily: OpcDayBucket[]
 }
 
 export interface BackgroundTaskInfo {
@@ -333,6 +411,10 @@ export interface ExecutionPolicy {
   notify_on_failure: boolean
   budget_usd?: number | null
   auto_archive_when_empty: boolean
+  /// P2.3: Result routing channels. Each entry is a target spec like
+  /// "slack:#ops", "email:ops@example.com", "notification", "log".
+  /// Empty array = log only (default behavior).
+  result_routing?: string[]
 }
 
 /// A single scheduled routine (wire-level type, matches Rust `ScheduledRoutine`).
@@ -354,6 +436,8 @@ export interface ScheduledRoutine {
   policy?: ExecutionPolicy | null
   last_run_id?: string | null
   last_error?: string | null
+  /// IDs of routines that must succeed before this one fires.
+  depends_on?: string[]
 }
 
 /// Payload for `create_scheduled_task`.
@@ -382,6 +466,8 @@ export interface UpdateTaskPayload {
   expires_at?: number
   max_fires?: number
   policy?: ExecutionPolicy
+  /// Replaces dependency list. Send the full list (add or remove); empty clears.
+  depends_on?: string[]
 }
 
 /// Result of `preview_cron`.
@@ -461,6 +547,42 @@ export interface TriggeredRoutineDto {
   description?: string
 }
 
+/// Hook event catalog entry. Mirrors `automation_commands::HookEventInfo`.
+export interface HookEventInfo {
+  name: string
+  category: string
+  description: string
+  payload_fields: string[]
+}
+
+/// Built-in permission profile summary (Strict / Balanced / Permissive).
+export interface BuiltinProfileInfo {
+  id: string
+  description: string
+  auto_approve_read: boolean
+  auto_approve_write: boolean
+  auto_approve_bash: boolean
+  auto_approve_delete: boolean
+  auto_approve_network: boolean
+  deny_destructive: string[]
+}
+
+/// User-defined custom profile row.
+export interface CustomProfileInfo {
+  name: string
+  description: string
+  auto_approve: string[]
+  confirm: string[]
+  deny: string[]
+  source_path?: string
+}
+
+/// Response from `list_permission_profiles`.
+export interface ProfilesList {
+  builtin: BuiltinProfileInfo[]
+  custom: CustomProfileInfo[]
+}
+
 /// DTO mirroring Rust `TaskWorktreeDto`.
 export interface TaskWorktreeDto {
   task_id: string
@@ -507,3 +629,16 @@ export const EVENT_NAMES = {
 } as const
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES]
+
+// --- Inter-agent message history (Phase D C3) ---
+
+export interface AgentMessageEntry {
+  message_id: string
+  team: string
+  from: string
+  to: string
+  content_preview: string
+  content_kind: 'text' | 'structured' | 'protocol'
+  priority: 'low' | 'normal' | 'high' | 'critical'
+  timestamp: number
+}

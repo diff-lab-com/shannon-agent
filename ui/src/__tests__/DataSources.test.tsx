@@ -1,114 +1,227 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
-import { AppProvider } from '@/context/AppContext'
-import { MemoryRouter } from 'react-router-dom'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import DataSources from '@/components/extensions/DataSources'
 
-const mockCtx = vi.hoisted(() => ({
-  mcpServers: [] as any[],
-  refreshMcpServers: vi.fn(),
+function Shell() {
+  return <Outlet context={{ search: '' }} />
+}
+
+const listDataSourceCatalog = vi.hoisted(() => vi.fn())
+const listInstalledDataSources = vi.hoisted(() => vi.fn())
+const installDataSource = vi.hoisted(() => vi.fn())
+const uninstallDataSource = vi.hoisted(() => vi.fn())
+
+vi.mock('@/lib/tauri-api', () => ({
+  default: {},
+  listDataSourceCatalog: (...a: unknown[]) => listDataSourceCatalog(...a),
+  listInstalledDataSources: (...a: unknown[]) => listInstalledDataSources(...a),
+  installDataSource: (...a: unknown[]) => installDataSource(...a),
+  uninstallDataSource: (...a: unknown[]) => uninstallDataSource(...a),
 }))
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => mockCtx,
-}))
-
-function wrap(ui: React.ReactElement) {
-  return (
-    <MemoryRouter>
-      {ui}
+function renderWithRouter() {
+  return render(
+    <MemoryRouter initialEntries={['/extensions/datasources']}>
+      <Routes>
+        <Route path="/*" element={<Shell />}>
+          <Route path="*" element={<DataSources />} />
+        </Route>
+      </Routes>
     </MemoryRouter>
   )
 }
 
-describe('DataSources page', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockCtx.mcpServers = []
-    mockCtx.refreshMcpServers.mockResolvedValue(undefined)
+const obsidianEntry = {
+  id: 'native:data-source-obsidian-vault',
+  kind: 'data_source' as const,
+  name: 'Obsidian Vault',
+  description: 'Read markdown notes from a local Obsidian vault.',
+  author: 'Shannon',
+  version: '0.2.4',
+  homepage_url: 'https://obsidian.md',
+  license: 'Apache-2.0',
+  stars: null,
+  last_updated: null,
+  source: { type: 'native' as const },
+  trust: 'verified' as const,
+  metadata: {
+    kind: 'obsidian',
+    fields: [
+      { key: 'vault_path', label: 'Vault path', kind: 'path', required: true, placeholder: '/home/user/MyVault', help: null },
+    ],
+  },
+  tags: ['native', 'obsidian'],
+}
+
+const emailEntry = {
+  id: 'native:data-source-email-imap',
+  kind: 'data_source' as const,
+  name: 'Email (IMAP)',
+  description: 'Connect to an IMAP server to read mailbox messages.',
+  author: 'Shannon',
+  version: '0.2.4',
+  homepage_url: null,
+  license: 'Apache-2.0',
+  stars: null,
+  last_updated: null,
+  source: { type: 'native' as const },
+  trust: 'verified' as const,
+  metadata: {
+    kind: 'email_imap',
+    fields: [
+      { key: 'imap_host', label: 'IMAP host', kind: 'text', required: true, placeholder: 'imap.gmail.com' },
+      { key: 'imap_port', label: 'IMAP port', kind: 'number', required: true, placeholder: '993' },
+      { key: 'username', label: 'Username', kind: 'text', required: true, placeholder: 'you@example.com' },
+      { key: 'password', label: 'Password / app password', kind: 'password', required: true, placeholder: null },
+    ],
+  },
+  tags: ['native', 'email_imap'],
+}
+
+const installedObsidian = {
+  slug: 'obsidian-vault',
+  kind: 'obsidian',
+  name: 'Obsidian Vault',
+  path: '/home/user/.shannon/data-sources/obsidian-vault.toml',
+  installed_at: '2026-06-15T00:00:00Z',
+}
+
+beforeEach(() => {
+  listDataSourceCatalog.mockReset()
+  listInstalledDataSources.mockReset()
+  installDataSource.mockReset()
+  uninstallDataSource.mockReset()
+})
+
+describe('DataSources (P5 native adapters)', () => {
+  it('renders catalog and installed headers', async () => {
+    listDataSourceCatalog.mockResolvedValue([])
+    listInstalledDataSources.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText(/Adapters · 0/)).toBeInTheDocument()
+    })
+    expect(screen.getByText(/Installed · 0/)).toBeInTheDocument()
   })
 
-  it('renders data sources heading', () => {
-    render(wrap(<DataSources />))
-    expect(screen.getByText('Data Sources')).toBeInTheDocument()
+  it('shows loading state for catalog', () => {
+    listDataSourceCatalog.mockReturnValue(new Promise(() => {}))
+    listInstalledDataSources.mockResolvedValue([])
+    renderWithRouter()
+    expect(screen.getByText('Loading adapters…')).toBeInTheDocument()
   })
 
-  it('renders add source button', () => {
-    render(wrap(<DataSources />))
-    expect(screen.getByText('Add Source')).toBeInTheDocument()
+  it('renders adapter cards with name and description', async () => {
+    listDataSourceCatalog.mockResolvedValue([obsidianEntry, emailEntry])
+    listInstalledDataSources.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Obsidian Vault')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Email (IMAP)')).toBeInTheDocument()
+    expect(screen.getByText(/Read markdown notes/)).toBeInTheDocument()
   })
 
-  it('renders empty state when no servers', () => {
-    render(wrap(<DataSources />))
-    expect(screen.getByText('No MCP servers configured.')).toBeInTheDocument()
+  it('shows Installed badge when adapter already installed', async () => {
+    listDataSourceCatalog.mockResolvedValue([obsidianEntry])
+    listInstalledDataSources.mockResolvedValue([installedObsidian])
+    renderWithRouter()
+    await waitFor(() => {
+      const installedBadges = screen.getAllByText('Installed')
+      expect(installedBadges.length).toBeGreaterThan(0)
+    })
   })
 
-  it('shows add form when Add Source is clicked', () => {
-    render(wrap(<DataSources />))
-    fireEvent.click(screen.getByText('Add Source'))
-    expect(screen.getByText('Add MCP Server')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Name (e.g. my-server)')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Command (e.g. npx my-mcp-server)')).toBeInTheDocument()
+  it('expands install form on Configure & Install click', async () => {
+    listDataSourceCatalog.mockResolvedValue([obsidianEntry])
+    listInstalledDataSources.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Obsidian Vault')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Configure & Install'))
+    expect(screen.getByText('Vault path')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('/home/user/MyVault')).toBeInTheDocument()
+    expect(screen.getByText('Save')).toBeInTheDocument()
   })
 
-  it('hides add form on Cancel', () => {
-    render(wrap(<DataSources />))
-    fireEvent.click(screen.getByText('Add Source'))
-    expect(screen.getByText('Add MCP Server')).toBeInTheDocument()
-    fireEvent.click(screen.getByText('Cancel'))
-    expect(screen.queryByText('Add MCP Server')).not.toBeInTheDocument()
+  it('validates required fields before submit', async () => {
+    listDataSourceCatalog.mockResolvedValue([obsidianEntry])
+    listInstalledDataSources.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Obsidian Vault')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Configure & Install'))
+    // Clear placeholder default
+    fireEvent.change(screen.getByPlaceholderText('/home/user/MyVault'), { target: { value: '' } })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => {
+      expect(screen.getByText(/Vault path is required/)).toBeInTheDocument()
+    })
+    expect(installDataSource).not.toHaveBeenCalled()
   })
 
-  it('calls addMcpServer on form submit', async () => {
-    render(wrap(<DataSources />))
-    fireEvent.click(screen.getByText('Add Source'))
-    fireEvent.change(screen.getByPlaceholderText('Name (e.g. my-server)'), { target: { value: 'test-server' } })
-    fireEvent.change(screen.getByPlaceholderText('Command (e.g. npx my-mcp-server)'), { target: { value: 'npx test' } })
-    fireEvent.click(screen.getByText('Add Server'))
-    const api = await import('@/lib/tauri-api')
-    expect(api.addMcpServer).toHaveBeenCalledWith('test-server', 'npx test', [], {})
+  it('submits install with form values', async () => {
+    listDataSourceCatalog.mockResolvedValue([obsidianEntry])
+    listInstalledDataSources.mockResolvedValue([])
+    installDataSource.mockResolvedValue({
+      id: 'native:data-source-obsidian-vault',
+      name: 'Obsidian Vault',
+      install_path: '/home/user/.shannon/data-sources/obsidian-vault.toml',
+    })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Obsidian Vault')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Configure & Install'))
+    fireEvent.change(screen.getByPlaceholderText('/home/user/MyVault'), {
+      target: { value: '/home/me/Vault' },
+    })
+    fireEvent.click(screen.getByText('Save'))
+    await waitFor(() => {
+      expect(installDataSource).toHaveBeenCalled()
+    })
+    const args = installDataSource.mock.calls[0]
+    expect(args[0]).toBe('obsidian-vault')
+    expect(args[1]).toBe('obsidian')
+    expect(args[2]).toBe('Obsidian Vault')
+    expect(args[3]).toMatchObject({ vault_path: '/home/me/Vault' })
   })
 
-  it('renders add new source card', () => {
-    render(wrap(<DataSources />))
-    expect(screen.getByText('Add New Source')).toBeInTheDocument()
+  it('renders installed section with adapter slug and Remove button', async () => {
+    listDataSourceCatalog.mockResolvedValue([])
+    listInstalledDataSources.mockResolvedValue([installedObsidian])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText(/Installed · 1/)).toBeInTheDocument()
+    })
+    expect(screen.getByText('Obsidian Vault')).toBeInTheDocument()
+    expect(screen.getByText(/obsidian-vault · obsidian/)).toBeInTheDocument()
+    expect(screen.getByText('Remove')).toBeInTheDocument()
   })
 
-  it('renders server cards when servers exist', () => {
-    mockCtx.mcpServers = [
-      { name: 'test-server', connected: true, tool_count: 5, command: 'npx test' },
-    ]
-    render(wrap(<DataSources />))
-    expect(screen.getByText('test-server')).toBeInTheDocument()
-    expect(screen.getByText('Connected')).toBeInTheDocument()
-    expect(screen.getByText('5 tools')).toBeInTheDocument()
+  it('calls uninstallDataSource on Remove click', async () => {
+    listDataSourceCatalog.mockResolvedValue([])
+    listInstalledDataSources.mockResolvedValue([installedObsidian])
+    uninstallDataSource.mockResolvedValue(undefined)
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Remove')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Remove'))
+    await waitFor(() => {
+      expect(uninstallDataSource).toHaveBeenCalledWith('obsidian-vault')
+    })
   })
 
-  it('shows disconnected state for offline servers', () => {
-    mockCtx.mcpServers = [
-      { name: 'offline-server', connected: false, tool_count: 0, command: 'npx broken' },
-    ]
-    render(wrap(<DataSources />))
-    expect(screen.getByText('offline-server')).toBeInTheDocument()
-    expect(screen.getByText('Disconnected')).toBeInTheDocument()
-  })
-
-  it('calls restartMcpServer on restart click', async () => {
-    mockCtx.mcpServers = [
-      { name: 'test-server', connected: true, tool_count: 5, command: 'npx test' },
-    ]
-    render(wrap(<DataSources />))
-    const restartBtn = screen.getByText('sync')
-    fireEvent.click(restartBtn)
-    const api = await import('@/lib/tauri-api')
-    expect(api.restartMcpServer).toHaveBeenCalledWith('test-server')
-  })
-
-  it('validates required fields on add', async () => {
-    render(wrap(<DataSources />))
-    fireEvent.click(screen.getByText('Add Source'))
-    fireEvent.click(screen.getByText('Add Server'))
-    const api = await import('@/lib/tauri-api')
-    expect(api.addMcpServer).not.toHaveBeenCalled()
+  it('shows empty state when no adapters available', async () => {
+    listDataSourceCatalog.mockResolvedValue([])
+    listInstalledDataSources.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('No data source adapters found.')).toBeInTheDocument()
+    })
   })
 })

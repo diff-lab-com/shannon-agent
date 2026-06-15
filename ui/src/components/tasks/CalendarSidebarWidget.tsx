@@ -17,6 +17,7 @@ interface CalendarSidebarWidgetProps {
   tasks: TaskItem[]
   scheduledTasks?: ScheduledRoutine[]
   onSelectTask?: (id: string) => void
+  onSelectRoutine?: (id: string) => void
 }
 
 export default function CalendarSidebarWidget({
@@ -27,6 +28,7 @@ export default function CalendarSidebarWidget({
   tasks,
   scheduledTasks = [],
   onSelectTask,
+  onSelectRoutine,
 }: CalendarSidebarWidgetProps) {
   const today = new Date()
   const startDay = (new Date(viewYear, viewMonth, 1).getDay() + 6) % 7 // Monday-based
@@ -113,6 +115,39 @@ export default function CalendarSidebarWidget({
           ) : null}
         </div>
       </div>
+
+      {scheduledTasks.length > 0 && (
+        <div className="mt-lg pt-lg border-t border-outline-variant/20">
+          <h5 className="font-label-sm text-outline uppercase tracking-wider mb-md">Routines</h5>
+          <div className="space-y-sm">
+            {scheduledTasks.slice(0, 6).map(r => (
+              <button
+                key={r.id}
+                type="button"
+                className="w-full flex items-center gap-sm text-left py-xs px-sm rounded-lg hover:bg-surface-container-low/60 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                onClick={() => onSelectRoutine?.(r.id)}
+                aria-label={`Open routine detail for ${r.name}`}
+              >
+                <span className="material-symbols-outlined text-[16px] text-primary">
+                  {r.enabled ? 'bolt' : 'block'}
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-body-sm font-semibold text-on-surface truncate">
+                    {r.name}
+                  </span>
+                  <span className="block text-[11px] text-on-surface-variant uppercase tracking-wider">
+                    {r.trigger_type}
+                    {r.depends_on && r.depends_on.length > 0
+                      ? ` · ${r.depends_on.length} dep${r.depends_on.length === 1 ? '' : 's'}`
+                      : ''}
+                  </span>
+                </span>
+                <span className="material-symbols-outlined text-[14px] text-on-surface-variant">chevron_right</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
