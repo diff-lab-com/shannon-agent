@@ -27,13 +27,46 @@ describe('ThemeContext', () => {
     expect(screen.getByTestId('current-theme')).toHaveTextContent('material')
   })
 
-  it('provides all 8 themes', () => {
+  it('provides all 11 themes', () => {
     render(
       <ThemeProvider>
         <ThemeConsumer />
       </ThemeProvider>
     )
-    expect(screen.getByTestId('theme-count')).toHaveTextContent('8')
+    expect(screen.getByTestId('theme-count')).toHaveTextContent('11')
+  })
+
+  it('switches to solarized theme and sets data-theme', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    fireEvent.click(screen.getByTestId('btn-solarized'))
+    expect(screen.getByTestId('current-theme')).toHaveTextContent('solarized')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('solarized')
+  })
+
+  it('switches to dracula theme and sets data-theme', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    fireEvent.click(screen.getByTestId('btn-dracula'))
+    expect(screen.getByTestId('current-theme')).toHaveTextContent('dracula')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dracula')
+  })
+
+  it('switches to gruvbox theme and sets data-theme', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    fireEvent.click(screen.getByTestId('btn-gruvbox'))
+    expect(screen.getByTestId('current-theme')).toHaveTextContent('gruvbox')
+    expect(document.documentElement.getAttribute('data-theme')).toBe('gruvbox')
   })
 
   it('resolves system theme to light/dight based on media query', () => {
