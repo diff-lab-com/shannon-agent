@@ -260,6 +260,63 @@ export async function uninstallMcpServer(serverName: string): Promise<void> {
   return invoke('uninstall_mcp_server', { serverName })
 }
 
+// --- Extensions Hub (P3: Skills catalog + installer) ---
+
+export interface SkillCatalogEntry {
+  id: string
+  kind: 'skill'
+  name: string
+  description: string
+  author: string | null
+  version: string | null
+  homepage_url: string | null
+  license: string | null
+  stars: number | null
+  last_updated: string | null
+  source:
+    | { type: 'mcp_registry'; publisher: string }
+    | { type: 'featured_vendor' }
+    | { type: 'git_hub_repo'; repo: string; ref_?: string | null }
+    | { type: 'custom'; url: string }
+    | { type: 'native' }
+  trust: 'unknown' | 'community' | 'official' | 'verified'
+  metadata: Record<string, unknown>
+  tags: string[]
+}
+
+export interface InstalledSkill {
+  name: string
+  path: string
+  installed_at: string | null
+}
+
+export async function listSkillCatalog(): Promise<SkillCatalogEntry[]> {
+  return invoke('list_skill_catalog')
+}
+
+export async function installSkillFromRepo(
+  pluginName: string,
+  repo: string,
+  ref_: string,
+): Promise<InstallResult> {
+  return invoke('install_skill_from_repo', { pluginName, repo, ref_ })
+}
+
+export async function installNativeSkill(
+  pluginName: string,
+  body: string,
+): Promise<InstallResult> {
+  return invoke('install_native_skill', { pluginName, body })
+}
+
+export async function listInstalledSkillPlugins(): Promise<InstalledSkill[]> {
+  return invoke('list_installed_skill_plugins')
+}
+
+export async function uninstallSkillPlugin(name: string): Promise<void> {
+  return invoke('uninstall_skill_plugin', { name })
+}
+
 // --- Plugins (A.3 ecosystem compatibility) ---
 
 export interface PluginInfo {

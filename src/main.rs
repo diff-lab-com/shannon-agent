@@ -83,6 +83,12 @@ fn main() {
             extensions_commands::install_mcp_oauth_authorize_url,
             extensions_commands::install_mcp_oauth_complete,
             extensions_commands::uninstall_mcp_server,
+            // Extensions hub P3 — Skills catalog + installer
+            extensions_commands::list_skill_catalog,
+            extensions_commands::install_skill_from_repo,
+            extensions_commands::install_native_skill,
+            extensions_commands::list_installed_skill_plugins,
+            extensions_commands::uninstall_skill_plugin,
             // Plugin management (A.3)
             commands::list_plugins,
             commands::install_plugin,

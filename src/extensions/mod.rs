@@ -10,6 +10,8 @@ pub mod catalog;
 pub mod oauth;
 pub mod mcpb;
 pub mod mcp_installers;
+pub mod skill_catalog;
+pub mod skill_installers;
 
 pub use types::{
     AddonKind, CatalogEntry, CatalogSource, ConfirmationLevel, InstallTarget, InstalledAddon,
@@ -26,4 +28,11 @@ pub use oauth::{OAuthError, PkceContext};
 pub use mcp_installers::{
     remove_mcp_server_config, write_mcp_server_config, McpbInstaller, OAuthRemoteMcpInstaller,
     ResolvedMcpInstaller, StdioMcpInstaller, StdioMcpSpec,
+};
+pub use skill_catalog::{
+    skill_upstreams, SkillCatalogClient, SkillManifest, SkillManifestEntry, SkillUpstream,
+};
+pub use skill_installers::{
+    is_skill_installed, list_installed_skills, MarketplacePluginInstaller,
+    remove_installed_skill, SkillMarkdownInstaller, InstalledSkill,
 };

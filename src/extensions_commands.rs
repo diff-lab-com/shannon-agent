@@ -8,6 +8,13 @@
 //! - `install_mcp_oauth_authorize_url` — produce the URL the UI opens in a browser.
 //! - `install_mcp_oauth_complete` — write the entry once the UI hands back a token.
 //! - `uninstall_mcp_server` — remove an installed MCP server.
+//!
+//! P3 adds skills catalog + installer:
+//! - `list_skill_catalog` — federated skills (native + GitHub upstreams, 24h cache).
+//! - `install_skill_from_repo` — clone a GitHub skill collection.
+//! - `install_native_skill` — write a built-in skill's SKILL.md.
+//! - `list_installed_skill_plugins` — scan `~/.shannon/skills/`.
+//! - `uninstall_skill_plugin` — remove a skill plugin dir.
 
 use std::sync::Arc;
 
@@ -15,7 +22,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::extensions::{
     self, catalog::FeaturedVendor, installer::AddonInstaller, FeaturedInstallKind,
-    McpRegistryClient, ReqwestFetch, ResolvedMcpInstaller, StdioMcpInstaller, StdioMcpSpec,
+    MarketplacePluginInstaller, McpRegistryClient, ReqwestFetch, ResolvedMcpInstaller,
+    SkillCatalogClient, SkillMarkdownInstaller, StdioMcpInstaller, StdioMcpSpec,
 };
 
 /// Featured vendor list — baked into the app, no network fetch.
@@ -183,6 +191,112 @@ pub async fn install_mcp_oauth_complete(
 #[tauri::command]
 pub async fn uninstall_mcp_server(server_name: String) -> Result<(), String> {
     extensions::remove_mcp_server_config(&server_name).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// P3: Skills catalog + installer
+// ---------------------------------------------------------------------------
+
+/// Fetch the federated skill catalog (native + GitHub upstreams, 24h cache).
+#[tauri::command]
+pub async fn list_skill_catalog() -> Result<Vec<extensions::CatalogEntry>, String> {
+    let fetcher: Arc<dyn extensions::HttpFetch> = Arc::new(ReqwestFetch::new());
+    let client = SkillCatalogClient::new(fetcher);
+    client.list_skills().await.map_err(|e| e.to_string())
+}
+
+/// Clone a GitHub skill collection into `~/.shannon/skills/<plugin>/`.
+#[tauri::command]
+pub async fn install_skill_from_repo(
+    plugin_name: String,
+    repo: String,
+    ref_: String,
+) -> Result<InstallResult, String> {
+    let installer = MarketplacePluginInstaller {
+        plugin_name: plugin_name.clone(),
+        repo,
+        ref_,
+    };
+    // Synthetic catalog entry so the installer's bookkeeping works.
+    let entry = extensions::CatalogEntry {
+        id: format!("marketplace:{}", plugin_name),
+        kind: extensions::AddonKind::Skill,
+        name: plugin_name.clone(),
+        description: String::new(),
+        author: None,
+        version: None,
+        homepage_url: None,
+        license: None,
+        stars: None,
+        last_updated: None,
+        source: extensions::CatalogSource::GitHubRepo {
+            repo: installer.repo.clone(),
+            ref_: Some(installer.ref_.clone()),
+        },
+        trust: extensions::TrustLevel::Community,
+        metadata: Default::default(),
+        tags: vec![],
+    };
+    let sink = extensions::ProgressSink::null();
+    let installed = installer
+        .install(&entry, &extensions::InstallTarget::ShannonSkillsDir { plugin: plugin_name.clone() }, &sink)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(InstallResult {
+        id: installed.id,
+        name: installed.name,
+        install_path: installed.install_path,
+    })
+}
+
+/// Write a built-in skill's SKILL.md body to `~/.shannon/skills/<plugin>/`.
+#[tauri::command]
+pub async fn install_native_skill(
+    plugin_name: String,
+    body: String,
+) -> Result<InstallResult, String> {
+    let installer = SkillMarkdownInstaller {
+        plugin_name: plugin_name.clone(),
+        body,
+    };
+    let entry = extensions::CatalogEntry {
+        id: format!("native:{}", plugin_name),
+        kind: extensions::AddonKind::Skill,
+        name: plugin_name.clone(),
+        description: String::new(),
+        author: None,
+        version: None,
+        homepage_url: None,
+        license: None,
+        stars: None,
+        last_updated: None,
+        source: extensions::CatalogSource::Native,
+        trust: extensions::TrustLevel::Verified,
+        metadata: Default::default(),
+        tags: vec![],
+    };
+    let sink = extensions::ProgressSink::null();
+    let installed = installer
+        .install(&entry, &extensions::InstallTarget::ShannonSkillsDir { plugin: plugin_name.clone() }, &sink)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(InstallResult {
+        id: installed.id,
+        name: installed.name,
+        install_path: installed.install_path,
+    })
+}
+
+/// Scan `~/.shannon/skills/` for installed skill plugins.
+#[tauri::command]
+pub async fn list_installed_skill_plugins() -> Result<Vec<extensions::InstalledSkill>, String> {
+    Ok(extensions::list_installed_skills())
+}
+
+/// Remove an installed skill plugin.
+#[tauri::command]
+pub async fn uninstall_skill_plugin(name: String) -> Result<(), String> {
+    extensions::remove_installed_skill(&name).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
