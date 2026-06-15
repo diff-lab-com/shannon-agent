@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import * as dialog from '@tauri-apps/plugin-dialog'
 import Chat from '@/pages/Chat'
 
 const ctx = vi.hoisted(() => ({
@@ -259,18 +260,35 @@ describe('Chat page', () => {
     expect(likeBtn.querySelector('.material-symbols-outlined')).toHaveTextContent('thumb_up')
   })
 
-  // US-CHAT-08: Attach file button
+  // US-CHAT-08: Attach file button — wired to Tauri native dialog.
   it('has attach file button', () => {
     resetCtx()
     renderChat()
     expect(screen.getByLabelText('Attach file')).toBeInTheDocument()
   })
 
-  it('has hidden file input for attachments', () => {
+  it('clicking attach button opens Tauri file dialog', async () => {
     resetCtx()
     renderChat()
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
-    expect(fileInput).toBeInTheDocument()
-    expect(fileInput.className).toContain('hidden')
+    fireEvent.click(screen.getByLabelText('Attach file'))
+    await waitFor(() => {
+      expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ multiple: true }))
+    })
+  })
+
+  it('shows selected file as a chip with basename only', async () => {
+    resetCtx()
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/Downloads/report.pdf')
+    renderChat()
+    fireEvent.click(screen.getByLabelText('Attach file'))
+    await waitFor(() => {
+      expect(screen.getByText('report.pdf')).toBeInTheDocument()
+    })
+  })
+
+  it('does not render an HTML file input (uses native dialog instead)', () => {
+    resetCtx()
+    renderChat()
+    expect(document.querySelector('input[type="file"]')).toBeNull()
   })
 })

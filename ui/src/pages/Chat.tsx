@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import { toast } from 'sonner'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -27,11 +28,9 @@ export default function Chat() {
   const [diffPath, setDiffPath] = useState<string | null>(null)
   const [fileContext, setFileContext] = useState<FileContext[]>([])
   const [attachedFiles, setAttachedFiles] = useState<string[]>([])
-  const [isDragging, setIsDragging] = useState(false)
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set())
   const [sessionPage, setSessionPage] = useState(1)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -49,6 +48,26 @@ export default function Chat() {
     sendMessage(trimmed, filePaths)
     setInput('')
     setAttachedFiles([])
+  }
+
+  // Attach files via Tauri's native dialog so the backend receives real
+  // absolute paths (the backend reads bytes via std::fs and base64-encodes).
+  // The browser <input type="file"> only exposes File objects with opaque
+  // "fakepath" paths, which never resolve on disk — that was the dead-button bug.
+  const handleAttach = async () => {
+    try {
+      const selected = await openDialog({
+        multiple: true,
+        filters: [
+          { name: 'Documents & Images', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'] },
+        ],
+      })
+      if (!selected) return
+      const paths = (Array.isArray(selected) ? selected : [selected]) as string[]
+      if (paths.length > 0) setAttachedFiles(prev => [...prev, ...paths])
+    } catch (err) {
+      toast.error('Attach failed', { description: String(err) })
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -264,32 +283,16 @@ export default function Chat() {
 
         {/* Input Bar */}
         <div
-          className={`absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg bg-gradient-to-t from-background via-background/90 to-transparent transition-colors ${isDragging ? 'bg-primary/5' : ''}`}
-          onDragOver={e => { e.preventDefault(); setIsDragging(true) }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={e => {
-            e.preventDefault()
-            setIsDragging(false)
-            const files = Array.from(e.dataTransfer.files).map(f => f.name)
-            if (files.length > 0) setAttachedFiles(prev => [...prev, ...files])
-          }}
+          className="absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg bg-gradient-to-t from-background via-background/90 to-transparent transition-colors"
         >
-          {isDragging && (
-            <div className="absolute inset-0 flex items-center justify-center z-10 bg-primary/10 backdrop-blur-sm rounded-lg pointer-events-none">
-              <div className="text-center">
-                <span className="material-symbols-outlined text-[32px] text-primary">cloud_upload</span>
-                <p className="font-label-md text-primary">Drop files here</p>
-              </div>
-            </div>
-          )}
           <div className="max-w-4xl mx-auto relative group">
             <div className="absolute inset-0 bg-primary/10 blur-xl rounded-full opacity-50 group-focus-within:opacity-100 transition-opacity duration-500"></div>
             {attachedFiles.length > 0 && (
               <div className="flex flex-wrap gap-xs mb-sm relative">
-                {attachedFiles.map((name, i) => (
+                {attachedFiles.map((path, i) => (
                   <span key={i} className="inline-flex items-center gap-xs px-sm py-xs bg-primary/10 text-primary rounded-lg font-label-sm">
                     <span className="material-symbols-outlined text-[14px]">description</span>
-                    {name}
+                    {path.split('/').pop()}
                     <button className="hover:text-error cursor-pointer" onClick={() => setAttachedFiles(prev => prev.filter((_, j) => j !== i))}>
                       <span className="material-symbols-outlined text-[14px]">close</span>
                     </button>
@@ -298,14 +301,7 @@ export default function Chat() {
               </div>
             )}
             <div className="relative glass-card bg-surface-container-lowest/80 rounded-2xl border border-outline-variant/30 px-sm py-xs flex items-center shadow-lg group-focus-within:border-primary/50 group-focus-within:shadow-primary/10 transition-all duration-300">
-              <input type="file" ref={fileInputRef} className="hidden" onChange={e => {
-                if (e.target.files) {
-                  const newFiles = Array.from(e.target.files).map(f => f.name)
-                  setAttachedFiles(prev => [...prev, ...newFiles])
-                  e.target.value = ''
-                }
-              }} />
-              <Button variant="ghost" aria-label="Attach file" className="p-md text-on-surface-variant hover:text-primary" onClick={() => fileInputRef.current?.click()}>
+              <Button variant="ghost" aria-label="Attach file" className="p-md text-on-surface-variant hover:text-primary" onClick={handleAttach}>
                 <span className="material-symbols-outlined text-[20px]" aria-hidden="true">attach_file</span>
               </Button>
               <span className="material-symbols-outlined p-md text-primary" aria-hidden="true">{isQuerying ? 'hourglass_empty' : 'auto_awesome'}</span>
