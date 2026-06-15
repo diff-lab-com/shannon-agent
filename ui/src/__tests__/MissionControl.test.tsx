@@ -43,6 +43,7 @@ function wrap(ui: React.ReactElement) {
 beforeEach(() => {
   useAppSpy.mockReturnValue({ tasks: [], sessions: [], agents: [], refreshTasks: vi.fn() })
   window.localStorage.removeItem(SIDEBAR_MODE_KEY)
+  window.localStorage.removeItem('shannon-conversations-tab')
 })
 
 // Helper: enable dev sidebar mode so the Board tab renders.
@@ -71,7 +72,19 @@ describe('MissionControl — tabs', () => {
     expect(screen.getByRole('button', { name: /Board tab/ })).toBeInTheDocument()
   })
 
-  it('defaults to All tab (list replaces board as default)', () => {
+  it('defaults to Today tab (F5: Today is the landing view)', () => {
+    render(wrap(<MissionControl />))
+    expect(screen.getByRole('button', { name: /Today tab/ })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('persists last-selected tab to localStorage', () => {
+    render(wrap(<MissionControl />))
+    fireEvent.click(screen.getByRole('button', { name: /All tab/ }))
+    expect(window.localStorage.getItem('shannon-conversations-tab')).toBe('all')
+  })
+
+  it('restores last-selected tab from localStorage on mount', () => {
+    window.localStorage.setItem('shannon-conversations-tab', 'all')
     render(wrap(<MissionControl />))
     expect(screen.getByRole('button', { name: /All tab/ })).toHaveAttribute('aria-pressed', 'true')
   })
@@ -82,8 +95,9 @@ describe('MissionControl — tabs', () => {
     expect(screen.getByText('Chats today')).toBeInTheDocument()
   })
 
-  it('All tab shows search input (default)', () => {
+  it('All tab shows search input after switching', () => {
     render(wrap(<MissionControl />))
+    fireEvent.click(screen.getByRole('button', { name: /All tab/ }))
     expect(screen.getByPlaceholderText('Search conversations...')).toBeInTheDocument()
   })
 })

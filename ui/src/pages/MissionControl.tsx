@@ -28,6 +28,18 @@ const ALL_TABS: { key: TabKey; label: string; icon: string; devOnly?: boolean }[
   { key: 'board', label: 'Board', icon: 'dashboard', devOnly: true },
 ]
 
+// F5: persist the user's last-selected Conversations tab so they land back on
+// Today (or All/Board) when they return. Default to 'today' so the MVP view
+// (today's chats + due tasks) is surfaced first.
+const TAB_STORAGE_KEY = 'shannon-conversations-tab'
+
+function loadInitialTab(): TabKey {
+  if (typeof window === 'undefined') return 'today'
+  const saved = window.localStorage.getItem(TAB_STORAGE_KEY)
+  if (saved === 'today' || saved === 'all' || saved === 'board') return saved
+  return 'today'
+}
+
 interface MissionControlProps {
   onSelectTask?: (id: string) => void
 }
@@ -37,7 +49,7 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
   const [sidebarMode] = useSidebarMode()
   const isDev = sidebarMode === 'dev'
   const tabs = ALL_TABS.filter(t => !t.devOnly || isDev)
-  const [tab, setTab] = useState<TabKey>('all')
+  const [tab, setTab] = useState<TabKey>(loadInitialTab)
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null)
   // If the active tab is dev-only but the user is in simple mode, fall back.
   const activeTab: TabKey = tab === 'board' && !isDev ? 'all' : tab
@@ -46,6 +58,13 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
   const handleSelect = (id: string) => {
     setLocalSelectedId(id)
     onSelectTask?.(id)
+  }
+
+  const handleTabChange = (next: TabKey) => {
+    setTab(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(TAB_STORAGE_KEY, next)
+    }
   }
 
   const totals = tasks.reduce<Record<TaskStatusFamily, number>>(
@@ -105,7 +124,7 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
           return (
             <button
               key={t.key}
-              onClick={() => setTab(t.key)}
+              onClick={() => handleTabChange(t.key)}
               className={`flex items-center gap-sm px-md py-sm rounded-t-lg font-label-md text-label-md transition-all cursor-pointer ${
                 active
                   ? 'text-primary border-b-2 border-primary -mb-px font-bold'
