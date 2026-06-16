@@ -1063,11 +1063,14 @@ mod tests {
     #[test]
     fn test_mark_fired_updates_next_fire_for_cron() {
         let mut r = ScheduledRoutine::new_cron("t".into(), "p".into(), "* * * * *".into()).unwrap();
+        // Force next_fire_at into the past so mark_fired's recomputation
+        // from Utc::now() produces a strictly later, deterministic value.
+        // The original implementation slept 1.1s and hoped to cross a minute
+        // boundary, which is flaky when the test runs near minute edges.
+        r.next_fire_at = Some(Utc::now() - chrono::Duration::minutes(2));
         let original_next = r.next_fire_at.unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1100));
         r.mark_fired();
         let new_next = r.next_fire_at.unwrap();
-        // After firing, next_fire_at should advance past the original time
         assert!(new_next > original_next);
         assert_eq!(r.fire_count, 1);
     }
