@@ -4220,7 +4220,7 @@ dependencies = [
 [[package]]
 name = "shannon-agents"
 version = "0.2.0"
-source = "git+ssh://git@github.com/shannon-agent/shannon-code.git?rev=e63ae82#e63ae824752dff71065471b2aaeceda5b0737852"
+source = "git+ssh://git@github.com/shannon-agent/shannon-code.git?rev=ede2105#ede21052129c1cdce727d6e9c7483e7770749463"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4285,7 +4285,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-desktop"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4302,7 +4302,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "shannon-agents 0.2.0 (git+ssh://git@github.com/shannon-agent/shannon-code.git?rev=e63ae82)",
+ "shannon-agents 0.2.0 (git+ssh://git@github.com/shannon-agent/shannon-code.git?rev=ede2105)",
  "shannon-core",
  "shannon-mcp",
  "shannon-skills",
