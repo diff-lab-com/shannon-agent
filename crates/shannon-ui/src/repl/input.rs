@@ -1284,13 +1284,20 @@ fn tab_complete(
             // File path completion mode
             complete_file_path(&prefix)
         } else if has_space {
-            // Command argument completion
-            let cmd_name = input
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_start_matches('/');
-            complete_command_args(cmd_name, &prefix)
+            // Try MCP prompt argument completion first; fall back to generic
+            // arg completion if the server doesn't support completion/complete
+            // or the input isn't an MCP prompt invocation.
+            let mcp_suggestions = try_mcp_prompt_completion(repl, input, available_commands);
+            if !mcp_suggestions.is_empty() {
+                mcp_suggestions
+            } else {
+                let cmd_name = input
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .trim_start_matches('/');
+                complete_command_args(cmd_name, &prefix)
+            }
         } else {
             Vec::new()
         };
@@ -1310,6 +1317,40 @@ fn tab_complete(
         (repl.tab_completion_state.current_index + 1) % repl.tab_completion_state.candidates.len();
 
     Some((completion.clone(), word_start, word_end))
+}
+
+/// Attempt MCP `completion/complete` for prompt argument values.
+///
+/// Returns an empty vec when the input is not an MCP prompt invocation,
+/// the server doesn't support completion, or the request times out —
+/// the caller falls back to generic argument completion silently.
+fn try_mcp_prompt_completion(
+    repl: &mut Repl,
+    input: &str,
+    available_commands: &[String],
+) -> Vec<String> {
+    let Some(mut ctx) =
+        super::mcp_completion::detect_mcp_prompt_context(input, available_commands, &[])
+    else {
+        return Vec::new();
+    };
+
+    let cmd_full = format!("mcp__{}__{}", ctx.server, ctx.prompt);
+    let arg_names = repl.runtime.block_on(async {
+        let registry = repl.shared_executor.registry().await;
+        match registry.get(&cmd_full).await {
+            Ok(cmd) => match cmd.as_ref() {
+                shannon_commands::Command::Prompt(pc) => pc.arg_names.clone(),
+                _ => Vec::new(),
+            },
+            Err(_) => Vec::new(),
+        }
+    });
+    ctx.argument_name = arg_names.first().cloned().unwrap_or_default();
+
+    let pool = repl.mcp_pool.clone();
+    repl.runtime
+        .block_on(super::mcp_completion::fetch_completion(&pool, &ctx))
 }
 
 /// Extract the word to complete from input.
