@@ -2,6 +2,8 @@ use anyhow::Result;
 use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
+
+mod mcp_install;
 use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
     api::LlmClientConfig,
@@ -539,6 +541,31 @@ enum Commands {
     Screenshot {
         /// Output directory for screenshot text files
         dir: String,
+    },
+
+    /// Manage MCP servers (install bundles, list, etc.)
+    Mcp {
+        #[command(subcommand)]
+        command: McpSubcommand,
+    },
+}
+
+/// Subcommands for `shannon mcp`.
+#[derive(Subcommand, Debug)]
+enum McpSubcommand {
+    /// Install MCP servers from a `.mcpb` bundle.
+    ///
+    /// A `.mcpb` file is a zip archive containing an `.mcp.json` at the root.
+    /// Servers are merged into the project's `.mcp.json` by default, or
+    /// `~/.shannon/settings.json` with `--user`.
+    Install {
+        /// Path to the `.mcpb` bundle.
+        bundle: String,
+
+        /// Install to user-level settings (`~/.shannon/settings.json`) instead
+        /// of the project's `.mcp.json`.
+        #[arg(long)]
+        user: bool,
     },
 }
 
@@ -2389,7 +2416,8 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Version { .. })
         | Some(Commands::Config { .. })
         | Some(Commands::Serve { .. })
-        | Some(Commands::Screenshot { .. }) => CliConfig::default(),
+        | Some(Commands::Screenshot { .. })
+        | Some(Commands::Mcp { .. }) => CliConfig::default(),
     };
 
     // Initialize tracing if debug mode enabled
@@ -2523,6 +2551,31 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             shannon_ui::screenshot::render_all_scenes(&output_path)
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
+        Some(Commands::Mcp { command }) => match command {
+            McpSubcommand::Install { bundle, user } => {
+                let scope = if user {
+                    mcp_install::InstallScope::User
+                } else {
+                    mcp_install::InstallScope::Project
+                };
+                match mcp_install::install_bundle(std::path::Path::new(&bundle), scope) {
+                    Ok(result) => {
+                        println!(
+                            "Installed {} server(s) to {}:",
+                            result.servers_installed,
+                            result.target_path.display()
+                        );
+                        for name in &result.server_names {
+                            println!("  - {name}");
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Install failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+        },
     }
 
     Ok(())
