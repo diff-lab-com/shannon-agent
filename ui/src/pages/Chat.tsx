@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, memo } from 'react'
+import { useIntl } from 'react-intl'
 import ReactMarkdown from 'react-markdown'
 import { toast } from 'sonner'
 import remarkGfm from 'remark-gfm'
@@ -81,6 +82,8 @@ export default function Chat() {
     sessions, currentSessionId, error,
     sendMessage, cancelQuery, createSession, switchSession, deleteSession, renameSession,
   } = useApp()
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
 
   const [input, setInput] = useState('')
   const [sessionSearch, setSessionSearch] = useState('')
@@ -120,14 +123,14 @@ export default function Chat() {
       const selected = await openDialog({
         multiple: true,
         filters: [
-          { name: 'Documents & Images', extensions: ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'] },
+          { name: t('chat.export.documents'), extensions: ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'] },
         ],
       })
       if (!selected) return
       const paths = (Array.isArray(selected) ? selected : [selected]) as string[]
       if (paths.length > 0) setAttachedFiles(prev => [...prev, ...paths])
     } catch (err) {
-      toast.error('Attach failed', { description: String(err) })
+      toast.error(t('chat.toast.attachFailed'), { description: String(err) })
     }
   }
 
@@ -172,14 +175,14 @@ export default function Chat() {
     try {
       const md = await api.exportSession(id, 'markdown')
       const session = sessions.find(s => s.id === id)
-      const defaultName = `${(session?.title || 'session').replace(/[^a-z0-9-_]+/gi, '_').slice(0, 60)}.md`
-      const target = await saveDialog({ defaultPath: defaultName, filters: [{ name: 'Markdown', extensions: ['md'] }] })
+      const defaultName = `${(session?.title || t('chat.export.defaultName')).replace(/[^a-z0-9-_]+/gi, '_').slice(0, 60)}.md`
+      const target = await saveDialog({ defaultPath: defaultName, filters: [{ name: t('chat.export.markdown'), extensions: ['md'] }] })
       if (!target) return // user cancelled
       await api.saveTextFile(target, md)
-      toast.success('Exported to Markdown', { description: target })
+      toast.success(t('chat.toast.exported'), { description: target })
     } catch (e) {
       console.warn('Export failed:', e)
-      toast.error('Export failed', { description: String(e) })
+      toast.error(t('chat.toast.exportFailed'), { description: String(e) })
     }
   }
 
@@ -192,10 +195,10 @@ export default function Chat() {
     try {
       const md = await api.exportSession(id, 'markdown')
       const session = sessions.find(s => s.id === id)
-      const title = session?.title || 'Conversation'
+      const title = session?.title || t('chat.export.printTitle')
       const printWindow = window.open('', '_blank', 'width=900,height=700')
       if (!printWindow) {
-        toast.error('Pop-up blocked', { description: 'Allow pop-ups to use Print / PDF.' })
+        toast.error(t('chat.toast.popupBlocked'), { description: t('chat.toast.popupBlocked.desc') })
         return
       }
       const doc = printWindow.document
@@ -221,19 +224,21 @@ export default function Chat() {
       setTimeout(() => printWindow.print(), 250)
     } catch (e) {
       console.warn('Print failed:', e)
-      toast.error('Print failed', { description: String(e) })
+      toast.error(t('chat.toast.printFailed'), { description: String(e) })
     }
   }
 
   const formatTime = (ts: number) => {
     const d = new Date(ts)
     const now = new Date()
-    if (d.toDateString() === now.toDateString()) return 'Today'
+    if (d.toDateString() === now.toDateString()) return t('chat.time.today')
     const yesterday = new Date(now)
     yesterday.setDate(yesterday.getDate() - 1)
-    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
+    if (d.toDateString() === yesterday.toDateString()) return t('chat.time.yesterday')
     return d.toLocaleDateString()
   }
+
+  const untitled = t('chat.session.untitled')
 
   return (
     <div className="flex-1 flex w-full h-full relative">
@@ -245,13 +250,13 @@ export default function Chat() {
             onClick={createSession}
           >
             <span className="material-symbols-outlined text-[18px]">add</span>
-            New Chat
+            {t('chat.newChat')}
           </Button>
           <div className="relative mt-sm">
             <span className="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
             <Input
               className="w-full pl-xl pr-md py-xs bg-surface-container border-none rounded-lg text-body-sm focus:ring-1 focus:ring-primary/30"
-              placeholder="Search sessions..."
+              placeholder={t('chat.searchSessions.placeholder')}
               type="text"
               value={sessionSearch}
               onChange={e => setSessionSearch(e.target.value)}
@@ -262,7 +267,7 @@ export default function Chat() {
           {filteredSessions.length === 0 && (
             <div className="text-center py-lg opacity-70">
               <span className="material-symbols-outlined text-on-surface-variant text-[32px]">chat_bubble_outline</span>
-              <p className="text-body-sm text-on-surface-variant mt-xs">No sessions yet</p>
+              <p className="text-body-sm text-on-surface-variant mt-xs">{t('chat.empty.sessions')}</p>
             </div>
           )}
           {pagedSessions.map(session => (
@@ -270,7 +275,7 @@ export default function Chat() {
               key={session.id}
               role="button"
               tabIndex={0}
-              aria-label={`Session: ${session.title || 'Untitled'}`}
+              aria-label={intl.formatMessage({ id: 'chat.session.aria' }, { title: session.title || untitled })}
               className={`p-sm rounded-lg cursor-pointer group ${
                 session.id === currentSessionId
                   ? 'bg-primary-fixed/40 border-l-4 border-primary shadow-sm'
@@ -309,22 +314,22 @@ export default function Chat() {
                   <div className="flex items-center justify-between">
                     <p className={`font-label-md truncate flex-1 ${session.id === currentSessionId ? 'text-primary font-bold' : 'text-on-surface group-hover:text-primary transition-colors'}`}>
                       {pinnedIds.has(session.id) && <span className="material-symbols-outlined text-[14px] text-primary mr-xs align-text-bottom">push_pin</span>}
-                      <HighlightText text={session.title || 'Untitled'} query={sessionSearch} />
+                      <HighlightText text={session.title || untitled} query={sessionSearch} />
                     </p>
                     <div className="flex items-center gap-xs opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); togglePin(session.id) }} title={pinnedIds.has(session.id) ? 'Unpin' : 'Pin'} aria-pressed={pinnedIds.has(session.id)}>
+                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); togglePin(session.id) }} title={pinnedIds.has(session.id) ? t('chat.session.unpin') : t('chat.session.pin')} aria-pressed={pinnedIds.has(session.id)}>
                         <span className="material-symbols-outlined text-[14px]">{pinnedIds.has(session.id) ? 'push_pin' : 'keep'}</span>
                       </button>
-                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handleExport(session.id) }} title="Export" aria-label={`Export ${session.title || 'session'}`}>
+                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handleExport(session.id) }} title={t('chat.session.export')} aria-label={intl.formatMessage({ id: 'chat.session.export.aria' }, { title: session.title || untitled })}>
                         <span className="material-symbols-outlined text-[14px]">download</span>
                       </button>
-                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handlePrint(session.id) }} title="Print / PDF" aria-label={`Print or save as PDF ${session.title || 'session'}`}>
+                      <button className="p-xs rounded hover:bg-surface-container text-on-surface-variant hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none" onClick={e => { e.stopPropagation(); handlePrint(session.id) }} title={t('chat.session.print')} aria-label={intl.formatMessage({ id: 'chat.session.print.aria' }, { title: session.title || untitled })}>
                         <span className="material-symbols-outlined text-[14px]">print</span>
                       </button>
                     </div>
                   </div>
                   <p className="text-body-sm text-on-surface-variant opacity-70 truncate">
-                    {session.message_count} messages · {formatTime(session.created_at)}
+                    {intl.formatMessage({ id: 'chat.session.meta' }, { count: session.message_count, time: formatTime(session.created_at) })}
                   </p>
                 </>
               )}
@@ -345,7 +350,7 @@ export default function Chat() {
               <div className="flex items-center justify-center h-full opacity-40">
                 <div className="text-center space-y-sm">
                   <span className="material-symbols-outlined text-[48px] text-primary">chat_bubble</span>
-                  <p className="font-body-lg text-on-surface-variant">Start a conversation</p>
+                  <p className="font-body-lg text-on-surface-variant">{t('chat.empty.start')}</p>
                 </div>
               </div>
             )
@@ -357,7 +362,7 @@ export default function Chat() {
 
           {/* Streaming response */}
           {(streamingText || thinkingText || activeToolCalls.length > 0) && (
-            <div className="flex gap-md max-w-[90%]" aria-live="polite" aria-label="AI response streaming">
+            <div className="flex gap-md max-w-[90%]" aria-live="polite" aria-label={t('chat.streaming.aria')}>
               <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-md">
                 <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>
               </div>
@@ -368,7 +373,7 @@ export default function Chat() {
                       <div className="absolute left-0 top-1 h-4 w-4 rounded-full bg-primary/20 flex items-center justify-center">
                         <div className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"></div>
                       </div>
-                      <span className="font-label-sm text-on-surface-variant block uppercase opacity-70">Thinking</span>
+                      <span className="font-label-sm text-on-surface-variant block uppercase opacity-70">{t('chat.streaming.thinking')}</span>
                       <p className="text-body-sm whitespace-pre-wrap">{thinkingText}</p>
                     </div>
                   </div>
@@ -388,7 +393,7 @@ export default function Chat() {
           {error && (
             <div className="mx-auto max-w-md p-md bg-error/10 border border-error/20 rounded-xl text-center">
               <p className="text-body-sm text-error">{error}</p>
-              <Button variant="ghost" className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer" onClick={() => { if (input.trim()) handleSend() }}>Retry</Button>
+              <Button variant="ghost" className="mt-sm text-error hover:bg-error/10 text-label-md cursor-pointer" onClick={() => { if (input.trim()) handleSend() }}>{t('chat.error.retry')}</Button>
             </div>
           )}
 
@@ -415,13 +420,13 @@ export default function Chat() {
               </div>
             )}
             <div className="relative glass-card bg-surface-container-lowest/80 rounded-2xl border border-outline-variant/30 px-sm py-xs flex items-center shadow-lg group-focus-within:border-primary/50 group-focus-within:shadow-primary/10 transition-all duration-300">
-              <Button variant="ghost" aria-label="Attach file" className="p-md text-on-surface-variant hover:text-primary" onClick={handleAttach}>
+              <Button variant="ghost" aria-label={t('chat.input.attach.aria')} className="p-md text-on-surface-variant hover:text-primary" onClick={handleAttach}>
                 <span className="material-symbols-outlined text-[20px]" aria-hidden="true">attach_file</span>
               </Button>
               <span className="material-symbols-outlined p-md text-primary" aria-hidden="true">{isQuerying ? 'hourglass_empty' : 'auto_awesome'}</span>
               <textarea
                 className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-outline-variant/80 text-on-surface resize-none min-h-[24px] max-h-[200px]"
-                placeholder={isQuerying ? 'Processing...' : 'Ask Shannon anything...'}
+                placeholder={isQuerying ? t('chat.input.processing') : t('chat.input.placeholder')}
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -430,12 +435,12 @@ export default function Chat() {
               />
               <div className="flex items-center gap-2 px-sm">
                 {isQuerying ? (
-                  <Button aria-label="Stop generation" className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all" onClick={cancelQuery}>
+                  <Button aria-label={t('chat.input.stop.aria')} className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all" onClick={cancelQuery}>
                     <span className="material-symbols-outlined text-[20px]" aria-hidden="true">stop</span>
                   </Button>
                 ) : (
                   <Button
-                    aria-label="Send message"
+                    aria-label={t('chat.input.send.aria')}
                     className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-md hover:shadow-primary/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
                     onClick={handleSend}
                     disabled={!input.trim()}
@@ -455,35 +460,35 @@ export default function Chat() {
           <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-error text-[24px]">delete</span>
-              <h3 className="font-headline-md text-on-surface">Delete Session</h3>
+              <h3 className="font-headline-md text-on-surface">{t('chat.delete.title')}</h3>
             </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">Are you sure you want to delete this session? This cannot be undone.</p>
+            <p className="text-body-md text-on-surface-variant mb-lg">{t('chat.delete.confirm')}</p>
             <div className="flex justify-end gap-sm">
-              <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setDeleteTarget(null)}>Cancel</Button>
-              <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={() => { deleteSession(deleteTarget); setDeleteTarget(null) }}>Delete</Button>
+              <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setDeleteTarget(null)}>{t('chat.delete.cancel')}</Button>
+              <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={() => { deleteSession(deleteTarget); setDeleteTarget(null) }}>{t('chat.delete.confirmButton')}</Button>
             </div>
           </div>
         </div>
       )}
 
       {/* Right Sidebar - Context */}
-      <aside aria-label="Context panel" className="w-[300px] border-l border-outline-variant/10 glass-panel shrink-0 p-lg overflow-y-auto bg-surface-container-lowest/50 hidden lg:block">
+      <aside aria-label={t('chat.context.aria')} className="w-[300px] border-l border-outline-variant/10 glass-panel shrink-0 p-lg overflow-y-auto bg-surface-container-lowest/50 hidden lg:block">
         <div className="space-y-xl">
           {/* Token Usage */}
           {usage && (
             <section>
-              <h3 className="font-label-md text-on-surface uppercase tracking-wider opacity-60 mb-md">Usage</h3>
+              <h3 className="font-label-md text-on-surface uppercase tracking-wider opacity-60 mb-md">{t('chat.context.usage')}</h3>
               <div className="p-md bg-surface-container rounded-xl border border-outline-variant/10 space-y-sm">
                 <div className="flex justify-between text-body-sm">
-                  <span className="text-on-surface-variant">Input tokens</span>
+                  <span className="text-on-surface-variant">{t('chat.context.inputTokens')}</span>
                   <span className="font-bold text-on-surface">{usage.input_tokens.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between text-body-sm">
-                  <span className="text-on-surface-variant">Output tokens</span>
+                  <span className="text-on-surface-variant">{t('chat.context.outputTokens')}</span>
                   <span className="font-bold text-on-surface">{usage.output_tokens.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between text-body-sm">
-                  <span className="text-on-surface-variant">Cost</span>
+                  <span className="text-on-surface-variant">{t('chat.context.cost')}</span>
                   <span className="font-bold text-primary">${usage.cost_usd.toFixed(4)}</span>
                 </div>
                 {(() => {
@@ -494,7 +499,7 @@ export default function Chat() {
                   return (
                     <div className="pt-sm border-t border-outline-variant/10">
                       <div className="flex justify-between text-label-sm text-on-surface-variant mb-xs">
-                        <span>Context Window</span>
+                        <span>{t('chat.context.window')}</span>
                         <span className="font-bold">{pct.toFixed(0)}%</span>
                       </div>
                       <div className="w-full h-1.5 bg-surface-container-high rounded-full overflow-hidden">
@@ -512,7 +517,7 @@ export default function Chat() {
           {activeToolCalls.length > 0 && (
             <section>
               <h3 className="font-label-md text-on-surface uppercase tracking-wider opacity-60 mb-md">
-                Active Tools
+                {t('chat.context.activeTools')}
                 <span className="ml-xs px-xs py-[2px] bg-primary/10 text-primary text-[10px] font-bold rounded">{activeToolCalls.length}</span>
               </h3>
               <div className="space-y-sm">
@@ -530,7 +535,7 @@ export default function Chat() {
           {fileContext.length > 0 && (
             <section>
               <h3 className="font-label-md text-on-surface uppercase tracking-wider opacity-60 mb-md">
-                Context Files
+                {t('chat.context.files')}
                 <span className="ml-xs px-xs py-[2px] bg-secondary/10 text-secondary text-[10px] font-bold rounded">{fileContext.length}</span>
               </h3>
               <div className="space-y-sm">
@@ -542,7 +547,7 @@ export default function Chat() {
                     </div>
                     <div className="flex items-center gap-md text-label-sm text-on-surface-variant">
                       <span>{fc.language}</span>
-                      <span>{fc.lines} lines</span>
+                      <span>{intl.formatMessage({ id: 'chat.context.lines' }, { count: fc.lines })}</span>
                     </div>
                   </div>
                 ))}
@@ -560,13 +565,15 @@ const MessageBubble = memo(function MessageBubble({ message, isBranch, onViewDif
   const isUser = message.role === 'user'
   const [liked, setLiked] = useState(false)
   const { sendMessage } = useApp()
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.content).catch(() => toast.error('Copy failed'))
+    navigator.clipboard.writeText(message.content).catch(() => toast.error(t('chat.toast.copyFailed')))
   }
 
   const handleRegenerate = () => {
-    sendMessage('Regenerate the previous response').catch(() => toast.error('Regeneration failed'))
+    sendMessage('Regenerate the previous response').catch(() => toast.error(t('chat.toast.regenerateFailed')))
   }
 
   if (isUser) {
@@ -576,7 +583,7 @@ const MessageBubble = memo(function MessageBubble({ message, isBranch, onViewDif
           {isBranch && (
             <div className="flex items-center gap-xs mb-xs justify-end">
               <span className="material-symbols-outlined text-[14px] text-on-surface-variant/50">fork_right</span>
-              <span className="font-label-sm text-on-surface-variant/50">Edited branch</span>
+              <span className="font-label-sm text-on-surface-variant/50">{t('chat.message.branch')}</span>
             </div>
           )}
           <div className="bg-primary-fixed text-on-primary-fixed px-lg py-md rounded-2xl rounded-tr-none shadow-sm">
@@ -606,13 +613,13 @@ const MessageBubble = memo(function MessageBubble({ message, isBranch, onViewDif
           )}
         </div>
         <div className="flex gap-sm">
-          <Button aria-label="Like message" aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
+          <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
           </Button>
-          <Button aria-label="Copy message" onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
+          <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
           </Button>
-          <Button aria-label="Regenerate response" onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
+          <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
           </Button>
         </div>
@@ -648,6 +655,8 @@ function extractFilePath(toolName: string, input: unknown): string | null {
 }
 
 const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewDiff }: { toolCall: ToolCall; onViewDiff: (path: string) => void }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [expanded, setExpanded] = useState(false)
   const statusIcon = toolCall.status === 'running' ? 'hourglass_empty' : toolCall.status === 'error' ? 'error' : 'check_circle'
   const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-tertiary'
@@ -662,12 +671,12 @@ const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewDiff }: 
         {canDiff && (
           <button
             type="button"
-            aria-label={`View diff for ${filePath}`}
+            aria-label={intl.formatMessage({ id: 'chat.message.diff.aria' }, { path: filePath })}
             className="flex items-center gap-xs px-xs py-[2px] rounded-md text-tertiary hover:bg-tertiary-container/40 text-[11px] cursor-pointer"
             onClick={(e) => { e.stopPropagation(); onViewDiff(filePath!) }}
           >
             <span className="material-symbols-outlined text-[14px]">difference</span>
-            Diff
+            {t('chat.message.diff')}
           </button>
         )}
         <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{expanded ? 'expand_less' : 'expand_more'}</span>
