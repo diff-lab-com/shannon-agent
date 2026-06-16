@@ -2,6 +2,14 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.2.5 (2026-06-17) — engine sync to shannon-code v0.5.1
+
+### Dependencies
+
+- **shannon-code engine bumped to v0.5.1** (`e63ae82` → `ede2105`). All six shannon-* crates (core, types, tools, mcp, skills, agents) now track the v0.5.1 tag, picking up:
+  - **Sprint 5 MCP integration**: elicitation TUI (bounded mpsc + spoofing-resistant `[EXTERNAL MCP · {server}]` labeling), MCP prompts as `/{server}:{prompt}` slash commands, `completion/complete` Tab autocomplete, `.mcpb` bundle CLI install.
+  - **v0.5.1 security hardening on `.mcpb` install**: symlink path traversal rejection, 10 MB manifest size cap, parse-error data-loss prevention, install preview + `[y/N]` confirmation flow.
+
 ## Sprint 5 (2026-06)
 
 ### i18n — Phase 5 Long-tail Components (S5-1)
