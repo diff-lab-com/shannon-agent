@@ -6,6 +6,7 @@
 // Scheduled-routine integration: if `scheduledTasks` is provided, days with a
 // routine `next_fire_at` (rendered as a local date) are highlighted.
 
+import { useIntl } from 'react-intl'
 import type { TaskItem, ScheduledRoutine } from '@/types'
 import { DAY_NAMES, MONTH_NAMES } from './shared'
 
@@ -30,6 +31,9 @@ export default function CalendarSidebarWidget({
   onSelectTask,
   onSelectRoutine,
 }: CalendarSidebarWidgetProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const today = new Date()
   const startDay = (new Date(viewYear, viewMonth, 1).getDay() + 6) % 7 // Monday-based
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
@@ -52,19 +56,19 @@ export default function CalendarSidebarWidget({
     <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-sm">
       <div className="flex items-center justify-between mb-lg">
         <div>
-          <h4 className="font-headline-md text-[18px] text-on-surface">Schedule</h4>
+          <h4 className="font-headline-md text-[18px] text-on-surface">{t('tasks.calendarSidebarWidget.schedule')}</h4>
           <span className="font-label-sm text-on-surface-variant">{MONTH_NAMES[viewMonth]} {viewYear}</span>
         </div>
         <div className="flex gap-sm">
           <button
-            aria-label="Previous month"
+            aria-label={t('tasks.calendarSidebarWidget.prevMonth')}
             className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors"
             onClick={onPrevMonth}
           >
             chevron_left
           </button>
           <button
-            aria-label="Next month"
+            aria-label={t('tasks.calendarSidebarWidget.nextMonth')}
             className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors"
             onClick={onNextMonth}
           >
@@ -95,30 +99,30 @@ export default function CalendarSidebarWidget({
       </div>
 
       <div className="mt-lg pt-lg border-t border-outline-variant/20">
-        <h5 className="font-label-sm text-outline uppercase tracking-wider mb-md">Active Now</h5>
+        <h5 className="font-label-sm text-outline uppercase tracking-wider mb-md">{t('tasks.calendarSidebarWidget.activeNow')}</h5>
         <div className="space-y-md">
-          {activeTasks.map(t => (
+          {activeTasks.map(task => (
             <div
-              key={t.id}
+              key={task.id}
               className={`flex items-start gap-md ${onSelectTask ? 'cursor-pointer' : ''}`}
-              onClick={() => onSelectTask?.(t.id)}
+              onClick={() => onSelectTask?.(task.id)}
             >
               <div className="w-1 bg-primary h-8 rounded-full" />
               <div>
-                <p className="text-body-sm font-semibold">{t.title}</p>
-                <p className="text-[12px] text-on-surface-variant">{t.assignee || 'Unassigned'}</p>
+                <p className="text-body-sm font-semibold">{task.title}</p>
+                <p className="text-[12px] text-on-surface-variant">{task.assignee || t('tasks.calendarSidebarWidget.unassigned')}</p>
               </div>
             </div>
           ))}
           {!hasActive ? (
-            <p className="text-body-sm text-on-surface-variant italic opacity-60">No active tasks</p>
+            <p className="text-body-sm text-on-surface-variant italic opacity-60">{t('tasks.calendarSidebarWidget.noActiveTasks')}</p>
           ) : null}
         </div>
       </div>
 
       {scheduledTasks.length > 0 && (
         <div className="mt-lg pt-lg border-t border-outline-variant/20">
-          <h5 className="font-label-sm text-outline uppercase tracking-wider mb-md">Routines</h5>
+          <h5 className="font-label-sm text-outline uppercase tracking-wider mb-md">{t('tasks.calendarSidebarWidget.routines')}</h5>
           <div className="space-y-sm">
             {scheduledTasks.slice(0, 6).map(r => (
               <button

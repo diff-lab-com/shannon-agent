@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { useIntl } from 'react-intl'
 import {
   listDataSourceCatalog,
   listInstalledDataSources,
@@ -21,6 +22,9 @@ import {
  * Two adapters ship today: Obsidian Vault, Email (IMAP).
  */
 export default function DataSources() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const { search } = useOutletContext<{ search: string }>();
 
   const [catalog, setCatalog] = useState<DataSourceCatalogEntry[]>([]);
@@ -132,17 +136,16 @@ export default function DataSources() {
   return (
     <div className="p-lg max-w-5xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">Data Sources</h2>
+        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.datasources.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
-          Native Tier-1 adapters for personal data. Config is stored under{" "}
-          <code className="font-mono text-label-sm">~/.shannon/data-sources/</code>.
+          {t('extensions.datasources.subtitle')}
         </p>
       </header>
 
       {catalogLoading ? (
         <div className="text-center py-lg text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          Loading adapters…
+          {t('extensions.datasources.loading')}
         </div>
       ) : (
         <section>
@@ -151,7 +154,7 @@ export default function DataSources() {
           </h3>
           {filtered.length === 0 ? (
             <div className="text-center py-md text-on-surface-variant text-label-md">
-              No data source adapters found.
+              {t('extensions.datasources.noAdapters')}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
@@ -190,10 +193,10 @@ export default function DataSources() {
           Installed · {installed.length}
         </h3>
         {installedLoading ? (
-          <div className="text-center py-md text-on-surface-variant text-label-sm">Loading…</div>
+          <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.datasources.loadingInstalled')}</div>
         ) : installed.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
-            No data sources installed.
+            {t('extensions.datasources.noInstalled')}
           </div>
         ) : (
           <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">
@@ -218,7 +221,7 @@ export default function DataSources() {
                   disabled={busySlug === `uninstall:${row.slug}`}
                   className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
                 >
-                  {busySlug === `uninstall:${row.slug}` ? "…" : "Remove"}
+                  {busySlug === `uninstall:${row.slug}` ? "…" : t('extensions.datasources.remove')}
                 </button>
               </div>
             ))}
@@ -252,6 +255,9 @@ function AdapterCard({
   onCancelInstall: () => void;
   onSubmitInstall: () => void;
 }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const fields: DataSourceField[] = entry.metadata.fields ?? [];
   const icon = entry.metadata.kind === "email_imap" ? "mail" : "menu_book";
   return (
@@ -282,7 +288,7 @@ function AdapterCard({
               rel="noreferrer"
               className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest"
             >
-              View
+              {t('extensions.datasources.view')}
             </a>
           )}
           <button
@@ -291,7 +297,7 @@ function AdapterCard({
             disabled={isInstalled}
             className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isInstalled ? "Installed" : "Configure & Install"}
+            {isInstalled ? t('extensions.datasources.installed') : t('extensions.datasources.configureInstall')}
           </button>
         </div>
       ) : (
@@ -326,7 +332,7 @@ function AdapterCard({
               disabled={busy}
               className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50"
             >
-              {busy ? "Saving…" : "Save"}
+              {busy ? t('extensions.datasources.saving') : t('extensions.datasources.save')}
             </button>
             <button
               type="button"
@@ -334,7 +340,7 @@ function AdapterCard({
               disabled={busy}
               className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest disabled:opacity-50"
             >
-              Cancel
+              {t('extensions.datasources.cancel')}
             </button>
           </div>
         </form>

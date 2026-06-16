@@ -16,6 +16,7 @@
 
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -42,6 +43,8 @@ interface Props {
 }
 
 export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [quickTask, setQuickTask] = useState('')
   const [overrides, setOverrides] = useState<Record<string, string>>({})
 
@@ -56,10 +59,10 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
     try {
       await api.startBackgroundTask(trimmed)
       setQuickTask('')
-      toast.success('Task created')
+      toast.success(t('opc.kanban.taskCreated'))
     } catch (e) {
       console.warn('Failed to start quick task:', e)
-      toast.error('Failed to create task')
+      toast.error(t('opc.kanban.createFailed'))
     }
   }
 
@@ -71,8 +74,8 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
     if (current === target) return
     const newStatus = canonicalStatusFor(target)
     setOverrides(prev => ({ ...prev, [taskId]: newStatus }))
-    toast.success(`Moved to ${STATUS_FAMILY[target].title}`, {
-      description: 'Local override — backend persistence pending',
+    toast.success(intl.formatMessage({ id: 'opc.kanban.movedTo' }, { column: STATUS_FAMILY[target].title }), {
+      description: t('opc.kanban.overrideDesc'),
     })
   }
 
@@ -80,14 +83,14 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
     <div className="relative">
       <Input
         type="text"
-        placeholder="Add task..."
+        placeholder={t('opc.kanban.addTaskPlaceholder')}
         value={quickTask}
         onChange={e => setQuickTask(e.target.value)}
         className="bg-surface-container-low border-none rounded-lg py-1.5 pl-3 pr-8 w-[200px] text-[13px] font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
-        aria-label="Add task"
+        aria-label={t('opc.kanban.addTaskAria')}
       />
       <Button
-        aria-label="Create task"
+        aria-label={t('opc.kanban.createTaskAria')}
         className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-primary text-on-primary rounded-[4px] flex items-center justify-center hover:bg-primary/90 transition-colors"
         onClick={handleQuickTask}
       >
@@ -108,7 +111,7 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
           <VariantCard key={task.id} task={task} family={family} />
         )}
         emptyLabel={family => family === 'failed'
-          ? 'No deprecated tasks.'
+          ? t('opc.kanban.noDeprecated')
           : undefined}
       />
 
@@ -118,7 +121,7 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
             className="text-label-sm text-on-surface-variant hover:text-primary cursor-pointer underline"
             onClick={() => { setOverrides({}); void refreshTasks() }}
           >
-            Reset local overrides
+            {t('opc.kanban.resetOverrides')}
           </button>
         </div>
       ) : null}

@@ -1,4 +1,18 @@
 import '@testing-library/jest-dom/vitest'
+import { createElement, type ReactElement } from 'react'
+
+// Auto-wrap rendered components with I18nProvider so tests don't need to
+// manually wrap every `render()` call. This is global; individual tests
+// that need a custom locale can still wrap manually.
+vi.mock('@testing-library/react', async () => {
+  const actual = await vi.importActual<typeof import('@testing-library/react')>('@testing-library/react')
+  const { I18nProvider } = await import('@/i18n')
+  return {
+    ...actual,
+    render: (ui: ReactElement, options?: Parameters<typeof actual.render>[1]) =>
+      actual.render(createElement(I18nProvider, null, ui), options),
+  }
+})
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),

@@ -3,6 +3,7 @@
 // MD3 tokens. Vertical timeline with colored dots per status. Cancel button
 // for running tasks.
 
+import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import type { BackgroundTaskInfo } from '@/types'
 import { statusBadge, formatTime } from './shared'
@@ -13,10 +14,13 @@ interface TaskExecutionLogProps {
 }
 
 export default function TaskExecutionLog({ tasks, onCancel }: TaskExecutionLogProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   if (tasks.length === 0) return null
   return (
     <div className="pt-lg">
-      <h4 className="font-label-md text-label-md text-outline uppercase tracking-[0.1em] mb-md pl-xs">Task Execution Log</h4>
+      <h4 className="font-label-md text-label-md text-outline uppercase tracking-[0.1em] mb-md pl-xs">{t('tasks.taskExecutionLog.title')}</h4>
       <div className="relative pl-8 border-l border-outline-variant/30 space-y-lg ml-md">
         {tasks.map(bt => {
           const badge = statusBadge(bt.status)

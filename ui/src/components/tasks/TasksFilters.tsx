@@ -3,6 +3,7 @@
 // MD3 tokens. Active chip uses bg-primary/10 text-primary font-bold.
 
 import { Button } from '@/components/ui/button'
+import { useIntl } from 'react-intl'
 import type { FilterStatus } from './shared'
 
 interface TasksFiltersProps {
@@ -11,13 +12,15 @@ interface TasksFiltersProps {
 }
 
 const OPTIONS: ReadonlyArray<[FilterStatus, string]> = [
-  ['all', 'All'],
-  ['pending', 'Pending'],
-  ['running', 'Running'],
-  ['completed', 'Completed'],
+  ['all', 'all'],
+  ['pending', 'pending'],
+  ['running', 'running'],
+  ['completed', 'completed'],
 ]
 
 export default function TasksFilters({ active, onChange }: TasksFiltersProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   return (
     <div className="flex gap-sm mb-lg flex-wrap">
       {OPTIONS.map(([value, label]) => (
@@ -27,7 +30,7 @@ export default function TasksFilters({ active, onChange }: TasksFiltersProps) {
           onClick={() => onChange(value)}
           className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${active === value ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
         >
-          {label}
+          {t(`tasks.tasksFilters.${label}`)}
         </Button>
       ))}
     </div>

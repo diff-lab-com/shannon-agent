@@ -9,6 +9,7 @@
 // on manual refresh.
 
 import { useEffect, useState, useCallback } from 'react'
+import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
 import HookRoutineCreateDialog from './HookRoutineCreateDialog'
@@ -33,6 +34,9 @@ function badgeFor(trigger: string): { icon: string; tone: string; label: string 
 }
 
 export default function HookTaskPipeline() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const [routines, setRoutines] = useState<TriggeredRoutineDto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -60,7 +64,7 @@ export default function HookTaskPipeline() {
       await api.toggleTriggeredRoutine(name, enabled)
       setRoutines(prev => prev.map(r => r.name === name ? { ...r, enabled } : r))
     } catch (e) {
-      setError(`Failed to toggle ${name}: ${e}`)
+      setError(intl.formatMessage({ id: 'tasks.hookTaskPipeline.toggleFailed' }, { name, error: String(e) }))
     } finally {
       setToggling(prev => {
         const next = new Set(prev)
@@ -77,10 +81,10 @@ export default function HookTaskPipeline() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined text-[20px] text-on-surface">conversion_path</span>
-          <h3 className="font-headline-md text-[16px] font-bold text-on-surface">Hook → Task Pipeline</h3>
+          <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('tasks.hookTaskPipeline.title')}</h3>
           {routines.length > 0 ? (
             <span className="font-label-sm text-[11px] text-on-surface-variant bg-surface-container-low px-xs py-1 rounded-full">
-              {enabledCount}/{routines.length} active
+              {intl.formatMessage({ id: 'tasks.hookTaskPipeline.active' }, { enabled: enabledCount, total: routines.length })}
             </span>
           ) : null}
         </div>
@@ -89,10 +93,10 @@ export default function HookTaskPipeline() {
             type="button"
             onClick={() => setCreateOpen(true)}
             className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-            aria-label="Create new hook routine"
+            aria-label={t('routines.create.aria')}
           >
             <span className="material-symbols-outlined text-[14px]">add</span>
-            Add
+            {t('tasks.hookTaskPipeline.add')}
           </button>
           <button
             type="button"
@@ -101,7 +105,7 @@ export default function HookTaskPipeline() {
             className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
           >
             <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
-            Refresh
+            {t('tasks.hookTaskPipeline.refresh')}
           </button>
         </div>
       </div>
@@ -114,19 +118,19 @@ export default function HookTaskPipeline() {
       ) : null}
 
       {loading && routines.length === 0 ? (
-        <p className="text-body-sm text-on-surface-variant text-center py-md">Loading…</p>
+        <p className="text-body-sm text-on-surface-variant text-center py-md">{t('tasks.hookTaskPipeline.loading')}</p>
       ) : routines.length === 0 ? (
         <div className="text-center py-lg">
           <span className="material-symbols-outlined text-[32px] text-on-surface-variant/40 block mb-sm">link_off</span>
           <p className="text-body-sm text-on-surface-variant">
-            No hook-driven routines registered.
+            {t('tasks.hookTaskPipeline.empty')}
           </p>
           <p className="font-label-sm text-[11px] text-on-surface-variant mt-xs">
-            Add routines to <code className="font-mono">.shannon/routines.toml</code> with a <code className="font-mono">[triggered]</code> section.
+            {t('tasks.hookTaskPipeline.emptyDesc')}
           </p>
         </div>
       ) : (
-        <ul className="flex flex-col gap-sm" aria-label="Hook-triggered routines">
+        <ul className="flex flex-col gap-sm" aria-label={t('tasks.hookTaskPipeline.title')}>
           {routines.map(r => {
             const b = badgeFor(r.trigger)
             const isToggling = toggling.has(r.name)
@@ -164,7 +168,7 @@ export default function HookTaskPipeline() {
                   type="button"
                   role="switch"
                   aria-checked={r.enabled}
-                  aria-label={`Toggle ${r.name}`}
+                  aria-label={intl.formatMessage({ id: 'tasks.hookTaskPipeline.toggleAria' }, { name: r.name })}
                   disabled={isToggling}
                   onClick={() => onToggle(r.name, !r.enabled)}
                   className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 ${

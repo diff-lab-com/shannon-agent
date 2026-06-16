@@ -3,6 +3,7 @@
 // MD3 tokens. Delegates each row to TaskCard. Pagination via existing
 // Pagination component.
 
+import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 import { Pagination } from '@/components/ui/pagination'
 import { CardSkeleton } from '@/components/SkeletonLoader'
@@ -33,12 +34,15 @@ export default function TaskList({
   onRunNow,
   onCancelTask,
 }: TaskListProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   return (
     <div className="col-span-12 lg:col-span-8 space-y-md">
       {loading ? (
         Array.from({ length: 3 }).map((_, i) => <CardSkeleton key={i} />)
       ) : tasks.length === 0 ? (
-        <EmptyState icon="task_alt" title="No tasks yet." />
+        <EmptyState icon="task_alt" title={t('tasks.taskList.empty')} />
       ) : null}
 
       {tasks.map(task => (

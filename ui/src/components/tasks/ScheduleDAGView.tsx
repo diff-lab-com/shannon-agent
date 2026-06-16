@@ -12,6 +12,7 @@
 // webhook=secondary, event=error). Strikethrough opacity for disabled routines.
 
 import { useMemo } from 'react'
+import { useIntl } from 'react-intl'
 import type { ScheduledRoutine } from '@/types'
 
 interface ScheduleDAGViewProps {
@@ -100,6 +101,8 @@ function triggerStyle(triggerType: string, enabled: boolean): { fill: string; st
 }
 
 export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleDAGViewProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { nodes, width, height } = useMemo(() => layout(routines), [routines])
   const nodeById = useMemo(() => new Map(nodes.map(n => [n.routine.id, n])), [nodes])
 
@@ -119,10 +122,10 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
       <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
         <div className="flex items-center gap-2 mb-md">
           <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">Schedule Graph</h3>
+          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.scheduleDAGView.title')}</h3>
         </div>
         <p className="text-body-sm text-on-surface-variant text-center py-lg">
-          No scheduled routines yet. Create routines with <code className="font-mono">depends_on</code> to see the DAG.
+          {t('tasks.scheduleDAGView.empty')}
         </p>
       </div>
     )
@@ -132,9 +135,9 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
     <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
       <div className="flex items-center gap-2 mb-md">
         <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
-        <h3 className="font-headline-md text-[18px] font-bold text-on-surface">Schedule Graph</h3>
+        <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.scheduleDAGView.title')}</h3>
         <span className="font-label-sm text-[11px] text-on-surface-variant bg-surface-container-low px-xs py-1 rounded-full">
-          {routines.length} routine{routines.length === 1 ? '' : 's'}
+          {intl.formatMessage({ id: 'tasks.scheduleDAGView.routineCount' }, { count: routines.length })}
         </span>
       </div>
 

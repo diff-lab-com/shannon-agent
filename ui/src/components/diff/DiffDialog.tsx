@@ -6,6 +6,7 @@
 // friendly inline message rather than throwing.
 
 import { useEffect, useState } from 'react'
+import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import DiffViewer from '@/components/diff/DiffViewer'
 import * as api from '@/lib/tauri-api'
@@ -18,6 +19,7 @@ interface DiffDialogProps {
 }
 
 export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps) {
+  const intl = useIntl()
   const [diff, setDiff] = useState<FileDiff | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -58,20 +60,20 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
         className="bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl w-full max-w-5xl max-h-[85vh] flex flex-col"
         role="dialog"
         aria-modal="true"
-        aria-label={`Diff for ${filePath ?? 'file'}`}
+        aria-label={intl.formatMessage({ id: 'diff.dialog.file' }, { path: filePath ?? 'file' })}
         onClick={e => e.stopPropagation()}
       >
         <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
           <div className="flex items-center gap-md min-w-0">
             <span className="material-symbols-outlined text-[20px] text-on-surface-variant">difference</span>
-            <h3 className="font-headline-md text-on-surface truncate">File Diff</h3>
+            <h3 className="font-headline-md text-on-surface truncate">{intl.formatMessage({ id: 'diff.dialog.title' })}</h3>
             {filePath ? (
               <code className="font-label-sm text-on-surface-variant bg-surface-container-low px-sm py-xs rounded truncate">{filePath}</code>
             ) : null}
           </div>
           <Button
             className="p-xs rounded-lg hover:bg-surface-container-high text-on-surface-variant cursor-pointer"
-            aria-label="Close diff"
+            aria-label={intl.formatMessage({ id: 'diff.dialog.close.aria' })}
             onClick={onClose}
           >
             <span className="material-symbols-outlined">close</span>
@@ -81,13 +83,13 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
           {loading ? (
             <div className="flex items-center justify-center py-xl">
               <span className="material-symbols-outlined animate-spin text-primary">progress_activity</span>
-              <span className="ml-md text-body-sm text-on-surface-variant">Loading diff…</span>
+              <span className="ml-md text-body-sm text-on-surface-variant">{intl.formatMessage({ id: 'diff.dialog.loading' })}</span>
             </div>
           ) : error ? (
             <div className="flex items-start gap-sm p-md bg-error/10 border border-error/20 rounded-xl text-error">
               <span className="material-symbols-outlined text-[18px] mt-[2px]">error</span>
               <div>
-                <p className="font-label-md">Failed to load diff</p>
+                <p className="font-label-md">{intl.formatMessage({ id: 'diff.dialog.loadFailed' })}</p>
                 <p className="font-body-sm mt-xs opacity-80">{error}</p>
               </div>
             </div>

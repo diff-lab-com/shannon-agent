@@ -17,6 +17,7 @@
 //   - OPC passes a custom renderer to keep its column-themed accents.
 
 import { useMemo, useState, type ReactNode } from 'react'
+import { useIntl } from 'react-intl'
 import type { TaskItem } from '@/types'
 import {
   STATUS_FAMILY,
@@ -69,6 +70,7 @@ export function KanbanBoard({
   boardTitle,
   toolbar,
 }: KanbanBoardProps) {
+  const intl = useIntl()
   const grouped = useMemo(() => groupTasksByFamily(tasks), [tasks])
   const totals = useMemo(() => {
     const t: Record<TaskStatusFamily, number> = { queued: 0, active: 0, blocked: 0, done: 0, failed: 0 }
@@ -95,7 +97,7 @@ export function KanbanBoard({
           ? 'flex-1 overflow-x-auto overflow-y-hidden'
           : 'flex gap-4 overflow-x-auto pb-4 custom-scrollbar items-start min-h-[600px]'}
         role="grid"
-        aria-label="Task board"
+        aria-label={intl.formatMessage({ id: 'shared.kanban.board.aria' })}
       >
         <div className={mode === 'observe'
           ? 'h-full flex gap-md p-lg min-w-max'
@@ -145,6 +147,7 @@ interface KanbanColumnProps {
 }
 
 function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLabel, onDrop, children }: KanbanColumnProps) {
+  const intl = useIntl()
   const [isOver, setIsOver] = useState(false)
   return (
     <section
@@ -188,7 +191,7 @@ function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLab
             ? 'text-center text-label-sm text-on-surface-variant py-xl opacity-60'
             : 'flex items-center justify-center p-xl mt-xl'}>
             <p className={observe ? '' : 'font-label-sm text-[12px] text-on-surface-variant italic opacity-60'}>
-              {emptyLabel ?? 'Nothing here.'}
+              {emptyLabel ?? intl.formatMessage({ id: 'shared.kanban.nothingHere' })}
             </p>
           </div>
         ) : children}

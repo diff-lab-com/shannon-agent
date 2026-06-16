@@ -5,6 +5,7 @@
 
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useIntl } from 'react-intl'
 import { useApp } from '@/context/AppContext'
 import type { SessionInfo, TaskItem } from '@/types'
 import { classifyStatus, STATUS_FAMILY } from '@/lib/task-status'
@@ -38,6 +39,8 @@ interface Props {
 }
 
 export default function ConversationsToday({ sessions, tasks }: Props) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { agents } = useApp()
   const navigate = useNavigate()
 
@@ -85,16 +88,16 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
     <div className="flex-1 overflow-y-auto px-lg py-lg space-y-xl">
       {/* North-star metric: Weekly Active Conversations */}
       <section
-        aria-label="Weekly Active Conversations"
+        aria-label={t('conversations.today.wacAria')}
         className="p-lg rounded-2xl bg-gradient-to-br from-primary-container/40 via-primary/10 to-transparent border border-primary/30 flex items-center gap-lg"
       >
         <div className="w-14 h-14 rounded-2xl bg-primary/15 flex items-center justify-center shrink-0">
           <span className="material-symbols-outlined text-primary text-[32px]">insights</span>
         </div>
         <div className="flex-1">
-          <div className="font-label-sm text-on-surface-variant uppercase tracking-wider">Weekly Active Conversations</div>
+          <div className="font-label-sm text-on-surface-variant uppercase tracking-wider">{t('conversations.today.weeklyActive')}</div>
           <div className="font-headline-lg text-on-surface text-[40px] leading-none mt-xs">{wac}</div>
-          <div className="font-label-sm text-on-surface-variant mt-xs">chats in the last 7 days</div>
+          <div className="font-label-sm text-on-surface-variant mt-xs">{t('conversations.today.chats7d')}</div>
         </div>
       </section>
 
@@ -102,19 +105,19 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
       <section className="grid grid-cols-1 sm:grid-cols-3 gap-md">
         <StatCard
           icon="forum"
-          label="Chats today"
+          label={t('conversations.today.chatsToday')}
           value={todaySessions.length}
           tone="primary"
         />
         <StatCard
           icon="play_circle"
-          label="Running tasks"
+          label={t('conversations.today.runningTasks')}
           value={runningTasks.length}
           tone="tertiary"
         />
         <StatCard
           icon="task_alt"
-          label="Completed"
+          label={t('conversations.today.completed')}
           value={completedToday.length}
           tone="success"
         />

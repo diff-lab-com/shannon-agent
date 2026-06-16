@@ -12,6 +12,7 @@
 // task drawer.
 
 import { useMemo } from 'react'
+import { useIntl } from 'react-intl'
 import type { TaskItem } from '@/types'
 
 interface TaskDAGViewProps {
@@ -106,6 +107,8 @@ function statusFill(status: string): string {
 }
 
 export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { nodes, width, height } = useMemo(() => layout(tasks), [tasks])
   const nodeById = useMemo(() => new Map(nodes.map(n => [n.task.id, n])), [nodes])
 
@@ -126,10 +129,10 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
       <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
         <div className="flex items-center gap-2 mb-md">
           <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">Task Graph</h3>
+          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.dag.title')}</h3>
         </div>
         <p className="text-body-sm text-on-surface-variant text-center py-lg">
-          No tasks yet — create tasks with dependencies to see the DAG.
+          {t('tasks.dag.empty')}
         </p>
       </div>
     )
@@ -140,10 +143,10 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
       <div className="flex items-center justify-between mb-md">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">Task Graph</h3>
+          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.dag.title')}</h3>
         </div>
         <span className="text-label-sm text-on-surface-variant">
-          {tasks.length} tasks · {edges.length} edges
+          {intl.formatMessage({ id: 'tasks.dag.tasksEdges' }, { tasks: tasks.length, edges: edges.length })}
         </span>
       </div>
 
@@ -152,7 +155,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
           width={width}
           height={height}
           role="img"
-          aria-label="Task dependency graph"
+          aria-label={t('tasks.dag.graphAria')}
           className="block"
         >
           {/* Arrowhead marker */}

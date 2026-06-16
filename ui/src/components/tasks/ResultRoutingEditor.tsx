@@ -14,6 +14,7 @@
 // Empty list = log only (the pre-P2.3 default).
 
 import { useState } from 'react'
+import { useIntl } from 'react-intl'
 
 export type RoutingKind = 'slack' | 'email' | 'notification' | 'log'
 
@@ -23,10 +24,10 @@ interface ResultRoutingEditorProps {
 }
 
 const KIND_OPTIONS: { kind: RoutingKind; icon: string; label: string; placeholder: string }[] = [
-  { kind: 'slack', icon: 'tag', label: 'Slack channel', placeholder: '#ops' },
+  { kind: 'slack', icon: 'tag', label: 'Slack', placeholder: '#ops' },
   { kind: 'email', icon: 'mail', label: 'Email', placeholder: 'user@example.com' },
   { kind: 'notification', icon: 'notifications', label: 'Notification', placeholder: '' },
-  { kind: 'log', icon: 'description', label: 'Log file', placeholder: '' },
+  { kind: 'log', icon: 'description', label: 'Log', placeholder: '' },
 ]
 
 export function encodeChannel(kind: RoutingKind, target: string): string {
@@ -48,6 +49,8 @@ export function parseChannel(entry: string): { kind: RoutingKind; target: string
 }
 
 export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEditorProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [pendingKind, setPendingKind] = useState<RoutingKind>('slack')
   const [pendingTarget, setPendingTarget] = useState('')
 
@@ -65,13 +68,13 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
 
   return (
     <div className="flex flex-col gap-sm">
-      <div className="font-label-md text-on-surface-variant">Result routing</div>
+      <div className="font-label-md text-on-surface-variant">{t('tasks.resultRoutingEditor.title')}</div>
       <div className="font-label-sm text-[11px] text-on-surface-variant">
-        Where to send results when this routine finishes. Empty = log only.
+        {t('tasks.resultRoutingEditor.description')}
       </div>
 
       {value.length > 0 ? (
-        <ul className="flex flex-col gap-xs" aria-label="Configured channels">
+        <ul className="flex flex-col gap-xs" aria-label={t('tasks.resultRoutingEditor.configuredAria')}>
           {value.map(entry => {
             const parsed = parseChannel(entry)
             const kind = parsed?.kind ?? 'log'
@@ -88,7 +91,7 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
                 </span>
                 <button
                   type="button"
-                  aria-label={`Remove ${entry}`}
+                  aria-label={intl.formatMessage({ id: 'tasks.resultRoutingEditor.removeAria' }, { entry })}
                   className="text-on-surface-variant hover:text-error cursor-pointer p-xs rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                   onClick={() => removeChannel(entry)}
                 >
@@ -99,14 +102,14 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
           })}
         </ul>
       ) : (
-        <p className="font-label-sm text-[11px] text-on-surface-variant italic">No channels configured.</p>
+        <p className="font-label-sm text-[11px] text-on-surface-variant italic">{t('tasks.resultRoutingEditor.noChannels')}</p>
       )}
 
       <div className="flex flex-col md:flex-row gap-xs">
         <label className="flex items-center gap-xs">
-          <span className="sr-only">Channel type</span>
+          <span className="sr-only">{t('tasks.resultRoutingEditor.channelType')}</span>
           <select
-            aria-label="Channel type"
+            aria-label={t('tasks.resultRoutingEditor.channelType')}
             value={pendingKind}
             onChange={e => { setPendingKind(e.target.value as RoutingKind); setPendingTarget('') }}
             className="bg-surface-container-low rounded-md border border-outline-variant/30 px-sm py-xs font-label-md focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -117,7 +120,7 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
         {pendingKind === 'slack' || pendingKind === 'email' ? (
           <input
             type="text"
-            aria-label={`${pendingKind} target`}
+            aria-label={intl.formatMessage({ id: 'tasks.resultRoutingEditor.targetAria' }, { kind: pendingKind })}
             placeholder={KIND_OPTIONS.find(o => o.kind === pendingKind)?.placeholder}
             value={pendingTarget}
             onChange={e => setPendingTarget(e.target.value)}
@@ -131,7 +134,7 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
           onClick={addChannel}
           disabled={pendingKind !== 'notification' && pendingKind !== 'log' && !pendingTarget.trim()}
         >
-          Add
+          {t('tasks.resultRoutingEditor.add')}
         </button>
       </div>
     </div>

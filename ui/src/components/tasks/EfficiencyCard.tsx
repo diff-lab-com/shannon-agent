@@ -3,6 +3,8 @@
 // MD3 tokens only. Variant: compact (calendar-mode bottom widget) or full
 // (sidebar widget with description and decorative icon).
 
+import { useIntl } from 'react-intl'
+
 interface EfficiencyCardProps {
   /** 0-100 completion percentage. */
   percentage: number
@@ -11,11 +13,14 @@ interface EfficiencyCardProps {
 }
 
 export default function EfficiencyCard({ percentage, variant = 'full' }: EfficiencyCardProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   if (variant === 'compact') {
     return (
       <div className="bg-primary overflow-hidden rounded-2xl relative p-lg text-on-primary">
         <div className="relative z-10">
-          <h4 className="font-label-md text-on-primary/80 uppercase tracking-widest mb-md">Task Completion</h4>
+          <h4 className="font-label-md text-on-primary/80 uppercase tracking-widest mb-md">{t('tasks.efficiencyCard.title')}</h4>
           <div className="text-display-lg text-[40px] mb-xs">{percentage}%</div>
           <div className="mt-lg h-2 bg-surface-container-lowest/20 rounded-full overflow-hidden">
             <div className="h-full bg-surface-container-lowest" style={{ width: `${percentage}%` }} />
@@ -28,9 +33,9 @@ export default function EfficiencyCard({ percentage, variant = 'full' }: Efficie
   return (
     <div className="bg-primary overflow-hidden rounded-2xl relative p-lg text-on-primary">
       <div className="relative z-10">
-        <h4 className="font-label-md text-on-primary/80 uppercase tracking-widest mb-md">Task Completion</h4>
+        <h4 className="font-label-md text-on-primary/80 uppercase tracking-widest mb-md">{t('tasks.efficiencyCard.title')}</h4>
         <div className="text-display-lg text-[40px] mb-xs">{percentage}%</div>
-        <p className="font-body-sm text-on-primary/70">Share of tasks marked completed in the current view.</p>
+        <p className="font-body-sm text-on-primary/70">{t('tasks.efficiencyCard.description')}</p>
         <div className="mt-lg h-2 bg-surface-container-lowest/20 rounded-full overflow-hidden">
           <div className="h-full bg-surface-container-lowest" style={{ width: `${percentage}%` }} />
         </div>

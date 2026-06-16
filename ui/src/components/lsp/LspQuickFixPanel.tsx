@@ -6,6 +6,7 @@
 // action's workspace edit on click.
 
 import { useEffect, useState, useCallback } from 'react'
+import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { CodeActionDto } from '@/lib/tauri-api'
 
@@ -45,6 +46,7 @@ export default function LspQuickFixPanel({
   onApplied,
   onClose,
 }: LspQuickFixPanelProps) {
+  const intl = useIntl()
   const server = DEFAULT_SERVERS[diagnostic.language_id] ?? EMPTY_SERVER
   const cmd = server_cmd ?? server.cmd
   const args = server_args ?? server.args
@@ -57,7 +59,7 @@ export default function LspQuickFixPanel({
 
   const fetch = useCallback(async () => {
     if (!cmd) {
-      setError(`No LSP server configured for language "${diagnostic.language_id}"`)
+      setError(intl.formatMessage({ id: 'lsp.quickFix.noLspConfigured' }, { language: diagnostic.language_id }))
       setActions([])
       return
     }
@@ -82,23 +84,23 @@ export default function LspQuickFixPanel({
     } finally {
       setLoading(false)
     }
-  }, [cmd, args, diagnostic])
+  }, [cmd, args, diagnostic, intl])
 
   useEffect(() => { fetch() }, [fetch])
 
   const onApply = async (a: CodeActionDto) => {
     if (!a.edit) {
-      setError(`Action "${a.title}" has no workspace edit.`)
+      setError(intl.formatMessage({ id: 'lsp.quickFix.noWorkspaceEdit' }, { title: a.title }))
       return
     }
     setApplying(a.title)
     setError(null)
     try {
       const count = await api.applyCodeAction(a.edit)
-      setLastApplied(`${a.title} (${count} edit${count === 1 ? '' : 's'})`)
+      setLastApplied(intl.formatMessage({ id: 'lsp.quickFix.applies' }, { title: a.title, count }))
       onApplied?.()
     } catch (e) {
-      setError(`Apply failed: ${e}`)
+      setError(intl.formatMessage({ id: 'lsp.quickFix.applyFailed' }, { error: e instanceof Error ? e.message : String(e) }))
     } finally {
       setApplying(null)
     }
@@ -113,7 +115,7 @@ export default function LspQuickFixPanel({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-sm min-w-0">
           <span className="material-symbols-outlined text-[18px] text-primary">build</span>
-          <h4 className="font-label-md text-on-surface truncate">Quick Fix</h4>
+          <h4 className="font-label-md text-on-surface truncate">{intl.formatMessage({ id: 'lsp.quickFix.title' })}</h4>
         </div>
         <div className="flex items-center gap-xs">
           <button
@@ -121,7 +123,7 @@ export default function LspQuickFixPanel({
             onClick={fetch}
             disabled={loading || !cmd}
             className="font-label-sm text-primary hover:bg-primary/10 rounded px-xs py-1 cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
-            aria-label="Re-fetch quick fixes"
+            aria-label={intl.formatMessage({ id: 'lsp.quickFix.refresh.aria' })}
           >
             <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
           </button>
@@ -129,7 +131,7 @@ export default function LspQuickFixPanel({
             <button
               type="button"
               onClick={onClose}
-              aria-label="Close quick-fix panel"
+              aria-label={intl.formatMessage({ id: 'lsp.quickFix.close.aria' })}
               className="text-on-surface-variant hover:bg-surface-container-high rounded-full p-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <span className="material-symbols-outlined text-[16px]">close</span>
@@ -153,14 +155,14 @@ export default function LspQuickFixPanel({
       {lastApplied ? (
         <div className="bg-tertiary/10 border border-tertiary/30 rounded-lg p-sm font-label-sm text-tertiary flex items-start gap-sm">
           <span className="material-symbols-outlined text-[14px] mt-0.5">check_circle</span>
-          <span className="flex-1">Applied: {lastApplied}</span>
+          <span className="flex-1">{intl.formatMessage({ id: 'lsp.quickFix.applied' }, { result: lastApplied })}</span>
         </div>
       ) : null}
 
       {loading ? (
-        <p className="font-label-sm text-on-surface-variant text-center py-sm">Asking {cmd}…</p>
+        <p className="font-label-sm text-on-surface-variant text-center py-sm">{intl.formatMessage({ id: 'lsp.quickFix.asking' }, { cmd })}</p>
       ) : actions.length === 0 && !error ? (
-        <p className="font-label-sm text-on-surface-variant italic">No quick fixes available.</p>
+        <p className="font-label-sm text-on-surface-variant italic">{intl.formatMessage({ id: 'lsp.quickFix.noQuickFixes' })}</p>
       ) : (
         <ul className="flex flex-col gap-xs">
           {actions.map((a, idx) => (
@@ -191,7 +193,7 @@ export default function LspQuickFixPanel({
       )}
 
       <p className="font-label-sm text-[10px] text-on-surface-variant mt-xs">
-        Spawns <code className="font-mono">{cmd}</code> on demand. Server must be on PATH.
+        {intl.formatMessage({ id: 'lsp.quickFix.spawnsServer' }, { cmd })}
       </p>
     </div>
   )

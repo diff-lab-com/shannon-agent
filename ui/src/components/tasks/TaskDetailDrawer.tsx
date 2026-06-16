@@ -6,6 +6,7 @@
 // assignee, status, and due date through the `update_task` Tauri command.
 
 import { useEffect, useMemo, useState } from 'react'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import type { TaskItem, BackgroundTaskInfo, UpdateTaskPayload } from '@/types'
 import * as api from '@/lib/tauri-api'
@@ -51,6 +52,8 @@ function fromDateInputValue(s: string): number | null {
 }
 
 export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetailDrawerProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { agents } = useApp()
   const [editing, setEditing] = useState(false)
   const [status, setStatus] = useState('')
@@ -99,11 +102,11 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
     }
     try {
       await api.updateTask(payload)
-      toast.success('Task updated')
+      toast.success(t('tasks.taskDetailDrawer.taskUpdated'))
       setEditing(false)
       onUpdated?.()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to update task')
+      toast.error(e instanceof Error ? e.message : t('tasks.taskDetailDrawer.updateFailed'))
     } finally {
       setSaving(false)
     }
@@ -121,9 +124,9 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-lg">
-          <h3 className="font-headline-md text-on-surface font-bold">Task Detail</h3>
+          <h3 className="font-headline-md text-on-surface font-bold">{t('tasks.taskDetailDrawer.title')}</h3>
           <button
-            aria-label="Close drawer"
+            aria-label={t('tasks.taskDetailDrawer.closeAria')}
             className="p-sm rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer"
             onClick={onClose}
           >
@@ -132,13 +135,13 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
         </div>
         <div className="space-y-md">
           <div>
-            <span className="text-label-sm text-on-surface-variant">Title</span>
+            <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.titleLabel')}</span>
             <p className="font-body-lg text-on-surface font-bold mt-xs">{getTitle(task)}</p>
           </div>
 
           {/* Status */}
           <div>
-            <span className="text-label-sm text-on-surface-variant">Status</span>
+            <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.status')}</span>
             {editing && editable ? (
               <select
                 value={status}
@@ -157,7 +160,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
 
           {'description' in task && task.description && (
             <div>
-              <span className="text-label-sm text-on-surface-variant">Description</span>
+              <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.description')}</span>
               <p className="font-body-md text-on-surface mt-xs">{task.description}</p>
             </div>
           )}
@@ -165,22 +168,22 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
           {/* Priority (editable) */}
           {editable && (
             <div>
-              <span className="text-label-sm text-on-surface-variant">Priority</span>
+              <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.priority')}</span>
               {editing ? (
                 <select
                   value={priority}
                   onChange={e => setPriority(e.target.value)}
-                  aria-label="Priority"
+                  aria-label={t('tasks.taskDetailDrawer.priority')}
                   className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
                 >
-                  <option value="">— none —</option>
+                  <option value="">{t('tasks.taskDetailDrawer.none')}</option>
                   {PRIORITIES.map(p => (
                     <option key={p} value={p}>{p}</option>
                   ))}
                 </select>
               ) : (
                 <p className="font-body-md text-on-surface mt-xs capitalize">
-                  {task.priority ?? '—'}
+                  {task.priority ?? t('tasks.taskDetailDrawer.none')}
                 </p>
               )}
             </div>
@@ -189,7 +192,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
           {/* Assignee (editable, G8 — datalist of known agents + free text) */}
           {editable && (
             <div>
-              <span className="text-label-sm text-on-surface-variant">Assignee</span>
+              <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.assignee')}</span>
               {editing ? (
                 <>
                   <input
@@ -197,8 +200,8 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                     list="assignee-options"
                     value={assignee}
                     onChange={e => setAssignee(e.target.value)}
-                    placeholder="agent name"
-                    aria-label="Assignee"
+                    placeholder={t('tasks.taskDetailDrawer.assigneePlaceholder')}
+                    aria-label={t('tasks.taskDetailDrawer.assignee')}
                     className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
                   />
                   <datalist id="assignee-options">
@@ -208,7 +211,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                   </datalist>
                 </>
               ) : (
-                <p className="font-body-md text-on-surface mt-xs">{task.assignee ?? '—'}</p>
+                <p className="font-body-md text-on-surface mt-xs">{task.assignee ?? t('tasks.taskDetailDrawer.none')}</p>
               )}
             </div>
           )}
@@ -216,20 +219,20 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
           {/* Due date (editable, G9) */}
           {editable && (
             <div>
-              <span className="text-label-sm text-on-surface-variant">Due Date</span>
+              <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.dueDate')}</span>
               {editing ? (
                 <input
                   type="date"
                   value={dueDate}
                   onChange={e => setDueDate(e.target.value)}
-                  aria-label="Due date"
+                  aria-label={t('tasks.taskDetailDrawer.dueDate')}
                   className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
                 />
               ) : (
                 <p className="font-body-md text-on-surface mt-xs">
                   {task.due_date
                     ? new Date(task.due_date * 1000).toLocaleDateString()
-                    : '—'}
+                    : t('tasks.taskDetailDrawer.none')}
                 </p>
               )}
             </div>
@@ -238,11 +241,11 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
           {/* Execution mode (editable, G7 — controls how `blocks` schedule) */}
           {editable && (
             <div>
-              <span className="text-label-sm text-on-surface-variant">Execution</span>
+              <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.execution')}</span>
               {editing ? (
                 <div
                   role="radiogroup"
-                  aria-label="Execution mode"
+                  aria-label={t('tasks.taskDetailDrawer.execution')}
                   className="mt-xs flex gap-sm"
                 >
                   {(['serial', 'parallel'] as const).map(mode => {
@@ -277,17 +280,17 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
           {/* Dependencies (read-only — editing happens via DependsOnEditor) */}
           {editable && (task.blocked_by?.length || task.blocks?.length) ? (
             <div>
-              <span className="text-label-sm text-on-surface-variant">Dependencies</span>
+              <span className="text-label-sm text-on-surface-variant">{t('tasks.taskDetailDrawer.dependencies')}</span>
               <div className="mt-xs flex flex-col gap-xs">
                 {task.blocked_by?.length ? (
                   <div className="text-body-sm text-on-surface-variant">
-                    Blocked by:{' '}
+                    {t('tasks.taskDetailDrawer.blockedBy')}{' '}
                     <span className="text-on-surface">{task.blocked_by.join(', ')}</span>
                   </div>
                 ) : null}
                 {task.blocks?.length ? (
                   <div className="text-body-sm text-on-surface-variant">
-                    Blocks:{' '}
+                    {t('tasks.taskDetailDrawer.blocks')}{' '}
                     <span className="text-on-surface">{task.blocks.join(', ')}</span>
                   </div>
                 ) : null}
@@ -313,14 +316,14 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                     disabled={saving}
                     className="px-md py-xs rounded-lg text-on-surface-variant font-label-md hover:bg-surface-container cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"
                   >
-                    Cancel
+                    {t('tasks.taskDetailDrawer.cancel')}
                   </button>
                   <button
                     onClick={() => void handleSave()}
                     disabled={saving}
                     className="px-md py-xs rounded-lg bg-primary text-on-primary font-label-md hover:brightness-110 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"
                   >
-                    {saving ? 'Saving…' : 'Save'}
+                    {saving ? t('tasks.taskDetailDrawer.saving') : t('tasks.taskDetailDrawer.save')}
                   </button>
                 </>
               ) : (
@@ -329,7 +332,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                   className="px-md py-xs rounded-lg bg-primary/10 text-primary font-label-md hover:bg-primary/20 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                 >
                   <span className="material-symbols-outlined text-[16px] align-middle mr-xs">edit</span>
-                  Edit
+                  {t('tasks.taskDetailDrawer.edit')}
                 </button>
               )}
             </div>

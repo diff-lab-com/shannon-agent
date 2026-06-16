@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { useIntl } from 'react-intl'
 import {
   listAgentCatalog,
   listInstalledAgentPlugins,
@@ -21,6 +22,9 @@ import { SecurityBadge } from "./SecurityBadge";
  * - GitHub: git clones into ~/.shannon/agents/<plugin>/ via install_agent_from_repo
  */
 export default function Agents() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const { search } = useOutletContext<{ search: string }>();
 
   const [catalog, setCatalog] = useState<AgentCatalogEntry[]>([]);
@@ -118,22 +122,22 @@ export default function Agents() {
   return (
     <div className="p-lg max-w-5xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">Agents</h2>
+        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.agents.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
-          Federated catalog of Claude Code-style agent definitions. Click Install to add.
+          {t('extensions.agents.subtitle')}
         </p>
       </header>
 
       {catalogLoading && (
         <div className="text-center py-lg text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          Fetching agent catalog…
+          {t('extensions.agents.loading')}
         </div>
       )}
 
       {catalogError && (
         <div className="border border-error/30 rounded-xl p-md bg-error-container/10 text-label-sm text-error">
-          Failed to load catalog: <span className="font-mono">{catalogError}</span>
+          {t('extensions.agents.loadError')}: <span className="font-mono">{catalogError}</span>
         </div>
       )}
 
@@ -144,7 +148,7 @@ export default function Agents() {
           </h3>
           {filtered.length === 0 ? (
             <div className="text-center py-md text-on-surface-variant text-label-md">
-              No agents found.
+              {t('extensions.agents.noAgents')}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
@@ -168,10 +172,10 @@ export default function Agents() {
           Installed · {installed.length}
         </h3>
         {installedLoading ? (
-          <div className="text-center py-md text-on-surface-variant text-label-sm">Loading…</div>
+          <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.agents.loadingInstalled')}</div>
         ) : installed.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
-            No agent plugins installed.
+            {t('extensions.agents.noInstalled')}
           </div>
         ) : (
           <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">
@@ -193,7 +197,7 @@ export default function Agents() {
                   disabled={busyId === `uninstall:${agent.name}`}
                   className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
                 >
-                  {busyId === `uninstall:${agent.name}` ? "…" : "Remove"}
+                  {busyId === `uninstall:${agent.name}` ? "…" : t('extensions.agents.remove')}
                 </button>
               </div>
             ))}
@@ -217,6 +221,9 @@ function AgentCard({
   feedback: { id: string; msg: string; ok: boolean } | null;
   onInstall: () => void;
 }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const trustLabel = TRUST_LABELS[entry.trust];
   const model = (entry.metadata.model as string | undefined) ?? null;
   const tools = Array.isArray(entry.metadata.tools) ? entry.metadata.tools : [];
@@ -260,7 +267,7 @@ function AgentCard({
             rel="noreferrer"
             className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest"
           >
-            View
+            {t('extensions.agents.view')}
           </a>
         )}
         <button
@@ -269,7 +276,7 @@ function AgentCard({
           disabled={busy || installed}
           className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {busy ? "…" : installed ? "Installed" : "Install"}
+          {busy ? "…" : installed ? t('extensions.agents.installed') : t('extensions.agents.install')}
         </button>
       </div>
     </div>
@@ -282,3 +289,5 @@ const TRUST_LABELS: Record<AgentCatalogEntry['trust'], { text: string; cls: stri
   community: { text: "Community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
   unknown: { text: "Unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
 };
+
+// Trust labels are static — no i18n needed for these constants
