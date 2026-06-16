@@ -67,7 +67,9 @@ use shannon_mcp::{
 use shannon_tools::register_default_tools_with_project_dir_ex;
 
 // Re-export public types from state submodule
-pub use state::{AgentDisplay, LoopState, PlanState, RalphState, ReplState, SidebarTab};
+pub use state::{
+    AgentDisplay, LoopState, PendingElicitation, PlanState, RalphState, ReplState, SidebarTab,
+};
 
 // Re-export custom_commands types used by other modules
 pub(super) use custom_commands::{
@@ -804,13 +806,48 @@ impl Repl {
 
         // Wire MCP sampling and elicitation providers so MCP servers can
         // request LLM completions (sampling) and ask the user questions (elicitation).
+        //
+        // Bounded channel (capacity 16) caps memory growth if a misbehaving MCP
+        // server floods elicitations. On full queue, the provider returns Cancel
+        // to the server instead of blocking or dropping queued requests.
+        const ELICITATION_CHANNEL_CAPACITY: usize = 16;
+        let (elicitation_tx, elicitation_rx) =
+            tokio::sync::mpsc::channel::<PendingElicitation>(ELICITATION_CHANNEL_CAPACITY);
         {
             let pool = mcp_pool.clone();
             let llm = std::sync::Arc::new(client.clone());
             let sampling = shannon_mcp::make_sampling_provider(llm);
-            // For now, elicitation auto-declines (no TUI callback wired yet).
-            // Future: wire to input_dialog for interactive elicitation.
-            let elicitation = shannon_mcp::make_elicitation_provider(None);
+            let elicitation_tx = elicitation_tx.clone();
+            let elicitation = shannon_mcp::make_elicitation_provider(Some(std::sync::Arc::new(
+                move |message: String, schema: Option<serde_json::Value>| {
+                    let tx = elicitation_tx.clone();
+                    Box::pin(async move {
+                        let (responder, receiver) = tokio::sync::oneshot::channel();
+                        let placeholder = schema
+                            .as_ref()
+                            .and_then(|s| s.get("placeholder"))
+                            .and_then(|p| p.as_str())
+                            .map(|s| s.to_string());
+                        let pending = PendingElicitation {
+                            server_name: "mcp".to_string(),
+                            message,
+                            placeholder,
+                            responder,
+                        };
+                        // Bounded send: if the queue is full (server flooding the
+                        // UI) or the TUI has shut down, return Cancel so the MCP
+                        // client sees a determinate response instead of hanging.
+                        if tx.try_send(pending).is_err() {
+                            tracing::warn!("Elicitation channel full or closed; cancelling");
+                            return (shannon_mcp::ElicitationAction::Cancel, None);
+                        }
+                        match receiver.await {
+                            Ok(result) => (result.action, result.content),
+                            Err(_) => (shannon_mcp::ElicitationAction::Cancel, None),
+                        }
+                    })
+                },
+            )));
             mcp_rt.block_on(async {
                 pool.set_sampling_provider(sampling).await;
                 pool.set_elicitation_provider(elicitation).await;
@@ -972,8 +1009,10 @@ impl Repl {
             builtin_commands::register_all(&registry);
 
             // Register MCP prompts as slash commands: /mcp__{server}__{prompt}
+            // Also expose a friendlier alias /{server}:{prompt} per ADR 0002 S5-2.
             for (server, prompt) in &discovered_mcp_prompts {
                 let cmd_name = format!("mcp__{}__{}", server, prompt.name);
+                let alias = format!("{}:{}", server, prompt.name);
                 let arg_hint = if prompt.argument_names.is_empty() {
                     None
                 } else {
@@ -986,11 +1025,11 @@ impl Repl {
                 let command = Command::Prompt(Box::new(PromptCommand {
                     base: CommandBase {
                         name: cmd_name,
-                        aliases: Vec::new(),
+                        aliases: vec![alias],
                         description: prompt.description.clone(),
                         has_user_specified_description: false,
                         availability: vec![shannon_commands::CommandAvailability::All],
-                        source: shannon_commands::CommandSource::Builtin,
+                        source: shannon_commands::CommandSource::Mcp,
                         is_enabled: true,
                         is_hidden: false,
                         argument_hint: arg_hint,
@@ -1261,6 +1300,8 @@ impl Repl {
                         s.theme = theme;
                     }
                 }
+                s.pending_elicitation_tx = Some(elicitation_tx);
+                s.pending_elicitation_rx = Some(elicitation_rx);
                 s
             },
             running: false,
@@ -1827,6 +1868,43 @@ impl Repl {
 
                 // Refresh custom statusline (throttled internally)
                 self.refresh_statusline();
+
+                // Drain pending MCP elicitations: if no dialog is open and a
+                // request is queued, surface it as an InputDialog. The dialog
+                // submits/cancels via action "__elicit__" which is handled in
+                // input.rs (handle_input_dialog_input).
+                if self.state.input_dialog.is_none() && self.state.active_elicitation.is_none() {
+                    if let Some(rx) = self.state.pending_elicitation_rx.as_mut() {
+                        if let Ok(req) = rx.try_recv() {
+                            use crate::widgets::dialog::InputDialog;
+                            // Stronger visual distinction: MCP servers are
+                            // untrusted third-party code, so label them as
+                            // EXTERNAL rather than blending in with system
+                            // dialogs. Include the server name (currently
+                            // hardcoded "mcp"; will be wired to the real name
+                            // in a follow-up) and cap message length to keep
+                            // the title bar readable.
+                            const MAX_MSG_LEN: usize = 200;
+                            let truncated = if req.message.chars().count() > MAX_MSG_LEN {
+                                let mut s: String = req.message.chars().take(MAX_MSG_LEN).collect();
+                                s.push('…');
+                                s
+                            } else {
+                                req.message.clone()
+                            };
+                            let title =
+                                format!("[EXTERNAL MCP · {}] {}", req.server_name, truncated);
+                            let placeholder = req
+                                .placeholder
+                                .clone()
+                                .unwrap_or_else(|| "Type response...".to_string());
+                            let dlg = InputDialog::new(title).with_placeholder(placeholder);
+                            self.state.input_dialog = Some(Box::new(dlg));
+                            self.state.input_dialog_action = Some("__elicit__".to_string());
+                            self.state.active_elicitation = Some(req);
+                        }
+                    }
+                }
             }
             crate::events::Event::Resize(_cols, _rows) => {
                 // Reflow committed scrollback if terminal width changed
