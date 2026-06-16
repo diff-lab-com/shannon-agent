@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { useIntl } from "react-intl";
 import { listInstalledAddons } from "@/lib/tauri-api";
 import type { InstalledAddonSummary, AddonKind } from "@/types";
 
@@ -15,6 +16,8 @@ import type { InstalledAddonSummary, AddonKind } from "@/types";
  * (for skills) and Settings page (for MCP servers).
  */
 export default function Installed() {
+  const intl = useIntl();
+  const t = (id: string) => intl.formatMessage({ id });
   const { search } = useOutletContext<{ search: string }>();
   const [addons, setAddons] = useState<InstalledAddonSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,7 +72,7 @@ export default function Installed() {
           <div className="flex items-start gap-md">
             <span className="material-symbols-outlined text-error text-[24px]">error</span>
             <div>
-              <h3 className="font-bold text-error mb-xs">Failed to load installed addons</h3>
+              <h3 className="font-bold text-error mb-xs">{t('extensions.installed.loadFailed')}</h3>
               <p className="text-label-sm text-on-surface-variant font-mono">{error}</p>
             </div>
           </div>

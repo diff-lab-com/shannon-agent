@@ -5,6 +5,7 @@
 // are optional with MD3-styled inputs. Live cron preview uses preview_cron.
 
 import { useEffect, useState } from 'react'
+import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import ResultRoutingEditor from './ResultRoutingEditor'
 import ScheduleTemplates from './ScheduleTemplates'
@@ -47,6 +48,9 @@ const DEFAULT_POLICY: ExecutionPolicy = {
 }
 
 export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const [name, setName] = useState('')
   const [prompt, setPrompt] = useState('')
   const [triggerType, setTriggerType] = useState<TriggerType>('interval')
@@ -88,7 +92,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
 
   const submit = () => {
     if (!valid) {
-      setError('Please fill all required fields')
+      setError(t('tasks.scheduleForm.requiredFields'))
       return
     }
     setError(null)
@@ -117,7 +121,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
     setNlMatch(null)
     const parsed = parseNlCron(nlInput)
     if (!parsed) {
-      setNlError('Could not parse. Try "every 15 minutes", "weekdays at 9am", "daily at 09:30", "monthly on day 1 at 8am".')
+      setNlError(t('tasks.scheduleForm.parseError'))
       return
     }
     setCronExpr(parsed.expression)
@@ -127,7 +131,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
   return (
     <div className="bg-surface-container-lowest border border-primary/30 rounded-xl p-lg mb-lg flex flex-col gap-md shadow-sm">
       <div className="flex items-center justify-between">
-        <h3 className="font-body-lg font-bold text-on-surface">Create Scheduled Routine</h3>
+        <h3 className="font-body-lg font-bold text-on-surface">{t('tasks.scheduleForm.title')}</h3>
         <button
           type="button"
           className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
@@ -136,17 +140,17 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           aria-controls="schedule-policy"
         >
           <span className="material-symbols-outlined text-[14px]">{showPolicy ? 'remove' : 'settings'}</span>
-          {showPolicy ? 'Hide policy' : 'Policy options'}
+          {showPolicy ? t('tasks.scheduleForm.hidePolicy') : t('tasks.scheduleForm.policyOptions')}
         </button>
       </div>
 
       <ScheduleTemplates onApply={applyTemplate} />
 
       <label className="flex flex-col gap-xs">
-        <span className="font-label-md text-on-surface-variant">Name *</span>
+        <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.nameLabel')}</span>
         <input
           type="text"
-          placeholder="e.g. Daily standup summary"
+          placeholder={t('tasks.scheduleForm.namePlaceholder')}
           value={name}
           onChange={e => setName(e.target.value)}
           className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -154,18 +158,18 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       </label>
 
       <label className="flex flex-col gap-xs">
-        <span className="font-label-md text-on-surface-variant">Prompt *</span>
+        <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.promptLabel')}</span>
         <textarea
           className="w-full h-20 p-sm bg-surface-container-low rounded-lg border border-outline-variant/30 text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30"
-          placeholder="Describe what this routine should do..."
+          placeholder={t('tasks.scheduleForm.promptPlaceholder')}
           value={prompt}
           onChange={e => setPrompt(e.target.value)}
         />
       </label>
 
       <fieldset className="flex flex-col gap-xs">
-        <legend className="font-label-md text-on-surface-variant mb-xs">Trigger type</legend>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-sm" role="radiogroup" aria-label="Trigger type">
+        <legend className="font-label-md text-on-surface-variant mb-xs">{t('tasks.scheduleForm.triggerType')}</legend>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-sm" role="radiogroup" aria-label={t('tasks.scheduleForm.triggerType')}>
           {TRIGGER_OPTIONS.map(opt => {
             const selected = triggerType === opt.value
             return (
@@ -194,7 +198,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
 
       {triggerType === 'interval' ? (
         <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface-variant">Interval (seconds)</span>
+          <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.intervalSeconds')}</span>
           <input
             type="number"
             min={1}
@@ -203,7 +207,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
           <span className="font-label-sm text-[11px] text-on-surface-variant">
-            ≈ {Math.round(intervalSecs / 60)} min / {Math.round(intervalSecs / 3600)} hr
+            {intl.formatMessage({ id: 'tasks.scheduleForm.intervalHint' }, { mins: Math.round(intervalSecs / 60), hrs: Math.round(intervalSecs / 3600) })}
           </span>
         </label>
       ) : null}
@@ -211,37 +215,37 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       {triggerType === 'cron' ? (
         <div className="flex flex-col gap-xs">
           <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">Cron expression *</span>
+            <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.cronExpression')}</span>
             <input
               type="text"
-              placeholder="0 9 * * *"
+              placeholder={t('tasks.scheduleForm.cronPlaceholder')}
               value={cronExpr}
               onChange={e => setCronExpr(e.target.value)}
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </label>
           {cronLoading ? (
-            <span className="font-label-sm text-[11px] text-on-surface-variant">Checking…</span>
+            <span className="font-label-sm text-[11px] text-on-surface-variant">{t('tasks.scheduleForm.checking')}</span>
           ) : cronPreview ? (
             cronPreview.valid ? (
               <div className="font-label-sm text-[11px] text-on-surface-variant flex items-center gap-xs">
                 <span className="material-symbols-outlined text-[14px] text-primary">check_circle</span>
-                Next: {cronPreview.next_fires.slice(0, 3).map(n => new Date(n * 1000).toLocaleString()).join(' · ')}
+                {t('tasks.scheduleForm.next')} {cronPreview.next_fires.slice(0, 3).map(n => new Date(n * 1000).toLocaleString()).join(' · ')}
               </div>
             ) : (
               <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
                 <span className="material-symbols-outlined text-[14px]">error</span>
-                {cronPreview.error ?? 'Invalid cron expression'}
+                {cronPreview.error ?? t('tasks.scheduleForm.invalidCron')}
               </div>
             )
           ) : null}
           <div className="flex gap-xs items-end">
             <label className="flex flex-col gap-xs flex-1">
-              <span className="font-label-sm text-[11px] text-on-surface-variant">Natural language</span>
+              <span className="font-label-sm text-[11px] text-on-surface-variant">{t('tasks.scheduleForm.naturalLanguage')}</span>
               <input
                 type="text"
-                aria-label="Natural language cron input"
-                placeholder='e.g. "weekdays at 9am"'
+                aria-label={t('tasks.scheduleForm.nlAria')}
+                placeholder={t('tasks.scheduleForm.nlPlaceholder')}
                 value={nlInput}
                 onChange={e => { setNlInput(e.target.value); setNlError(null); setNlMatch(null) }}
                 onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); tryParseNl() } }}
@@ -254,7 +258,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
               disabled={!nlInput.trim()}
               className="px-sm py-sm rounded-lg border border-primary/40 bg-primary/10 text-primary font-label-md text-[12px] hover:bg-primary/20 disabled:opacity-40 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
-              Parse
+              {t('tasks.scheduleForm.parse')}
             </button>
           </div>
           {nlError ? (
@@ -266,7 +270,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           {nlMatch ? (
             <div className="font-label-sm text-[11px] text-tertiary flex items-center gap-xs">
               <span className="material-symbols-outlined text-[14px]">check_circle</span>
-              Parsed: {nlMatch}
+              {t('tasks.scheduleForm.parsed')} {nlMatch}
             </div>
           ) : null}
         </div>
@@ -276,7 +280,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
         <div className="bg-tertiary/10 border border-tertiary/30 rounded-lg p-md flex gap-sm items-start">
           <span className="material-symbols-outlined text-[18px] text-on-tertiary">info</span>
           <div className="font-label-sm text-[12px] text-on-surface-variant">
-            On save, a webhook URL + signing secret will be generated. Trigger via <code className="font-mono">POST</code> with HMAC-SHA256 signature header.
+            {t('tasks.scheduleForm.webhookInfo')}
           </div>
         </div>
       ) : null}
@@ -285,17 +289,17 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
         <div className="bg-secondary/10 border border-secondary/30 rounded-lg p-md flex gap-sm items-start">
           <span className="material-symbols-outlined text-[18px] text-secondary">info</span>
           <div className="font-label-sm text-[12px] text-on-surface-variant">
-            Event-driven triggers fire when another routine emits a matching event. Configure event subscriptions after creation in the routine detail view.
+            {t('tasks.scheduleForm.eventInfo')}
           </div>
         </div>
       ) : null}
 
       <label className="flex flex-col gap-xs">
-        <span className="font-label-md text-on-surface-variant">Max fires (optional)</span>
+        <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.maxFires')}</span>
         <input
           type="number"
           min={1}
-          placeholder="Unlimited"
+          placeholder={t('tasks.scheduleForm.maxFiresPlaceholder')}
           value={maxFires}
           onChange={e => setMaxFires(e.target.value === '' ? '' : Math.max(1, Number(e.target.value)))}
           className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -305,7 +309,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       {showPolicy ? (
         <div id="schedule-policy" className="grid grid-cols-1 md:grid-cols-2 gap-md p-md bg-surface-container-low/60 rounded-lg border border-outline-variant/20">
           <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">Max retries</span>
+            <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.maxRetries')}</span>
             <input
               type="number"
               min={0}
@@ -313,10 +317,10 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
               onChange={e => setPolicy({ ...policy, max_retries: Math.max(0, Number(e.target.value) || 0) })}
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
-            <span className="font-label-sm text-[11px] text-on-surface-variant">Auto-retry on failure (0 disables)</span>
+            <span className="font-label-sm text-[11px] text-on-surface-variant">{t('tasks.scheduleForm.maxRetriesHint')}</span>
           </label>
           <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">Timeout (seconds)</span>
+            <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.timeout')}</span>
             <input
               type="number"
               min={1}
@@ -326,22 +330,22 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
             />
           </label>
           <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">Budget (USD, optional)</span>
+            <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.budget')}</span>
             <input
               type="number"
               min={0}
               step="0.01"
-              placeholder="No cap"
+              placeholder={t('tasks.scheduleForm.budgetPlaceholder')}
               value={policy.budget_usd ?? ''}
               onChange={e => setPolicy({ ...policy, budget_usd: e.target.value === '' ? null : Math.max(0, Number(e.target.value)) })}
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
           </label>
           <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface-variant">Worktree path (optional)</span>
+            <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.worktreePath')}</span>
             <input
               type="text"
-              placeholder="/path/to/worktree"
+              placeholder={t('tasks.scheduleForm.worktreePlaceholder')}
               value={policy.worktree ?? ''}
               onChange={e => setPolicy({ ...policy, worktree: e.target.value || null })}
               className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm font-mono focus:outline-none focus:ring-2 focus:ring-primary/30"
@@ -354,7 +358,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
               onChange={e => setPolicy({ ...policy, notify_on_failure: e.target.checked })}
               className="cursor-pointer"
             />
-            <span className="font-label-md text-on-surface">Notify on failure</span>
+            <span className="font-label-md text-on-surface">{t('tasks.scheduleForm.notifyOnFailure')}</span>
           </label>
           <label className="flex items-center gap-sm md:col-span-2 cursor-pointer">
             <input
@@ -363,7 +367,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
               onChange={e => setPolicy({ ...policy, auto_archive_when_empty: e.target.checked })}
               className="cursor-pointer"
             />
-            <span className="font-label-md text-on-surface">Auto-archive when worktree is empty</span>
+            <span className="font-label-md text-on-surface">{t('tasks.scheduleForm.autoArchive')}</span>
           </label>
           <div className="md:col-span-2">
             <ResultRoutingEditor
@@ -387,14 +391,14 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
           className="px-md py-sm rounded-lg border border-outline-variant font-label-md cursor-pointer"
           onClick={() => { setName(''); setPrompt(''); setTriggerType('interval'); setIntervalSecs(3600); setCronExpr('0 9 * * *'); setMaxFires(''); setPolicy(DEFAULT_POLICY); setShowPolicy(false); onCancel() }}
         >
-          Cancel
+          {t('tasks.scheduleForm.cancel')}
         </Button>
         <Button
           className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50"
           onClick={submit}
           disabled={!valid}
         >
-          Create Routine
+          {t('tasks.scheduleForm.createRoutine')}
         </Button>
       </div>
     </div>

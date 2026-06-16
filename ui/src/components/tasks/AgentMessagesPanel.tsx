@@ -6,6 +6,7 @@
 // until real team agents are wired into the desktop runtime.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 import { ListSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
@@ -50,6 +51,8 @@ interface AgentMessagesPanelProps {
 }
 
 export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesPanelProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [rows, setRows] = useState<AgentMessageEntry[]>([])
   const [teams, setTeams] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -76,7 +79,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
       setRows(msgs)
       setTeams(allTeams)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load agent messages')
+      setError(e instanceof Error ? e.message : t('tasks.agentMessagesPanel.loadFailed'))
     } finally {
       setLoading(false)
     }
@@ -101,7 +104,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
       setContent('')
       await reload()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to record message')
+      setError(e instanceof Error ? e.message : t('tasks.agentMessagesPanel.recordFailed'))
     } finally {
       setInjecting(false)
     }
@@ -114,7 +117,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
       <div className="flex items-center justify-between mb-md">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-[20px] text-on-surface">forum</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">Agent Messages</h3>
+          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.agentMessagesPanel.title')}</h3>
           {team && (
             <span className="text-label-sm text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full border border-outline-variant/20">
               {team}
@@ -129,12 +132,12 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
               onChange={e => setAutoRefresh(e.target.checked)}
               className="accent-primary"
             />
-            Auto-refresh
+            {t('tasks.agentMessagesPanel.autoRefresh')}
           </label>
           <button
             onClick={() => void reload()}
             disabled={loading}
-            aria-label="Reload messages"
+            aria-label={t('tasks.agentMessagesPanel.reloadAria')}
             className="p-xs rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50"
           >
             <span className="material-symbols-outlined text-[18px]">refresh</span>
@@ -145,7 +148,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
       {/* Manual inject form (testing aid). */}
       <details className="mb-md">
         <summary className="cursor-pointer text-label-sm text-on-surface-variant hover:text-primary select-none">
-          Record test message
+          {t('tasks.agentMessagesPanel.recordTest')}
         </summary>
         <div className="mt-sm flex flex-col gap-sm p-md bg-surface-container-low rounded-xl border border-outline-variant/20">
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-sm">
@@ -153,22 +156,22 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
               type="text"
               value={from}
               onChange={e => setFrom(e.target.value)}
-              placeholder="from"
-              aria-label="From agent"
+              placeholder={t('tasks.agentMessagesPanel.fromPlaceholder')}
+              aria-label={t('tasks.agentMessagesPanel.fromAria')}
               className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
             />
             <input
               type="text"
               value={to}
               onChange={e => setTo(e.target.value)}
-              placeholder="to (use * for broadcast)"
-              aria-label="To agent"
+              placeholder={t('tasks.agentMessagesPanel.toPlaceholder')}
+              aria-label={t('tasks.agentMessagesPanel.toAria')}
               className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
             />
             <select
               value={priority}
               onChange={e => setPriority(e.target.value as Priority)}
-              aria-label="Priority"
+              aria-label={t('tasks.agentMessagesPanel.priorityAria')}
               className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
             >
               {PRIORITIES.map(p => (
@@ -178,15 +181,15 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
               ))}
             </select>
             <span className="text-label-sm text-on-surface-variant self-center">
-              Team: <span className="text-on-surface">{activeTeam}</span>
+              {t('tasks.agentMessagesPanel.team')}: <span className="text-on-surface">{activeTeam}</span>
             </span>
           </div>
           <textarea
             value={content}
             onChange={e => setContent(e.target.value)}
-            placeholder="Message content (text only — structured/protocol come from real agents)"
+            placeholder={t('tasks.agentMessagesPanel.contentPlaceholder')}
             rows={2}
-            aria-label="Message content"
+            aria-label={t('tasks.agentMessagesPanel.contentAria')}
             className="px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface resize-none focus:outline-none focus:border-primary"
           />
           <div className="flex justify-end gap-sm">
@@ -195,14 +198,14 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
               className="px-md py-xs rounded-lg text-on-surface-variant font-label-md hover:bg-surface-container cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               disabled={injecting}
             >
-              Clear
+              {t('tasks.agentMessagesPanel.clear')}
             </button>
             <button
               onClick={() => void handleInject()}
               disabled={injecting || !content.trim()}
               className="px-md py-xs rounded-lg bg-primary text-on-primary font-label-md hover:brightness-110 transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {injecting ? 'Sending…' : 'Send'}
+              {injecting ? t('tasks.agentMessagesPanel.sending') : t('tasks.agentMessagesPanel.send')}
             </button>
           </div>
         </div>
@@ -217,18 +220,18 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
       ) : empty ? (
         <EmptyState
           icon="forum"
-          title="No agent messages"
+          title={t('tasks.agentMessagesPanel.emptyTitle')}
           description={
             team
-              ? `No messages recorded for team "${team}" yet. Real team agents will populate this automatically.`
-              : `No inter-agent messages recorded yet. Use "Record test message" above, or wait for real team agents to communicate.`
+              ? intl.formatMessage({ id: 'tasks.agentMessagesPanel.emptyDescTeam' }, { team })
+              : t('tasks.agentMessagesPanel.emptyDesc')
           }
         />
       ) : (
         <>
           {team === undefined && teams.length > 0 && (
             <p className="text-label-sm text-on-surface-variant mb-sm">
-              Aggregated from {teams.length} team{teams.length === 1 ? '' : 's'}: {teams.join(', ')}
+              {intl.formatMessage({ id: 'tasks.agentMessagesPanel.aggregatedFrom' }, { count: teams.length, teams: teams.join(', ') })}
             </p>
           )}
           <ol className="relative pl-md space-y-md before:absolute before:left-[7px] before:top-2 before:bottom-2 before:w-px before:bg-outline-variant/30">

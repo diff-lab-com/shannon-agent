@@ -9,6 +9,7 @@
 // the original heuristic (highlight days with running/completed tasks) when no
 // scheduled data is supplied.
 
+import { useIntl } from 'react-intl'
 import type { TaskItem, AgentInfo, ScheduledRoutine } from '@/types'
 import { DAY_NAMES, MONTH_NAMES, statusBadge } from './shared'
 import EfficiencyCard from './EfficiencyCard'
@@ -39,6 +40,8 @@ export default function TaskCalendarView({
   onSelectDay,
   onSelectTask,
 }: TaskCalendarViewProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const today = new Date()
   const startDay = (new Date(viewYear, viewMonth, 1).getDay() + 6) % 7 // Monday-based
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
@@ -74,7 +77,7 @@ export default function TaskCalendarView({
             return (
               <div
                 key={day}
-                title={dayFires.length > 0 ? `${dayFires.length} scheduled run(s)` : undefined}
+                title={dayFires.length > 0 ? intl.formatMessage({ id: 'tasks.taskCalendarView.scheduledRuns' }, { count: dayFires.length }) : undefined}
                 className={`min-h-[80px] p-xs rounded-lg border cursor-pointer transition-all ${
                   isSelected ? 'border-primary bg-primary/5 ring-1 ring-primary/20' :
                   isToday ? 'border-primary/30 bg-primary/5' :
@@ -103,11 +106,11 @@ export default function TaskCalendarView({
       {selectedDay !== null && (
         <div>
           <h4 className="font-label-md text-label-md text-outline uppercase tracking-[0.1em] mb-md pl-xs">
-            {MONTH_NAMES[viewMonth]} {selectedDay} — Tasks
+            {MONTH_NAMES[viewMonth]} {selectedDay} — {t('tasks.taskCalendarView.tasks')}
           </h4>
           <div className="space-y-md">
             {filteredTasks.length === 0 ? (
-              <p className="text-body-sm text-on-surface-variant text-center py-lg">No tasks for this view.</p>
+              <p className="text-body-sm text-on-surface-variant text-center py-lg">{t('tasks.taskCalendarView.noTasks')}</p>
             ) : (
               filteredTasks.slice(0, 5).map(task => {
                 const badge = statusBadge(task.status)
@@ -145,19 +148,19 @@ export default function TaskCalendarView({
         <EfficiencyCard percentage={efficiencyPct} variant="compact" />
         <AgentAllocation agents={agents} />
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg">
-          <h4 className="font-headline-md text-[16px] text-on-surface mb-md">Active Now</h4>
+          <h4 className="font-headline-md text-[16px] text-on-surface mb-md">{t('tasks.taskCalendarView.activeNow')}</h4>
           <div className="space-y-md">
-            {allTasks.filter(t => t.status === 'running' || t.status === 'in_progress').slice(0, 3).map(t => (
-              <div key={t.id} className="flex items-start gap-md">
+            {allTasks.filter(task => task.status === 'running' || task.status === 'in_progress').slice(0, 3).map(task => (
+              <div key={task.id} className="flex items-start gap-md">
                 <div className="w-1 bg-primary h-8 rounded-full" />
                 <div>
-                  <p className="text-body-sm font-semibold">{t.title}</p>
-                  <p className="text-[12px] text-on-surface-variant">{t.assignee || 'Unassigned'}</p>
+                  <p className="text-body-sm font-semibold">{task.title}</p>
+                  <p className="text-[12px] text-on-surface-variant">{task.assignee || t('tasks.taskCalendarView.unassigned')}</p>
                 </div>
               </div>
             ))}
-            {allTasks.filter(t => t.status === 'running' || t.status === 'in_progress').length === 0 ? (
-              <p className="text-body-sm text-on-surface-variant italic opacity-60">No active tasks</p>
+            {allTasks.filter(task => task.status === 'running' || task.status === 'in_progress').length === 0 ? (
+              <p className="text-body-sm text-on-surface-variant italic opacity-60">{t('tasks.taskCalendarView.noActiveTasks')}</p>
             ) : null}
           </div>
         </div>

@@ -9,6 +9,7 @@
 // pruneTaskWorktrees) was merged in shannon-code PR #18.
 
 import { useMemo, useState } from 'react'
+import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import { useScheduledTasks, useTaskWorktrees } from '@/hooks/scheduled-tasks'
@@ -22,6 +23,8 @@ function shortPath(p: string): string {
 }
 
 export default function WorktreePanel() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { tasks: routines } = useScheduledTasks()
   const { worktrees, loading, error, create, remove, prune } = useTaskWorktrees()
   const [selectedTaskId, setSelectedTaskId] = useState<string>('')
@@ -77,9 +80,9 @@ export default function WorktreePanel() {
     <div className="space-y-md">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-headline-md text-on-surface">Task Worktrees</h3>
+          <h3 className="font-headline-md text-on-surface">{t('tasks.worktreePanel.title')}</h3>
           <p className="text-on-surface-variant text-[13px] mt-xs">
-            Spin up isolated git worktrees for unattended routine execution.
+            {t('tasks.worktreePanel.description')}
           </p>
         </div>
         <button
@@ -87,10 +90,10 @@ export default function WorktreePanel() {
           className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           onClick={handlePrune}
           disabled={busy || worktrees.length === 0}
-          aria-label="Prune stale worktrees"
+          aria-label={t('tasks.worktreePanel.pruneStaleAria')}
         >
           <span className="material-symbols-outlined text-[18px]">cleaning_services</span>
-          Prune stale
+          {t('tasks.worktreePanel.pruneStale')}
         </button>
       </div>
 
@@ -105,7 +108,7 @@ export default function WorktreePanel() {
       <div className="bg-surface-container-lowest/80 border border-outline-variant/20 rounded-xl p-md flex flex-col md:flex-row md:items-end gap-sm">
         <div className="flex-1">
           <label htmlFor="worktree-task-select" className="block font-label-sm text-[11px] text-on-surface-variant uppercase tracking-wider mb-xs">
-            Routine
+            {t('tasks.worktreePanel.routine')}
           </label>
           <select
             id="worktree-task-select"
@@ -114,7 +117,7 @@ export default function WorktreePanel() {
             onChange={e => setSelectedTaskId(e.target.value)}
             disabled={busy || routines.length === 0}
           >
-            <option value="">{routines.length === 0 ? 'No routines available' : 'Select a routine…'}</option>
+            <option value="">{routines.length === 0 ? t('tasks.worktreePanel.noRoutines') : t('tasks.worktreePanel.selectRoutine')}</option>
             {routines.map(r => (
               <option key={r.id} value={r.id}>{r.name}</option>
             ))}
@@ -125,10 +128,10 @@ export default function WorktreePanel() {
           className="px-md py-sm bg-primary text-on-primary rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-md active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           onClick={handleCreate}
           disabled={busy || !selectedTaskId}
-          aria-label="Create worktree for selected routine"
+          aria-label={t('tasks.worktreePanel.createWorktreeAria')}
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
-          Create worktree
+          {t('tasks.worktreePanel.createWorktree')}
         </button>
       </div>
 
@@ -137,8 +140,8 @@ export default function WorktreePanel() {
         <div className="bg-surface-container-lowest/70 border border-outline-variant/20 rounded-xl p-xl">
           <EmptyState
             icon="fork_right"
-            title="No task worktrees yet."
-            description="Create one above to enable isolated, unattended execution of a scheduled routine."
+            title={t('tasks.worktreePanel.emptyTitle')}
+            description={t('tasks.worktreePanel.emptyDesc')}
           />
         </div>
       ) : (
@@ -173,18 +176,18 @@ export default function WorktreePanel() {
                       className="px-sm py-xs bg-error text-on-error rounded-lg font-label-sm text-[12px] font-bold cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-error/30"
                       onClick={handleRemoveConfirm}
                       disabled={busy}
-                      aria-label="Confirm remove worktree"
+                      aria-label={t('tasks.worktreePanel.confirmRemoveAria')}
                     >
-                      Remove
+                      {t('tasks.worktreePanel.remove')}
                     </button>
                     <button
                       type="button"
                       className="px-sm py-xs border border-outline-variant text-on-surface rounded-lg font-label-sm text-[12px] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                       onClick={() => setConfirmRemove(null)}
                       disabled={busy}
-                      aria-label="Cancel remove"
+                      aria-label={t('tasks.worktreePanel.cancelRemoveAria')}
                     >
-                      Cancel
+                      {t('tasks.worktreePanel.cancel')}
                     </button>
                   </div>
                 ) : (
@@ -192,8 +195,8 @@ export default function WorktreePanel() {
                     type="button"
                     className="p-xs text-on-surface-variant hover:text-error cursor-pointer rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                     onClick={() => setConfirmRemove(wt.path)}
-                    aria-label={`Remove worktree for ${wt.task_name}`}
-                    title="Remove worktree"
+                    aria-label={intl.formatMessage({ id: 'tasks.worktreePanel.removeWorktreeAria' }, { name: wt.task_name })}
+                    title={t('tasks.worktreePanel.removeWorktree')}
                   >
                     <span className="material-symbols-outlined text-[18px]">delete</span>
                   </button>

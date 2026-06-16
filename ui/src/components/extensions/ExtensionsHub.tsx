@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
@@ -6,6 +7,8 @@ import * as api from '@/lib/tauri-api'
 import type { SkillInfo } from '@/types'
 
 export default function ExtensionsHub() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [skills, setSkills] = useState<SkillInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [filterMode, setFilterMode] = useState<'trending' | 'recent'>('trending')
@@ -15,7 +18,7 @@ export default function ExtensionsHub() {
   useEffect(() => {
     api.listSkills()
       .then(setSkills)
-      .catch(e => { console.warn('Failed to load skills:', e); toast.error('Failed to load skills') })
+      .catch(e => { console.warn('Failed to load skills:', e); toast.error(t('extensions.hub.loadFailed')) })
       .finally(() => setLoading(false))
   }, [])
 
@@ -63,7 +66,7 @@ export default function ExtensionsHub() {
     <div className="max-w-[1200px] mx-auto px-lg pt-lg pb-xl">
       <section className="mb-xl mt-4">
         <div className="flex items-center justify-between mb-lg">
-          <h3 className="font-headline-md text-headline-md">Available Skills</h3>
+          <h3 className="font-headline-md text-headline-md">{t('extensions.hub.availableSkills')}</h3>
           <div className="flex items-center gap-sm">
             <div className="relative">
               <span className="material-symbols-outlined absolute left-sm top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
@@ -71,16 +74,16 @@ export default function ExtensionsHub() {
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
-                placeholder="Search skills..."
+                placeholder={t('extensions.hub.searchPlaceholder')}
                 className="pl-[36px] pr-md py-xs rounded-lg bg-surface-container-low border border-outline-variant/30 text-body-sm text-on-surface placeholder:text-on-surface-variant/50 outline-none focus:ring-2 focus:ring-primary/20 w-[200px]"
               />
             </div>
             <div className="flex bg-surface-container-low rounded-lg p-xs gap-xs">
-              <button onClick={() => setFilterMode('trending')} className={`px-sm py-xs rounded-md text-label-sm font-bold cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none ${filterMode === 'trending' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high'}`}>Trending</button>
-              <button onClick={() => setFilterMode('recent')} className={`px-sm py-xs rounded-md text-label-sm font-bold cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none ${filterMode === 'recent' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high'}`}>Recent</button>
+              <button onClick={() => setFilterMode('trending')} className={`px-sm py-xs rounded-md text-label-sm font-bold cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none ${filterMode === 'trending' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high'}`}>{t('extensions.hub.trending')}</button>
+              <button onClick={() => setFilterMode('recent')} className={`px-sm py-xs rounded-md text-label-sm font-bold cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none ${filterMode === 'recent' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high'}`}>{t('extensions.hub.recent')}</button>
             </div>
             <Button variant="ghost" className="px-md py-sm rounded-full bg-surface-container-high font-label-md text-label-md text-on-surface cursor-pointer">
-              {filteredSkills.length} Skills
+              {intl.formatMessage({ id: 'extensions.hub.skillsCount' }, { count: filteredSkills.length })}
             </Button>
           </div>
         </div>
@@ -92,8 +95,8 @@ export default function ExtensionsHub() {
         ) : filteredSkills.length === 0 ? (
           <EmptyState
             icon="extension_off"
-            title={searchQuery ? 'No skills match your search.' : 'No skills available.'}
-            description={searchQuery ? 'Try a different search term.' : 'Skills can be added via MCP servers or plugin configuration.'}
+            title={searchQuery ? t('extensions.hub.noMatchTitle') : t('extensions.hub.noneAvailableTitle')}
+            description={searchQuery ? t('extensions.hub.noMatchDesc') : t('extensions.hub.noneAvailableDesc')}
           />
         ) : (
           sortedCategories.map(cat => (

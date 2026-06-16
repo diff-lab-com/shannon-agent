@@ -5,6 +5,7 @@
 // their routine list (the dialog calls onCreated with the new routine DTO).
 
 import { useState, useEffect } from 'react'
+import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
 
@@ -27,6 +28,8 @@ export interface HookRoutineCreateDialogProps {
 }
 
 export default function HookRoutineCreateDialog({ open, onClose, onCreated }: HookRoutineCreateDialogProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [name, setName] = useState('')
   const [trigger, setTrigger] = useState('PostToolUse')
   const [command, setCommand] = useState('')
@@ -96,12 +99,12 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
         <div className="flex items-center justify-between">
           <h2 id="hook-routine-create-title" className="font-headline-md text-[18px] font-bold text-on-surface flex items-center gap-sm">
             <span className="material-symbols-outlined text-[20px] text-primary">add_link</span>
-            New Hook → Task Routine
+            {t('tasks.hookRoutineCreateDialog.title')}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close dialog"
+            aria-label={t('tasks.hookRoutineCreateDialog.closeAria')}
             className="text-on-surface-variant hover:bg-surface-container-high rounded-full p-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <span className="material-symbols-outlined text-[18px]">close</span>
@@ -116,23 +119,23 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
         ) : null}
 
         <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface">Name</span>
+          <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.name')}</span>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. lint-after-edit"
+            placeholder={t('tasks.hookRoutineCreateDialog.namePlaceholder')}
             required
             aria-invalid={!nameOk && name.length > 0}
             className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           />
           <span className="font-label-sm text-[11px] text-on-surface-variant">
-            Letters, digits, dash, underscore. Must start with a letter.
+            {t('tasks.hookRoutineCreateDialog.nameHint')}
           </span>
         </label>
 
         <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface">Hook event</span>
+          <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.hookEvent')}</span>
           <select
             value={trigger}
             onChange={(e) => setTrigger(e.target.value)}
@@ -146,49 +149,49 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
         </label>
 
         <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface">Command</span>
+          <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.command')}</span>
           <input
             type="text"
             value={command}
             onChange={(e) => setCommand(e.target.value)}
-            placeholder="e.g. cargo clippy --workspace"
+            placeholder={t('tasks.hookRoutineCreateDialog.commandPlaceholder')}
             required
             className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           />
           <span className="font-label-sm text-[11px] text-on-surface-variant">
-            Shell command to run when the hook fires.
+            {t('tasks.hookRoutineCreateDialog.commandHint')}
           </span>
         </label>
 
         <div className="grid grid-cols-2 gap-md">
           <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface">Matcher (optional)</span>
+            <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.matcher')}</span>
             <input
               type="text"
               value={matcher}
               onChange={(e) => setMatcher(e.target.value)}
-              placeholder="e.g. Write|Edit"
+              placeholder={t('tasks.hookRoutineCreateDialog.matcherPlaceholder')}
               className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             />
           </label>
           <label className="flex flex-col gap-xs">
-            <span className="font-label-md text-on-surface">Pattern (optional)</span>
+            <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.pattern')}</span>
             <input
               type="text"
               value={pattern}
               onChange={(e) => setPattern(e.target.value)}
-              placeholder="regex, e.g. \\.rs$"
+              placeholder={t('tasks.hookRoutineCreateDialog.patternPlaceholder')}
               className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md font-mono text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
             />
           </label>
         </div>
 
         <label className="flex flex-col gap-xs">
-          <span className="font-label-md text-on-surface">Description (optional)</span>
+          <span className="font-label-md text-on-surface">{t('tasks.hookRoutineCreateDialog.description')}</span>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="What does this routine do?"
+            placeholder={t('tasks.hookRoutineCreateDialog.descriptionPlaceholder')}
             rows={2}
             className="bg-surface-container-low border border-outline-variant/40 rounded-lg px-md py-sm font-body-md text-on-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 resize-none"
           />
@@ -201,7 +204,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
             disabled={submitting}
             className="px-md py-sm rounded-lg font-label-md text-on-surface-variant hover:bg-surface-container-high cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
           >
-            Cancel
+            {t('tasks.hookRoutineCreateDialog.cancel')}
           </button>
           <button
             type="submit"
@@ -209,7 +212,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
             className="px-md py-sm rounded-lg font-label-md text-on-primary bg-primary hover:bg-primary/90 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1"
           >
             <span className="material-symbols-outlined text-[14px]">{submitting ? 'hourglass_top' : 'add'}</span>
-            {submitting ? 'Creating…' : 'Create routine'}
+            {submitting ? t('tasks.hookRoutineCreateDialog.creating') : t('tasks.hookRoutineCreateDialog.createRoutine')}
           </button>
         </div>
       </form>

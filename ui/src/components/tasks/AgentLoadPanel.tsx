@@ -6,6 +6,7 @@
 // chart sorted by load, with summary stats (active count, avg load, peak).
 
 import { useMemo } from 'react'
+import { useIntl } from 'react-intl'
 import type { AgentInfo } from '@/types'
 
 interface AgentLoadPanelProps {
@@ -59,6 +60,9 @@ function computeAgentLoads(agents: AgentInfo[]): AgentLoad[] {
 }
 
 export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const rows = useMemo(() => computeAgentLoads(agents), [agents])
 
   const stats = useMemo(() => {
@@ -79,31 +83,31 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
       <div className="flex items-center justify-between mb-md">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-[20px] text-on-surface">speed</span>
-          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">Agent Load</h3>
+          <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.agentLoadPanel.title')}</h3>
         </div>
         <span className="text-label-sm text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full border border-outline-variant/20">
-          {stats.active} active · {stats.idle} idle
+          {intl.formatMessage({ id: 'tasks.agentLoadPanel.activeIdle' }, { active: stats.active, idle: stats.idle })}
         </span>
       </div>
 
       {rows.length === 0 ? (
         <p className="text-body-sm text-on-surface-variant text-center py-lg">
-          No agents registered. Start a workflow to see real-time load.
+          {t('tasks.agentLoadPanel.noAgents')}
         </p>
       ) : (
         <>
           {/* Summary stats */}
           <div className="grid grid-cols-3 gap-sm mb-md">
             <div className="bg-surface-container-low rounded-xl p-sm border border-outline-variant/20 text-center">
-              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">Active</div>
+              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.active')}</div>
               <div className="font-headline-md text-[18px] font-bold text-primary">{stats.active}</div>
             </div>
             <div className="bg-surface-container-low rounded-xl p-sm border border-outline-variant/20 text-center">
-              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">Avg Load</div>
+              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.avgLoad')}</div>
               <div className="font-headline-md text-[18px] font-bold text-on-surface">{stats.avgLoad}%</div>
             </div>
             <div className="bg-surface-container-low rounded-xl p-sm border border-outline-variant/20 text-center">
-              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">Peak</div>
+              <div className="text-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{t('tasks.agentLoadPanel.peak')}</div>
               <div className="font-headline-md text-[18px] font-bold text-tertiary">{stats.peakLoad}%</div>
             </div>
           </div>
@@ -134,7 +138,7 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
                   aria-valuenow={r.load}
                   aria-valuemin={0}
                   aria-valuemax={100}
-                  aria-label={`${r.name} load`}
+                  aria-label={intl.formatMessage({ id: 'tasks.agentLoadPanel.loadAria' }, { name: r.name })}
                 >
                   <div
                     className={`h-full ${statusColor(r.status)} rounded-full transition-all duration-500 ${r.active ? 'animate-pulse' : ''}`}

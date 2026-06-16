@@ -2,6 +2,16 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## Sprint 5 (2026-06)
+
+### i18n — Phase 5 Long-tail Components (S5-1)
+
+- **17 sub-components migrated**: WelcomeState, Header, ExtensionsHub (agents / datasources / skills loading states), Chat (session export / print aria-labels), MissionControl tab labels, DependsOnEditor aria, LspQuickFixPanel (ICU plural for edit count), AgentMessagesPanel (empty states + team-scoped messages), HistoryView, Goals (active agents / suggest next steps / summarize progress), Perf analyzer, HookTaskPipeline, ErrorBoundary, OPCTask, Editor diagnostics.
+- **Source-side fixes**: 5 edits for duplicate IDs (e.g. `loadingInstalled` variant alongside `loading` for installed-extensions spinner vs catalog spinner) and ICU placeholder mismatches (e.g. `lsp.quickFix.applies` now takes `{title, count}` so "Applied: Prefix with _ (2 edits)" renders correctly).
+- **Locale parity**: en.json + zh-CN.json both at **1373 keys** with identical ordering. Curated translations (no machine translation). 60+ zh-CN entries added; 60 dead zh-only keys removed.
+- **Test setup upgrade**: `setup.ts` auto-wraps `@testing-library/react` render with `<I18nProvider>` globally — individual tests no longer need manual wrapper boilerplate. Existing tests that already wrap are unaffected.
+- **Final state**: 806 / 806 UI tests pass. `pnpm tsc --noEmit` clean. i18n migration complete (only `__tests__/` helper files remain unmigrated, which is correct).
+
 ## Sprint 4 (2026-06)
 
 ### Command Palette Enhancements (S4-3)

@@ -6,6 +6,7 @@
 //
 // MD3 tokens only. Renders nothing when no agents are present.
 
+import { useIntl } from 'react-intl'
 import type { AgentInfo } from '@/types'
 
 interface AgentAllocationProps {
@@ -43,11 +44,14 @@ function computeAllocs(agents: AgentInfo[]): AgentAlloc[] {
 }
 
 export default function AgentAllocation({ agents }: AgentAllocationProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const allocs = computeAllocs(agents)
   if (allocs.length === 0) return null
   return (
     <div className="bg-surface-container-low rounded-2xl p-lg border border-outline-variant/20">
-      <h4 className="font-headline-md text-[16px] text-on-surface mb-md">Agent Allocation</h4>
+      <h4 className="font-headline-md text-[16px] text-on-surface mb-md">{t('tasks.agentAllocation.title')}</h4>
       <div className="space-y-sm">
         {allocs.map(a => (
           <div key={a.name}>

@@ -7,6 +7,7 @@
 // P2.2 deliverable from OPC-SCHEDULED-GAP-ANALYSIS.md §2.6 Phase 2.
 
 import { useEffect, useState } from 'react'
+import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
@@ -33,6 +34,8 @@ function StatusPill({ status }: { status: string }) {
 }
 
 export default function HistoryView({ taskId, limit = 50 }: { taskId?: string; limit?: number }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [rows, setRows] = useState<TaskExecution[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -45,7 +48,7 @@ export default function HistoryView({ taskId, limit = 50 }: { taskId?: string; l
     setLoading(true); setError(null)
     api.listTaskExecutions(taskId, limit)
       .then(r => { if (!cancelled) setRows(r) })
-      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load history') })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : t('tasks.historyView.loadFailed')) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [taskId, limit])
@@ -83,7 +86,7 @@ export default function HistoryView({ taskId, limit = 50 }: { taskId?: string; l
   if (rows.length === 0) {
     return (
       <div className="bg-surface-container-lowest/70 border border-outline-variant/20 rounded-xl p-xl">
-        <EmptyState icon="history" title="No execution history yet." description="Scheduled task runs will appear here." />
+        <EmptyState icon="history" title={t('tasks.historyView.emptyTitle')} description={t('tasks.historyView.emptyDesc')} />
       </div>
     )
   }
@@ -91,8 +94,8 @@ export default function HistoryView({ taskId, limit = 50 }: { taskId?: string; l
   return (
     <div className="space-y-sm">
       <div className="flex items-center justify-between mb-md">
-        <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest">Execution History</h3>
-        <span className="font-label-sm text-[11px] text-on-surface-variant">{rows.length} runs</span>
+        <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest">{t('tasks.historyView.title')}</h3>
+        <span className="font-label-sm text-[11px] text-on-surface-variant">{intl.formatMessage({ id: 'tasks.historyView.runsCount' }, { count: rows.length })}</span>
       </div>
       <div className="space-y-sm">
         {rows.map(row => {
@@ -121,34 +124,34 @@ export default function HistoryView({ taskId, limit = 50 }: { taskId?: string; l
               {isExpanded ? (
                 <div className="px-md pb-md border-t border-outline-variant/10">
                   {detailLoading ? (
-                    <p className="font-label-sm text-on-surface-variant py-md">Loading details…</p>
+                    <p className="font-label-sm text-on-surface-variant py-md">{t('tasks.historyView.loadingDetails')}</p>
                   ) : detail ? (
                     <div className="pt-md space-y-sm">
                       {detail.prompt ? (
                         <div>
-                          <div className="font-label-sm text-[11px] text-on-surface-variant uppercase tracking-wider mb-xs">Prompt</div>
+                          <div className="font-label-sm text-[11px] text-on-surface-variant uppercase tracking-wider mb-xs">{t('tasks.historyView.prompt')}</div>
                           <pre className="font-mono text-[12px] bg-surface-container-low/60 rounded p-sm whitespace-pre-wrap break-words">{detail.prompt}</pre>
                         </div>
                       ) : null}
                       {detail.cron_expr ? (
                         <div className="font-label-sm text-[12px] text-on-surface-variant">
-                          <strong>Cron:</strong> <code className="font-mono">{detail.cron_expr}</code>
+                          <strong>{t('tasks.historyView.cron')}:</strong> <code className="font-mono">{detail.cron_expr}</code>
                         </div>
                       ) : null}
                       {detail.next_fire_at ? (
                         <div className="font-label-sm text-[12px] text-on-surface-variant">
-                          <strong>Next fire:</strong> {formatUnixDateTime(detail.next_fire_at)}
+                          <strong>{t('tasks.historyView.nextFire')}:</strong> {formatUnixDateTime(detail.next_fire_at)}
                         </div>
                       ) : null}
                       {row.error_message ? (
                         <div>
-                          <div className="font-label-sm text-[11px] text-error uppercase tracking-wider mb-xs">Error</div>
+                          <div className="font-label-sm text-[11px] text-error uppercase tracking-wider mb-xs">{t('tasks.historyView.error')}</div>
                           <pre className="font-mono text-[12px] bg-error/5 text-error border border-error/20 rounded p-sm whitespace-pre-wrap break-words">{row.error_message}</pre>
                         </div>
                       ) : null}
                     </div>
                   ) : (
-                    <p className="font-label-sm text-on-surface-variant py-md">No detail available.</p>
+                    <p className="font-label-sm text-on-surface-variant py-md">{t('tasks.historyView.noDetail')}</p>
                   )}
                 </div>
               ) : null}

@@ -5,6 +5,7 @@
 
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useIntl } from 'react-intl'
 import type { SessionInfo } from '@/types'
 
 type SortKey = 'recent' | 'messages'
@@ -14,14 +15,16 @@ interface Props {
   sessions: SessionInfo[]
 }
 
-const FILTER_TABS: { key: FilterKey; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'agent_run', label: 'Agent-run' },
-  { key: 'scheduled', label: 'Scheduled' },
-  { key: 'pinned', label: 'Pinned' },
+const FILTER_TABS: { key: FilterKey; labelId: string }[] = [
+  { key: 'all', labelId: 'conversations.list.filterAll' },
+  { key: 'agent_run', labelId: 'conversations.list.filterAgentRun' },
+  { key: 'scheduled', labelId: 'conversations.list.filterScheduled' },
+  { key: 'pinned', labelId: 'conversations.list.filterPinned' },
 ]
 
 export default function ConversationsList({ sessions }: Props) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('recent')
@@ -62,23 +65,24 @@ export default function ConversationsList({ sessions }: Props) {
   return (
     <div className="flex-1 overflow-y-auto px-lg py-lg">
       {/* Filter tabs */}
-      <div role="tablist" aria-label="Filter conversations" className="flex items-center gap-xs mb-md flex-wrap">
-        {FILTER_TABS.map(t => {
-          const active = filter === t.key
+      <div role="tablist" aria-label={t('conversations.list.filterAria')} className="flex items-center gap-xs mb-md flex-wrap">
+        {FILTER_TABS.map(tab => {
+          const active = filter === tab.key
+          const label = t(tab.labelId)
           return (
             <button
-              key={t.key}
+              key={tab.key}
               role="tab"
               aria-selected={active}
-              aria-label={`${t.label} tab`}
-              onClick={() => setFilter(t.key)}
+              aria-label={intl.formatMessage({ id: 'conversations.list.tabAria' }, { label })}
+              onClick={() => setFilter(tab.key)}
               className={`px-md py-xs rounded-full text-[12px] font-label-md cursor-pointer transition-colors ${
                 active
                   ? 'bg-primary text-on-primary'
                   : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high'
               }`}
             >
-              {t.label} <span className={active ? 'text-on-primary/80' : 'text-outline'}>({counts[t.key]})</span>
+              {label} <span className={active ? 'text-on-primary/80' : 'text-outline'}>({counts[tab.key]})</span>
             </button>
           )
         })}
@@ -92,22 +96,22 @@ export default function ConversationsList({ sessions }: Props) {
             type="search"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search conversations..."
-            aria-label="Search conversations"
+            placeholder={t('conversations.list.searchPlaceholder')}
+            aria-label={t('conversations.list.searchAria')}
             className="w-full pl-xl pr-md py-sm bg-surface-container-lowest border border-outline-variant/40 rounded-xl text-body-sm focus:ring-2 focus:ring-primary outline-none"
           />
         </div>
         <div className="flex items-center gap-xs">
-          <label htmlFor="conv-sort" className="font-label-sm text-on-surface-variant">Sort</label>
+          <label htmlFor="conv-sort" className="font-label-sm text-on-surface-variant">{t('conversations.list.sort')}</label>
           <select
             id="conv-sort"
             value={sort}
             onChange={e => setSort(e.target.value as SortKey)}
             className="px-md py-sm bg-surface-container-lowest border border-outline-variant/40 rounded-xl text-body-sm cursor-pointer focus:ring-2 focus:ring-primary outline-none"
-            aria-label="Sort conversations"
+            aria-label={t('conversations.list.sortAria')}
           >
-            <option value="recent">Most recent</option>
-            <option value="messages">Most messages</option>
+            <option value="recent">{t('conversations.list.sortRecent')}</option>
+            <option value="messages">{t('conversations.list.sortMessages')}</option>
           </select>
         </div>
       </div>
@@ -117,10 +121,10 @@ export default function ConversationsList({ sessions }: Props) {
           <span className="material-symbols-outlined text-outline-variant mb-sm">search_off</span>
           <p className="font-body-md text-on-surface-variant">
             {query
-              ? `No conversations matching "${query}"`
+              ? intl.formatMessage({ id: 'conversations.list.noMatching' }, { query })
               : filter === 'all'
-                ? 'No conversations yet.'
-                : `No ${FILTER_TABS.find(t => t.key === filter)?.label.toLowerCase()} conversations yet.`}
+                ? t('conversations.list.noneYet')
+                : intl.formatMessage({ id: 'conversations.list.noFilterType' }, { label: t(FILTER_TABS.find(tab => tab.key === filter)?.labelId ?? 'conversations.list.filterAll').toLowerCase() })}
           </p>
         </div>
       ) : (
@@ -137,9 +141,9 @@ export default function ConversationsList({ sessions }: Props) {
                     >
                       <span className="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chat_bubble</span>
                       <div className="flex-1 min-w-0">
-                        <div className="font-label-md text-on-surface truncate">{s.title || 'Untitled chat'}</div>
+                        <div className="font-label-md text-on-surface truncate">{s.title || t('conversations.list.untitled')}</div>
                         <div className="font-label-sm text-on-surface-variant mt-xs">
-                          {s.message_count} message{s.message_count === 1 ? '' : 's'}
+                          {intl.formatMessage({ id: 'conversations.list.messageCount' }, { count: s.message_count })}
                           {' · '}
                           {new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </div>

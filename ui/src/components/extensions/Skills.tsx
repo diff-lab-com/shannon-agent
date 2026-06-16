@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { useIntl } from 'react-intl'
 import {
   listSkillCatalog,
   listInstalledSkillPlugins,
@@ -21,6 +22,9 @@ import {
  * Installed skill plugins show at the bottom with Remove buttons.
  */
 export default function Skills() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const { search } = useOutletContext<{ search: string }>();
 
   const [catalog, setCatalog] = useState<SkillCatalogEntry[]>([]);
@@ -116,22 +120,22 @@ export default function Skills() {
   return (
     <div className="p-lg max-w-5xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">Skills</h2>
+        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.skills.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
-          Curated skills from Shannon, Anthropic, and the community. Click Install to add.
+          {t('extensions.skills.subtitle')}
         </p>
       </header>
 
       {catalogLoading && (
         <div className="text-center py-lg text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          Fetching skill catalog…
+          {t('extensions.skills.loading')}
         </div>
       )}
 
       {catalogError && (
         <div className="border border-error/30 rounded-xl p-md bg-error-container/10 text-label-sm text-error">
-          Failed to load catalog: <span className="font-mono">{catalogError}</span>
+          {t('extensions.skills.loadError')}: <span className="font-mono">{catalogError}</span>
         </div>
       )}
 
@@ -143,7 +147,7 @@ export default function Skills() {
             </h3>
             {filtered.length === 0 ? (
               <div className="text-center py-md text-on-surface-variant text-label-md">
-                No skills found.
+                {t('extensions.skills.noSkills')}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
@@ -168,10 +172,10 @@ export default function Skills() {
           Installed · {installed.length}
         </h3>
         {installedLoading ? (
-          <div className="text-center py-md text-on-surface-variant text-label-sm">Loading…</div>
+          <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.skills.loadingInstalled')}</div>
         ) : installed.length === 0 ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">
-            No skill plugins installed.
+            {t('extensions.skills.noInstalled')}
           </div>
         ) : (
           <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">
@@ -193,7 +197,7 @@ export default function Skills() {
                   disabled={busyId === `uninstall:${skill.name}`}
                   className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
                 >
-                  {busyId === `uninstall:${skill.name}` ? "…" : "Remove"}
+                  {busyId === `uninstall:${skill.name}` ? "…" : t('extensions.skills.remove')}
                 </button>
               </div>
             ))}
@@ -217,6 +221,9 @@ function SkillCard({
   feedback: { id: string; msg: string; ok: boolean } | null;
   onInstall: () => void;
 }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const trustLabel = TRUST_LABELS[entry.trust];
   return (
     <div className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/40 flex flex-col">
@@ -248,7 +255,7 @@ function SkillCard({
             rel="noreferrer"
             className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest"
           >
-            View
+            {t('extensions.skills.view')}
           </a>
         )}
         <button
@@ -257,7 +264,7 @@ function SkillCard({
           disabled={busy || installed}
           className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {busy ? "…" : installed ? "Installed" : "Install"}
+          {busy ? "…" : installed ? t('extensions.skills.installed') : t('extensions.skills.install')}
         </button>
       </div>
     </div>
@@ -270,3 +277,5 @@ const TRUST_LABELS: Record<SkillCatalogEntry['trust'], { text: string; cls: stri
   community: { text: "Community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
   unknown: { text: "Unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
 };
+
+// Trust labels are static — no i18n needed for these constants

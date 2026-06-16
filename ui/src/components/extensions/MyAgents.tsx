@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
@@ -7,6 +8,8 @@ import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 
 export default function MyAgents() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { agents, backgroundTasks, models } = useApp()
   const navigate = useNavigate()
   const [configuring, setConfiguring] = useState<string | null>(null)
@@ -30,9 +33,9 @@ export default function MyAgents() {
 
   const statusFor = (status: string) => {
     switch (status) {
-      case 'active': case 'running': return { color: 'bg-tertiary animate-pulse', bg: 'bg-primary/10 text-primary', label: 'Active' }
-      case 'idle': return { color: 'bg-outline', bg: 'bg-surface-container-high text-on-surface-variant', label: 'Idle' }
-      case 'error': return { color: 'bg-error', bg: 'bg-error/10 text-error', label: 'Error' }
+      case 'active': case 'running': return { color: 'bg-tertiary animate-pulse', bg: 'bg-primary/10 text-primary', label: t('extensions.myAgents.statusActive') }
+      case 'idle': return { color: 'bg-outline', bg: 'bg-surface-container-high text-on-surface-variant', label: t('extensions.myAgents.statusIdle') }
+      case 'error': return { color: 'bg-error', bg: 'bg-error/10 text-error', label: t('extensions.myAgents.statusError') }
       default: return { color: 'bg-outline', bg: 'bg-surface-container-high text-on-surface-variant', label: status }
     }
   }
@@ -64,11 +67,11 @@ export default function MyAgents() {
       {/* Page Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-lg mb-xl">
         <div>
-          <h2 className="text-headline-lg font-headline-lg text-on-surface">My Agents</h2>
-          <p className="text-body-md text-on-surface-variant">Manage and monitor your deployed autonomous intelligence units.</p>
+          <h2 className="text-headline-lg font-headline-lg text-on-surface">{t('extensions.myAgents.title')}</h2>
+          <p className="text-body-md text-on-surface-variant">{t('extensions.myAgents.subtitle')}</p>
         </div>
         <div className="flex items-center gap-md">
-          <span className="font-label-md text-on-surface-variant">{agents.length} agent{agents.length !== 1 ? 's' : ''}</span>
+          <span className="font-label-md text-on-surface-variant">{intl.formatMessage({ id: 'extensions.myAgents.count' }, { count: agents.length })}</span>
         </div>
       </div>
 
@@ -76,8 +79,8 @@ export default function MyAgents() {
       {agents.length === 0 ? (
         <EmptyState
           icon="smart_toy"
-          title="No agents running."
-          description="Agents will appear here when spawned via team coordination or background tasks."
+          title={t('extensions.myAgents.emptyTitle')}
+          description={t('extensions.myAgents.emptyDesc')}
         />
       ) : (
         <>
@@ -98,19 +101,19 @@ export default function MyAgents() {
 
                   <div className="mb-lg">
                     <h3 className="text-headline-md font-headline-md">{agent.name}</h3>
-                    <p className="text-label-sm text-on-surface-variant">{agent.model || 'Default Model'} · Autonomous</p>
+                    <p className="text-label-sm text-on-surface-variant">{intl.formatMessage({ id: 'extensions.myAgents.modelAutonomous' }, { model: (agent.model || t('extensions.myAgents.defaultModel')) })}</p>
                   </div>
 
                   <div className="space-y-sm mb-lg">
                     {agent.task ? (
                       <div className="flex justify-between items-center text-label-md">
-                        <span className="text-on-surface-variant">Current Task</span>
+                        <span className="text-on-surface-variant">{t('extensions.myAgents.currentTask')}</span>
                         <span className="font-bold truncate max-w-[140px]">{agent.task}</span>
                       </div>
                     ) : null}
                     {agent.progress != null ? (
                       <div className="flex justify-between items-center text-label-md">
-                        <span className="text-on-surface-variant">Progress</span>
+                        <span className="text-on-surface-variant">{t('extensions.myAgents.progress')}</span>
                         <div className="flex items-center gap-sm">
                           <div className="w-16 h-1.5 bg-surface-container rounded-full overflow-hidden">
                             <div className="h-full bg-primary rounded-full" style={{ width: `${agent.progress}%` }} />
@@ -121,13 +124,13 @@ export default function MyAgents() {
                     ) : null}
                     {agent.tools_used != null ? (
                       <div className="flex justify-between items-center text-label-md">
-                        <span className="text-on-surface-variant">Tools Used</span>
+                        <span className="text-on-surface-variant">{t('extensions.myAgents.toolsUsed')}</span>
                         <span className="font-bold">{agent.tools_used}</span>
                       </div>
                     ) : null}
                     {agent.duration != null ? (
                       <div className="flex justify-between items-center text-label-md">
-                        <span className="text-on-surface-variant">Duration</span>
+                        <span className="text-on-surface-variant">{t('extensions.myAgents.duration')}</span>
                         <span className="font-bold">{agent.duration > 60000 ? `${(agent.duration / 60000).toFixed(1)}m` : `${(agent.duration / 1000).toFixed(0)}s`}</span>
                       </div>
                     ) : null}
@@ -135,22 +138,22 @@ export default function MyAgents() {
 
                   <div className="mt-auto pt-md border-t border-outline-variant flex gap-sm">
                     <Button variant="ghost" className="flex-grow py-2 rounded-lg bg-surface-variant/50 font-bold text-label-md hover:bg-surface-variant transition-colors cursor-pointer" onClick={() => setConfiguring(configuring === agent.id ? null : agent.id)}>
-                      {configuring === agent.id ? 'Close' : 'Configure'}
+                      {configuring === agent.id ? t('extensions.myAgents.close') : t('extensions.myAgents.configure')}
                     </Button>
                     <Button variant="ghost" className="p-2 rounded-lg border border-outline-variant hover:text-primary transition-colors cursor-pointer flex items-center justify-center relative" onClick={() => setShowMenu(showMenu === agent.id ? null : agent.id)}>
                       <span className="material-symbols-outlined">more_horiz</span>
                       {showMenu === agent.id && (
                         <div ref={menuRef} className="absolute right-0 top-full mt-1 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-xs z-10 min-w-[140px]">
-                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>View Status</button>
-                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors text-error" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(`Stopped ${agent.name}`) } catch (e) { console.warn('Failed to stop agent:', e); toast.error('Failed to stop agent') } }}>Stop Agent</button>
+                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>{t('extensions.myAgents.viewStatus')}</button>
+                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors text-error" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(intl.formatMessage({ id: 'extensions.myAgents.stopped' }, { name: agent.name })) } catch (e) { console.warn('Failed to stop agent:', e); toast.error(t('extensions.myAgents.stopFailed')) } }}>{t('extensions.myAgents.stopAgent')}</button>
                         </div>
                       )}
                     </Button>
                   </div>
                   {configuring === agent.id && (
                     <div className="mt-sm p-sm bg-surface-container-low rounded-lg text-label-sm text-on-surface-variant">
-                      <p>Configuration for <strong className="text-on-surface">{agent.name}</strong></p>
-                      <p className="mt-xs opacity-70">Model: {agent.model || 'Default'}</p>
+                      <p>{intl.formatMessage({ id: 'extensions.myAgents.configuration' }, { name: agent.name })}</p>
+                      <p className="mt-xs opacity-70">{intl.formatMessage({ id: 'extensions.myAgents.modelLabel' }, { model: (agent.model || t('extensions.myAgents.default')) })}</p>
                     </div>
                   )}
                 </div>
@@ -163,46 +166,46 @@ export default function MyAgents() {
                 <div className="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant group-hover:bg-primary-container/20 group-hover:text-primary transition-colors mb-md">
                   <span className="material-symbols-outlined text-[32px]">add</span>
                 </div>
-                <h3 className="text-body-lg font-bold">New Specialization</h3>
-                <p className="text-label-md text-on-surface-variant max-w-[200px]">Define a custom prompt or import a model to create a new agent.</p>
+                <h3 className="text-body-lg font-bold">{t('extensions.myAgents.newSpecialization')}</h3>
+                <p className="text-label-md text-on-surface-variant max-w-[200px]">{t('extensions.myAgents.newSpecializationDesc')}</p>
               </div>
             ) : (
               <div className="border-2 border-primary/30 p-lg rounded-xl flex flex-col gap-md">
-                <h3 className="text-body-lg font-bold">Create New Agent</h3>
+                <h3 className="text-body-lg font-bold">{t('extensions.myAgents.createTitle')}</h3>
                 <div className="space-y-sm">
-                  <label className="text-label-md text-on-surface-variant">Name</label>
+                  <label className="text-label-md text-on-surface-variant">{t('extensions.myAgents.nameLabel')}</label>
                   <input
                     className={`w-full p-sm bg-surface-container-low rounded-lg border text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30 ${nameError ? 'border-error' : 'border-outline-variant/30'}`}
-                    placeholder="e.g. Research Assistant"
+                    placeholder={t('extensions.myAgents.namePlaceholder')}
                     value={agentName}
                     onChange={e => { setAgentName(e.target.value); setNameError('') }}
                   />
                   {nameError ? <p className="text-error text-label-sm">{nameError}</p> : null}
                 </div>
                 <div className="space-y-sm">
-                  <label className="text-label-md text-on-surface-variant">Model</label>
+                  <label className="text-label-md text-on-surface-variant">{t('extensions.myAgents.modelLabelField')}</label>
                   <select
                     className="w-full p-sm bg-surface-container-low rounded-lg border border-outline-variant/30 text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                     value={agentModel}
                     onChange={e => setAgentModel(e.target.value)}
                   >
-                    <option value="">Default Model</option>
+                    <option value="">{t('extensions.myAgents.defaultModel')}</option>
                     {models.map(m => (
                       <option key={m.id} value={m.id}>{m.name} ({m.provider})</option>
                     ))}
                   </select>
                 </div>
                 <div className="space-y-sm">
-                  <label className="text-label-md text-on-surface-variant">System Prompt</label>
+                  <label className="text-label-md text-on-surface-variant">{t('extensions.myAgents.systemPrompt')}</label>
                   <textarea
                     className="w-full h-24 p-sm bg-surface-container-low rounded-lg border border-outline-variant/30 text-body-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    placeholder="Describe the agent's role and capabilities..."
+                    placeholder={t('extensions.myAgents.promptPlaceholder')}
                     value={agentPrompt}
                     onChange={e => setAgentPrompt(e.target.value)}
                   />
                 </div>
                 <div className="space-y-sm">
-                  <label className="text-label-md text-on-surface-variant">Tools</label>
+                  <label className="text-label-md text-on-surface-variant">{t('extensions.myAgents.tools')}</label>
                   <div className="flex flex-wrap gap-md">
                     {['bash', 'read', 'write', 'search', 'mcp'].map(tool => (
                       <label key={tool} className="flex items-center gap-xs text-label-md cursor-pointer">
@@ -219,24 +222,24 @@ export default function MyAgents() {
                 </div>
                 <div className="flex gap-sm">
                   <Button className="flex-1 py-2 bg-primary text-on-primary rounded-lg font-label-md cursor-pointer" onClick={async () => {
-                    if (!agentName.trim()) { setNameError('Agent name is required'); return }
+                    if (!agentName.trim()) { setNameError(t('extensions.myAgents.nameRequired')); return }
                     const tools = Object.entries(agentTools).filter(([, v]) => v).map(([k]) => k)
                     try {
                       await api.createAgentDefinition(agentName.trim(), agentModel || undefined, agentPrompt || undefined, tools)
-                      toast.success(`Agent "${agentName}" created`)
+                      toast.success(intl.formatMessage({ id: 'extensions.myAgents.created' }, { name: agentName }))
                       setAgentName(''); setAgentModel(''); setAgentPrompt(''); setAgentTools({ bash: true, read: true, write: true }); setNameError('')
                       setShowAddAgent(false)
                     } catch (e) {
                       console.warn('Failed to create agent:', e)
-                      toast.error(e instanceof Error ? e.message : 'Failed to create agent')
+                      toast.error(e instanceof Error ? e.message : t('extensions.myAgents.createFailed'))
                     }
                   }}>
-                    Create Agent
+                    {t('extensions.myAgents.createButton')}
                   </Button>
                   <Button variant="ghost" className="py-2 px-md rounded-lg border border-outline-variant font-label-md cursor-pointer" onClick={() => {
                     setShowAddAgent(false); setAgentName(''); setAgentModel(''); setAgentPrompt(''); setNameError('')
                   }}>
-                    Cancel
+                    {t('extensions.myAgents.cancel')}
                   </Button>
                 </div>
               </div>
@@ -248,12 +251,12 @@ export default function MyAgents() {
             <div className="lg:col-span-2 glass-card p-xl rounded-xl">
               <h4 className="text-body-lg font-bold mb-lg flex items-center gap-md">
                 <span className="material-symbols-outlined text-primary">insights</span>
-                Agent Performance
+                {t('extensions.myAgents.performance')}
               </h4>
 
               {backgroundTasks.length === 0 ? (
                 <div className="h-48 flex items-center justify-center text-on-surface-variant opacity-60">
-                  <p className="text-body-sm">No task execution data yet.</p>
+                  <p className="text-body-sm">{t('extensions.myAgents.noPerfData')}</p>
                 </div>
               ) : (
                 <div className="space-y-sm">
@@ -267,7 +270,7 @@ export default function MyAgents() {
                         />
                       </div>
                       <span className={`font-label-sm font-bold w-16 text-right ${bt.status === 'completed' ? 'text-primary' : bt.status === 'running' ? 'text-primary/60' : 'text-error'}`}>
-                        {bt.status === 'completed' ? 'Done' : bt.status === 'running' ? 'Active' : 'Failed'}
+                        {bt.status === 'completed' ? t('extensions.myAgents.done') : bt.status === 'running' ? t('extensions.myAgents.active') : t('extensions.myAgents.failed')}
                       </span>
                     </div>
                   ))}
@@ -276,15 +279,15 @@ export default function MyAgents() {
             </div>
 
             <div className="glass-card p-xl rounded-xl">
-              <h4 className="text-body-lg font-bold mb-lg">Task Completion</h4>
+              <h4 className="text-body-lg font-bold mb-lg">{t('extensions.myAgents.taskCompletion')}</h4>
               <div className="text-center py-lg">
                 <div className="text-display-lg text-[48px] text-primary font-bold">{totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0}%</div>
-                <p className="text-on-surface-variant text-body-sm mt-sm">{completedTasks} of {totalTasks} tasks completed</p>
+                <p className="text-on-surface-variant text-body-sm mt-sm">{intl.formatMessage({ id: 'extensions.myAgents.tasksCompleted' }, { completed: completedTasks, total: totalTasks })}</p>
               </div>
               <div className="mt-lg h-2 bg-surface-container-high rounded-full overflow-hidden">
                 <div className="h-full bg-primary rounded-full" style={{ width: totalTasks > 0 ? `${(completedTasks / totalTasks) * 100}%` : '0%' }} />
               </div>
-              <Button variant="ghost" className="w-full mt-lg text-primary text-label-md font-bold hover:underline cursor-pointer text-left" onClick={() => navigate('/tasks')}>View All Tasks →</Button>
+              <Button variant="ghost" className="w-full mt-lg text-primary text-label-md font-bold hover:underline cursor-pointer text-left" onClick={() => navigate('/tasks')}>{t('extensions.myAgents.viewAllTasks')}</Button>
             </div>
           </section>
         </>

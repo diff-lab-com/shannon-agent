@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { useIntl } from "react-intl";
 import {
   listMcpRegistryServers,
   installMcpStdio,
@@ -24,6 +25,8 @@ import type { McpServerInfo } from "@/types";
  * Installed servers are listed at the bottom with uninstall buttons.
  */
 export default function McpServers() {
+  const intl = useIntl();
+  const t = (id: string) => intl.formatMessage({ id });
   const { search } = useOutletContext<{ search: string }>();
 
   const [registry, setRegistry] = useState<RegistryServer[]>([]);
@@ -109,9 +112,9 @@ export default function McpServers() {
   return (
     <div className="p-lg max-w-5xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">MCP Servers</h2>
+        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.mcp.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
-          Browse the registry, upload a <code>.mcpb</code> bundle, or add a stdio server manually.
+          {t('extensions.mcp.subtitle')}
         </p>
       </header>
 
@@ -302,6 +305,8 @@ function McpbUploadSection({
   onError: (msg: string) => void;
   refreshInstalled: () => void;
 }) {
+  const intl = useIntl();
+  const t = (id: string) => intl.formatMessage({ id });
   const inputRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -334,7 +339,7 @@ function McpbUploadSection({
       </p>
       <div className="flex flex-wrap gap-xs items-end">
         <label className="flex-1 min-w-[200px]">
-          <span className="block text-label-xs text-on-surface-variant mb-[2px]">Server name</span>
+          <span className="block text-label-xs text-on-surface-variant mb-[2px]">{t('extensions.mcp.serverName')}</span>
           <input
             type="text"
             value={name}
@@ -379,6 +384,8 @@ function StdioManualForm({
   onError: (msg: string) => void;
   refreshInstalled: () => void;
 }) {
+  const intl = useIntl();
+  const t = (id: string) => intl.formatMessage({ id });
   const [name, setName] = useState("");
   const [command, setCommand] = useState("");
   const [argsText, setArgsText] = useState("");
@@ -437,7 +444,7 @@ function StdioManualForm({
 
   return (
     <section className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/30">
-      <h3 className="text-label-lg font-bold text-on-surface mb-xs">Add stdio server manually</h3>
+      <h3 className="text-label-lg font-bold text-on-surface mb-xs">{t('extensions.mcp.addStdioTitle')}</h3>
       <p className="text-label-sm text-on-surface-variant mb-sm">
         Tier-3 escape hatch: specify command, args, and env directly.
       </p>

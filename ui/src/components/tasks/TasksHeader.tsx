@@ -3,6 +3,7 @@
 //
 // MD3 tokens. Button active state uses ring-2 ring-primary.
 
+import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 
 interface TasksHeaderProps {
@@ -34,24 +35,27 @@ export default function TasksHeader({
   teamFilter,
   onTeamFilterChange,
 }: TasksHeaderProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   return (
     <div className="flex flex-col md:flex-row md:items-end justify-between mb-xl gap-md">
       <div>
-        <h2 className="font-headline-lg text-headline-lg text-on-surface">Scheduled Tasks</h2>
-        <p className="text-on-surface-variant mt-xs">Manage and monitor your automated intelligence workflows.</p>
+        <h2 className="font-headline-lg text-headline-lg text-on-surface">{t('tasks.tasksHeader.title')}</h2>
+        <p className="text-on-surface-variant mt-xs">{t('tasks.tasksHeader.subtitle')}</p>
       </div>
       <div className="flex gap-sm flex-wrap">
         {teams && teams.length > 0 && onTeamFilterChange ? (
           <label className="flex items-center gap-xs px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl font-label-md">
             <span className="material-symbols-outlined text-[18px] text-on-surface-variant">groups</span>
-            <span className="sr-only">Filter by team</span>
+            <span className="sr-only">{t('tasks.tasksHeader.filterByTeam')}</span>
             <select
-              aria-label="Filter by team"
+              aria-label={t('tasks.tasksHeader.filterByTeam')}
               value={teamFilter ?? 'all'}
               onChange={e => onTeamFilterChange(e.target.value)}
               className="bg-transparent border-none focus:outline-none cursor-pointer text-on-surface"
             >
-              <option value="all">All teams</option>
+              <option value="all">{t('tasks.tasksHeader.allTeams')}</option>
               {teams.map(t => (
                 <option key={t} value={t}>{t}</option>
               ))}
@@ -59,46 +63,46 @@ export default function TasksHeader({
           </label>
         ) : null}
         <Button
-          aria-label="Toggle filters"
+          aria-label={t('tasks.tasksHeader.filters')}
           onClick={onToggleFilters}
           className={`px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors ${showFilters ? 'ring-2 ring-primary' : ''}`}
         >
           <span className="material-symbols-outlined text-[18px]">filter_list</span>
-          Filters
+          {t('tasks.tasksHeader.filters')}
         </Button>
         <Button
-          aria-label="Toggle calendar view"
+          aria-label={t('tasks.tasksHeader.monthView')}
           onClick={onToggleCalendar}
           className={`px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors ${calendarView ? 'ring-2 ring-primary' : ''}`}
         >
           <span className="material-symbols-outlined text-[18px]">calendar_month</span>
-          {calendarView ? 'List View' : 'Month View'}
+          {calendarView ? t('tasks.tasksHeader.listView') : t('tasks.tasksHeader.monthView')}
         </Button>
         {onToggleDag ? (
           <Button
-            aria-label="Toggle graph view"
+            aria-label={t('tasks.tasksHeader.graph')}
             onClick={onToggleDag}
             className={`px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors ${dagView ? 'ring-2 ring-primary' : ''}`}
           >
             <span className="material-symbols-outlined text-[18px]">account_tree</span>
-            {dagView ? 'Hide Graph' : 'Graph'}
+            {dagView ? t('tasks.tasksHeader.hideGraph') : t('tasks.tasksHeader.graph')}
           </Button>
         ) : null}
         <Button
-          aria-label="Create new scheduled routine"
+          aria-label={t('tasks.tasksHeader.newRoutine')}
           className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:bg-surface-container transition-colors"
           onClick={onToggleSchedule}
         >
           <span className="material-symbols-outlined text-[18px]">schedule</span>
-          New Routine
+          {t('tasks.tasksHeader.newRoutine')}
         </Button>
         <Button
-          aria-label="Create new task"
+          aria-label={t('tasks.tasksHeader.newBackgroundTask')}
           className="px-md py-sm bg-primary text-on-primary rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-md active:scale-95 transition-all"
           onClick={onToggleNewTask}
         >
           <span className="material-symbols-outlined text-[20px]">add</span>
-          New Background Task
+          {t('tasks.tasksHeader.newBackgroundTask')}
         </Button>
       </div>
     </div>

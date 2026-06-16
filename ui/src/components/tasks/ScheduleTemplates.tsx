@@ -4,6 +4,7 @@
 // onApply with a partial payload. Each template encodes a sensible default
 // for the named scenario; the user can still edit any field afterwards.
 
+import { useIntl } from 'react-intl'
 import type { TriggerType } from '@/types'
 
 export interface ScheduleTemplate {
@@ -88,11 +89,13 @@ interface ScheduleTemplatesProps {
 }
 
 export default function ScheduleTemplates({ onApply }: ScheduleTemplatesProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   return (
     <div className="flex flex-col gap-sm mb-md">
       <div className="font-label-md text-on-surface-variant flex items-center gap-xs">
         <span className="material-symbols-outlined text-[14px]">auto_awesome</span>
-        Templates
+        {t('tasks.scheduleTemplates.title')}
       </div>
       <div className="flex flex-wrap gap-xs">
         {SCHEDULE_TEMPLATES.map(t => (

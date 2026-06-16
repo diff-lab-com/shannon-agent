@@ -1,26 +1,29 @@
+import { useIntl } from 'react-intl'
 import { useTheme } from '@/context/ThemeContext'
 
 export default function ThemeSettings() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { theme, setTheme, themes } = useTheme()
 
   return (
     <div className="max-w-3xl">
       <header className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">Theme Settings</h2>
-        <p className="font-body-md text-on-surface-variant">Customize the visual environment to match your cognitive workflow.</p>
+        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">{t('settings.theme.title')}</h2>
+        <p className="font-body-md text-on-surface-variant">{t('settings.theme.subtitle')}</p>
       </header>
 
       <div className="space-y-lg pb-10">
         {/* Theme Selection */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
-          <h3 className="font-headline-md text-headline-md mb-md">Theme</h3>
+          <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.themeLabel')}</h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
-            {themes.map(t => (
+            {themes.map(opt => (
               <button
-                key={t.id}
-                onClick={() => setTheme(t.id)}
+                key={opt.id}
+                onClick={() => setTheme(opt.id)}
                 className={`cursor-pointer p-md rounded-xl border-2 transition-all text-left ${
-                  theme === t.id
+                  theme === opt.id
                     ? 'border-primary bg-primary-fixed/20 shadow-sm'
                     : 'border-outline-variant/30 hover:border-primary/50'
                 }`}
@@ -47,10 +50,10 @@ export default function ThemeSettings() {
                     </div>
                   </div>
                 </div>
-                <p className={`text-center font-label-md ${theme === t.id ? 'text-primary font-bold' : 'text-on-surface'}`}>
-	                  {t.id === 'system' && <span className="material-symbols-outlined text-[14px] align-middle mr-xs">monitor</span>}
-	                  {t.label}
-	                </p>
+                <p className={`text-center font-label-md ${theme === opt.id ? 'text-primary font-bold' : 'text-on-surface'}`}>
+                  {opt.id === 'system' && <span className="material-symbols-outlined text-[14px] align-middle mr-xs">monitor</span>}
+                  {opt.label}
+                </p>
               </button>
             ))}
           </div>
@@ -60,13 +63,13 @@ export default function ThemeSettings() {
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="font-headline-md text-headline-md">Active Theme</h3>
-              <p className="font-body-sm text-on-surface-variant mt-xs">Currently using <strong className="text-primary">{themes.find(t => t.id === theme)?.label ?? theme}</strong> theme.</p>
+              <h3 className="font-headline-md text-headline-md">{t('settings.theme.activeTheme')}</h3>
+              <p className="font-body-sm text-on-surface-variant mt-xs">{intl.formatMessage({ id: 'settings.theme.usingTheme' }, { theme: (themes.find(opt => opt.id === theme)?.label ?? theme) })}</p>
             </div>
             <div className="flex gap-sm">
-              <div className="w-8 h-8 rounded-full bg-primary ring-2 ring-primary/30" title="Primary" />
-              <div className="w-8 h-8 rounded-full bg-secondary ring-2 ring-secondary/30" title="Secondary" />
-              <div className="w-8 h-8 rounded-full bg-tertiary ring-2 ring-tertiary/30" title="Tertiary" />
+              <div className="w-8 h-8 rounded-full bg-primary ring-2 ring-primary/30" title={t('settings.theme.colorPrimary')} />
+              <div className="w-8 h-8 rounded-full bg-secondary ring-2 ring-secondary/30" title={t('settings.theme.colorSecondary')} />
+              <div className="w-8 h-8 rounded-full bg-tertiary ring-2 ring-tertiary/30" title={t('settings.theme.colorTertiary')} />
             </div>
           </div>
         </section>

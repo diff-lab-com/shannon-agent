@@ -6,6 +6,7 @@
 // dependency list rather than mutating it.
 
 import { useMemo, useState } from 'react'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import type { ScheduledRoutine } from '@/types'
@@ -17,6 +18,8 @@ interface DependsOnEditorProps {
 }
 
 export default function DependsOnEditor({ routine, routines, onUpdated }: DependsOnEditorProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const initial = useMemo(() => new Set(routine.depends_on ?? []), [routine.id, routine.depends_on])
   const [selected, setSelected] = useState<Set<string>>(initial)
   const [saving, setSaving] = useState(false)
@@ -49,10 +52,10 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
         id: routine.id,
         depends_on: Array.from(selected),
       })
-      toast.success('Dependencies updated')
+      toast.success(t('tasks.dependsOnEditor.updated'))
       onUpdated?.(updated)
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to update dependencies'
+      const msg = e instanceof Error ? e.message : t('tasks.dependsOnEditor.updateFailed')
       toast.error(msg)
     } finally {
       setSaving(false)
@@ -64,7 +67,7 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
   if (candidates.length === 0) {
     return (
       <div className="rounded-xl border border-outline-variant/20 bg-surface-container-lowest/60 px-md py-sm text-on-surface-variant font-label-md text-[13px]">
-        Create at least one other routine to set dependencies.
+        {t('tasks.dependsOnEditor.empty')}
       </div>
     )
   }
@@ -84,7 +87,7 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
                 className="w-4 h-4 accent-primary cursor-pointer"
                 checked={checked}
                 onChange={() => toggle(r.id)}
-                aria-label={`Depends on ${r.name}`}
+                aria-label={intl.formatMessage({ id: 'tasks.dependsOnEditor.dependsOnAria' }, { name: r.name })}
               />
               <div className="flex-1 min-w-0">
                 <div className="font-label-md text-[13px] text-on-surface truncate">{r.name}</div>
@@ -102,23 +105,23 @@ export default function DependsOnEditor({ routine, routines, onUpdated }: Depend
           className="px-md py-sm bg-primary text-on-primary rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-md active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           onClick={save}
           disabled={!dirty || saving}
-          aria-label="Save dependencies"
+          aria-label={t('tasks.dependsOnEditor.saveAria')}
         >
           <span className="material-symbols-outlined text-[18px]">save</span>
-          {saving ? 'Saving…' : 'Save'}
+          {saving ? t('tasks.dependsOnEditor.saving') : t('tasks.dependsOnEditor.save')}
         </button>
         <button
           type="button"
           className="px-md py-sm border border-outline-variant text-on-surface rounded-xl font-label-md cursor-pointer hover:bg-surface-container-low/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           onClick={reset}
           disabled={!dirty || saving}
-          aria-label="Discard dependency changes"
+          aria-label={t('tasks.dependsOnEditor.resetAria')}
         >
-          Reset
+          {t('tasks.dependsOnEditor.reset')}
         </button>
         {selected.size > 0 && (
           <span className="ml-auto font-label-sm text-[12px] text-on-surface-variant">
-            {selected.size} selected
+            {intl.formatMessage({ id: 'tasks.dependsOnEditor.selectedCount' }, { count: selected.size })}
           </span>
         )}
       </div>

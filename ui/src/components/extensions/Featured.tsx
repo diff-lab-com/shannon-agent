@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { useIntl } from 'react-intl'
 import {
   listFeaturedVendors,
   installMcpOAuthAuthorizeUrl,
@@ -23,6 +24,9 @@ import {
  * but requires a desktop process event channel to surface back to the UI.
  */
 export default function Featured() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const { search } = useOutletContext<{ search: string }>();
   const [vendors, setVendors] = useState<FeaturedVendor[]>([]);
   const [loading, setLoading] = useState(true);
@@ -106,7 +110,7 @@ export default function Featured() {
   if (loading) {
     return (
       <div className="p-lg max-w-5xl mx-auto">
-        <div className="text-center py-3xl text-on-surface-variant">Loading featured vendors…</div>
+        <div className="text-center py-3xl text-on-surface-variant">{t('extensions.featured.loading')}</div>
       </div>
     );
   }
@@ -114,7 +118,7 @@ export default function Featured() {
   if (error) {
     return (
       <div className="p-lg max-w-5xl mx-auto">
-        <div className="text-center py-3xl text-error">Failed to load: {error}</div>
+        <div className="text-center py-3xl text-error">{t('extensions.featured.loadError')}: {error}</div>
       </div>
     );
   }
@@ -122,9 +126,9 @@ export default function Featured() {
   return (
     <div className="p-lg max-w-5xl mx-auto">
       <div className="mb-xl">
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">Featured Extensions</h2>
+        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.featured.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
-          Curated MCP servers verified by Shannon. Click Connect to authorize via OAuth.
+          {t('extensions.featured.subtitle')}
         </p>
       </div>
 
@@ -203,7 +207,7 @@ export default function Featured() {
 
       {filtered.length === 0 && (
         <div className="text-center py-3xl text-on-surface-variant">
-          {search ? `No matches for "${search}"` : "No featured vendors available."}
+          {search ? intl.formatMessage({ id: 'extensions.featured.noMatches' }, { search }) : t('extensions.featured.noVendors')}
         </div>
       )}
     </div>
@@ -211,11 +215,14 @@ export default function Featured() {
 }
 
 function TrustBadge({ trust }: { trust: FeaturedVendor["trust"] }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const labels: Record<FeaturedVendor["trust"], { text: string; cls: string }> = {
-    verified: { text: "Verified", cls: "bg-primary-container/50 text-on-primary-container" },
-    official: { text: "Official", cls: "bg-secondary-container/50 text-on-secondary-container" },
-    community: { text: "Community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
-    unknown: { text: "Unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
+    verified: { text: t('extensions.featured.trust.verified'), cls: "bg-primary-container/50 text-on-primary-container" },
+    official: { text: t('extensions.featured.trust.official'), cls: "bg-secondary-container/50 text-on-secondary-container" },
+    community: { text: t('extensions.featured.trust.community'), cls: "bg-tertiary-container/50 text-on-tertiary-container" },
+    unknown: { text: t('extensions.featured.trust.unknown'), cls: "bg-surface-container-highest text-on-surface-variant" },
   };
   const { text, cls } = labels[trust];
   return (
@@ -232,17 +239,20 @@ function TokenPasteForm({
   onCancel: () => void;
   disabled: boolean;
 }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const [token, setToken] = useState("");
   return (
     <div className="mb-sm">
       <p className="text-label-xs text-on-surface-variant mb-xs">
-        After authorizing in your browser, paste the access token:
+        {t('extensions.featured.tokenPrompt')}
       </p>
       <input
         type="password"
         value={token}
         onChange={(e) => setToken(e.target.value)}
-        placeholder="access_token"
+        placeholder={t('extensions.featured.tokenPlaceholder')}
         className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface mb-xs"
         disabled={disabled}
       />
@@ -253,7 +263,7 @@ function TokenPasteForm({
           disabled={disabled || !token}
           className="flex-1 px-sm py-xs rounded bg-primary text-on-primary text-label-xs font-bold disabled:opacity-50"
         >
-          Submit
+          {t('extensions.featured.tokenSubmit')}
         </button>
         <button
           type="button"
@@ -261,7 +271,7 @@ function TokenPasteForm({
           disabled={disabled}
           className="px-sm py-xs rounded bg-surface-container-high text-on-surface text-label-xs font-bold"
         >
-          Cancel
+          {t('extensions.featured.tokenCancel')}
         </button>
       </div>
     </div>

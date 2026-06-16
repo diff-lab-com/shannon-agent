@@ -3,6 +3,7 @@
 // MD3 tokens. Click outside or "Keep Running" dismisses without action.
 
 import { Button } from '@/components/ui/button'
+import { useIntl } from 'react-intl'
 
 interface CancelTaskModalProps {
   open: boolean
@@ -11,6 +12,8 @@ interface CancelTaskModalProps {
 }
 
 export default function CancelTaskModal({ open, onCancel, onConfirm }: CancelTaskModalProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   if (!open) return null
   return (
     <div
@@ -25,21 +28,21 @@ export default function CancelTaskModal({ open, onCancel, onConfirm }: CancelTas
       >
         <div className="flex items-center gap-sm mb-lg">
           <span className="material-symbols-outlined text-error text-[24px]">warning</span>
-          <h3 className="font-headline-md text-on-surface">Cancel Task?</h3>
+          <h3 className="font-headline-md text-on-surface">{t('tasks.cancelTaskModal.title')}</h3>
         </div>
-        <p className="text-body-sm text-on-surface-variant mb-lg">This will stop the running task. Any progress will be lost.</p>
+        <p className="text-body-sm text-on-surface-variant mb-lg">{t('tasks.cancelTaskModal.confirmation')}</p>
         <div className="flex gap-sm justify-end">
           <Button
             className="px-md py-sm rounded-lg border border-outline-variant text-on-surface-variant font-label-md cursor-pointer"
             onClick={onCancel}
           >
-            Keep Running
+            {t('tasks.cancelTaskModal.keepRunning')}
           </Button>
           <Button
             className="px-md py-sm rounded-lg bg-error text-on-error font-label-md cursor-pointer hover:brightness-110"
             onClick={onConfirm}
           >
-            Cancel Task
+            {t('tasks.cancelTaskModal.cancelTask')}
           </Button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useIntl } from 'react-intl'
 import {
   scanPromptInjectionWithReadme,
   type InjectionRisk,
@@ -28,6 +29,9 @@ export function SecurityBadge({
    */
   readmeUrl?: string
 }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const skip = trust === "verified" || trust === "official"
   const [risk, setRisk] = useState<InjectionRisk | null>(null)
 
@@ -53,10 +57,10 @@ export function SecurityBadge({
     return (
       <span
         className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-error-container/60 text-on-error-container flex items-center gap-[2px]"
-        title="Prompt-injection patterns detected. Review before install."
+        title={t('extensions.security.injectionTitle')}
       >
         <span className="material-symbols-outlined text-[12px]">warning</span>
-        Injection risk
+        {t('extensions.security.injectionRisk')}
       </span>
     )
   }
@@ -64,10 +68,10 @@ export function SecurityBadge({
   return (
     <span
       className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-tertiary-container/60 text-on-tertiary-container flex items-center gap-[2px]"
-      title="Possible prompt-injection patterns detected. Review the description."
+      title={t('extensions.security.reviewTitle')}
     >
       <span className="material-symbols-outlined text-[12px]">info</span>
-      Review
+      {t('extensions.security.review')}
     </span>
   )
 }

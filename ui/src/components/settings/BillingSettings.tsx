@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/context/AppContext'
@@ -7,6 +8,8 @@ import * as api from '@/lib/tauri-api'
 import type { BillingPlan, CostRecord, BillingHistory } from '@/types'
 
 export default function BillingSettings() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { usage, status } = useApp()
   const [plan, setPlan] = useState<BillingPlan | null>(null)
   const [costHistory, setCostHistory] = useState<CostRecord[]>([])
@@ -22,9 +25,9 @@ export default function BillingSettings() {
     setCancelling(true)
     try {
       await api.configure({ key: 'cancel_subscription', value: 'true' })
-      toast.success('Subscription cancelled')
+      toast.success(t('settings.billing.cancelSuccess'))
       setShowCancelConfirm(false)
-    } catch (e) { console.warn("BillingSettings cancel error:", e); toast.error('Failed to cancel subscription') }
+    } catch (e) { console.warn("BillingSettings cancel error:", e); toast.error(t('settings.billing.cancelFailed')) }
     setCancelling(false)
   }
 
@@ -32,17 +35,17 @@ export default function BillingSettings() {
     setChangingPlan(planName)
     try {
       await api.configure({ key: 'plan', value: planName.toLowerCase() })
-      toast.success(`Switched to ${planName} plan`)
+      toast.success(intl.formatMessage({ id: 'settings.billing.planSwitched' }, { plan: planName }))
       setShowChangePlan(false)
-    } catch (e) { console.warn("BillingSettings plan error:", e); toast.error('Failed to change plan') }
+    } catch (e) { console.warn("BillingSettings plan error:", e); toast.error(t('settings.billing.planChangeFailed')) }
     setChangingPlan(null)
   }
 
   useEffect(() => {
     Promise.all([
-      api.getBillingPlan().then(setPlan).catch(() => toast.error('Failed to load billing plan')),
-      api.getCostHistory(30).then(setCostHistory).catch(() => toast.error('Failed to load cost history')),
-      api.getBillingHistory().then(setBillingHistory).catch(() => toast.error('Failed to load billing history')),
+      api.getBillingPlan().then(setPlan).catch(() => toast.error(t('settings.billing.loadPlanFailed'))),
+      api.getCostHistory(30).then(setCostHistory).catch(() => toast.error(t('settings.billing.loadCostFailed'))),
+      api.getBillingHistory().then(setBillingHistory).catch(() => toast.error(t('settings.billing.loadHistoryFailed'))),
     ]).finally(() => setLoading(false))
   }, [])
 
@@ -56,8 +59,8 @@ export default function BillingSettings() {
     <div className="pb-xl">
       {/* Page Header */}
       <div className="mb-xl">
-        <h2 className="font-headline-lg text-[32px] font-semibold text-on-surface mb-xs">Usage &amp; Billing</h2>
-        <p className="font-body-md text-on-surface-variant">Manage your subscription plans, view usage metrics, and update payment information.</p>
+        <h2 className="font-headline-lg text-[32px] font-semibold text-on-surface mb-xs">{t('settings.billing.title')}</h2>
+        <p className="font-body-md text-on-surface-variant">{t('settings.billing.subtitle')}</p>
       </div>
 
       {/* Demo mode banner */}
@@ -68,9 +71,9 @@ export default function BillingSettings() {
       >
         <span className="material-symbols-outlined text-warning shrink-0">science</span>
         <div className="flex-1">
-          <div className="font-label-md text-warning font-bold">Demo mode</div>
+          <div className="font-label-md text-warning font-bold">{t('settings.billing.demoMode')}</div>
           <p className="font-body-sm text-on-surface-variant mt-xs">
-            Billing integration is not yet connected. Plan, cost, and history figures shown here are illustrative sample data, not real usage.
+            {t('settings.billing.demoDesc')}
           </p>
         </div>
       </div>
@@ -90,34 +93,34 @@ export default function BillingSettings() {
             <div>
               <div className="flex justify-between items-start mb-lg">
                 <div>
-                  <span className="bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider mb-2 inline-block">Active Plan</span>
-                  <h3 className="font-headline-md text-[24px] font-bold">{plan?.name ?? 'Pro'} Plan</h3>
+                  <span className="bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider mb-2 inline-block">{t('settings.billing.activePlan')}</span>
+                  <h3 className="font-headline-md text-[24px] font-bold">{intl.formatMessage({ id: 'settings.billing.planName' }, { name: plan?.name ?? 'Pro' })}</h3>
                 </div>
                 <div className="text-right">
                   <p className="font-headline-md text-[24px] font-bold">${plan?.price ?? 29}.00</p>
-                  <p className="font-label-sm text-label-sm text-on-surface-variant">per month</p>
+                  <p className="font-label-sm text-label-sm text-on-surface-variant">{t('settings.billing.perMonth')}</p>
                 </div>
               </div>
               <div className="space-y-4 mb-xl">
                 <div className="flex items-center gap-3 text-on-surface-variant">
                   <span className="material-symbols-outlined text-primary">event</span>
-                  <span className="font-body-sm text-[14px]">Token limit: <strong className="text-on-surface">{plan?.token_limit?.toLocaleString() ?? '1,000,000'}/month</strong></span>
+                  <span className="font-body-sm text-[14px]">{intl.formatMessage({ id: 'settings.billing.tokenLimit' }, { limit: (plan?.token_limit?.toLocaleString() ?? '1,000,000') })}</span>
                 </div>
                 <div className="flex items-center gap-3 text-on-surface-variant">
                   <span className="material-symbols-outlined text-primary">credit_card</span>
-                  <span className="font-body-sm text-[14px]">Provider: <strong className="text-on-surface">{status?.provider ?? 'N/A'}</strong></span>
+                  <span className="font-body-sm text-[14px]">{intl.formatMessage({ id: 'settings.billing.provider' }, { provider: (status?.provider ?? 'N/A') })}</span>
                 </div>
               </div>
             </div>
             <div className="flex gap-3 mt-auto">
-              <Button className="flex-1 py-3 px-4 bg-primary text-on-primary rounded-xl font-bold text-center hover:opacity-90 active:scale-[0.98] transition-all cursor-pointer" onClick={() => setShowChangePlan(true)}>Change Plan</Button>
-              <Button className="px-4 py-3 border border-outline-variant text-on-surface-variant rounded-xl hover:bg-surface-container-low active:scale-[0.98] transition-all cursor-pointer font-bold" onClick={() => setShowCancelConfirm(true)}>Cancel</Button>
+              <Button className="flex-1 py-3 px-4 bg-primary text-on-primary rounded-xl font-bold text-center hover:opacity-90 active:scale-[0.98] transition-all cursor-pointer" onClick={() => setShowChangePlan(true)}>{t('settings.billing.changePlan')}</Button>
+              <Button className="px-4 py-3 border border-outline-variant text-on-surface-variant rounded-xl hover:bg-surface-container-low active:scale-[0.98] transition-all cursor-pointer font-bold" onClick={() => setShowCancelConfirm(true)}>{t('settings.billing.cancel')}</Button>
             </div>
           </section>
 
           {/* Section 2: Usage Quota Overview */}
           <section className="md:col-span-7 bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/30 rounded-2xl p-lg shadow-sm">
-            <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest mb-lg">Usage Quota Overview</h3>
+            <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest mb-lg">{t('settings.billing.usageOverview')}</h3>
             <div className="grid grid-cols-1 gap-lg md:grid-cols-2">
               {/* Token Usage Ring */}
               <div className="flex flex-col items-center text-center">
@@ -135,7 +138,7 @@ export default function BillingSettings() {
                     </span>
                   </div>
                 </div>
-                <p className="font-label-md text-[14px] font-bold mb-1">Token Usage</p>
+                <p className="font-label-md text-[14px] font-bold mb-1">{t('settings.billing.tokenUsage')}</p>
                 <p className="font-label-sm text-[12px] text-on-surface-variant">
                   {totalTokens >= 1000000 ? `${(totalTokens / 1000000).toFixed(1)}M` : totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(0)}K` : '0'}
                 </p>
@@ -155,8 +158,8 @@ export default function BillingSettings() {
                     <span className="font-headline-md text-[24px] font-bold">{Math.round(cacheHitRate * 100)}%</span>
                   </div>
                 </div>
-                <p className="font-label-md text-[14px] font-bold mb-1">Cache Hit Rate</p>
-                <p className="font-label-sm text-[12px] text-on-surface-variant">Average Cache Hit</p>
+                <p className="font-label-md text-[14px] font-bold mb-1">{t('settings.billing.cacheHitRate')}</p>
+                <p className="font-label-sm text-[12px] text-on-surface-variant">{t('settings.billing.avgCacheHit')}</p>
               </div>
             </div>
           </section>
@@ -165,15 +168,15 @@ export default function BillingSettings() {
           <section className="md:col-span-12 bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/30 rounded-2xl p-lg shadow-sm">
             <div className="flex justify-between items-end mb-xl">
               <div>
-                <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest mb-2">Cost Analysis</h3>
-                <p className="font-headline-md text-[24px] font-bold">Daily Spending <span className="text-on-surface-variant font-normal text-[14px] ml-1">(Last 30 Days)</span></p>
+                <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest mb-2">{t('settings.billing.costAnalysis')}</h3>
+                <p className="font-headline-md text-[24px] font-bold">{t('settings.billing.dailySpending')} <span className="text-on-surface-variant font-normal text-[14px] ml-1">{t('settings.billing.last30Days')}</span></p>
               </div>
               <div className="flex gap-2">
                 <span className="flex items-center gap-2 font-label-md text-[14px] text-on-surface-variant bg-surface-container px-3 py-1 rounded-lg">
-                  <span className="w-2 h-2 rounded-full bg-primary"></span>Tokens
+                  <span className="w-2 h-2 rounded-full bg-primary"></span>{t('settings.billing.tokens')}
                 </span>
                 <span className="flex items-center gap-2 font-label-md text-[14px] text-on-surface-variant bg-surface-container px-3 py-1 rounded-lg">
-                  <span className="w-2 h-2 rounded-full bg-secondary"></span> Cache Hit
+                  <span className="w-2 h-2 rounded-full bg-secondary"></span> {t('settings.billing.cacheHit')}
                 </span>
               </div>
             </div>
@@ -194,12 +197,12 @@ export default function BillingSettings() {
                 <div className="flex justify-between mt-4 px-2 text-on-surface-variant font-label-sm text-[12px]">
                   {costHistory.length >= 10 && <span>{costHistory[costHistory.length - 10]?.date}</span>}
                   <span>{costHistory[costHistory.length - 5]?.date ?? ''}</span>
-                  <span>Today</span>
+                  <span>{t('settings.billing.today')}</span>
                 </div>
               </>
             ) : (
               <div className="h-48 flex items-center justify-center">
-                <p className="text-body-sm text-on-surface-variant">No cost data yet. Usage data will appear here once available.</p>
+                <p className="text-body-sm text-on-surface-variant">{t('settings.billing.noCostData')}</p>
               </div>
             )}
           </section>
@@ -207,16 +210,16 @@ export default function BillingSettings() {
           {/* Section 4: Billing History */}
           <section className="md:col-span-12 bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/30 rounded-2xl p-lg overflow-hidden shadow-sm">
             <div className="flex justify-between items-center mb-lg">
-              <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest">Billing History</h3>
+              <h3 className="font-label-md text-[14px] font-bold text-on-surface-variant uppercase tracking-widest">{t('settings.billing.billingHistory')}</h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-outline-variant/30 font-label-sm text-[12px] text-on-surface-variant uppercase tracking-wider">
-                    <th className="pb-4 font-medium px-2">Date</th>
-                    <th className="pb-4 font-medium px-2">Description</th>
-                    <th className="pb-4 font-medium px-2 text-right">Amount</th>
-                    <th className="pb-4 font-medium px-2 text-center">Status</th>
+                    <th className="pb-4 font-medium px-2">{t('settings.billing.colDate')}</th>
+                    <th className="pb-4 font-medium px-2">{t('settings.billing.colDescription')}</th>
+                    <th className="pb-4 font-medium px-2 text-right">{t('settings.billing.colAmount')}</th>
+                    <th className="pb-4 font-medium px-2 text-center">{t('settings.billing.colStatus')}</th>
                   </tr>
                 </thead>
                 <tbody className="font-body-sm text-[14px]">
@@ -240,7 +243,7 @@ export default function BillingSettings() {
                     <>
                       <tr className="border-b border-outline-variant/10 group hover:bg-surface-container-low transition-colors">
                         <td className="py-4 px-2 text-on-surface-variant">—</td>
-                        <td className="py-4 px-2 font-medium">No billing records yet</td>
+                        <td className="py-4 px-2 font-medium">{t('settings.billing.noRecords')}</td>
                         <td className="py-4 px-2 text-right">—</td>
                         <td className="py-4 px-2 text-center">
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface-variant text-[11px] font-bold uppercase tracking-wider">
@@ -262,11 +265,11 @@ export default function BillingSettings() {
       <footer className="mt-xl flex flex-col md:flex-row justify-between items-center px-lg py-md bg-surface-container-lowest/70 backdrop-blur-md border border-outline-variant/30 rounded-2xl shadow-sm gap-md">
         <div className="flex items-center gap-4 text-center md:text-left">
           <span className="material-symbols-outlined text-primary hidden md:block">info</span>
-          <p className="font-body-sm text-[14px] text-on-surface-variant">Need to scale further? Contact our <a className="text-primary font-bold hover:underline cursor-pointer">Enterprise Team</a> for custom quotas.</p>
+          <p className="font-body-sm text-[14px] text-on-surface-variant">{intl.formatMessage({ id: 'settings.billing.enterpriseCta' }, { team: t('settings.billing.enterpriseTeam') })}</p>
         </div>
         <div className="flex items-center justify-center gap-6">
-          <button className="font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer" onClick={() => setShowLegal(true)}>Legal &amp; Terms</button>
-          <button className="font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer" onClick={() => setShowLegal(true)}>Privacy Policy</button>
+          <button className="font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer" onClick={() => setShowLegal(true)}>{t('settings.billing.legalTerms')}</button>
+          <button className="font-label-sm text-[12px] text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer" onClick={() => setShowLegal(true)}>{t('settings.billing.privacyPolicy')}</button>
         </div>
       </footer>
 
@@ -276,12 +279,12 @@ export default function BillingSettings() {
           <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-error text-[24px]">warning</span>
-              <h3 className="font-headline-md text-on-surface">Cancel Subscription</h3>
+              <h3 className="font-headline-md text-on-surface">{t('settings.billing.cancelTitle')}</h3>
             </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">Are you sure you want to cancel? This will downgrade you to the free tier at the end of your billing period.</p>
+            <p className="text-body-md text-on-surface-variant mb-lg">{t('settings.billing.cancelConfirm')}</p>
             <div className="flex justify-end gap-sm">
-              <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setShowCancelConfirm(false)}>Keep Plan</Button>
-              <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={handleCancelSubscription} disabled={cancelling}>{cancelling ? 'Cancelling...' : 'Cancel Plan'}</Button>
+              <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setShowCancelConfirm(false)}>{t('settings.billing.keepPlan')}</Button>
+              <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={handleCancelSubscription} disabled={cancelling}>{cancelling ? t('settings.billing.cancelling') : t('settings.billing.cancelPlan')}</Button>
             </div>
           </div>
         </div>
@@ -292,7 +295,7 @@ export default function BillingSettings() {
         <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowChangePlan(false)} onKeyDown={e => { if (e.key === 'Escape') setShowChangePlan(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-md w-full mx-lg shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-lg">
-              <h3 className="font-headline-md text-on-surface">Change Plan</h3>
+              <h3 className="font-headline-md text-on-surface">{t('settings.billing.changePlanTitle')}</h3>
               <Button variant="ghost" className="cursor-pointer" onClick={() => setShowChangePlan(false)}>
                 <span className="material-symbols-outlined">close</span>
               </Button>
@@ -301,7 +304,7 @@ export default function BillingSettings() {
               {(['Free', 'Pro', 'Enterprise'] as const).map(p => (
                 <button key={p} disabled={changingPlan !== null} className={`w-full p-md rounded-xl border text-left cursor-pointer transition-all disabled:opacity-50 ${plan?.name?.toLowerCase() === p.toLowerCase() ? 'border-2 border-primary bg-primary/5' : 'border-outline-variant/30 hover:border-primary/50'}`} onClick={() => handleChangePlan(p)}>
                   <div className="font-label-md font-bold text-on-surface">{p}</div>
-                  <div className="font-label-sm text-on-surface-variant">{p === 'Free' ? '$0/mo — 100K tokens' : p === 'Pro' ? '$29/mo — 1M tokens' : 'Custom pricing'}</div>
+                  <div className="font-label-sm text-on-surface-variant">{p === 'Free' ? t('settings.billing.planFreeDesc') : p === 'Pro' ? t('settings.billing.planProDesc') : t('settings.billing.planEnterpriseDesc')}</div>
                 </button>
               ))}
             </div>
@@ -314,14 +317,14 @@ export default function BillingSettings() {
         <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLegal(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLegal(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-lg w-full mx-lg shadow-2xl max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-lg">
-              <h3 className="font-headline-md text-on-surface">Legal &amp; Privacy</h3>
+              <h3 className="font-headline-md text-on-surface">{t('settings.billing.legalPrivacy')}</h3>
               <Button variant="ghost" className="cursor-pointer" onClick={() => setShowLegal(false)}>
                 <span className="material-symbols-outlined">close</span>
               </Button>
             </div>
             <div className="text-body-sm text-on-surface-variant space-y-md">
-              <p>Shannon Desktop processes all data locally. No conversation content is sent to third parties beyond your configured LLM provider.</p>
-              <p>Usage telemetry is optional and can be disabled in Advanced Settings.</p>
+              <p>{t('settings.billing.legalBody1')}</p>
+              <p>{t('settings.billing.legalBody2')}</p>
             </div>
           </div>
         </div>

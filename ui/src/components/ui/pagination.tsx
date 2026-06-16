@@ -1,3 +1,4 @@
+import { useIntl } from 'react-intl'
 import { Button } from './button'
 
 interface PaginationProps {
@@ -7,6 +8,7 @@ interface PaginationProps {
 }
 
 export function Pagination({ page, totalPages, onPageChange }: PaginationProps) {
+  const intl = useIntl()
   if (totalPages <= 1) return null
 
   const pages: (number | '…')[] = []
@@ -29,7 +31,7 @@ export function Pagination({ page, totalPages, onPageChange }: PaginationProps) 
         disabled={page <= 1}
         onClick={() => onPageChange(page - 1)}
         className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-primary disabled:opacity-30"
-        aria-label="Previous page"
+        aria-label={intl.formatMessage({ id: 'ui.pagination.previous' })}
       >
         <span className="material-symbols-outlined text-[18px]">chevron_left</span>
       </Button>
@@ -54,7 +56,7 @@ export function Pagination({ page, totalPages, onPageChange }: PaginationProps) 
         disabled={page >= totalPages}
         onClick={() => onPageChange(page + 1)}
         className="px-sm py-xs rounded-lg text-on-surface-variant hover:text-primary disabled:opacity-30"
-        aria-label="Next page"
+        aria-label={intl.formatMessage({ id: 'ui.pagination.next' })}
       >
         <span className="material-symbols-outlined text-[18px]">chevron_right</span>
       </Button>

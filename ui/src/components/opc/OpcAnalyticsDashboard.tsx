@@ -6,6 +6,7 @@
 // File mtime is the time-series proxy — task JSON has no created_at field.
 
 import { useEffect, useState, useCallback } from 'react'
+import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { OpcMetrics } from '@/types'
 
@@ -24,6 +25,8 @@ function toneFor(status: string): string {
 }
 
 export default function OpcAnalyticsDashboard() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [metrics, setMetrics] = useState<OpcMetrics | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -46,7 +49,7 @@ export default function OpcAnalyticsDashboard() {
   if (loading && !metrics) {
     return (
       <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
-        <p className="text-body-sm text-on-surface-variant text-center py-md">Loading analytics…</p>
+        <p className="text-body-sm text-on-surface-variant text-center py-md">{t('opc.analytics.loading')}</p>
       </div>
     )
   }
@@ -63,7 +66,7 @@ export default function OpcAnalyticsDashboard() {
           onClick={refresh}
           className="mt-sm font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer"
         >
-          Retry
+          {t('opc.analytics.retry')}
         </button>
       </div>
     )
@@ -75,36 +78,36 @@ export default function OpcAnalyticsDashboard() {
 
   return (
     <section
-      aria-label="OPC analytics"
+      aria-label={t('opc.analytics.aria')}
       className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm flex flex-col gap-lg"
     >
       <header className="flex items-center justify-between">
         <div className="flex items-center gap-sm">
           <span className="material-symbols-outlined text-[20px] text-primary">monitoring</span>
-          <h3 className="font-headline-md text-[16px] font-bold text-on-surface">7-Day Analytics</h3>
+          <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('opc.analytics.title')}</h3>
         </div>
         <button
           type="button"
           onClick={refresh}
           disabled={loading}
           className="font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer flex items-center gap-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40"
-          aria-label="Refresh analytics"
+          aria-label={t('opc.analytics.refreshAria')}
         >
           <span className="material-symbols-outlined text-[14px]">{loading ? 'hourglass_top' : 'refresh'}</span>
-          Refresh
+          {t('opc.analytics.refresh')}
         </button>
       </header>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-md">
-        <StatCard label="Total tasks" value={metrics.total} icon="inventory_2" />
-        <StatCard label="Completion rate" value={`${metrics.completion_rate.toFixed(0)}%`} icon="trending_up" />
+        <StatCard label={t('opc.analytics.statTotal')} value={metrics.total} icon="inventory_2" />
+        <StatCard label={t('opc.analytics.statCompletion')} value={`${metrics.completion_rate.toFixed(0)}%`} icon="trending_up" />
         <StatCard
-          label="In progress"
+          label={t('opc.analytics.statInProgress')}
           value={metrics.by_status.filter(s => /in_progress|running|pending/i.test(s.status)).reduce((n, s) => n + s.count, 0)}
           icon="work"
         />
         <StatCard
-          label="Done"
+          label={t('opc.analytics.statDone')}
           value={metrics.by_status.filter(s => /completed|done/i.test(s.status)).reduce((n, s) => n + s.count, 0)}
           icon="task_alt"
         />
@@ -113,12 +116,12 @@ export default function OpcAnalyticsDashboard() {
       <div>
         <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
           <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bar_chart</span>
-          Daily activity (last 7 days)
+          {t('opc.analytics.dailyActivity')}
         </h4>
         {metrics.daily.length === 0 ? (
-          <p className="font-label-sm text-on-surface-variant italic">No activity yet.</p>
+          <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noActivity')}</p>
         ) : (
-          <div className="flex items-end justify-between gap-sm h-32" role="img" aria-label="Daily activity chart">
+          <div className="flex items-end justify-between gap-sm h-32" role="img" aria-label={t('opc.analytics.dailyChartAria')}>
             {metrics.daily.map(d => {
               const createdH = (d.created / maxDaily) * 100
               const completedH = (d.completed / maxDaily) * 100
@@ -129,12 +132,12 @@ export default function OpcAnalyticsDashboard() {
                     <div
                       className="w-3 bg-primary/70 rounded-t hover:bg-primary transition-colors"
                       style={{ height: `${Math.max(createdH, d.created > 0 ? 6 : 0)}%` }}
-                      title={`Created: ${d.created}`}
+                      title={intl.formatMessage({ id: 'opc.analytics.created' }, { count: d.created })}
                     />
                     <div
                       className="w-3 bg-tertiary/70 rounded-t hover:bg-tertiary transition-colors"
                       style={{ height: `${Math.max(completedH, d.completed > 0 ? 6 : 0)}%` }}
-                      title={`Completed: ${d.completed}`}
+                      title={intl.formatMessage({ id: 'opc.analytics.completedTitle' }, { count: d.completed })}
                     />
                   </div>
                   <span className="font-label-sm text-[10px] text-on-surface-variant">{shortDay}</span>
@@ -144,8 +147,8 @@ export default function OpcAnalyticsDashboard() {
           </div>
         )}
         <div className="flex items-center gap-md mt-sm font-label-sm text-[11px] text-on-surface-variant">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-primary/70 inline-block rounded-sm" /> Created</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-tertiary/70 inline-block rounded-sm" /> Completed</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-primary/70 inline-block rounded-sm" /> {t('opc.analytics.createdLegend')}</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 bg-tertiary/70 inline-block rounded-sm" /> {t('opc.analytics.completedLegend')}</span>
         </div>
       </div>
 

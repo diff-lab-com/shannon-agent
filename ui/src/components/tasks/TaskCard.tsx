@@ -3,6 +3,7 @@
 // MD3 tokens. Glass-panel styling. Shows status badge, assignee, priority, and
 // action buttons (Cancel for running, Run Now for all).
 
+import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import type { TaskItem } from '@/types'
 import { statusBadge } from './shared'
@@ -16,6 +17,9 @@ interface TaskCardProps {
 }
 
 export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel }: TaskCardProps) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   const badge = statusBadge(task.status)
   const isActive = task.status === 'running' || task.status === 'in_progress'
   return (
@@ -63,7 +67,7 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
           <div className="flex items-center gap-sm">
             {isActive ? (
               <Button
-                aria-label="Cancel task"
+                aria-label={t('tasks.taskCard.cancelAria')}
                 className="p-2 rounded-lg hover:bg-error/10 text-error transition-colors cursor-pointer"
                 onClick={e => { e.stopPropagation(); onCancel() }}
               >
@@ -78,12 +82,12 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
               {isRunning ? (
                 <>
                   <span className="material-symbols-outlined text-[18px]">check_circle</span>
-                  Success
+                  {t('tasks.taskCard.success')}
                 </>
               ) : (
                 <>
                   <span className="material-symbols-outlined text-[18px]">play_arrow</span>
-                  Run Now
+                  {t('tasks.taskCard.runNow')}
                 </>
               )}
             </Button>
