@@ -68,7 +68,7 @@ fn render_scene(scene: &SceneData) -> String {
     let backend = TestBackend::new(WIDTH, HEIGHT);
     let mut terminal = Terminal::new(backend).expect("TestBackend init failed");
 
-    let state = scene.state.clone();
+    let state = &scene.state;
     let chat = &scene.chat;
     let prompt = &scene.prompt;
     let spinner = &state.spinner;
@@ -95,12 +95,12 @@ fn render_scene(scene: &SceneData) -> String {
             // Overlays (mutually exclusive in normal rendering order)
 
             // Permission dialog
-            if let Some(ref dialog) = state.permission_dialog {
+            if let Some(dialog) = state.permission_dialog.as_ref() {
                 render_permission_dialog(f, f.area(), dialog, &state.theme);
             }
 
             // Model picker
-            if let Some(ref mp) = state.model_picker {
+            if let Some(mp) = state.model_picker.as_ref() {
                 mp.render(f, f.area(), &state.theme);
             }
 

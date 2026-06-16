@@ -39,7 +39,7 @@ impl ViewMode {
 }
 
 /// Application state for the REPL
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ReplState {
     /// Current status message
     pub status: String,
@@ -270,6 +270,39 @@ pub struct ReplState {
     pub undo_preview: Option<shannon_core::RevertPreview>,
     /// Target checkpoint index for pending undo operation
     pub undo_target_index: Option<usize>,
+    /// Sender for pending MCP elicitation requests (provider → TUI event loop).
+    ///
+    /// Set once during REPL init; cloned into the elicitation provider callback.
+    /// `None` when elicitation wiring is disabled (e.g. headless mode).
+    pub pending_elicitation_tx: Option<tokio::sync::mpsc::UnboundedSender<PendingElicitation>>,
+    /// Receiver for pending MCP elicitation requests (drained by Tick handler).
+    ///
+    /// Stored as `Option` so the Tick handler can `take()`/`as_mut()` it.
+    /// Only consumed by the single-threaded REPL event loop.
+    pub pending_elicitation_rx: Option<tokio::sync::mpsc::UnboundedReceiver<PendingElicitation>>,
+    /// Currently displayed elicitation request (set when InputDialog opens).
+    ///
+    /// `Some` while the user is answering; cleared on submit/cancel when the
+    /// `oneshot` responder is sent back to the provider.
+    pub active_elicitation: Option<PendingElicitation>,
+}
+
+/// Pending MCP elicitation request forwarded from the provider to the TUI.
+///
+/// Created by the elicitation provider callback, sent through the
+/// `pending_elicitation_tx` channel, drained by the Tick handler which opens
+/// an `InputDialog`, and finally resolved when the user submits/cancels —
+/// the `responder` carries the result back to the awaiting MCP server.
+#[derive(Debug)]
+pub struct PendingElicitation {
+    /// Name of the MCP server that issued the request (for dialog title prefix).
+    pub server_name: String,
+    /// Human-readable message from the server (shown as dialog title/content).
+    pub message: String,
+    /// Optional placeholder derived from the request schema (heuristic).
+    pub placeholder: Option<String>,
+    /// One-shot responder that receives the user's `ElicitationResult`.
+    pub responder: tokio::sync::oneshot::Sender<shannon_mcp::ElicitationResult>,
 }
 
 /// State for the autonomous loop iteration engine.
@@ -536,6 +569,9 @@ impl Default for ReplState {
             persisted_ui_state: None,
             undo_preview: None,
             undo_target_index: None,
+            pending_elicitation_tx: None,
+            pending_elicitation_rx: None,
+            active_elicitation: None,
         }
     }
 }
