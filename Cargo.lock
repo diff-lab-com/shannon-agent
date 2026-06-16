@@ -3839,6 +3839,7 @@ dependencies = [
  "tracing-subscriber",
  "urlencoding",
  "uuid",
+ "zip",
 ]
 
 [[package]]

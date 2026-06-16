@@ -46,7 +46,7 @@ pub fn detect_mcp_prompt_context(
 
     let (server, prompt) = parse_mcp_prompt_command(cmd)?;
 
-    let full_name = format!("mcp__{}__{}", server, prompt);
+    let full_name = format!("mcp__{server}__{prompt}");
     if !command_names.iter().any(|n| n == &full_name) {
         return None;
     }
