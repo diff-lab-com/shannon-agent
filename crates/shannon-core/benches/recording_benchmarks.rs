@@ -166,7 +166,7 @@ fn bench_recording_serialize(c: &mut Criterion) {
         b.iter(|| {
             entries
                 .iter()
-                .map(|e| serde_json::to_string(e))
+                .map(serde_json::to_string)
                 .collect::<Vec<_>>()
         })
     });
