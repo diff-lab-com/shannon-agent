@@ -2,6 +2,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { I18nProvider } from '@/i18n'
 import Perf, { analyzeTracingJson, parseDurationMs, percentile } from '@/pages/Perf'
 
 describe('parseDurationMs', () => {
@@ -106,18 +107,18 @@ describe('analyzeTracingJson', () => {
 
 describe('Perf UI', () => {
   it('shows the empty state before analysis', () => {
-    render(<Perf />)
+    render(<I18nProvider><Perf /></I18nProvider>)
     expect(screen.getByText('No analysis yet')).toBeInTheDocument()
   })
 
   it('shows error when Analyze clicked with empty input', () => {
-    render(<Perf />)
+    render(<I18nProvider><Perf /></I18nProvider>)
     fireEvent.click(screen.getByRole('button', { name: 'Analyze' }))
     expect(screen.getByRole('alert')).toHaveTextContent('Paste at least one line')
   })
 
   it('renders summary and slow-top after analyzing input', () => {
-    render(<Perf />)
+    render(<I18nProvider><Perf /></I18nProvider>)
     const ev = {
       timestamp: '2026-06-14T10:00:00Z',
       level: 'INFO',
@@ -133,7 +134,7 @@ describe('Perf UI', () => {
   })
 
   it('Clear button resets to empty state', () => {
-    render(<Perf />)
+    render(<I18nProvider><Perf /></I18nProvider>)
     fireEvent.change(screen.getByLabelText(/Trace JSON/), { target: { value: 'garbage' } })
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
     expect(screen.getByText('No analysis yet')).toBeInTheDocument()

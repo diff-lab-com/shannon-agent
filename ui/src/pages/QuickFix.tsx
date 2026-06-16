@@ -4,6 +4,7 @@
 // the language server offers at that location.
 
 import { useState } from 'react'
+import { useIntl } from 'react-intl'
 import LspQuickFixPanel, {
   type LspQuickFixDiagnostic,
 } from '@/components/lsp/LspQuickFixPanel'
@@ -21,6 +22,8 @@ const DEFAULT_DIAG: LspQuickFixDiagnostic = {
 const LANGUAGES = ['rust', 'typescript', 'typescriptreact', 'javascript', 'go', 'python']
 
 export default function QuickFix() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [diag, setDiag] = useState<LspQuickFixDiagnostic>(DEFAULT_DIAG)
   const [submitted, setSubmitted] = useState<LspQuickFixDiagnostic | null>(null)
 
@@ -35,11 +38,9 @@ export default function QuickFix() {
   return (
     <div className="max-w-3xl mx-auto p-md flex flex-col gap-md">
       <header>
-        <h2 className="font-headline-md text-on-surface">Quick Fix Launcher</h2>
+        <h2 className="font-headline-md text-on-surface">{t('quickFix.title')}</h2>
         <p className="font-label-sm text-on-surface-variant mt-xs">
-          Paste a diagnostic to ask the language server for code actions. The
-          server binary must be on PATH (rust-analyzer, typescript-language-server,
-          gopls, pylsp).
+          {t('quickFix.subtitle')}
         </p>
       </header>
 
@@ -48,7 +49,7 @@ export default function QuickFix() {
         className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
       >
         <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-          File path
+          {t('quickFix.filePath')}
           <input
             type="text"
             value={diag.file_path}
@@ -60,7 +61,7 @@ export default function QuickFix() {
 
         <div className="grid grid-cols-2 gap-sm">
           <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-            Start line (0-indexed)
+            {t('quickFix.startLine')}
             <input
               type="number"
               min={0}
@@ -72,7 +73,7 @@ export default function QuickFix() {
             />
           </label>
           <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-            Start character (0-indexed)
+            {t('quickFix.startChar')}
             <input
               type="number"
               min={0}
@@ -86,7 +87,7 @@ export default function QuickFix() {
         </div>
 
         <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-          Diagnostic message
+          {t('quickFix.message')}
           <input
             type="text"
             value={diag.message}
@@ -97,7 +98,7 @@ export default function QuickFix() {
         </label>
 
         <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-          Language
+          {t('quickFix.language')}
           <select
             value={diag.language_id}
             onChange={(e) => setDiag({ ...diag, language_id: e.target.value })}
@@ -116,7 +117,7 @@ export default function QuickFix() {
           disabled={!canSubmit}
           className="self-start font-label-md bg-primary text-on-primary rounded-full px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         >
-          Ask LSP server
+          {t('quickFix.askLSP')}
         </button>
       </form>
 

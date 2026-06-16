@@ -13,12 +13,36 @@ interface PaletteItem {
   action: () => void
 }
 
+// Subsequence fuzzy matcher with scoring. Query characters must appear in
+// order, but not contiguously. Contiguous matches score higher so they rank
+// first. Returns null when query does not match.
+function fuzzyScore(query: string, text: string): number | null {
+  if (!query) return 0
+  const q = query.toLowerCase()
+  const t = text.toLowerCase()
+  let qi = 0
+  let score = 0
+  let prevMatch = false
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) {
+      // Bonus for contiguous matches and matches at word boundaries.
+      score += prevMatch ? 3 : 1
+      if (ti === 0 || /[\s\-_/.]/.test(t[ti - 1])) score += 5
+      qi++
+      prevMatch = true
+    } else {
+      prevMatch = false
+    }
+  }
+  return qi === q.length ? score : null
+}
+
 export default function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
-  const { sessions, models, tasks, agents } = useApp()
+  const { sessions, models, tasks, agents, refreshConfig } = useApp()
   const intl = useIntl()
 
   const t = (id: string) => intl.formatMessage({ id })
@@ -67,16 +91,29 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     const modelItems: PaletteItem[] = models.slice(0, 5).map(m => ({
       id: `m-${m.id}`, label: m.name, icon: 'neurology', category: t('palette.category.switchModel'), action: () => {
         api.switchProvider({ provider: m.provider, model: m.id })
-          .then(() => toast.success(intl.formatMessage({ id: 'palette.toast.switched' }, { name: m.name })))
+          .then(async () => {
+            // Refresh app-wide config so the new provider/model is reflected
+            // in footer, chat header, and anywhere else that reads current model.
+            await refreshConfig()
+            toast.success(intl.formatMessage({ id: 'palette.toast.switched' }, { name: m.name }))
+          })
           .catch(() => toast.error(t('palette.toast.switchFailed')))
       },
     }))
     return [...actions, ...pages, ...taskItems, ...agentItems, ...sessionItems, ...modelItems]
-  }, [intl, navigate, sessions, models, tasks, agents, t])
+  }, [intl, navigate, sessions, models, tasks, agents, refreshConfig, t])
 
-  const filtered = query
-    ? items.filter(i => i.label.toLowerCase().includes(query.toLowerCase()))
-    : items
+  // Fuzzy-scored + ranked results. Empty query returns items unchanged (stable
+  // category order). Non-matching items drop out; matches sort by score desc.
+  const filtered = useMemo(() => {
+    if (!query.trim()) return items
+    const scored = items
+      .map(item => ({ item, score: fuzzyScore(query, item.label) ?? -1 }))
+      .filter(x => x.score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .map(x => x.item)
+    return scored
+  }, [items, query])
 
   useEffect(() => { setSelected(0) }, [query])
   useEffect(() => { if (open) { setQuery(''); inputRef.current?.focus() } }, [open])
@@ -128,6 +165,10 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               </div>
             )
           })}
+        </div>
+        <div className="flex items-center justify-between px-lg py-xs border-t border-outline-variant/10 text-label-sm text-on-surface-variant/70">
+          <span>{intl.formatMessage({ id: 'palette.footer.results' }, { count: filtered.length })}</span>
+          <kbd className="font-mono text-[10px]">{t('palette.footer.shortcuts')}</kbd>
         </div>
       </div>
     </div>

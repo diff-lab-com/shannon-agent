@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
+import { I18nProvider } from '@/i18n'
 import Chat from '@/pages/Chat'
 
 const ctx = vi.hoisted(() => ({
@@ -47,9 +48,11 @@ function resetCtx() {
 
 function renderChat() {
   return render(
-    <MemoryRouter>
-      <Chat />
-    </MemoryRouter>
+    <I18nProvider>
+      <MemoryRouter>
+        <Chat />
+      </MemoryRouter>
+    </I18nProvider>
   )
 }
 

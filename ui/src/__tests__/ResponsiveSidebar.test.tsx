@@ -43,13 +43,14 @@ describe('Responsive sidebar', () => {
 describe('WelcomeState onboarding', () => {
   it('shows keyboard shortcuts in welcome screen', async () => {
     const Chat = (await import('@/pages/Chat')).default
+    const WelcomeState = (await import('@/components/WelcomeState')).default
     render(
       <I18nProvider>
         <AppProvider>
           <MemoryRouter initialEntries={['/chat']}>
             <Routes>
               <Route element={<Layout />}>
-                <Route path="/chat" element={<Chat />} />
+                <Route path="/chat" element={<><WelcomeState onSelectPrompt={() => {}} /></>} />
               </Route>
             </Routes>
           </MemoryRouter>

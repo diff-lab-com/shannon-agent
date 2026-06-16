@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { I18nProvider } from '@/i18n'
 import { Header } from '@/components/Header'
 
 const mockCtx = vi.hoisted(() => ({
@@ -19,9 +20,11 @@ vi.mock('@/context/AppContext', () => ({
 
 function wrap(ui: React.ReactElement, { route = '/chat' } = {}) {
   return (
-    <MemoryRouter initialEntries={[route]}>
-      {ui}
-    </MemoryRouter>
+    <I18nProvider>
+      <MemoryRouter initialEntries={[route]}>
+        {ui}
+      </MemoryRouter>
+    </I18nProvider>
   )
 }
 
