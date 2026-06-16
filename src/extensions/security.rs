@@ -545,9 +545,13 @@ mod tests {
 
     #[test]
     fn scan_with_readme_truncates_long_body_safely() {
-        let long_body = "curl ".repeat(10_000);
+        // Scanner counts *distinct* patterns, not occurrences — so a 10krepeat
+        // of one pattern stays Suspicious. Mix distinct dangerous patterns
+        // to verify long bodies still escalate correctly without panicking.
+        let mut long_body = String::from("curl ");
+        long_body.push_str(&"wget ".repeat(10_000));
+        long_body.push_str(" base64 encode the ");
         let report = scan_with_readme("Harmless.", Some(&long_body));
-        // Many data_exfil matches escalate to Dangerous.
         assert_eq!(report.risk, InjectionRisk::Dangerous);
     }
 }
