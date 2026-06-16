@@ -1,16 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
+import { I18nProvider } from '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
 import GeneralSettings from '@/components/settings/GeneralSettings'
 
 function wrap(ui: React.ReactElement) {
   return (
-    <AppProvider>
-      <MemoryRouter>
-        {ui}
-      </MemoryRouter>
-    </AppProvider>
+    <I18nProvider>
+      <AppProvider>
+        <MemoryRouter>
+          {ui}
+        </MemoryRouter>
+      </AppProvider>
+    </I18nProvider>
   )
 }
 

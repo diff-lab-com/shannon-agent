@@ -1464,7 +1464,6 @@ mod tests {
             notify_on_failure: true,
             budget_usd: Some(10.0),
             auto_archive_when_empty: false,
-            result_routing: Vec::new(),
         };
         let json = serde_json::to_string(&policy).unwrap();
         assert!(json.contains("budget_usd"));

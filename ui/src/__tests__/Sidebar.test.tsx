@@ -1,16 +1,19 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
+import { I18nProvider } from '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
 import { Sidebar, SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 
 function wrap(ui: React.ReactElement, { path = '/chat' } = {}) {
   return (
-    <AppProvider>
-      <MemoryRouter initialEntries={[path]}>
-        {ui}
-      </MemoryRouter>
-    </AppProvider>
+    <I18nProvider>
+      <AppProvider>
+        <MemoryRouter initialEntries={[path]}>
+          {ui}
+        </MemoryRouter>
+      </AppProvider>
+    </I18nProvider>
   )
 }
 

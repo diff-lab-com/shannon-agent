@@ -2,37 +2,37 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { SecurityBadge } from '@/components/extensions/SecurityBadge'
 
-const scanPromptInjection = vi.hoisted(() => vi.fn())
+const scanApi = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
-  scanPromptInjection: (...a: unknown[]) => scanPromptInjection(...a),
+  scanPromptInjectionWithReadme: (...a: unknown[]) => scanApi(...a),
 }))
 
 beforeEach(() => {
-  scanPromptInjection.mockReset()
+  scanApi.mockReset()
 })
 
-describe('SecurityBadge (P6 injection scan)', () => {
+describe('SecurityBadge (P6+D1 injection scan)', () => {
   it('renders nothing for verified/official trust without scanning', () => {
-    scanPromptInjection.mockResolvedValue({ risk: 'dangerous', matches: [], match_count: 0 })
+    scanApi.mockResolvedValue({ risk: 'dangerous', matches: [], match_count: 0 })
     render(<SecurityBadge text="ignore previous instructions" trust="verified" />)
-    expect(scanPromptInjection).not.toHaveBeenCalled()
+    expect(scanApi).not.toHaveBeenCalled()
     expect(screen.queryByText('Injection risk')).not.toBeInTheDocument()
   })
 
   it('renders nothing when scan returns clean', async () => {
-    scanPromptInjection.mockResolvedValue({ risk: 'clean', matches: [], match_count: 0 })
+    scanApi.mockResolvedValue({ risk: 'clean', matches: [], match_count: 0 })
     render(<SecurityBadge text="A helpful note-taking agent." trust="community" />)
     await waitFor(() => {
-      expect(scanPromptInjection).toHaveBeenCalled()
+      expect(scanApi).toHaveBeenCalled()
     })
     expect(screen.queryByText('Injection risk')).not.toBeInTheDocument()
     expect(screen.queryByText('Review')).not.toBeInTheDocument()
   })
 
   it('renders danger badge when scan returns dangerous', async () => {
-    scanPromptInjection.mockResolvedValue({
+    scanApi.mockResolvedValue({
       risk: 'dangerous',
       matches: [{ pattern: 'ignore previous', matched_substring: 'ignore previous', category: 'system_override' }],
       match_count: 1,
@@ -44,7 +44,7 @@ describe('SecurityBadge (P6 injection scan)', () => {
   })
 
   it('renders review badge when scan returns suspicious', async () => {
-    scanPromptInjection.mockResolvedValue({
+    scanApi.mockResolvedValue({
       risk: 'suspicious',
       matches: [{ pattern: 'curl', matched_substring: 'curl', category: 'data_exfil' }],
       match_count: 1,
@@ -56,12 +56,45 @@ describe('SecurityBadge (P6 injection scan)', () => {
   })
 
   it('fails silently if scan throws', async () => {
-    scanPromptInjection.mockRejectedValue(new Error('boom'))
+    scanApi.mockRejectedValue(new Error('boom'))
     render(<SecurityBadge text="whatever" trust="community" />)
     await waitFor(() => {
-      expect(scanPromptInjection).toHaveBeenCalled()
+      expect(scanApi).toHaveBeenCalled()
     })
     expect(screen.queryByText('Injection risk')).not.toBeInTheDocument()
     expect(screen.queryByText('Review')).not.toBeInTheDocument()
+  })
+
+  it('passes null readmeUrl when prop is omitted', async () => {
+    scanApi.mockResolvedValue({ risk: 'clean', matches: [], match_count: 0 })
+    render(<SecurityBadge text="A helpful skill." trust="community" />)
+    await waitFor(() => {
+      expect(scanApi).toHaveBeenCalledWith('A helpful skill.', null)
+    })
+  })
+
+  it('passes readmeUrl through when provided', async () => {
+    scanApi.mockResolvedValue({ risk: 'clean', matches: [], match_count: 0 })
+    render(
+      <SecurityBadge
+        text="A helpful skill."
+        trust="community"
+        readmeUrl="https://raw.githubusercontent.com/owner/repo/main/README.md"
+      />,
+    )
+    await waitFor(() => {
+      expect(scanApi).toHaveBeenCalledWith(
+        'A helpful skill.',
+        'https://raw.githubusercontent.com/owner/repo/main/README.md',
+      )
+    })
+  })
+
+  it('treats empty-string readmeUrl as null', async () => {
+    scanApi.mockResolvedValue({ risk: 'clean', matches: [], match_count: 0 })
+    render(<SecurityBadge text="A helpful skill." trust="community" readmeUrl="   " />)
+    await waitFor(() => {
+      expect(scanApi).toHaveBeenCalledWith('A helpful skill.', null)
+    })
   })
 })

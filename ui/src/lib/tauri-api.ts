@@ -504,6 +504,16 @@ export async function scanPromptInjection(text: string): Promise<InjectionReport
   return invoke('scan_prompt_injection', { text })
 }
 
+export async function scanPromptInjectionWithReadme(
+  description: string,
+  readmeUrl: string | null,
+): Promise<InjectionReport> {
+  return invoke('scan_prompt_injection_with_readme', {
+    description,
+    readmeUrl: readmeUrl ?? null,
+  })
+}
+
 export async function verifySignature(
   signatureBody: string | null,
 ): Promise<SignatureReport> {
@@ -914,4 +924,18 @@ export async function removeTaskWorktree(path: string): Promise<void> {
 
 export async function pruneTaskWorktrees(): Promise<string[]> {
   return invoke('prune_task_worktrees')
+}
+
+// ─── Onboarding seed (#75) ────────────────────────────────────────────────
+//
+// First-run sample tasks so the Tasks / Today surfaces aren't empty. The Rust
+// command is idempotent — no-op when `.claude/tasks/` already holds any JSON.
+
+export interface SeedReport {
+  /** Number of sample task files written. Zero when tasks already existed. */
+  tasks_seeded: number
+}
+
+export async function seedSampleData(): Promise<SeedReport> {
+  return invoke('seed_sample_data')
 }

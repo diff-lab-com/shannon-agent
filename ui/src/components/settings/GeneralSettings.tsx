@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
+import { useIntl } from 'react-intl'
 import { useApp } from '@/context/AppContext'
+import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import * as api from '@/lib/tauri-api'
 import type { ApprovalMode } from '@/types'
 
@@ -14,8 +16,15 @@ const APPROVAL_MODES: { value: ApprovalMode; label: string; description: string 
 
 export default function GeneralSettings() {
   const { config, refreshConfig } = useApp()
+  const intl = useIntl()
+  const { locale, setLocale } = useI18n()
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
   const [saving, setSaving] = useState(false)
+
+  const handleLocaleChange = (next: Locale) => {
+    setLocale(next)
+    toast.success(intl.formatMessage({ id: 'settings.language.label' }))
+  }
 
   useEffect(() => {
     if (config?.approval_mode) {
@@ -74,6 +83,31 @@ export default function GeneralSettings() {
                 </button>
               ))}
             </div>
+          </div>
+        </section>
+
+        {/* Language */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm transition-all hover:shadow-md">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>translate</span>
+            <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.language.label' })}</h3>
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.language.help' })}</p>
+          <div className="flex gap-sm">
+            {SUPPORTED_LOCALES.map(opt => (
+              <button
+                key={opt.id}
+                onClick={() => handleLocaleChange(opt.id)}
+                aria-pressed={locale === opt.id}
+                className={`px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
+                  locale === opt.id
+                    ? 'bg-primary text-on-primary'
+                    : 'bg-surface-container-low text-on-surface hover:bg-surface-container-high border border-outline-variant/50'
+                }`}
+              >
+                {intl.formatMessage({ id: opt.labelKey })}
+              </button>
+            ))}
           </div>
         </section>
 
