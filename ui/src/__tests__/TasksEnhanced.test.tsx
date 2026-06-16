@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { I18nProvider } from '@/i18n'
 import Tasks from '@/pages/Tasks'
 
 let mockContext: any = {
@@ -25,11 +26,13 @@ vi.mock('@/lib/tauri-api', async () => {
 
 function renderTasks() {
   return render(
-    <MemoryRouter initialEntries={['/tasks']}>
-      <Routes>
-        <Route path="/tasks" element={<Tasks />} />
-      </Routes>
-    </MemoryRouter>
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/tasks']}>
+        <Routes>
+          <Route path="/tasks" element={<Tasks />} />
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>
   )
 }
 

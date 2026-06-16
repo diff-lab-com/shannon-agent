@@ -1,20 +1,23 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
+import { I18nProvider } from '@/i18n'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { Layout } from '@/components/Layout'
 
 function wrap(ui: React.ReactElement) {
   return (
-    <AppProvider>
-      <MemoryRouter initialEntries={['/chat']}>
-        <Routes>
-          <Route element={ui}>
-            <Route path="/chat" element={<div data-testid="outlet-content">Chat Page Content</div>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
-    </AppProvider>
+    <I18nProvider>
+      <AppProvider>
+        <MemoryRouter initialEntries={['/chat']}>
+          <Routes>
+            <Route element={ui}>
+              <Route path="/chat" element={<div data-testid="outlet-content">Chat Page Content</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </AppProvider>
+    </I18nProvider>
   )
 }
 

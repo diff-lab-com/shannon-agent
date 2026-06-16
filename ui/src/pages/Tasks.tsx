@@ -19,6 +19,7 @@
 
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { useIntl } from 'react-intl'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import { useScheduledTasks } from '@/hooks/scheduled-tasks'
@@ -48,6 +49,8 @@ type Tab = 'active' | 'history' | 'worktrees'
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
   const { tasks: scheduledTasks, create: createScheduled } = useScheduledTasks()
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
 
   // Cross-component state
   const [tab, setTab] = useState<Tab>('active')
@@ -105,9 +108,11 @@ export default function Tasks() {
       await api.startBackgroundTask(body)
       setNewTaskPrompt('')
       setShowNewTask(false)
-      toast.success(rich?.assignee ? `Task assigned to ${rich.assignee}` : 'Task created')
+      toast.success(rich?.assignee
+        ? intl.formatMessage({ id: 'tasks.toast.assigned' }, { name: rich.assignee })
+        : t('tasks.toast.created'))
       await refreshTasks()
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : 'Failed to start task'); toast.error('Failed to create task') }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.create')); toast.error(t('tasks.toast.failed.create')) }
   }
 
   const handleCreateSchedule = async (payload: CreateTaskPayload) => {
@@ -116,21 +121,21 @@ export default function Tasks() {
       const created = await createScheduled(payload)
       if (created) {
         if (created.trigger_type === 'webhook') {
-          toast.success(`Webhook ready: copy URL from routine detail`)
+          toast.success(t('tasks.toast.webhookReady'))
         } else {
-          toast.success(`Routine "${created.name}" scheduled`)
+          toast.success(intl.formatMessage({ id: 'tasks.toast.routineScheduled' }, { name: created.name }))
         }
         setShowSchedule(false)
       }
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : 'Failed to create routine'); toast.error('Failed to create routine') }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.createRoutine')); toast.error(t('tasks.toast.failed.createRoutine')) }
   }
 
   const handleCancelTask = async (id: string) => {
     try {
       setErrorMsg(null)
       await api.cancelBackgroundTask(id)
-      toast.success('Task cancelled')
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : 'Failed to cancel task'); toast.error('Failed to cancel task') }
+      toast.success(t('tasks.toast.cancelled'))
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.cancel')); toast.error(t('tasks.toast.failed.cancel')) }
     setCancelTarget(null)
     await refreshTasks()
   }
@@ -139,17 +144,17 @@ export default function Tasks() {
     setRunning(id)
     try {
       setErrorMsg(null)
-      const routine = scheduledTasks.find(t => t.id === id)
+      const routine = scheduledTasks.find(task => task.id === id)
       if (routine) {
         await api.triggerTaskNow(id)
-        toast.success(`Triggered "${routine.name}"`)
+        toast.success(intl.formatMessage({ id: 'tasks.toast.triggered' }, { name: routine.name }))
       } else {
-        const fallbackTitle = tasks.find(t => t.id === id)?.title ?? id
+        const fallbackTitle = tasks.find(task => task.id === id)?.title ?? id
         await api.startBackgroundTask(`Execute task: ${fallbackTitle}`)
-        toast.success('Task started')
+        toast.success(t('tasks.toast.started'))
       }
       await refreshTasks()
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : 'Failed to run task'); toast.error('Failed to run task') }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.run')); toast.error(t('tasks.toast.failed.run')) }
     setTimeout(() => setRunning(null), 1500)
   }
 
@@ -171,20 +176,20 @@ export default function Tasks() {
         />
 
         {/* P2.2: Active / History / Worktrees tab switcher */}
-        <div role="tablist" aria-label="Tasks view" className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'history', 'worktrees'] as const).map(t => {
-            const selected = tab === t
+        <div role="tablist" aria-label={t('tasks.tabs.aria')} className="flex gap-xs mb-lg border-b border-outline-variant/30">
+          {(['active', 'history', 'worktrees'] as const).map(tabId => {
+            const selected = tab === tabId
             return (
               <button
-                key={t}
+                key={tabId}
                 role="tab"
                 aria-selected={selected}
-                onClick={() => setTab(t)}
+                onClick={() => setTab(tabId)}
                 className={`px-md py-sm font-label-md text-[13px] font-bold cursor-pointer border-b-2 -mb-px transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
                   selected ? 'border-primary text-primary' : 'border-transparent text-on-surface-variant hover:text-on-surface'
                 }`}
               >
-                {t === 'active' ? 'Active' : t === 'history' ? 'History' : 'Worktrees'}
+                {t(`tasks.tab.${tabId}`)}
               </button>
             )
           })}

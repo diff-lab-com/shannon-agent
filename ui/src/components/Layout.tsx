@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, createContext, useContext } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
+import { useIntl } from 'react-intl';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { ErrorBoundary } from '@/components/ErrorBoundary'
@@ -21,6 +22,7 @@ export const useSidebar = () => useContext(SidebarContext)
 export function Layout() {
   const { usage, agents, status, sessions, backgroundTasks, config, loading } = useApp();
   const navigate = useNavigate();
+  const intl = useIntl();
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -69,7 +71,7 @@ export function Layout() {
             {usage ? (
               <>
                 <span className="w-2 h-2 rounded-full bg-tertiary shrink-0" />
-                <span>{(usage.input_tokens + usage.output_tokens).toLocaleString()} tokens</span>
+                <span>{intl.formatMessage({ id: 'footer.tokens' }, { count: (usage.input_tokens + usage.output_tokens) })}</span>
                 <span className="text-outline-variant">·</span>
                 <span className="text-primary">${usage.cost_usd.toFixed(4)}</span>
               </>
@@ -83,24 +85,26 @@ export function Layout() {
             ) : (
               <>
                 <span className="w-2 h-2 rounded-full bg-outline shrink-0" />
-                <span>Shannon Code</span>
+                <span>{intl.formatMessage({ id: 'app.brandName' })}</span>
               </>
             )}
           </span>
           <div className="flex items-center gap-md font-label-sm text-label-sm text-on-surface-variant">
             {sessions.length > 0 && (
-              <span className="hidden sm:inline">{sessions.length} session{sessions.length !== 1 ? 's' : ''}</span>
+              <span className="hidden sm:inline">
+                {intl.formatMessage({ id: 'footer.sessions' }, { count: sessions.length })}
+              </span>
             )}
             {activeBgTasks > 0 && (
               <span className="flex items-center gap-xs text-primary">
                 <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-                {activeBgTasks} task{activeBgTasks !== 1 ? 's' : ''}
+                {intl.formatMessage({ id: 'footer.tasks' }, { count: activeBgTasks })}
               </span>
             )}
             {agents.length > 0 && (
               <span className="hidden sm:flex items-center gap-xs text-primary">
                 <span className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
-                {agents.length} agent{agents.length !== 1 ? 's' : ''}
+                {intl.formatMessage({ id: 'footer.agents' }, { count: agents.length })}
               </span>
             )}
             {version && (

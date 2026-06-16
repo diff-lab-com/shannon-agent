@@ -2,17 +2,20 @@ import { describe, it, expect } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AppProvider } from '@/context/AppContext'
+import { I18nProvider } from '@/i18n'
 import Tasks from '@/pages/Tasks'
 import Goals from '@/pages/Goals'
 import OPC from '@/pages/OPC'
 
 function wrap(ui: React.ReactElement) {
   return (
-    <AppProvider>
-      <MemoryRouter>
-        {ui}
-      </MemoryRouter>
-    </AppProvider>
+    <I18nProvider>
+      <AppProvider>
+        <MemoryRouter>
+          {ui}
+        </MemoryRouter>
+      </AppProvider>
+    </I18nProvider>
   )
 }
 
