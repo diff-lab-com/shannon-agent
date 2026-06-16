@@ -2,6 +2,31 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## Sprint 4 (2026-06)
+
+### Command Palette Enhancements (S4-3)
+
+- **Fuzzy subsequence matching**: Palette now scores all items via contiguous-match and word-boundary bonuses, ranking the best matches first. Queries like "mc" surface "Mission Control" even though the letters aren't contiguous.
+- **Model switch refresh**: Selecting a model in the palette now triggers `refreshConfig()` so the new provider/model propagates immediately to the footer and chat header — no manual reload.
+- **Shortcut hints + result count**: Palette footer shows live result count with ICU plural formatting and a keyboard-shortcut legend (`↑↓ navigate ↵ select esc close`).
+
+### i18n — Phase 3 Chat Migration (S4-1)
+
+- **Chat.tsx**: Full migration of the 693-line chat surface — session sidebar (search / pin / export / print aria-labels), message bubbles (branch / copy / like / regenerate), streaming indicators (thinking text), input bar (placeholder / attach / send / stop), delete modal, context panel (usage / active tools / attached files). ~45 new message IDs following `chat.{section}.{key}` convention. MessageBubble and ToolCallDisplay subcomponents each get their own `useIntl()` call.
+
+### i18n — Phase 4 Long-tail Components (S4-2)
+
+- **Batch 1**: Extensions, Routines, Hooks, Profiles pages fully migrated with per-page locale namespaces.
+- **Batch 2 (13 components)**: Triage, MissionControl, OPC, OPCTask, Goals, Perf, QuickFix, Editor, Settings, Header, WelcomeState, KeyboardShortcutsHelp, ErrorBoundary. ~150 new locale IDs added to en.json and zh-CN.json with natural Simplified Chinese translations.
+- **ErrorBoundary refactor**: Class component couldn't call `useIntl()` hook — split into `ErrorBoundaryInner` (class) + functional wrapper that calls the hook and passes `t()` down as a prop. Reusable pattern for any class component needing i18n.
+- **Test infrastructure**: 13 test files updated to wrap rendered components with `<I18nProvider>` from `@/i18n`. Established as the standard test pattern going forward.
+
+### Maintenance
+
+- All 806 UI tests passing. `pnpm tsc --noEmit` clean. No new clippy warnings.
+- **#74 README screenshots**: Explicitly declined — documentation refresh deferred until feature work stabilizes.
+- **Phase 5 sub-components deferred**: Sub-components under `ui/src/components/{conversations,diff,editor,extensions,lsp,opc,settings,tasks,shared,ui}/` will be migrated in a future phase.
+
 ## Sprint 3 (2026-06)
 
 ### Command Palette (G3)
