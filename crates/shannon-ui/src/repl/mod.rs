@@ -837,7 +837,7 @@ impl Repl {
                         // Bounded send: if the queue is full (server flooding the
                         // UI) or the TUI has shut down, return Cancel so the MCP
                         // client sees a determinate response instead of hanging.
-                        if let Err(_) = tx.try_send(pending) {
+                        if tx.try_send(pending).is_err() {
                             tracing::warn!("Elicitation channel full or closed; cancelling");
                             return (shannon_mcp::ElicitationAction::Cancel, None);
                         }
