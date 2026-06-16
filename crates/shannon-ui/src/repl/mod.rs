@@ -67,7 +67,9 @@ use shannon_mcp::{
 use shannon_tools::register_default_tools_with_project_dir_ex;
 
 // Re-export public types from state submodule
-pub use state::{AgentDisplay, LoopState, PlanState, RalphState, ReplState, SidebarTab};
+pub use state::{
+    AgentDisplay, LoopState, PendingElicitation, PlanState, RalphState, ReplState, SidebarTab,
+};
 
 // Re-export custom_commands types used by other modules
 pub(super) use custom_commands::{
@@ -804,13 +806,40 @@ impl Repl {
 
         // Wire MCP sampling and elicitation providers so MCP servers can
         // request LLM completions (sampling) and ask the user questions (elicitation).
+        let (elicitation_tx, elicitation_rx) =
+            tokio::sync::mpsc::unbounded_channel::<PendingElicitation>();
         {
             let pool = mcp_pool.clone();
             let llm = std::sync::Arc::new(client.clone());
             let sampling = shannon_mcp::make_sampling_provider(llm);
-            // For now, elicitation auto-declines (no TUI callback wired yet).
-            // Future: wire to input_dialog for interactive elicitation.
-            let elicitation = shannon_mcp::make_elicitation_provider(None);
+            let elicitation_tx = elicitation_tx.clone();
+            let elicitation = shannon_mcp::make_elicitation_provider(Some(std::sync::Arc::new(
+                move |message: String, schema: Option<serde_json::Value>| {
+                    let tx = elicitation_tx.clone();
+                    Box::pin(async move {
+                        let (responder, receiver) = tokio::sync::oneshot::channel();
+                        let placeholder = schema
+                            .as_ref()
+                            .and_then(|s| s.get("placeholder"))
+                            .and_then(|p| p.as_str())
+                            .map(|s| s.to_string());
+                        let pending = PendingElicitation {
+                            server_name: "mcp".to_string(),
+                            message,
+                            placeholder,
+                            responder,
+                        };
+                        if tx.send(pending).is_err() {
+                            tracing::warn!("Elicitation channel closed; cancelling");
+                            return (shannon_mcp::ElicitationAction::Cancel, None);
+                        }
+                        match receiver.await {
+                            Ok(result) => (result.action, result.content),
+                            Err(_) => (shannon_mcp::ElicitationAction::Cancel, None),
+                        }
+                    })
+                },
+            )));
             mcp_rt.block_on(async {
                 pool.set_sampling_provider(sampling).await;
                 pool.set_elicitation_provider(elicitation).await;
@@ -1261,6 +1290,8 @@ impl Repl {
                         s.theme = theme;
                     }
                 }
+                s.pending_elicitation_tx = Some(elicitation_tx);
+                s.pending_elicitation_rx = Some(elicitation_rx);
                 s
             },
             running: false,
@@ -1827,6 +1858,27 @@ impl Repl {
 
                 // Refresh custom statusline (throttled internally)
                 self.refresh_statusline();
+
+                // Drain pending MCP elicitations: if no dialog is open and a
+                // request is queued, surface it as an InputDialog. The dialog
+                // submits/cancels via action "__elicit__" which is handled in
+                // input.rs (handle_input_dialog_input).
+                if self.state.input_dialog.is_none() && self.state.active_elicitation.is_none() {
+                    if let Some(rx) = self.state.pending_elicitation_rx.as_mut() {
+                        if let Ok(req) = rx.try_recv() {
+                            use crate::widgets::dialog::InputDialog;
+                            let title = format!("[MCP] {}", req.message);
+                            let placeholder = req
+                                .placeholder
+                                .clone()
+                                .unwrap_or_else(|| "Type response...".to_string());
+                            let dlg = InputDialog::new(title).with_placeholder(placeholder);
+                            self.state.input_dialog = Some(Box::new(dlg));
+                            self.state.input_dialog_action = Some("__elicit__".to_string());
+                            self.state.active_elicitation = Some(req);
+                        }
+                    }
+                }
             }
             crate::events::Event::Resize(_cols, _rows) => {
                 // Reflow committed scrollback if terminal width changed

@@ -42,16 +42,6 @@ fn test_repl_state_fields() {
 }
 
 #[test]
-fn test_repl_state_clone() {
-    let state = ReplState::default();
-    let cloned = state.clone();
-    assert_eq!(cloned.status, state.status);
-    assert_eq!(cloned.model, state.model);
-    assert_eq!(cloned.tokens_used, state.tokens_used);
-    assert_eq!(cloned.working_directory, state.working_directory);
-}
-
-#[test]
 fn test_repl_creation() {
     let repl = Repl::new();
     assert!(repl.is_ok());
@@ -4725,4 +4715,146 @@ fn test_model_can_be_unset() {
     state.model = Some("gpt-4".to_string());
     state.model = None;
     assert!(state.model.is_none());
+}
+
+// ── Elicitation wiring tests (S5-1) ───────────────────────────────
+
+#[test]
+fn test_elicitation_channel_send_and_receive() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PendingElicitation>();
+    let (responder, receiver) = tokio::sync::oneshot::channel();
+
+    let pending = PendingElicitation {
+        server_name: "test".to_string(),
+        message: "Branch name?".to_string(),
+        placeholder: Some("feature/...".to_string()),
+        responder,
+    };
+    tx.send(pending).expect("send");
+
+    let received = rx.try_recv().expect("try_recv");
+    assert_eq!(received.server_name, "test");
+    assert_eq!(received.message, "Branch name?");
+    assert_eq!(received.placeholder.as_deref(), Some("feature/..."));
+
+    // Echo a result back through the responder — receiver should observe it.
+    received
+        .responder
+        .send(shannon_mcp::ElicitationResult {
+            action: shannon_mcp::ElicitationAction::Accept,
+            content: Some(serde_json::Value::String("feature/x".into())),
+        })
+        .expect("send response");
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(receiver).expect("recv");
+    assert!(matches!(
+        result.action,
+        shannon_mcp::ElicitationAction::Accept
+    ));
+}
+
+#[test]
+fn test_elicitation_provider_callback_accept_path() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PendingElicitation>();
+    let callback: shannon_mcp::process_pool::UserPromptCallback =
+        std::sync::Arc::new(move |message: String, _schema: Option<serde_json::Value>| {
+            let tx = tx.clone();
+            Box::pin(async move {
+                let (responder, receiver) = tokio::sync::oneshot::channel();
+                let pending = PendingElicitation {
+                    server_name: "mcp".to_string(),
+                    message,
+                    placeholder: None,
+                    responder,
+                };
+                if tx.send(pending).is_err() {
+                    return (shannon_mcp::ElicitationAction::Cancel, None);
+                }
+                match receiver.await {
+                    Ok(r) => (r.action, r.content),
+                    Err(_) => (shannon_mcp::ElicitationAction::Cancel, None),
+                }
+            })
+        });
+
+    let provider = shannon_mcp::make_elicitation_provider(Some(callback));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let handle = rt.spawn(async move {
+        let req = shannon_mcp::ElicitationRequest {
+            message: "Pick a number".to_string(),
+            requested_schema: None,
+        };
+        provider(req).await
+    });
+
+    let pending = rx.blocking_recv().expect("channel closed");
+    pending
+        .responder
+        .send(shannon_mcp::ElicitationResult {
+            action: shannon_mcp::ElicitationAction::Accept,
+            content: Some(serde_json::Value::String("42".into())),
+        })
+        .expect("respond");
+
+    let result = rt.block_on(handle).unwrap().unwrap();
+    assert!(matches!(
+        result.action,
+        shannon_mcp::ElicitationAction::Accept
+    ));
+    assert_eq!(
+        result.content.as_ref(),
+        Some(&serde_json::Value::String("42".into()))
+    );
+}
+
+#[test]
+fn test_elicitation_provider_callback_cancel_on_dropped_responder() {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<PendingElicitation>();
+    let callback: shannon_mcp::process_pool::UserPromptCallback =
+        std::sync::Arc::new(move |message: String, _schema: Option<serde_json::Value>| {
+            let tx = tx.clone();
+            Box::pin(async move {
+                let (responder, receiver) = tokio::sync::oneshot::channel();
+                let pending = PendingElicitation {
+                    server_name: "mcp".to_string(),
+                    message,
+                    placeholder: None,
+                    responder,
+                };
+                if tx.send(pending).is_err() {
+                    return (shannon_mcp::ElicitationAction::Cancel, None);
+                }
+                match receiver.await {
+                    Ok(r) => (r.action, r.content),
+                    Err(_) => (shannon_mcp::ElicitationAction::Cancel, None),
+                }
+            })
+        });
+
+    // Drop rx without responding — provider should observe Cancel.
+    drop(rx);
+    let provider = shannon_mcp::make_elicitation_provider(Some(callback));
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt
+        .block_on(async {
+            let req = shannon_mcp::ElicitationRequest {
+                message: "ignored".to_string(),
+                requested_schema: None,
+            };
+            provider(req).await
+        })
+        .unwrap();
+    assert!(matches!(
+        result.action,
+        shannon_mcp::ElicitationAction::Cancel
+    ));
+}
+
+#[test]
+fn test_elicitation_default_state_has_no_channels() {
+    let state = ReplState::default();
+    assert!(state.pending_elicitation_tx.is_none());
+    assert!(state.pending_elicitation_rx.is_none());
+    assert!(state.active_elicitation.is_none());
 }

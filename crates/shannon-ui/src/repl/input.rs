@@ -1493,6 +1493,22 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
 
             if let Some(ref act) = action {
                 match act.as_str() {
+                    "__elicit__" => {
+                        let result = if value.is_empty() {
+                            shannon_mcp::ElicitationResult {
+                                action: shannon_mcp::ElicitationAction::Decline,
+                                content: None,
+                            }
+                        } else {
+                            shannon_mcp::ElicitationResult {
+                                action: shannon_mcp::ElicitationAction::Accept,
+                                content: Some(serde_json::Value::String(value.clone())),
+                            }
+                        };
+                        if let Some(pending) = repl.state.active_elicitation.take() {
+                            let _ = pending.responder.send(result);
+                        }
+                    }
                     "set_api_key" => {
                         if !value.is_empty() {
                             // SAFETY: REPL event loop is single-threaded; no concurrent reads of SHANNON_API_KEY.
@@ -1520,8 +1536,17 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Esc => {
+            let action = repl.state.input_dialog_action.take();
             repl.state.input_dialog = None;
-            repl.state.input_dialog_action = None;
+            if action.as_deref() == Some("__elicit__") {
+                if let Some(pending) = repl.state.active_elicitation.take() {
+                    let result = shannon_mcp::ElicitationResult {
+                        action: shannon_mcp::ElicitationAction::Cancel,
+                        content: None,
+                    };
+                    let _ = pending.responder.send(result);
+                }
+            }
         }
         _ => {}
     }
