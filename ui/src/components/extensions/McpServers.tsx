@@ -547,7 +547,7 @@ function InstalledSection({
                 <div className="font-bold text-label-md text-on-surface truncate">{srv.name}</div>
                 {srv.command && (
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">
-                    {srv.command} {srv.args?.join(" ")}
+                    {srv.command}
                   </div>
                 )}
               </div>

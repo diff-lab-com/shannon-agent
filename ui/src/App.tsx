@@ -23,8 +23,6 @@ const OPCTask = lazy(() => import('./pages/OPCTask'));
 const QuickFix = lazy(() => import('./pages/QuickFix'));
 const Editor = lazy(() => import('./pages/Editor'));
 const Perf = lazy(() => import('./pages/Perf'));
-const ExtensionsHub = lazy(() => import('./components/extensions/ExtensionsHub'));
-const MyAgents = lazy(() => import('./components/extensions/MyAgents'));
 const DataSources = lazy(() => import('./components/extensions/DataSources'));
 const Featured = lazy(() => import('./components/extensions/Featured'));
 const McpServers = lazy(() => import('./components/extensions/McpServers'));
