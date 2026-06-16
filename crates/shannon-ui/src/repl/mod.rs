@@ -1001,8 +1001,10 @@ impl Repl {
             builtin_commands::register_all(&registry);
 
             // Register MCP prompts as slash commands: /mcp__{server}__{prompt}
+            // Also expose a friendlier alias /{server}:{prompt} per ADR 0002 S5-2.
             for (server, prompt) in &discovered_mcp_prompts {
                 let cmd_name = format!("mcp__{}__{}", server, prompt.name);
+                let alias = format!("{}:{}", server, prompt.name);
                 let arg_hint = if prompt.argument_names.is_empty() {
                     None
                 } else {
@@ -1015,11 +1017,11 @@ impl Repl {
                 let command = Command::Prompt(Box::new(PromptCommand {
                     base: CommandBase {
                         name: cmd_name,
-                        aliases: Vec::new(),
+                        aliases: vec![alias],
                         description: prompt.description.clone(),
                         has_user_specified_description: false,
                         availability: vec![shannon_commands::CommandAvailability::All],
-                        source: shannon_commands::CommandSource::Builtin,
+                        source: shannon_commands::CommandSource::Mcp,
                         is_enabled: true,
                         is_hidden: false,
                         argument_hint: arg_hint,

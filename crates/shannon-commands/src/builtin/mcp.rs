@@ -20,6 +20,7 @@ Subcommands:
 - **status [server]** — Detailed server info (state, uptime, request/error counts, capabilities)
 - **restart [server]** — Gracefully restart a specific MCP server
 - **tools [server]** — List available MCP tools with annotations (all tools, or filtered by server)
+- **prompts [server]** — List MCP prompts exposed by servers; each prompt is invocable as `/<server>:<prompt>` or `/mcp__<server>__<prompt>`
 - **help** — Show this help
 
 If no subcommand is given, default to `list`.
@@ -37,13 +38,13 @@ pub fn command() -> Command {
         base: CommandBase {
             name: "mcp".to_string(),
             aliases: vec!["servers".to_string()],
-            description: "Manage MCP servers: list, status, restart, tools".to_string(),
+            description: "Manage MCP servers: list, status, restart, tools, prompts".to_string(),
             has_user_specified_description: false,
             availability: vec![CommandAvailability::All],
             source: CommandSource::Builtin,
             is_enabled: true,
             is_hidden: false,
-            argument_hint: Some("[list|status|restart|tools] [server]".to_string()),
+            argument_hint: Some("[list|status|restart|tools|prompts] [server]".to_string()),
             when_to_use: Some(
                 "To view or manage MCP server connections, check server health, or list available tools".to_string(),
             ),
@@ -79,6 +80,8 @@ pub enum McpSubcommand {
     Restart,
     /// List available tools
     Tools,
+    /// List available prompts
+    Prompts,
     /// Show help
     Help,
 }
@@ -90,6 +93,7 @@ pub fn parse_mcp_subcommand(arg: &str) -> McpSubcommand {
         "status" | "info" => McpSubcommand::Status,
         "restart" | "reload" => McpSubcommand::Restart,
         "tools" | "tools-list" => McpSubcommand::Tools,
+        "prompts" | "prompt-list" => McpSubcommand::Prompts,
         "help" | "?" => McpSubcommand::Help,
         _ => McpSubcommand::List,
     }
@@ -103,6 +107,7 @@ pub fn format_mcp_help() -> String {
     output.push_str("  /mcp status [server]   - Detailed server info (uptime, requests, errors)\n");
     output.push_str("  /mcp restart [server]  - Restart a specific MCP server\n");
     output.push_str("  /mcp tools [server]    - List available tools with annotations\n");
+    output.push_str("  /mcp prompts [server]  - List MCP prompts (invoke as /<server>:<prompt>)\n");
     output.push_str("\nAnnotations:\n");
     output.push_str("  R = read-only   (safe to call without confirmation)\n");
     output.push_str("  D = destructive (may perform irreversible operations)\n");
@@ -184,6 +189,43 @@ pub fn format_tool_list(tools: &[ToolInfo]) -> String {
         }
     }
 
+    output
+}
+
+/// Info about an MCP prompt for display purposes.
+#[derive(Debug, Clone, Default)]
+pub struct PromptDisplayInfo {
+    /// Name of the prompt.
+    pub name: String,
+    /// Server that exposes the prompt.
+    pub server: String,
+    /// Human-readable description.
+    pub description: String,
+    /// Declared argument names (may be empty).
+    pub argument_names: Vec<String>,
+}
+
+/// Format a prompt list for display.
+pub fn format_prompt_list(prompts: &[PromptDisplayInfo]) -> String {
+    if prompts.is_empty() {
+        return "No MCP prompts available.".to_string();
+    }
+
+    let mut output = String::from("MCP Prompts:\n\n");
+
+    for prompt in prompts {
+        let args = if prompt.argument_names.is_empty() {
+            String::new()
+        } else {
+            format!(" --{} <value>", prompt.argument_names.join(" --"))
+        };
+        output.push_str(&format!(
+            "  /{}:{}{}\n    {}\n",
+            prompt.server, prompt.name, args, prompt.description
+        ));
+    }
+
+    output.push_str("\nInvoke with /<server>:<prompt> or /mcp__<server>__<prompt>.");
     output
 }
 
@@ -418,5 +460,47 @@ mod tests {
         assert_eq!(ServerStateDisplay::Stopped.to_string(), "Stopped");
         assert_eq!(ServerStateDisplay::Unhealthy.to_string(), "Unhealthy");
         assert_eq!(ServerStateDisplay::Starting.to_string(), "Starting");
+    }
+
+    #[test]
+    fn test_parse_mcp_prompts_subcommand() {
+        assert_eq!(parse_mcp_subcommand("prompts"), McpSubcommand::Prompts);
+        assert_eq!(parse_mcp_subcommand("prompt-list"), McpSubcommand::Prompts);
+    }
+
+    #[test]
+    fn test_format_mcp_help_includes_prompts() {
+        let help = format_mcp_help();
+        assert!(help.contains("/mcp prompts"));
+        assert!(help.contains("/<server>:<prompt>"));
+    }
+
+    #[test]
+    fn test_format_prompt_list_empty() {
+        let output = format_prompt_list(&[]);
+        assert!(output.contains("No MCP prompts"));
+    }
+
+    #[test]
+    fn test_format_prompt_list_with_entries() {
+        let prompts = vec![
+            PromptDisplayInfo {
+                name: "code-review".to_string(),
+                server: "reviewer".to_string(),
+                description: "Review code changes".to_string(),
+                argument_names: vec!["file".to_string()],
+            },
+            PromptDisplayInfo {
+                name: "summarize".to_string(),
+                server: "writer".to_string(),
+                description: "Summarize text".to_string(),
+                argument_names: vec![],
+            },
+        ];
+        let output = format_prompt_list(&prompts);
+        assert!(output.contains("/reviewer:code-review"));
+        assert!(output.contains("--file <value>"));
+        assert!(output.contains("/writer:summarize"));
+        assert!(output.contains("Review code changes"));
     }
 }
