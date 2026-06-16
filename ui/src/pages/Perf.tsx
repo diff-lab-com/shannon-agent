@@ -13,6 +13,7 @@
 // log file is the source of truth, by design.
 
 import { useMemo, useState } from 'react'
+import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -163,6 +164,8 @@ export function analyzeTracingJson(text: string): PerfAnalysis {
 // ─── View ──────────────────────────────────────────────────────────────────
 
 function Histogram({ commands }: { commands: CommandStat[] }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   // Buckets by p95 latency: <10ms / 10-100ms / 100ms-1s / >1s.
   const buckets = useMemo(() => {
     const b = { fast: 0, ok: 0, slow: 0, critical: 0 }
@@ -176,10 +179,10 @@ function Histogram({ commands }: { commands: CommandStat[] }) {
   }, [commands])
   const maxBucket = Math.max(1, buckets.fast, buckets.ok, buckets.slow, buckets.critical)
   const rows = [
-    { label: '< 10ms', color: 'bg-tertiary', count: buckets.fast },
-    { label: '10ms–100ms', color: 'bg-primary', count: buckets.ok },
-    { label: '100ms–1s', color: 'bg-warning', count: buckets.slow },
-    { label: '> 1s', color: 'bg-error', count: buckets.critical },
+    { label: t('perf.histogram.fast'), color: 'bg-tertiary', count: buckets.fast },
+    { label: t('perf.histogram.ok'), color: 'bg-primary', count: buckets.ok },
+    { label: t('perf.histogram.slow'), color: 'bg-warning', count: buckets.slow },
+    { label: t('perf.histogram.critical'), color: 'bg-error', count: buckets.critical },
   ]
   return (
     <div className="space-y-sm">
@@ -200,6 +203,8 @@ const SAMPLE_HINT = `Run the desktop app with SHANNON_LOG_FORMAT=json and paste 
 Each line must be a single JSON object emitted by tracing-subscriber.`
 
 export default function Perf() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [text, setText] = useState('')
   const [analyzed, setAnalyzed] = useState<PerfAnalysis | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -207,14 +212,14 @@ export default function Perf() {
   const onAnalyze = () => {
     if (!text.trim()) {
       setAnalyzed(null)
-      setError('Paste at least one line of tracing JSON.')
+      setError(t('perf.error.empty'))
       return
     }
     try {
       setError(null)
       setAnalyzed(analyzeTracingJson(text))
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to analyze JSON')
+      setError(e instanceof Error ? e.message : t('perf.error.parse'))
       setAnalyzed(null)
     }
   }
@@ -231,17 +236,17 @@ export default function Perf() {
         <header className="mb-xl">
           <h2 className="font-headline-lg text-headline-lg text-on-surface flex items-center gap-sm">
             <span className="material-symbols-outlined text-primary">bar_chart</span>
-            Performance
+            {t('perf.title')}
           </h2>
           <p className="text-on-surface-variant mt-xs text-body-sm">
-            Developer panel: analyze tracing JSON captured from <code className="px-xs py-0.5 rounded bg-surface-container-low font-mono text-label-sm">SHANNON_LOG_FORMAT=json</code>.
+            {t('perf.subtitle')} <code className="px-xs py-0.5 rounded bg-surface-container-low font-mono text-label-sm">SHANNON_LOG_FORMAT=json</code>{t('perf.subtitle.end')}
           </p>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-lg mb-lg">
           <section aria-label="Trace input" className="flex flex-col">
             <label htmlFor="perf-textarea" className="font-label-md text-on-surface mb-sm">
-              Trace JSON (newline-delimited)
+              {t('perf.input.label')}
             </label>
             <textarea
               id="perf-textarea"
@@ -252,11 +257,11 @@ export default function Perf() {
               className="flex-1 min-h-[260px] font-mono text-label-sm p-md rounded-xl border border-outline-variant/30 bg-surface-container-lowest focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 resize-y"
             />
             <p id="perf-hint" className="font-label-sm text-on-surface-variant mt-xs">
-              {SAMPLE_HINT}
+              {t('perf.input.hint')}
             </p>
             <div className="flex items-center gap-sm mt-md">
-              <Button onClick={onAnalyze}>Analyze</Button>
-              <Button variant="ghost" onClick={onClear}>Clear</Button>
+              <Button onClick={onAnalyze}>{t('perf.analyze')}</Button>
+              <Button variant="ghost" onClick={onClear}>{t('perf.clear')}</Button>
               {error && <span className="text-error font-label-md text-label-md" role="alert">{error}</span>}
             </div>
           </section>
@@ -264,27 +269,27 @@ export default function Perf() {
           {!analyzed ? (
             <EmptyState
               icon="analytics"
-              title="No analysis yet"
-              description="Paste tracing JSON on the left and click Analyze."
+              title={t('perf.empty.title')}
+              description={t('perf.empty.description')}
             />
           ) : (
             <section aria-label="Summary" className="p-md rounded-xl bg-surface-container-lowest border border-outline-variant/30">
-              <h3 className="font-label-md text-on-surface font-bold uppercase tracking-wider mb-md">Summary</h3>
+              <h3 className="font-label-md text-on-surface font-bold uppercase tracking-wider mb-md">{t('perf.summary.title')}</h3>
               <dl className="grid grid-cols-2 gap-md">
                 <div>
-                  <dt className="font-label-sm text-on-surface-variant">Events parsed</dt>
+                  <dt className="font-label-sm text-on-surface-variant">{t('perf.summary.eventsParsed')}</dt>
                   <dd className="font-headline-md text-headline-md text-on-surface" data-testid="events-parsed">{analyzed.totalEvents}</dd>
                 </div>
                 <div>
-                  <dt className="font-label-sm text-on-surface-variant">Unique commands</dt>
+                  <dt className="font-label-sm text-on-surface-variant">{t('perf.summary.uniqueCommands')}</dt>
                   <dd className="font-headline-md text-headline-md text-on-surface" data-testid="unique-commands">{analyzed.commands.length}</dd>
                 </div>
                 <div>
-                  <dt className="font-label-sm text-on-surface-variant">Tool call types</dt>
+                  <dt className="font-label-sm text-on-surface-variant">{t('perf.summary.toolTypes')}</dt>
                   <dd className="font-headline-md text-headline-md text-on-surface" data-testid="tool-types">{analyzed.toolCounts.length}</dd>
                 </div>
                 <div>
-                  <dt className="font-label-sm text-on-surface-variant">Parse errors</dt>
+                  <dt className="font-label-sm text-on-surface-variant">{t('perf.summary.parseErrors')}</dt>
                   <dd className="font-headline-md text-headline-md text-on-surface" data-testid="parse-errors">{analyzed.parseErrors}</dd>
                 </div>
               </dl>
@@ -296,19 +301,19 @@ export default function Perf() {
           <>
             <section aria-label="Latency histogram" className="mb-lg p-md rounded-xl bg-surface-container-lowest border border-outline-variant/30">
               <h3 className="font-label-md text-on-surface font-bold uppercase tracking-wider mb-md">
-                Latency histogram (by p95 bucket)
+                {t('perf.histogram.title')}
               </h3>
               {analyzed.commands.length === 0 ? (
-                <p className="font-label-sm text-on-surface-variant">No span-close events found. Check that the trace includes <code>close</code> markers (FmtSpan::CLOSE).</p>
+                <p className="font-label-sm text-on-surface-variant">{t('perf.histogram.noSpans')}</p>
               ) : (
                 <Histogram commands={analyzed.commands} />
               )}
             </section>
 
             <section aria-label="Slow Top 10" className="mb-lg p-md rounded-xl bg-surface-container-lowest border border-outline-variant/30">
-              <h3 className="font-label-md text-on-surface font-bold uppercase tracking-wider mb-md">Slow Top 10 spans</h3>
+              <h3 className="font-label-md text-on-surface font-bold uppercase tracking-wider mb-md">{t('perf.slowTop10.title')}</h3>
               {analyzed.slowTop10.length === 0 ? (
-                <p className="font-label-sm text-on-surface-variant">No span-close events.</p>
+                <p className="font-label-sm text-on-surface-variant">{t('perf.slowTop10.empty')}</p>
               ) : (
                 <ol className="space-y-sm" data-testid="slow-top">
                   {analyzed.slowTop10.map((s, i) => (
@@ -326,9 +331,9 @@ export default function Perf() {
             </section>
 
             <section aria-label="Tool call counts" className="p-md rounded-xl bg-surface-container-lowest border border-outline-variant/30">
-              <h3 className="font-label-md text-on-surface font-bold uppercase tracking-wider mb-md">Tool call counts</h3>
+              <h3 className="font-label-md text-on-surface font-bold uppercase tracking-wider mb-md">{t('perf.toolCounts.title')}</h3>
               {analyzed.toolCounts.length === 0 ? (
-                <p className="font-label-sm text-on-surface-variant">No events with <code>tool_name</code> fields.</p>
+                <p className="font-label-sm text-on-surface-variant">{t('perf.toolCounts.empty')}</p>
               ) : (
                 <ul className="grid grid-cols-2 md:grid-cols-3 gap-sm" data-testid="tool-counts">
                   {analyzed.toolCounts.map(t => (

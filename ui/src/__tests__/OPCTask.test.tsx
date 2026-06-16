@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { I18nProvider } from '@/i18n'
 import OPCTask from '@/pages/OPCTask'
 
 const ctx = vi.hoisted(() => ({
@@ -16,12 +17,14 @@ vi.mock('@/context/AppContext', () => ({
 
 function renderOPCTask(path = '/opc/task') {
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route path="/opc/task" element={<OPCTask />} />
-        <Route path="/opc/task/:id" element={<OPCTask />} />
-      </Routes>
-    </MemoryRouter>
+    <I18nProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/opc/task" element={<OPCTask />} />
+          <Route path="/opc/task/:id" element={<OPCTask />} />
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>
   )
 }
 

@@ -2,8 +2,57 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { IntlProvider } from 'react-intl'
 import Triage from '@/pages/Triage'
 import type { TriageItem, TriageStats } from '@/types'
+
+// Test locale messages (minimal set for test assertions)
+const testMessages: Record<string, string> = {
+  'triage.title': 'Triage',
+  'triage.subtitle': 'Failed runs and errors',
+  'triage.empty.title': 'All clear.',
+  'triage.empty.description': 'No items to triage.',
+  'triage.kind.label': 'Kind',
+  'triage.filter.all': 'All',
+  'triage.filter.unread': 'unread',
+  'triage.filter.read': 'read',
+  'triage.bulk.title': 'Bulk actions',
+  'triage.bulk.markRead': 'Mark read',
+  'triage.bulk.archive': 'Archive',
+  'triage.bulk.delete': 'Delete',
+  'triage.bulk.clear': 'Clear',
+  'triage.bulk.selected': '{count} selected',
+  'triage.select.aria': 'Select item {id}',
+  'triage.select.selectAll': 'Select all visible items',
+  'triage.select.deselectAll': 'Deselect all',
+  'triage.select.shown': 'shown',
+  'triage.markRead.aria': 'Mark item {id} as read',
+  'triage.markRead.title': 'Mark read',
+  'triage.archive.aria': 'Archive item {id}',
+  'triage.archive.title': 'Archive',
+  'triage.archived.label': 'Archived',
+  'triage.archived.hide': 'Hide archived',
+  'triage.read.label': 'Read',
+  'triage.unread.title': 'Unread',
+  'triage.unread': '{count} unread',
+  'triage.total': '{count} total',
+  'triage.delete.aria': 'Delete item',
+  'triage.delete.title': 'Delete',
+  'triage.deleteDialog.title': 'Delete item',
+  'triage.deleteDialog.message': 'Delete this item?',
+  'triage.deleteDialog.confirm': 'Delete',
+  'triage.deleteDialog.cancel': 'Cancel',
+  'triage.bulkDelete.title': 'Bulk delete',
+  'triage.bulkDeleteDialog.title': 'Delete {count} item?',
+  'triage.bulkDeleteDialog.message': 'This removes the selected items from your inbox. Underlying records are archived, not erased.',
+  'triage.toast.deleted': 'Item deleted',
+  'triage.noMatch.title': 'No matches',
+  'triage.noMatch.description': 'No items match your filter',
+  'triage.sort.label': 'Sort',
+  'triage.sort.aria': 'Toggle sort order',
+  'triage.sort.newest': 'Newest first',
+  'triage.sort.oldest': 'Oldest first',
+}
 
 // useTriageItems returns { items, loading, error, filter, setFilter, refresh, markRead, archive }
 // useTriageStats returns { stats, loading, error, refresh }
@@ -43,6 +92,14 @@ function setItems(items: TriageItem[], stats: TriageStats = baseStats) {
   return { markRead, archive }
 }
 
+function renderWithIntl(ui: React.ReactElement) {
+  return render(
+    <IntlProvider locale="en" messages={testMessages} defaultLocale="en">
+      {ui}
+    </IntlProvider>
+  )
+}
+
 beforeEach(() => {
   itemsSpy.mockReset()
   statsSpy.mockReset()
@@ -52,7 +109,7 @@ beforeEach(() => {
 describe('Triage page', () => {
   it('renders empty state when there are no triage items', () => {
     setItems([])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     expect(screen.getByText('All clear.')).toBeInTheDocument()
   })
 
@@ -61,21 +118,21 @@ describe('Triage page', () => {
       makeItem({ id: 'a', message: 'A failed' }),
       makeItem({ id: 'b', message: 'B failed' }),
     ])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     expect(screen.getByText('A failed')).toBeInTheDocument()
     expect(screen.getByText('B failed')).toBeInTheDocument()
   })
 
   it('shows total count from stats in the header', () => {
     setItems([], { total: 7, unread: 3, archived: 0, by_kind: {} })
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     expect(screen.getByText('7 total')).toBeInTheDocument()
     expect(screen.getByText('3 unread')).toBeInTheDocument()
   })
 
   it('selecting items shows the bulk action bar with the count', () => {
     setItems([makeItem({ id: 'a' }), makeItem({ id: 'b' })])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     expect(screen.queryByRole('region', { name: 'Bulk actions' })).not.toBeInTheDocument()
     fireEvent.click(screen.getAllByRole('checkbox')[1])
     expect(screen.getByRole('region', { name: 'Bulk actions' })).toBeInTheDocument()
@@ -84,7 +141,7 @@ describe('Triage page', () => {
 
   it('clicking select-all toggles all visible item checkboxes', () => {
     setItems([makeItem({ id: 'a' }), makeItem({ id: 'b' }), makeItem({ id: 'c' })])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     const selectAll = screen.getByLabelText('Select all visible items')
     fireEvent.click(selectAll)
     expect(screen.getByText('3 selected')).toBeInTheDocument()
@@ -94,7 +151,7 @@ describe('Triage page', () => {
 
   it('Clear button in bulk bar empties the selection', () => {
     setItems([makeItem({ id: 'a' }), makeItem({ id: 'b' })])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     fireEvent.click(screen.getByLabelText('Select all visible items'))
     fireEvent.click(screen.getByRole('button', { name: /^Clear$/ }))
     expect(screen.queryByRole('region', { name: 'Bulk actions' })).not.toBeInTheDocument()
@@ -104,7 +161,7 @@ describe('Triage page', () => {
     const { markRead } = setItems([
       makeItem({ id: 'a' }), makeItem({ id: 'b' }), makeItem({ id: 'c' }),
     ])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     fireEvent.click(screen.getByLabelText('Select all visible items'))
     const bar = screen.getByRole('region', { name: 'Bulk actions' })
     fireEvent.click(within(bar).getByRole('button', { name: /Mark read/ }))
@@ -113,7 +170,7 @@ describe('Triage page', () => {
 
   it('Archive bulk action calls archive for each selected id', async () => {
     const { archive } = setItems([makeItem({ id: 'x' }), makeItem({ id: 'y' })])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     fireEvent.click(screen.getByLabelText('Select all visible items'))
     const bar = screen.getByRole('region', { name: 'Bulk actions' })
     fireEvent.click(within(bar).getByRole('button', { name: /Archive/ }))
@@ -122,13 +179,13 @@ describe('Triage page', () => {
 
   it('Delete bulk action opens confirmation modal then deletes on confirm', async () => {
     const { archive } = setItems([makeItem({ id: 'x' }), makeItem({ id: 'y' })])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     fireEvent.click(screen.getByLabelText('Select all visible items'))
     const bar = screen.getByRole('region', { name: 'Bulk actions' })
     fireEvent.click(within(bar).getByRole('button', { name: /Delete/ }))
     // Confirmation dialog appears
-    const dialog = await screen.findByRole('dialog', { name: 'Bulk delete items' })
-    expect(dialog).toHaveTextContent(/Delete 2 items/)
+    const dialog = await screen.findByRole('dialog', { name: 'Delete 2 item?' })
+    expect(dialog).toHaveTextContent(/Delete 2 item\?/)
     // Confirm
     fireEvent.click(within(dialog).getByRole('button', { name: /^Delete$/ }))
     await waitFor(() => expect(archive).toHaveBeenCalledTimes(2))
@@ -136,18 +193,18 @@ describe('Triage page', () => {
 
   it('Cancel in bulk delete modal does NOT call archive', () => {
     const { archive } = setItems([makeItem({ id: 'x' })])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     fireEvent.click(screen.getByLabelText('Select all visible items'))
     fireEvent.click(within(screen.getByRole('region', { name: 'Bulk actions' })).getByRole('button', { name: /Delete/ }))
-    const dialog = screen.getByRole('dialog', { name: 'Bulk delete items' })
+    const dialog = screen.getByRole('dialog', { name: 'Delete 1 item?' })
     fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/ }))
     expect(archive).not.toHaveBeenCalled()
   })
 
   it('per-item Delete button opens single-item confirm and deletes on confirm', async () => {
     const { archive } = setItems([makeItem({ id: 'only' })])
-    render(<Triage />)
-    fireEvent.click(screen.getByLabelText('Delete item'))
+    renderWithIntl(<Triage />)
+    fireEvent.click(screen.getByLabelText(/Delete item/))
     const dialog = await screen.findByRole('dialog', { name: 'Delete item' })
     fireEvent.click(within(dialog).getByRole('button', { name: /^Delete$/ }))
     await waitFor(() => expect(archive).toHaveBeenCalledWith('only'))
@@ -155,8 +212,8 @@ describe('Triage page', () => {
 
   it('Cancel in single-item delete modal does NOT call archive', () => {
     const { archive } = setItems([makeItem({ id: 'only' })])
-    render(<Triage />)
-    fireEvent.click(screen.getByLabelText('Delete item'))
+    renderWithIntl(<Triage />)
+    fireEvent.click(screen.getByLabelText(/Delete item/))
     const dialog = screen.getByRole('dialog', { name: 'Delete item' })
     fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/ }))
     expect(archive).not.toHaveBeenCalled()
@@ -167,7 +224,7 @@ describe('Triage page', () => {
       makeItem({ id: 'a', message: 'unread one', read: false }),
       makeItem({ id: 'b', message: 'read one', read: true }),
     ])
-    render(<Triage />)
+    renderWithIntl(<Triage />)
     fireEvent.click(screen.getByRole('button', { name: 'unread' }))
     expect(screen.getByText('unread one')).toBeInTheDocument()
     expect(screen.queryByText('read one')).not.toBeInTheDocument()
@@ -178,7 +235,7 @@ describe('Triage page', () => {
       makeItem({ id: 'old', message: 'Older', created_at: 1000 }),
       makeItem({ id: 'new', message: 'Newer', created_at: 5000 }),
     ])
-    const { container } = render(<Triage />)
+    const { container } = renderWithIntl(<Triage />)
     // Initial: newest first → "Newer" appears before "Older"
     const cards = container.querySelectorAll('.glass-panel')
     expect(cards[0]).toHaveTextContent('Newer')

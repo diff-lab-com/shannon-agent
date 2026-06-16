@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useIntl } from 'react-intl';
 import { useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -25,6 +26,8 @@ function getTitle(pathname: string): string {
 }
 
 export function Header() {
+  const intl = useIntl()
+  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const location = useLocation();
   const { status, models, permissionRequest, respondPermission } = useApp();
   const { toggle: toggleSidebar } = useSidebar();
@@ -53,8 +56,8 @@ export function Header() {
     try {
       await api.switchProvider({ provider: status.provider, model: modelId })
       setModelOpen(false)
-      toast.success(`Switched to ${modelId}`)
-    } catch (e) { console.warn("Header error:", e); toast.error('Failed to switch model') }
+      toast.success(t('header.permRequest.toast.switched', { modelId }))
+    } catch (e) { console.warn("Header error:", e); toast.error(t('header.permRequest.error')) }
   }
 
   return (
@@ -77,7 +80,7 @@ export function Header() {
             <div className="flex-1 max-w-[400px] ml-auto mr-lg relative hidden md:block">
               <Input
                 type="text"
-                placeholder="Search proposals..."
+                placeholder={t('header.search.placeholder')}
                 className="w-full bg-surface-container-low border-none rounded-full py-2 pl-4 pr-10 text-sm font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
               />
               <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]">search</span>
@@ -87,7 +90,7 @@ export function Header() {
           {isOpcTask && (
             <div className="ml-auto mr-lg flex items-center gap-2 bg-surface-container-low px-3 py-1.5 rounded-full border border-outline-variant/20 shrink-0">
                <span className="w-2 h-2 rounded-full bg-tertiary"></span>
-               <span className="font-label-sm text-[12px] text-on-surface-variant whitespace-nowrap">Sync Status: Realtime</span>
+               <span className="font-label-sm text-[12px] text-on-surface-variant whitespace-nowrap">{t('header.syncStatus')}</span>
             </div>
           )}
         </div>
@@ -96,12 +99,12 @@ export function Header() {
           <div className="relative" ref={modelRef}>
             <Button
               variant="ghost"
-              aria-label="Select model"
+              aria-label={t('header.model.select')}
               className="flex items-center gap-sm px-md py-sm rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-all"
               onClick={() => { setModelOpen(!modelOpen); setModelFocus(-1) }}
             >
               <span className={`w-2 h-2 rounded-full shrink-0 ${status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary'}`}></span>
-              <span className="font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || 'No model'}</span>
+              <span className="font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
               <span className="material-symbols-outlined text-[16px]">expand_more</span>
             </Button>
             {modelOpen && models.length > 0 && (
@@ -128,10 +131,10 @@ export function Header() {
             )}
           </div>
 
-          <Button variant="ghost" aria-label="Notifications" title="View notifications" className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative">
+          <Button variant="ghost" aria-label={t('header.notifications')} title={t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative">
             <span className="material-symbols-outlined text-[20px]" aria-hidden="true">notifications</span>
           </Button>
-          <Button variant="ghost" aria-label="Help" title="Get help" className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
+          <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
             <span className="material-symbols-outlined text-[20px]" aria-hidden="true">help</span>
           </Button>
           <div className="h-8 w-8 rounded-full overflow-hidden bg-surface-container flex items-center justify-center ring-2 ring-primary/10">
@@ -149,8 +152,8 @@ export function Header() {
                 <span className="material-symbols-outlined text-on-tertiary-container">shield</span>
               </div>
               <div className="flex-1">
-                <h3 className="font-headline-sm text-on-surface font-bold">Permission Request</h3>
-                <p className="text-body-sm text-on-surface-variant">Review the tool invocation below</p>
+                <h3 className="font-headline-sm text-on-surface font-bold">{t('header.permRequest.title')}</h3>
+                <p className="text-body-sm text-on-surface-variant">{t('header.permRequest.subtitle')}</p>
               </div>
               <span className={`px-sm py-xs rounded-full font-label-sm font-bold uppercase tracking-wider ${
                 permissionRequest.risk === 'critical' ? 'bg-error/10 text-error' :
@@ -161,7 +164,7 @@ export function Header() {
             </div>
             <div className="p-md bg-surface-container-low rounded-xl mb-lg space-y-sm">
               <div className="flex justify-between">
-                <span className="text-label-sm text-on-surface-variant">Tool</span>
+                <span className="text-label-sm text-on-surface-variant">{t('header.permRequest.tool')}</span>
                 <span className="font-label-md text-on-surface font-bold">{permissionRequest.tool}</span>
               </div>
               {permissionRequest.input ? (
@@ -170,14 +173,14 @@ export function Header() {
             </div>
             <label className="flex items-center gap-sm mb-lg cursor-pointer text-body-sm text-on-surface-variant hover:text-on-surface transition-colors">
               <input type="checkbox" className="w-4 h-4 rounded border-outline-variant text-primary focus:ring-primary/30" />
-              Always allow this tool
+              {t('header.permRequest.alwaysAllow')}
             </label>
             <div className="flex gap-md">
               <Button autoFocus className="flex-1 py-sm bg-surface-container text-on-surface rounded-xl hover:bg-surface-container-high transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, false)}>
-                Deny
+                {t('header.permRequest.deny')}
               </Button>
               <Button className="flex-1 py-sm bg-primary text-on-primary rounded-xl hover:shadow-md hover:shadow-primary/30 active:scale-95 transition-all font-label-md" onClick={() => respondPermission(permissionRequest.request_id, true)}>
-                Allow Once
+                {t('header.permRequest.allowOnce')}
               </Button>
             </div>
           </div>

@@ -6,6 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { I18nProvider } from '@/i18n'
 import Editor from '@/pages/Editor'
 
 const readSourceFile = vi.hoisted(() => vi.fn())
@@ -27,9 +28,11 @@ vi.mock('@/lib/tauri-api', async () => {
 
 function renderEditor() {
   return render(
-    <MemoryRouter>
-      <Editor />
-    </MemoryRouter>,
+    <I18nProvider>
+      <MemoryRouter>
+        <Editor />
+      </MemoryRouter>
+    </I18nProvider>,
   )
 }
 

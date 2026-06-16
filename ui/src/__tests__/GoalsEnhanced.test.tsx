@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { I18nProvider } from '@/i18n'
 import Goals from '@/pages/Goals'
 
 const ctx = vi.hoisted(() => ({
@@ -16,11 +17,13 @@ vi.mock('@/context/AppContext', () => ({
 
 function renderGoals() {
   return render(
-    <MemoryRouter initialEntries={['/goals']}>
-      <Routes>
-        <Route path="/goals" element={<Goals />} />
-      </Routes>
-    </MemoryRouter>
+    <I18nProvider>
+      <MemoryRouter initialEntries={['/goals']}>
+        <Routes>
+          <Route path="/goals" element={<Goals />} />
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>
   )
 }
 

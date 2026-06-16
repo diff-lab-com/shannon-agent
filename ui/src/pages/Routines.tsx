@@ -151,6 +151,8 @@ export default function Routines() {
 }
 
 function RoutineRow({ routine, onToggle }: { routine: TriggeredRoutineDto; onToggle: (name: string, enabled: boolean) => void }) {
+  const intl = useIntl()
+  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   return (
     <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-md flex items-start justify-between gap-md">
       <div className="flex-1 min-w-0">

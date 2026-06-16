@@ -6,6 +6,7 @@
 // Phase E1 v1: manual squiggle UI.
 
 import { useEffect, useState, useCallback } from 'react'
+import { useIntl } from 'react-intl'
 import CodeEditor, {
   type EditorDiagnostic,
 } from '@/components/editor/CodeEditor'
@@ -52,6 +53,8 @@ function normalizeSeverity(raw: string): EditorDiagnostic['severity'] {
 }
 
 export default function Editor() {
+  const intl = useIntl()
+  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const [filePath, setFilePath] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -188,11 +191,9 @@ export default function Editor() {
   return (
     <div className="max-w-6xl mx-auto p-md flex flex-col gap-md">
       <header>
-        <h2 className="font-headline-md text-on-surface">Code Editor</h2>
+        <h2 className="font-headline-md text-on-surface">{t('editor.title')}</h2>
         <p className="font-label-sm text-on-surface-variant mt-xs">
-          Load a source file to view it with syntax highlighting. Diagnostics
-          auto-fetch from the language server — add manual squiggles to annotate.
-          Click any squiggle to ask the language server for quick-fixes.
+          {t('editor.subtitle')}
         </p>
       </header>
 
@@ -201,7 +202,7 @@ export default function Editor() {
         className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
       >
         <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-          File path
+          {t('editor.filePath')}
           <input
             type="text"
             value={filePath}
@@ -215,7 +216,7 @@ export default function Editor() {
           disabled={!filePath.trim() || loading}
           className="self-start font-label-md bg-primary text-on-primary rounded-full px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         >
-          {loading ? 'Loading…' : 'Load file'}
+          {loading ? t('editor.loading') : t('editor.loadFile')}
         </button>
         {loadError ? (
           <div
@@ -237,7 +238,7 @@ export default function Editor() {
               {file.language_id}
             </span>
             <span>·</span>
-            <span>{diagCount} diagnostic{diagCount === 1 ? '' : 's'}</span>
+            <span>{diagCount} {t(`editor.diagnostics`, { count: diagCount })}</span>
             <button
               type="button"
               onClick={() => void fetchDiagnostics(file)}
@@ -254,7 +255,7 @@ export default function Editor() {
               >
                 {diagLoading ? 'progress_activity' : 'refresh'}
               </span>
-              <span>{diagLoading ? 'Running…' : 'Re-run diagnostics'}</span>
+              <span>{diagLoading ? t('editor.running') : t('editor.reRun')}</span>
             </button>
           </div>
 
@@ -268,9 +269,9 @@ export default function Editor() {
               </span>
               <span className="flex-1">
                 {diagError
-                  ? `Diagnostics failed: ${diagError}`
+                  ? `${t('editor.diagnosticsFailed', { error: diagError })}`
                   : diagTimedOut
-                    ? 'Diagnostics timed out — showing partial results.'
+                    ? t('editor.diagnosticsTimedOut')
                     : null}
               </span>
             </div>
@@ -288,10 +289,10 @@ export default function Editor() {
             onSubmit={onAddSquiggle}
             className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
           >
-            <h3 className="font-label-md text-on-surface">Add manual squiggle</h3>
+            <h3 className="font-label-md text-on-surface">{t('editor.addSquiggle')}</h3>
             <div className="grid grid-cols-4 gap-sm">
               <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-                Line (0-indexed)
+                {t('editor.line')}
                 <input
                   type="number"
                   min={0}
@@ -301,7 +302,7 @@ export default function Editor() {
                 />
               </label>
               <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-                Start char
+                {t('editor.startChar')}
                 <input
                   type="number"
                   min={0}
@@ -311,7 +312,7 @@ export default function Editor() {
                 />
               </label>
               <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-                End char
+                {t('editor.endChar')}
                 <input
                   type="number"
                   min={0}
@@ -321,7 +322,7 @@ export default function Editor() {
                 />
               </label>
               <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-                Severity
+                {t('editor.severity')}
                 <select
                   value={newSeverity}
                   onChange={(e) =>
@@ -338,7 +339,7 @@ export default function Editor() {
               </label>
             </div>
             <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
-              Message
+              {t('editor.message')}
               <input
                 type="text"
                 value={newMessage}
@@ -352,13 +353,13 @@ export default function Editor() {
               disabled={!newMessage.trim()}
               className="self-start font-label-md bg-primary text-on-primary rounded-full px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
-              Add squiggle
+              {t('editor.addSquiggleBtn')}
             </button>
           </form>
 
           {diagCount > 0 ? (
             <div className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm">
-              <h3 className="font-label-md text-on-surface mb-sm">Diagnostics</h3>
+              <h3 className="font-label-md text-on-surface mb-sm">{t('editor.diagnosticsList')}</h3>
               <ul className="flex flex-col gap-xs">
                 {diags.map((d, i) => (
                   <li key={i}>
@@ -392,14 +393,14 @@ export default function Editor() {
                           title={
                             d.source
                               ? `source: ${d.source}${d.code ? ` (${d.code})` : ''}`
-                              : 'auto'
+                              : t('editor.source')
                           }
                         >
-                          {d.source ?? 'auto'}
+                          {d.source ?? t('editor.source')}
                         </span>
                       ) : (
                         <span className="font-label-sm uppercase text-[10px] tracking-wider text-on-surface-variant">
-                          manual
+                          {t('editor.manual')}
                         </span>
                       )}
                       <span className="material-symbols-outlined text-[14px] text-primary">
@@ -418,12 +419,12 @@ export default function Editor() {
         <div
           className="fixed inset-0 z-[80] flex"
           role="dialog"
-          aria-label="Quick fix drawer"
+          aria-label={t('editor.quickFixDrawer')}
         >
           <button
             type="button"
             onClick={() => setDrawer(null)}
-            aria-label="Close drawer backdrop"
+            aria-label={t('editor.closeDrawer')}
             className="flex-1 bg-black/30"
           />
           <aside className="w-[420px] max-w-[90vw] bg-surface-container-lowest h-full overflow-auto p-md border-l border-outline-variant/30 shadow-lg flex flex-col gap-sm">

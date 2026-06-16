@@ -9,6 +9,7 @@
 // TriageItem cards with checkbox + Mark Read / Archive actions, empty state.
 
 import { useState, useMemo, useCallback } from 'react'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
@@ -44,11 +45,13 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, o
   onArchive: (id: string) => void
   onDelete: (id: string) => void
 }) {
+  const intl = useIntl()
+  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const meta = kindMeta(item.kind)
   return (
     <div className={`glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 ${item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20'} ${selected ? 'ring-2 ring-primary/40' : ''}`}>
       <div className="flex items-start gap-sm">
-        <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={`Select item ${item.id}`}>
+        <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('triage.select.aria', { id: item.id })}>
           <input
             type="checkbox"
             checked={selected}
@@ -63,8 +66,8 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, o
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-sm mb-xs">
               <span className={`font-label-sm text-[11px] font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</span>
-              {!item.read && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title="Unread" />}
-              {item.archived && <span className="font-label-sm text-[11px] text-on-surface-variant">Archived</span>}
+              {!item.read && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title={t('triage.unread.title')} />}
+              {item.archived && <span className="font-label-sm text-[11px] text-on-surface-variant">{t('triage.archived.label')}</span>}
             </div>
             <p className="text-body-sm text-on-surface mb-xs break-words">{item.message}</p>
             <div className="flex items-center gap-md flex-wrap">
@@ -84,32 +87,32 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, o
         <div className="flex items-center gap-sm shrink-0">
           {!item.read && (
             <Button
-              aria-label="Mark read"
+              aria-label={t('triage.markRead.aria')}
               variant="ghost"
               className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer"
               onClick={() => onMarkRead(item.id)}
-              title="Mark as read"
+              title={t('triage.markRead.title')}
             >
               <span className="material-symbols-outlined text-[18px]">check</span>
             </Button>
           )}
           {!item.archived && (
             <Button
-              aria-label="Archive item"
+              aria-label={t('triage.archive.aria')}
               variant="ghost"
               className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant cursor-pointer"
               onClick={() => onArchive(item.id)}
-              title="Archive"
+              title={t('triage.archive.title')}
             >
               <span className="material-symbols-outlined text-[18px]">archive</span>
             </Button>
           )}
           <Button
-            aria-label="Delete item"
+            aria-label={t('triage.delete.aria')}
             variant="ghost"
             className="p-2 rounded-lg hover:bg-error/10 text-on-surface-variant hover:text-error cursor-pointer"
             onClick={() => onDelete(item.id)}
-            title="Delete"
+            title={t('triage.delete.title')}
           >
             <span className="material-symbols-outlined text-[18px]">delete</span>
           </Button>
@@ -120,6 +123,8 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, o
 }
 
 export default function Triage() {
+  const intl = useIntl()
+  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const [kindFilter, setKindFilter] = useState<string | undefined>(undefined)
   const [showArchived, setShowArchived] = useState(false)
   const [readFilter, setReadFilter] = useState<ReadFilter>('all')
@@ -188,9 +193,12 @@ export default function Triage() {
       if (await markRead(id)) ok++
     }
     setBulkRunning(false)
-    if (ok > 0) toast.success(`Marked ${ok} item${ok === 1 ? '' : 's'} as read`)
+    if (ok > 0) {
+      const key = ok === 1 ? 'triage.toast.markRead' : 'triage.toast.markRead.plural'
+      toast.success(intl.formatMessage({ id: key }, { count: ok }))
+    }
     clearSelection()
-  }, [effectiveSelected, markRead, clearSelection])
+  }, [effectiveSelected, markRead, clearSelection, intl])
 
   const bulkArchive = useCallback(async () => {
     setBulkRunning(true)
@@ -199,18 +207,21 @@ export default function Triage() {
       if (await archive(id)) ok++
     }
     setBulkRunning(false)
-    if (ok > 0) toast.success(`Archived ${ok} item${ok === 1 ? '' : 's'}`)
+    if (ok > 0) {
+      const key = ok === 1 ? 'triage.toast.archived' : 'triage.toast.archived.plural'
+      toast.success(intl.formatMessage({ id: key }, { count: ok }))
+    }
     clearSelection()
-  }, [effectiveSelected, archive, clearSelection])
+  }, [effectiveSelected, archive, clearSelection, intl])
 
   // Delete in the UI maps to archive in the backend — the backend doesn't
   // expose a hard-delete endpoint, so we treat archive as soft removal and
   // surface it as "Delete" to match the spec's bulk complete/archive/delete
   // triad. A future backend hard-delete can swap in here without UI changes.
   const deleteItem = useCallback(async (id: string) => {
-    if (await archive(id)) toast.success('Item deleted')
+    if (await archive(id)) toast.success(intl.formatMessage({ id: 'triage.toast.deleted' }, { count: 1 }))
     setDeleteTargetId(null)
-  }, [archive])
+  }, [archive, intl])
 
   const bulkDelete = useCallback(async () => {
     setBulkRunning(true)
@@ -219,10 +230,13 @@ export default function Triage() {
       if (await archive(id)) ok++
     }
     setBulkRunning(false)
-    if (ok > 0) toast.success(`Deleted ${ok} item${ok === 1 ? '' : 's'}`)
+    if (ok > 0) {
+      const key = ok === 1 ? 'triage.toast.deleted' : 'triage.toast.deleted.plural'
+      toast.success(intl.formatMessage({ id: key }, { count: ok }))
+    }
     setShowBulkDeleteConfirm(false)
     clearSelection()
-  }, [effectiveSelected, archive, clearSelection])
+  }, [effectiveSelected, archive, clearSelection, intl])
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
@@ -230,31 +244,31 @@ export default function Triage() {
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-end justify-between mb-xl gap-md">
           <div>
-            <h2 className="font-headline-lg text-headline-lg text-on-surface">Inbox</h2>
-            <p className="text-on-surface-variant mt-xs">Items needing your attention.</p>
+            <h2 className="font-headline-lg text-headline-lg text-on-surface">{t('triage.title')}</h2>
+            <p className="text-on-surface-variant mt-xs">{t('triage.subtitle')}</p>
           </div>
           <div className="flex items-center gap-md">
             <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30">
               <span className="material-symbols-outlined text-[18px] text-primary">mark_email_unread</span>
-              <span className="font-label-md text-on-surface">{stats.unread} unread</span>
+              <span className="font-label-md text-on-surface">{intl.formatMessage({ id: 'triage.unread' }, { count: stats.unread })}</span>
             </div>
             <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-surface-container-lowest border border-outline-variant/30">
               <span className="material-symbols-outlined text-[18px] text-on-surface-variant">inbox</span>
-              <span className="font-label-md text-on-surface">{stats.total} total</span>
+              <span className="font-label-md text-on-surface">{intl.formatMessage({ id: 'triage.total' }, { count: stats.total })}</span>
             </div>
           </div>
         </div>
 
         {/* Filter bar */}
         <div className="flex items-center gap-sm mb-md flex-wrap">
-          <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">Kind:</span>
+          <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">{t('triage.kind.label')}</span>
           <Button
             variant="ghost"
             onClick={() => setKindFilter(undefined)}
             aria-pressed={!kindFilter}
             className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${!kindFilter ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
           >
-            All Kinds
+            {t('triage.filter.all')}
           </Button>
           {availableKinds.map(kind => {
             const meta = kindMeta(kind)
@@ -273,7 +287,7 @@ export default function Triage() {
         </div>
 
         <div className="flex items-center gap-sm mb-lg flex-wrap">
-          <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">Read:</span>
+          <span className="font-label-sm text-on-surface-variant uppercase tracking-wider mr-xs">{t('triage.read.label')}</span>
           {(['all', 'unread', 'read'] as const).map(opt => (
             <Button
               key={opt}
@@ -282,20 +296,20 @@ export default function Triage() {
               aria-pressed={readFilter === opt}
               className={`px-sm py-xs rounded-full text-label-sm capitalize transition-colors cursor-pointer ${readFilter === opt ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
             >
-              {opt}
+              {t(`triage.filter.${opt}`)}
             </Button>
           ))}
-          <span className="font-label-sm text-on-surface-variant uppercase tracking-wider ml-md mr-xs">Sort:</span>
+          <span className="font-label-sm text-on-surface-variant uppercase tracking-wider ml-md mr-xs">{t('triage.sort.label')}</span>
           <Button
             variant="ghost"
             onClick={() => setSortOrder(sortOrder === 'newest' ? 'oldest' : 'newest')}
-            aria-label="Toggle sort order"
+            aria-label={t('triage.sort.aria')}
             className="px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10"
           >
             <span className="material-symbols-outlined text-[14px] mr-xs align-middle">
               {sortOrder === 'newest' ? 'arrow_downward' : 'arrow_upward'}
             </span>
-            {sortOrder === 'newest' ? 'Newest first' : 'Oldest first'}
+            {t(sortOrder === 'newest' ? 'triage.sort.newest' : 'triage.sort.oldest')}
           </Button>
           <div className="ml-auto">
             <Button
@@ -305,7 +319,7 @@ export default function Triage() {
               className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${showArchived ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
             >
               <span className="material-symbols-outlined text-[14px] mr-xs align-middle">archive</span>
-              {showArchived ? 'Showing Archived' : 'Hide Archived'}
+              {t(showArchived ? 'triage.archived.show' : 'triage.archived.hide')}
             </Button>
           </div>
         </div>
@@ -314,11 +328,11 @@ export default function Triage() {
         {effectiveSelected.size > 0 ? (
           <div
             role="region"
-            aria-label="Bulk actions"
+            aria-label={t('triage.bulk.title')}
             className="sticky top-0 z-10 mb-md flex items-center gap-md px-md py-sm rounded-xl bg-primary/10 border border-primary/30 backdrop-blur-md"
           >
             <span className="font-label-md text-primary font-bold">
-              {effectiveSelected.size} selected
+              {intl.formatMessage({ id: 'triage.bulk.selected' }, { count: effectiveSelected.size })}
             </span>
             <Button
               variant="ghost"
@@ -327,7 +341,7 @@ export default function Triage() {
               className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined text-[16px] mr-xs align-middle">done_all</span>
-              Mark read
+              {t('triage.bulk.markRead')}
             </Button>
             <Button
               variant="ghost"
@@ -336,7 +350,7 @@ export default function Triage() {
               className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined text-[16px] mr-xs align-middle">archive</span>
-              Archive
+              {t('triage.bulk.archive')}
             </Button>
             <Button
               variant="ghost"
@@ -345,7 +359,7 @@ export default function Triage() {
               className="px-sm py-xs rounded-lg text-label-md text-error hover:bg-error/10 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="material-symbols-outlined text-[16px] mr-xs align-middle">delete</span>
-              Delete
+              {t('triage.bulk.delete')}
             </Button>
             <Button
               variant="ghost"
@@ -353,7 +367,7 @@ export default function Triage() {
               onClick={clearSelection}
               className="ml-auto px-sm py-xs rounded-lg text-label-md text-on-surface-variant hover:text-primary cursor-pointer"
             >
-              Clear
+              {t('triage.bulk.clear')}
             </Button>
           </div>
         ) : null}
@@ -366,8 +380,8 @@ export default function Triage() {
         ) : items.length === 0 ? (
           <EmptyState
             icon="check_circle"
-            title="All clear."
-            description="No triage items match the current filter."
+            title={t('triage.empty.title')}
+            description={t('triage.empty.description')}
           />
         ) : (
           <>
@@ -378,22 +392,22 @@ export default function Triage() {
                   type="checkbox"
                   checked={allSelected}
                   onChange={toggleSelectAll}
-                  aria-label="Select all visible items"
+                  aria-label={t(allSelected ? 'triage.select.deselectAll' : 'triage.select.selectAll')}
                   className="w-4 h-4 accent-primary cursor-pointer"
                 />
                 <span className="font-label-sm text-on-surface-variant">
-                  {allSelected ? 'Deselect all' : 'Select all'}
+                  {t(allSelected ? 'triage.select.deselectAll' : 'triage.select.selectAll')}
                 </span>
               </label>
               <span className="font-label-sm text-outline ml-auto">
-                {visibleItems.length} of {items.length} shown
+                {intl.formatMessage({ id: 'triage.select.shown' }, { visible: visibleItems.length, total: items.length })}
               </span>
             </div>
             {visibleItems.length === 0 ? (
               <EmptyState
                 icon="filter_alt_off"
-                title="No items match."
-                description="Adjust the read or kind filter to see more."
+                title={t('triage.noMatch.title')}
+                description={t('triage.noMatch.description')}
               />
             ) : (
               <div className="space-y-md">
@@ -418,7 +432,7 @@ export default function Triage() {
       {deleteTargetId && (
         <div
           role="dialog"
-          aria-label="Delete item"
+          aria-label={t('triage.deleteDialog.title')}
           className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center"
           onClick={() => setDeleteTargetId(null)}
           onKeyDown={e => { if (e.key === 'Escape') setDeleteTargetId(null) }}
@@ -429,10 +443,10 @@ export default function Triage() {
           >
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-error text-[24px]">delete</span>
-              <h3 className="font-headline-md text-on-surface">Delete item</h3>
+              <h3 className="font-headline-md text-on-surface">{t('triage.deleteDialog.title')}</h3>
             </div>
             <p className="text-body-md text-on-surface-variant mb-lg">
-              This removes the item from your inbox. The underlying record is archived, not erased.
+              {t('triage.deleteDialog.message')}
             </p>
             <div className="flex justify-end gap-sm">
               <Button
@@ -440,13 +454,13 @@ export default function Triage() {
                 className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container cursor-pointer"
                 onClick={() => setDeleteTargetId(null)}
               >
-                Cancel
+                {t('triage.deleteDialog.cancel')}
               </Button>
               <Button
                 className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90 cursor-pointer"
                 onClick={() => deleteItem(deleteTargetId)}
               >
-                Delete
+                {t('triage.deleteDialog.confirm')}
               </Button>
             </div>
           </div>
@@ -457,7 +471,7 @@ export default function Triage() {
       {showBulkDeleteConfirm && (
         <div
           role="dialog"
-          aria-label="Bulk delete items"
+          aria-label={t('triage.bulkDeleteDialog.title', { count: effectiveSelected.size })}
           className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center"
           onClick={() => setShowBulkDeleteConfirm(false)}
           onKeyDown={e => { if (e.key === 'Escape') setShowBulkDeleteConfirm(false) }}
@@ -468,10 +482,10 @@ export default function Triage() {
           >
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-error text-[24px]">delete</span>
-              <h3 className="font-headline-md text-on-surface">Delete {effectiveSelected.size} item{effectiveSelected.size === 1 ? '' : 's'}?</h3>
+              <h3 className="font-headline-md text-on-surface">{t('triage.bulkDeleteDialog.title', { count: effectiveSelected.size })}</h3>
             </div>
             <p className="text-body-md text-on-surface-variant mb-lg">
-              This removes the selected items from your inbox. Underlying records are archived, not erased.
+              {t('triage.bulkDeleteDialog.message')}
             </p>
             <div className="flex justify-end gap-sm">
               <Button
@@ -480,14 +494,14 @@ export default function Triage() {
                 className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container cursor-pointer"
                 onClick={() => setShowBulkDeleteConfirm(false)}
               >
-                Cancel
+                {t('triage.deleteDialog.cancel')}
               </Button>
               <Button
                 disabled={bulkRunning}
                 className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90 cursor-pointer disabled:opacity-50"
                 onClick={bulkDelete}
               >
-                {bulkRunning ? 'Deleting…' : 'Delete'}
+                {bulkRunning ? t('triage.bulkDeleteDialog.deleting') : t('triage.deleteDialog.confirm')}
               </Button>
             </div>
           </div>

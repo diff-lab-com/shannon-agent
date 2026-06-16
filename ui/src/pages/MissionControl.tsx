@@ -13,6 +13,7 @@
 // is identical to OPC; only the interaction mode differs (click vs drag).
 
 import { useState } from 'react'
+import { useIntl } from 'react-intl'
 import { useApp } from '@/context/AppContext'
 import TaskDetailDrawer from '@/components/tasks/TaskDetailDrawer'
 import { KanbanBoard, STATUS_FAMILY, type TaskStatusFamily } from '@/components/shared/KanbanBoard'
@@ -23,9 +24,9 @@ import { useSidebarMode } from '@/components/Sidebar'
 type TabKey = 'today' | 'all' | 'board'
 
 const ALL_TABS: { key: TabKey; label: string; icon: string; devOnly?: boolean }[] = [
-  { key: 'today', label: 'Today', icon: 'today' },
-  { key: 'all', label: 'All', icon: 'forum' },
-  { key: 'board', label: 'Board', icon: 'dashboard', devOnly: true },
+  { key: 'today', label: 'missionControl.today', icon: 'today' },
+  { key: 'all', label: 'missionControl.all', icon: 'forum' },
+  { key: 'board', label: 'missionControl.board', icon: 'dashboard', devOnly: true },
 ]
 
 // F5: persist the user's last-selected Conversations tab so they land back on
@@ -45,15 +46,17 @@ interface MissionControlProps {
 }
 
 export default function MissionControl({ onSelectTask }: MissionControlProps) {
+  const intl = useIntl()
+  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const { tasks, sessions, refreshTasks } = useApp()
   const [sidebarMode] = useSidebarMode()
   const isDev = sidebarMode === 'dev'
-  const tabs = ALL_TABS.filter(t => !t.devOnly || isDev)
+  const tabs = ALL_TABS.filter(tab => !tab.devOnly || isDev)
   const [tab, setTab] = useState<TabKey>(loadInitialTab)
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null)
   // If the active tab is dev-only but the user is in simple mode, fall back.
   const activeTab: TabKey = tab === 'board' && !isDev ? 'all' : tab
-  const selectedTask = localSelectedId ? tasks.find(t => t.id === localSelectedId) ?? null : null
+  const selectedTask = localSelectedId ? tasks.find(task => task.id === localSelectedId) ?? null : null
 
   const handleSelect = (id: string) => {
     setLocalSelectedId(id)
@@ -105,10 +108,10 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
           <div>
             <h2 className="font-headline-lg text-headline-lg text-on-surface flex items-center gap-sm">
               <span className="material-symbols-outlined text-primary">dashboard</span>
-              Conversations
+              {t('missionControl.title')}
             </h2>
             <p className="text-on-surface-variant mt-xs text-body-sm">
-              Aggregated view across {tasks.length} task{tasks.length === 1 ? '' : 's'} from all teams.
+              {t('missionControl.subtitle', { count: tasks.length })}
             </p>
           </div>
           {headerExtra}
@@ -119,12 +122,12 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
         aria-label="Conversations view tabs"
         className="flex items-center gap-xs px-lg pt-md border-b border-outline-variant/20 bg-surface-container-lowest/40"
       >
-        {tabs.map(t => {
-          const active = activeTab === t.key
+        {tabs.map(tab => {
+          const active = activeTab === tab.key
           return (
             <button
-              key={t.key}
-              onClick={() => handleTabChange(t.key)}
+              key={tab.key}
+              onClick={() => handleTabChange(tab.key)}
               className={`flex items-center gap-sm px-md py-sm rounded-t-lg font-label-md text-label-md transition-all cursor-pointer ${
                 active
                   ? 'text-primary border-b-2 border-primary -mb-px font-bold'
@@ -132,10 +135,10 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
               }`}
               aria-current={active ? 'page' : undefined}
               aria-pressed={active}
-              aria-label={`${t.label} tab`}
+              aria-label={`${t(tab.label)} tab`}
             >
-              <span className="material-symbols-outlined text-[18px]">{t.icon}</span>
-              <span>{t.label}</span>
+              <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
+              <span>{t(tab.label)}</span>
             </button>
           )
         })}
