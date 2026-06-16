@@ -566,6 +566,14 @@ enum McpSubcommand {
         /// of the project's `.mcp.json`.
         #[arg(long)]
         user: bool,
+
+        /// Skip the confirmation prompt. Script-friendly.
+        #[arg(long)]
+        yes: bool,
+
+        /// Show what would be installed, then exit without writing.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -2552,26 +2560,95 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         Some(Commands::Mcp { command }) => match command {
-            McpSubcommand::Install { bundle, user } => {
+            McpSubcommand::Install {
+                bundle,
+                user,
+                yes,
+                dry_run,
+            } => {
                 let scope = if user {
                     mcp_install::InstallScope::User
                 } else {
                     mcp_install::InstallScope::Project
                 };
-                match mcp_install::install_bundle(std::path::Path::new(&bundle), scope) {
-                    Ok(result) => {
-                        println!(
-                            "Installed {} server(s) to {}:",
-                            result.servers_installed,
-                            result.target_path.display()
-                        );
-                        for name in &result.server_names {
-                            println!("  - {name}");
-                        }
-                    }
+                let bundle_path = std::path::Path::new(&bundle);
+
+                let preview = match mcp_install::preview_bundle(bundle_path, scope) {
+                    Ok(p) => p,
                     Err(e) => {
                         eprintln!("Install failed: {e}");
                         std::process::exit(1);
+                    }
+                };
+
+                println!(
+                    "Target ({}): {}",
+                    match preview.scope {
+                        mcp_install::InstallScope::Project => "project",
+                        mcp_install::InstallScope::User => "user",
+                    },
+                    preview.target_path.display()
+                );
+                println!("Servers ({}):", preview.servers.len());
+                for server in &preview.servers {
+                    let marker = if server.overwrites_existing {
+                        " [OVERWRITE]"
+                    } else {
+                        ""
+                    };
+                    match &server.command {
+                        Some(cmd) => {
+                            let args = if cmd.args.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" {}", cmd.args.join(" "))
+                            };
+                            println!("  - {} -> {}{}{marker}", server.name, cmd.command, args);
+                        }
+                        None => println!("  - {} (no command field)", server.name),
+                    }
+                }
+                if preview.has_overwrite() {
+                    println!("\nWarning: some servers will overwrite existing entries.");
+                }
+
+                if dry_run {
+                    println!("\n--dry-run: no changes written.");
+                } else {
+                    let mut should_install = yes;
+                    if !yes {
+                        print!("\nProceed with install? [y/N] ");
+                        use std::io::Write as _;
+                        std::io::stdout().flush().ok();
+                        let mut answer = String::new();
+                        if std::io::stdin().read_line(&mut answer).is_err() {
+                            eprintln!("Install aborted: could not read confirmation.");
+                            std::process::exit(1);
+                        }
+                        let answer = answer.trim().to_lowercase();
+                        should_install = answer == "y" || answer == "yes";
+                        if !should_install {
+                            println!("Install cancelled.");
+                        }
+                    }
+
+                    if should_install {
+                        match mcp_install::install_bundle(bundle_path, scope) {
+                            Ok(result) => {
+                                println!(
+                                    "\nInstalled {} server(s) to {}:",
+                                    result.servers_installed,
+                                    result.target_path.display()
+                                );
+                                for name in &result.server_names {
+                                    println!("  - {name}");
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Install failed: {e}");
+                                std::process::exit(1);
+                            }
+                        }
                     }
                 }
             }
