@@ -99,7 +99,7 @@ proptest! {
         chat in proptest::collection::vec(arb_chat_message(), 2..10),
         strategy in arb_strategy(),
     ) {
-        let messages = vec![
+        let messages = [
             vec![sys_msg],
             chat,
         ].concat();

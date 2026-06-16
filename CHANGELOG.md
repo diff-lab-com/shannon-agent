@@ -2,6 +2,20 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
+## v0.5.0 (2026-06) — Sprint 5: Deepen MCP Integration
+
+### MCP
+
+- **Elicitation TUI**: Server-initiated `elicitation/create` requests surface as a ratatui `InputDialog` in the REPL, with responses delivered back over a bounded mpsc + oneshot channel. UI prefix `[EXTERNAL MCP · <server>]` distinguishes server-originated prompts from Shannon's own dialogs, capped at 200 chars to prevent spoofing abuse.
+- **MCP prompts as slash commands**: Server prompts auto-register as `/{server}:{prompt}` aliases alongside the canonical `/mcp__{server}__{prompt}` form. New `/mcp prompts` lists every server prompt with descriptions.
+- **Tab autocomplete via `completion/complete`**: Typing an argument after an MCP prompt slash command queries the originating server for argument completions (800ms timeout, silent fallback to local completion on miss).
+- **`.mcpb` bundle install**: `shannon mcp install <bundle> [--user]` extracts a `.mcpb` zip archive (containing `.mcp.json`) and merges `mcpServers` into either the project's `.mcp.json` or `~/.shannon/settings.json`. Preserves existing servers and non-mcp keys; overwrites same-name entries.
+
+### Security
+
+- **Elicitation channel hardening**: Bounded `mpsc::channel(16)` replaces unbounded sender to prevent flood-based DoS.
+- **Spoofing-resistant UI**: Server-originated dialogs visually distinct from Shannon's own.
+
 ## v0.1.0 (2026-05)
 
 Initial public release with full feature set.
