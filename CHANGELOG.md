@@ -2,6 +2,15 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
+## v0.5.1 (2026-06) — `.mcpb` install security hardening
+
+### Security
+
+- **Symlink path traversal**: `shannon mcp install` now refuses to follow symlinks for the target file (`.mcp.json` or `~/.shannon/settings.json`), blocking a planted symlink from redirecting writes to arbitrary files.
+- **Zip bomb DoS**: `.mcp.json` entries larger than 10 MB uncompressed are rejected before reading.
+- **Data loss on parse error**: An existing settings file that fails to parse as JSON now aborts the install (preserving the original file) instead of being silently reset to `{}`.
+- **Install preview + confirmation**: The CLI now prints each server's `name -> command args` with `[OVERWRITE]` markers and prompts `[y/N]` before writing. `--yes` skips the prompt for scripts; `--dry-run` previews without writing.
+
 ## v0.5.0 (2026-06) — Sprint 5: Deepen MCP Integration
 
 ### MCP
