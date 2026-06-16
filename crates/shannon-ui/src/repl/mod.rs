@@ -806,8 +806,13 @@ impl Repl {
 
         // Wire MCP sampling and elicitation providers so MCP servers can
         // request LLM completions (sampling) and ask the user questions (elicitation).
+        //
+        // Bounded channel (capacity 16) caps memory growth if a misbehaving MCP
+        // server floods elicitations. On full queue, the provider returns Cancel
+        // to the server instead of blocking or dropping queued requests.
+        const ELICITATION_CHANNEL_CAPACITY: usize = 16;
         let (elicitation_tx, elicitation_rx) =
-            tokio::sync::mpsc::unbounded_channel::<PendingElicitation>();
+            tokio::sync::mpsc::channel::<PendingElicitation>(ELICITATION_CHANNEL_CAPACITY);
         {
             let pool = mcp_pool.clone();
             let llm = std::sync::Arc::new(client.clone());
@@ -829,8 +834,11 @@ impl Repl {
                             placeholder,
                             responder,
                         };
-                        if tx.send(pending).is_err() {
-                            tracing::warn!("Elicitation channel closed; cancelling");
+                        // Bounded send: if the queue is full (server flooding the
+                        // UI) or the TUI has shut down, return Cancel so the MCP
+                        // client sees a determinate response instead of hanging.
+                        if let Err(_) = tx.try_send(pending) {
+                            tracing::warn!("Elicitation channel full or closed; cancelling");
                             return (shannon_mcp::ElicitationAction::Cancel, None);
                         }
                         match receiver.await {
@@ -1869,7 +1877,23 @@ impl Repl {
                     if let Some(rx) = self.state.pending_elicitation_rx.as_mut() {
                         if let Ok(req) = rx.try_recv() {
                             use crate::widgets::dialog::InputDialog;
-                            let title = format!("[MCP] {}", req.message);
+                            // Stronger visual distinction: MCP servers are
+                            // untrusted third-party code, so label them as
+                            // EXTERNAL rather than blending in with system
+                            // dialogs. Include the server name (currently
+                            // hardcoded "mcp"; will be wired to the real name
+                            // in a follow-up) and cap message length to keep
+                            // the title bar readable.
+                            const MAX_MSG_LEN: usize = 200;
+                            let truncated = if req.message.chars().count() > MAX_MSG_LEN {
+                                let mut s: String = req.message.chars().take(MAX_MSG_LEN).collect();
+                                s.push('…');
+                                s
+                            } else {
+                                req.message.clone()
+                            };
+                            let title =
+                                format!("[EXTERNAL MCP · {}] {}", req.server_name, truncated);
                             let placeholder = req
                                 .placeholder
                                 .clone()

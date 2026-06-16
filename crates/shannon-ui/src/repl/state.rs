@@ -274,12 +274,14 @@ pub struct ReplState {
     ///
     /// Set once during REPL init; cloned into the elicitation provider callback.
     /// `None` when elicitation wiring is disabled (e.g. headless mode).
-    pub pending_elicitation_tx: Option<tokio::sync::mpsc::UnboundedSender<PendingElicitation>>,
+    /// Bounded channel (capacity 16) protects the single-threaded UI loop from
+    /// a misbehaving MCP server flooding it with `elicitation/create` requests.
+    pub pending_elicitation_tx: Option<tokio::sync::mpsc::Sender<PendingElicitation>>,
     /// Receiver for pending MCP elicitation requests (drained by Tick handler).
     ///
     /// Stored as `Option` so the Tick handler can `take()`/`as_mut()` it.
     /// Only consumed by the single-threaded REPL event loop.
-    pub pending_elicitation_rx: Option<tokio::sync::mpsc::UnboundedReceiver<PendingElicitation>>,
+    pub pending_elicitation_rx: Option<tokio::sync::mpsc::Receiver<PendingElicitation>>,
     /// Currently displayed elicitation request (set when InputDialog opens).
     ///
     /// `Some` while the user is answering; cleared on submit/cancel when the
