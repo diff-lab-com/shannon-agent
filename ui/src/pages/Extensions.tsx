@@ -1,37 +1,40 @@
 import { useState } from "react";
 import { Outlet, useLocation, useNavigate, NavLink } from "react-router-dom";
+import { useIntl } from "react-intl";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 const subTabs = [
-  { to: '/extensions/featured', icon: 'auto_awesome', label: 'Featured' },
-  { to: '/extensions/mcp-servers', icon: 'cloud', label: 'MCP Servers' },
-  { to: '/extensions/skills', icon: 'extension', label: 'Skills' },
-  { to: '/extensions/agents', icon: 'smart_toy', label: 'My Agents' },
-  { to: '/extensions/datasources', icon: 'database', label: 'Data Sources' },
-  { to: '/extensions/plugins', icon: 'workspaces', label: 'Plugins' },
-  { to: '/extensions/installed', icon: 'download', label: 'Installed' },
+  { to: '/extensions/featured', icon: 'auto_awesome', labelKey: 'extensions.featured' },
+  { to: '/extensions/mcp-servers', icon: 'cloud', labelKey: 'extensions.mcpServers' },
+  { to: '/extensions/skills', icon: 'extension', labelKey: 'extensions.skills' },
+  { to: '/extensions/agents', icon: 'smart_toy', labelKey: 'extensions.myAgents' },
+  { to: '/extensions/datasources', icon: 'database', labelKey: 'extensions.dataSources' },
+  { to: '/extensions/plugins', icon: 'workspaces', labelKey: 'extensions.plugins' },
+  { to: '/extensions/installed', icon: 'download', labelKey: 'extensions.installed' },
 ] as const
 
 export default function Extensions() {
   const location = useLocation();
   const navigate = useNavigate();
+  const intl = useIntl();
+  const t = (id: string) => intl.formatMessage({ id });
   const path = location.pathname;
   const [search, setSearch] = useState("");
 
-  let searchPlaceholder = "Search extensions...";
-  let ctaText = "";
+  let searchPlaceholderKey = "extensions.search.placeholder";
+  let ctaTextKey = "";
   let ctaIcon = "";
   let ctaAction: () => void = () => {};
 
   if (path.includes('agents')) {
-    searchPlaceholder = "Search agents...";
-    ctaText = "Create Agent";
+    searchPlaceholderKey = "extensions.search.agents";
+    ctaTextKey = "extensions.createAgent";
     ctaIcon = "add";
     ctaAction = () => navigate('/extensions/agents');
   } else if (path.includes('datasources')) {
-    searchPlaceholder = "Search data sources...";
-    ctaText = "Add Source";
+    searchPlaceholderKey = "extensions.search.datasources";
+    ctaTextKey = "extensions.addSource";
     ctaIcon = "add_circle";
     ctaAction = () => navigate('/extensions/datasources');
   }
@@ -41,7 +44,7 @@ export default function Extensions() {
       {/* Top Bar with tabs + search + CTA */}
       <div className="flex justify-between items-center w-full px-lg py-sm border-b border-outline-variant/20 bg-surface/80 backdrop-blur-md sticky top-0 z-30">
         <div className="flex items-center gap-lg">
-          <nav aria-label="Extensions tabs" className="flex items-center gap-xs flex-wrap">
+          <nav aria-label={t('extensions.tabs.aria')} className="flex items-center gap-xs flex-wrap">
             {subTabs.map(tab => (
               <NavLink
                 key={tab.to}
@@ -55,7 +58,7 @@ export default function Extensions() {
                 }
               >
                 <span className="material-symbols-outlined text-[18px]">{tab.icon}</span>
-                <span className="hidden sm:inline">{tab.label}</span>
+                <span className="hidden sm:inline">{t(tab.labelKey)}</span>
               </NavLink>
             ))}
           </nav>
@@ -65,16 +68,16 @@ export default function Extensions() {
             <span className="material-symbols-outlined text-outline mr-sm text-[18px]">search</span>
             <Input
               className="bg-transparent border-none outline-none focus:ring-0 text-label-md font-label-md w-full"
-              placeholder={searchPlaceholder}
+              placeholder={t(searchPlaceholderKey)}
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          {ctaText && (
+          {ctaTextKey && (
             <Button onClick={ctaAction} className="bg-primary text-on-primary px-lg py-sm rounded-full font-bold text-label-md hover:bg-primary/90 flex items-center gap-1 cursor-pointer whitespace-nowrap">
               <span className="material-symbols-outlined text-[18px]">{ctaIcon}</span>
-              {ctaText}
+              {t(ctaTextKey)}
             </Button>
           )}
         </div>

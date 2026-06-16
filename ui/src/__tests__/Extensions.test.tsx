@@ -1,15 +1,18 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
+import { I18nProvider } from '@/i18n'
 import Extensions from '@/pages/Extensions'
 
 function renderWithRoute(path: string) {
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <Routes>
-        <Route path="/*" element={<Extensions />} />
-      </Routes>
-    </MemoryRouter>
+    <I18nProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <Routes>
+          <Route path="/*" element={<Extensions />} />
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>
   )
 }
 

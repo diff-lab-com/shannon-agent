@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
@@ -39,6 +40,8 @@ const EMPTY_FORM: FormState = {
 }
 
 export default function Routines() {
+  const intl = useIntl()
+  const t = (id: string, values?: Record<string, any>) => intl.formatMessage({ id }, values)
   const [routines, setRoutines] = useState<TriggeredRoutineDto[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
@@ -50,7 +53,7 @@ export default function Routines() {
       setRoutines(await api.listTriggeredRoutines())
     } catch (e) {
       console.warn('Failed to load routines:', e)
-      toast.error('Failed to load routines')
+      toast.error(t('routines.error.load'))
     }
     setLoading(false)
   }
@@ -62,17 +65,17 @@ export default function Routines() {
     setRoutines(rs => rs.map(r => r.name === name ? { ...r, enabled } : r))
     try {
       await api.toggleTriggeredRoutine(name, enabled)
-      toast.success(`${name} ${enabled ? 'enabled' : 'disabled'}`)
+      toast.success(t(enabled ? 'routines.toast.enabled' : 'routines.toast.disabled', { name }))
     } catch (e) {
       console.warn('Failed to toggle routine:', e)
       setRoutines(prev)
-      toast.error('Failed to toggle')
+      toast.error(t('routines.error.toggle'))
     }
   }
 
   const handleCreate = async () => {
     if (!form.name.trim() || !form.command.trim()) {
-      toast.error('Name and command are required')
+      toast.error(t('routines.error.required'))
       return
     }
     setSaving(true)
@@ -85,13 +88,13 @@ export default function Routines() {
         pattern: form.pattern.trim() || undefined,
         description: form.description.trim() || undefined,
       })
-      toast.success(`Created "${form.name.trim()}"`)
+      toast.success(t('routines.toast.created', { name: form.name.trim() }))
       setForm(EMPTY_FORM)
       setShowCreate(false)
       await load()
     } catch (e) {
       console.warn('Failed to create routine:', e)
-      toast.error('Failed to create routine')
+      toast.error(t('routines.error.create'))
     }
     setSaving(false)
   }
@@ -102,9 +105,9 @@ export default function Routines() {
     <div className="p-xl space-y-lg max-w-4xl">
       <header className="flex items-start justify-between gap-md">
         <div>
-          <h1 className="font-headline-lg text-on-surface mb-xs">Schedules</h1>
+          <h1 className="font-headline-lg text-on-surface mb-xs">{t('routines.title')}</h1>
           <p className="font-body-md text-on-surface-variant">
-            Triggered schedules fire automatically on Shannon events (PostToolUse, PreCompact, WorktreeCreate, …). Scheduled routines live in <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">/tasks</code>.
+            {t('routines.subtitle')}<code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">{t('routines.subtitle.code')}</code>.
           </p>
         </div>
         <button
@@ -113,7 +116,7 @@ export default function Routines() {
           className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 transition-colors flex items-center gap-sm shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
           <span className="material-symbols-outlined text-[18px]">{showCreate ? 'close' : 'add'}</span>
-          {showCreate ? 'Cancel' : 'New Routine'}
+          {showCreate ? t('routines.cancel') : t('routines.newRoutine')}
         </button>
       </header>
 
@@ -128,13 +131,13 @@ export default function Routines() {
       ) : routines.length === 0 ? (
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-xl text-center">
           <span className="material-symbols-outlined text-[48px] text-outline-variant block mb-sm">bolt</span>
-          <p className="font-headline-md text-on-surface mb-xs">No routines yet</p>
-          <p className="font-body-sm text-on-surface-variant">Create one to automate a response to a Shannon event.</p>
+          <p className="font-headline-md text-on-surface mb-xs">{t('routines.empty.title')}</p>
+          <p className="font-body-sm text-on-surface-variant">{t('routines.empty.description')}</p>
         </div>
       ) : (
         <>
           <div className="font-label-sm text-on-surface-variant">
-            {routines.length} routine{routines.length !== 1 ? 's' : ''} · {enabledCount} enabled
+            {t('routines.count', { count: routines.length })} · {enabledCount} {t('routines.enabled')}
           </div>
           <div className="space-y-sm">
             {routines.map(r => (
@@ -178,7 +181,7 @@ function RoutineRow({ routine, onToggle }: { routine: TriggeredRoutineDto; onTog
       <button
         onClick={() => onToggle(routine.name, !routine.enabled)}
         aria-pressed={routine.enabled}
-        aria-label={`${routine.enabled ? 'Disable' : 'Enable'} ${routine.name}`}
+        aria-label={t(routine.enabled ? 'routines.toggle.disable' : 'routines.toggle.enable') + ' ' + routine.name}
         className={`relative w-11 h-6 rounded-full transition-colors shrink-0 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${routine.enabled ? 'bg-primary' : 'bg-outline-variant'}`}
       >
         <span
@@ -196,21 +199,24 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
   onCancel: () => void
   saving: boolean
 }) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
   return (
     <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg space-y-md">
-      <h2 className="font-headline-md text-on-surface">New triggered routine</h2>
+      <h2 className="font-headline-md text-on-surface">{t('routines.new.title')}</h2>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-        <Field label="Name" required>
+        <Field label={t('routines.form.name')} required>
           <input
             value={form.name}
             onChange={e => setForm({ ...form, name: e.target.value })}
-            placeholder="lint-after-edit"
+            placeholder={t('routines.form.name.placeholder')}
             className="w-full px-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm font-mono"
           />
         </Field>
 
-        <Field label="Trigger event" required>
+        <Field label={t('routines.form.trigger')} required>
           <select
             value={form.trigger}
             onChange={e => setForm({ ...form, trigger: e.target.value })}
@@ -220,38 +226,38 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
           </select>
         </Field>
 
-        <Field label="Command" required hint="Shell command or Shannon prompt — runs when the trigger fires">
+        <Field label={t('routines.form.command')} required hint={t('routines.form.command.hint')}>
           <input
             value={form.command}
             onChange={e => setForm({ ...form, command: e.target.value })}
-            placeholder="pnpm lint"
+            placeholder={t('routines.form.command.placeholder')}
             className="w-full px-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm font-mono"
           />
         </Field>
 
-        <Field label="Matcher (optional)" hint="Tool name for *ToolUse triggers; otherwise free text">
+        <Field label={t('routines.form.matcher')} hint={t('routines.form.matcher.hint')}>
           <input
             value={form.matcher}
             onChange={e => setForm({ ...form, matcher: e.target.value })}
-            placeholder="bash"
+            placeholder={t('routines.form.matcher.placeholder')}
             className="w-full px-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm font-mono"
           />
         </Field>
 
-        <Field label="Pattern (optional)" hint="Regex filter on the matcher payload">
+        <Field label={t('routines.form.pattern')} hint={t('routines.form.pattern.hint')}>
           <input
             value={form.pattern}
             onChange={e => setForm({ ...form, pattern: e.target.value })}
-            placeholder="\\.py$"
+            placeholder={t('routines.form.pattern.placeholder')}
             className="w-full px-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm font-mono"
           />
         </Field>
 
-        <Field label="Description (optional)">
+        <Field label={t('routines.form.description')}>
           <input
             value={form.description}
             onChange={e => setForm({ ...form, description: e.target.value })}
-            placeholder="Auto-lint Python files after bash edits"
+            placeholder={t('routines.form.description.placeholder')}
             className="w-full px-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
           />
         </Field>
@@ -263,7 +269,7 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
           disabled={saving}
           className="px-md py-sm text-on-surface-variant hover:text-primary font-label-md cursor-pointer disabled:opacity-50"
         >
-          Cancel
+          {t('routines.form.cancel')}
         </button>
         <button
           onClick={onSave}
@@ -271,7 +277,7 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
           className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-sm"
         >
           {saving && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
-          {saving ? 'Saving…' : 'Create routine'}
+          {saving ? t('routines.form.saving') : t('routines.form.create')}
         </button>
       </div>
     </section>

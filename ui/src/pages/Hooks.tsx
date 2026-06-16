@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import type { HookEventInfo } from '@/types'
@@ -25,6 +26,8 @@ const CATEGORY_ORDER = [
 ] as const
 
 export default function Hooks() {
+  const intl = useIntl()
+  const t = (id: string, values?: Record<string, any>) => intl.formatMessage({ id }, values)
   const [events, setEvents] = useState<HookEventInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
@@ -36,7 +39,7 @@ export default function Hooks() {
         setEvents(await api.listHookEvents())
       } catch (e) {
         console.warn('Failed to load hook events:', e)
-        toast.error('Failed to load hook catalog')
+        toast.error(t('hooks.error.load'))
       }
       setLoading(false)
     })()
@@ -65,11 +68,11 @@ export default function Hooks() {
   return (
     <div className="p-xl space-y-lg max-w-5xl">
       <header>
-        <h1 className="font-headline-lg text-on-surface mb-xs">Triggers</h1>
+        <h1 className="font-headline-lg text-on-surface mb-xs">{t('hooks.title')}</h1>
         <p className="font-body-md text-on-surface-variant max-w-2xl">
-          Shannon can run shell commands on {liveEvents.length || 'many'} lifecycle events. Browse the catalog, then head to{' '}
-          <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">/routines</code>{' '}
-          to wire a command to one of them.
+          {t('hooks.subtitle', { count: liveEvents.length || 'many' })}
+          <code className="font-mono bg-surface-container-high px-xs rounded text-[12px]">{t('hooks.subtitle.code')}</code>{' '}
+          {t('hooks.subtitle.end')}
         </p>
       </header>
 
@@ -80,14 +83,14 @@ export default function Hooks() {
             type="search"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Search events, descriptions, or payload fields"
-            aria-label="Search hook events"
+            placeholder={t('hooks.search.placeholder')}
+            aria-label={t('hooks.search.aria')}
             className="w-full pl-xl pr-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
           />
         </div>
         <div className="flex items-center gap-xs flex-wrap" role="tablist" aria-label="Filter by category">
           <CategoryChip active={activeCategory === 'all'} onClick={() => setActiveCategory('all')}>
-            All
+            {t('hooks.filter.all')}
           </CategoryChip>
           {categories.map(c => (
             <CategoryChip key={c} active={activeCategory === c} onClick={() => setActiveCategory(c)}>
@@ -104,8 +107,8 @@ export default function Hooks() {
       ) : filtered.length === 0 ? (
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-xl text-center">
           <span className="material-symbols-outlined text-[48px] text-outline-variant block mb-sm">search_off</span>
-          <p className="font-headline-md text-on-surface mb-xs">No events match</p>
-          <p className="font-body-sm text-on-surface-variant">Try a different search or category.</p>
+          <p className="font-headline-md text-on-surface mb-xs">{t('hooks.empty.title')}</p>
+          <p className="font-body-sm text-on-surface-variant">{t('hooks.empty.description')}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-sm">
