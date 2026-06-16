@@ -2,6 +2,37 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## Sprint 3 (2026-06)
+
+### Command Palette (G3)
+
+- **G3 Palette MVP**: Quick-actions palette (iOS Shortcuts style) with ⌘K trigger, fuzzy search across actions / pages / settings / recent chats / tasks / agents / model switching. Category-grouped results, keyboard navigation.
+
+### Extensions Hub Tier-3 (Sprint 3-11)
+
+- **#71 Stdio form**: Native stdio MCP server config form (command, args, env) in Extensions Hub → Add → stdio, replacing raw JSON editor. Validates required fields, shows preview of generated `.mcp.json` entry.
+
+### Theme Manager (Sprint 3-10)
+
+- **#72 Theme picker**: Dedicated theme settings page with live preview, search, and visual swatches for all 12 themes. Replaces inline dropdown.
+
+### i18n (#73 + #75)
+
+- **#73 Phase 1 Infrastructure**: react-intl v7.1.14 setup with IntlProvider, useIntl hook, locale state with localStorage persistence (`shannon.locale`). Language switcher in Settings → General. en + zh-CN locale files. Welcome.tsx migrated as reference.
+- **#73 Phase 2 Core surfaces**: Migrated Sidebar (nav labels / mode toggle / aria-labels / titles), Layout footer (ICU plurals for tokens / sessions / tasks / agents with locale-aware number grouping), CommandPalette (actions / pages / categories / toasts), Tasks (tabs / toasts / aria). ~85 new message IDs. Chat.tsx deferred to Phase 3.
+- **#75 Sample seed**: `seed_sample_data` Tauri command populates demo conversations / tasks / agents / routines on first run. Wired into Welcome.tsx finish() for new users.
+
+### Security (D1)
+
+- **D1 README scan**: SecurityBadge now scans extension README alongside description for prompt-injection patterns. Catches malicious instructions buried in installation / usage docs.
+
+### Maintenance
+
+- **C1 Test fix**: `scan_with_readme_truncates_long_body_safely` corrected — scanner counts distinct patterns (not occurrences), so test now uses 3 distinct patterns to escalate to Dangerous.
+- **C2 Clippy**: Documented pre-existing warnings (exit 0 — no new warnings introduced).
+- **TS cleanup**: Fixed 3 pre-existing TypeScript errors in App.tsx / McpServers.tsx that were out-of-scope during Phase 1.
+- **#75 deferred**: Sample seed data NOT auto-seeded for existing users (only new installs via Welcome).
+
 ## Sprint 2 (2026-06)
 
 ### Extensions Hub (P1–P6)
