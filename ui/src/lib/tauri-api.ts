@@ -81,6 +81,35 @@ export async function clearWebhookConfig(): Promise<void> {
   await invoke('clear_webhook_config')
 }
 
+export interface SlackInboundDto {
+  bot_token: string
+  trigger_word: string
+  allowed_channels: string[]
+}
+
+export interface TelegramInboundDto {
+  bot_token: string
+  trigger_word: string
+  allowed_chats: string[]
+}
+
+export interface InboundConfigDto {
+  slack?: SlackInboundDto | null
+  telegram?: TelegramInboundDto | null
+}
+
+export async function getInboundConfig(): Promise<InboundConfigDto> {
+  return invoke('get_inbound_config')
+}
+
+export async function saveInboundConfig(dto: InboundConfigDto): Promise<void> {
+  await invoke('save_inbound_config', { dto })
+}
+
+export async function clearInboundConfig(): Promise<void> {
+  await invoke('clear_inbound_config')
+}
+
 export async function switchProvider(req: ProviderSwitchRequest): Promise<void> {
   await invoke('switch_provider', { request: req })
 }

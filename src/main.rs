@@ -173,6 +173,10 @@ fn main() {
             commands::get_webhook_config,
             commands::save_webhook_config,
             commands::clear_webhook_config,
+            // P5 Phase 1 — inbound notifications (Slack + Telegram) config storage
+            commands::get_inbound_config,
+            commands::save_inbound_config,
+            commands::clear_inbound_config,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
             commands::get_billing_plan,
             commands::get_cost_history,

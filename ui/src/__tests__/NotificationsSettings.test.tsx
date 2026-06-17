@@ -7,12 +7,18 @@ import NotificationsSettings from '@/components/settings/NotificationsSettings'
 const getWebhookConfig = vi.hoisted(() => vi.fn())
 const saveWebhookConfig = vi.hoisted(() => vi.fn())
 const clearWebhookConfig = vi.hoisted(() => vi.fn())
+const getInboundConfig = vi.hoisted(() => vi.fn())
+const saveInboundConfig = vi.hoisted(() => vi.fn())
+const clearInboundConfig = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
   getWebhookConfig: (...args: unknown[]) => getWebhookConfig(...args),
   saveWebhookConfig: (...args: unknown[]) => saveWebhookConfig(...args),
   clearWebhookConfig: (...args: unknown[]) => clearWebhookConfig(...args),
+  getInboundConfig: (...args: unknown[]) => getInboundConfig(...args),
+  saveInboundConfig: (...args: unknown[]) => saveInboundConfig(...args),
+  clearInboundConfig: (...args: unknown[]) => clearInboundConfig(...args),
 }))
 
 function wrap(ui: React.ReactElement) {
@@ -27,6 +33,10 @@ beforeEach(() => {
   getWebhookConfig.mockReset()
   saveWebhookConfig.mockReset()
   clearWebhookConfig.mockReset()
+  getInboundConfig.mockReset()
+  saveInboundConfig.mockReset()
+  clearInboundConfig.mockReset()
+  getInboundConfig.mockResolvedValue({})
 })
 
 describe('NotificationsSettings', () => {

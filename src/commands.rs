@@ -3734,6 +3734,131 @@ fn clear_webhook_config_on_disk() -> Result<(), String> {
     Ok(())
 }
 
+// --- Inbound notifications (P5 Phase 1) --------------------------------------
+//
+// Stores bot tokens + allow-lists for Slack and Telegram so a future
+// listener/poller can route inbound messages into Shannon. Phase 1 only
+// persists configuration; the actual listener ships in a later phase.
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct SlackInboundDto {
+    pub bot_token: String,
+    pub trigger_word: String,
+    pub allowed_channels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TelegramInboundDto {
+    pub bot_token: String,
+    pub trigger_word: String,
+    pub allowed_chats: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct InboundConfigDto {
+    pub slack: Option<SlackInboundDto>,
+    pub telegram: Option<TelegramInboundDto>,
+}
+
+#[tauri::command]
+pub async fn get_inbound_config() -> Result<InboundConfigDto, String> {
+    let path = resolve_webhook_config_path()?;
+    if !path.exists() {
+        return Ok(InboundConfigDto::default());
+    }
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let Ok(root) = toml::from_str::<toml::Value>(&existing) else {
+        return Ok(InboundConfigDto::default());
+    };
+    let Some(notif) = root.get("notifications").and_then(|v| v.as_table()) else {
+        return Ok(InboundConfigDto::default());
+    };
+    let Some(inbound) = notif.get("inbound").and_then(|v| v.as_table()) else {
+        return Ok(InboundConfigDto::default());
+    };
+    let slack = inbound.get("slack").and_then(|v| v.as_table()).map(|t| SlackInboundDto {
+        bot_token: t.get("bot_token").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        trigger_word: t.get("trigger_word").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        allowed_channels: t
+            .get("allowed_channels")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+    });
+    let telegram = inbound.get("telegram").and_then(|v| v.as_table()).map(|t| TelegramInboundDto {
+        bot_token: t.get("bot_token").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        trigger_word: t.get("trigger_word").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        allowed_chats: t
+            .get("allowed_chats")
+            .and_then(|v| v.as_array())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+    });
+    Ok(InboundConfigDto { slack, telegram })
+}
+
+#[tauri::command]
+pub async fn save_inbound_config(dto: InboundConfigDto) -> Result<(), String> {
+    let path = resolve_webhook_config_path()?;
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut root: toml::Value =
+        toml::from_str(&existing).unwrap_or(toml::Value::Table(toml::value::Table::new()));
+    let table = root.as_table_mut().ok_or_else(|| "config root is not a table".to_string())?;
+    let notifications = table
+        .entry("notifications")
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let notif_table = notifications
+        .as_table_mut()
+        .ok_or_else(|| "notifications is not a table".to_string())?;
+    let mut inbound = toml::value::Table::new();
+    if let Some(s) = &dto.slack {
+        let mut t = toml::value::Table::new();
+        t.insert("bot_token".into(), toml::Value::String(s.bot_token.clone()));
+        t.insert("trigger_word".into(), toml::Value::String(s.trigger_word.clone()));
+        t.insert(
+            "allowed_channels".into(),
+            toml::Value::Array(s.allowed_channels.iter().map(|c| toml::Value::String(c.clone())).collect()),
+        );
+        inbound.insert("slack".into(), toml::Value::Table(t));
+    }
+    if let Some(tg) = &dto.telegram {
+        let mut t = toml::value::Table::new();
+        t.insert("bot_token".into(), toml::Value::String(tg.bot_token.clone()));
+        t.insert("trigger_word".into(), toml::Value::String(tg.trigger_word.clone()));
+        t.insert(
+            "allowed_chats".into(),
+            toml::Value::Array(tg.allowed_chats.iter().map(|c| toml::Value::String(c.clone())).collect()),
+        );
+        inbound.insert("telegram".into(), toml::Value::Table(t));
+    }
+    notif_table.insert("inbound".into(), toml::Value::Table(inbound));
+    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    tracing::info!(path = %path.display(), "inbound config saved");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn clear_inbound_config() -> Result<(), String> {
+    let path = resolve_webhook_config_path()?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let Ok(mut root) = toml::from_str::<toml::Value>(&existing) else {
+        return Ok(());
+    };
+    if let Some(table) = root.as_table_mut() {
+        if let Some(notif) = table.get_mut("notifications").and_then(|v| v.as_table_mut()) {
+            notif.remove("inbound");
+        }
+    }
+    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    tracing::info!(path = %path.display(), "inbound config cleared");
+    Ok(())
+}
+
 // --- Billing (P0-c) ---------------------------------------------------------
 //
 // The billing surface is intentionally a demo right now — the UI shows a
