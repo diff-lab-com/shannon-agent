@@ -172,7 +172,8 @@ fn main() {
             commands::send_notification,
         ])
         .setup(|app| {
-            let state = commands::AppState::new();
+            let mut state = commands::AppState::new();
+            state.attach_notification_handler(app.handle().clone());
             app.manage(state);
 
             // Register global shortcut handlers

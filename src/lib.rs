@@ -24,3 +24,6 @@ pub mod automation_commands;
 
 #[cfg(feature = "tauri")]
 pub mod extensions_commands;
+
+#[cfg(feature = "tauri")]
+pub mod notifications;
