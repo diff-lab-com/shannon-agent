@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::api::types::LlmProvider;
+use crate::notifier::NotificationsConfig;
 
 /// A conversation preset with pre-configured settings.
 /// Duplicated here to avoid a circular dependency on shannon-commands.
@@ -67,6 +68,9 @@ pub struct ShannonConfig {
     /// Permission profile name: "strict", "balanced", "permissive", or "custom:<name>".
     #[serde(default)]
     pub permission_profile: Option<String>,
+    /// `[notifications]` section for system-level notification behavior.
+    #[serde(default)]
+    pub notifications: Option<NotificationsConfig>,
 }
 
 impl ShannonConfig {
@@ -123,6 +127,10 @@ impl ShannonConfig {
                 .permission_profile
                 .clone()
                 .or_else(|| self.permission_profile.clone()),
+            notifications: other
+                .notifications
+                .clone()
+                .or_else(|| self.notifications.clone()),
         }
     }
 

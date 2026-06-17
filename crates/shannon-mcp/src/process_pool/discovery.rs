@@ -105,6 +105,7 @@ pub type UserPromptCallback = Arc<
     dyn Fn(
             String,
             Option<serde_json::Value>,
+            String,
         ) -> Pin<
             Box<dyn Future<Output = (crate::ElicitationAction, Option<serde_json::Value>)> + Send>,
         > + Send
@@ -123,10 +124,12 @@ pub fn make_elicitation_provider(
 ) -> ElicitationProvider {
     use crate::{ElicitationAction, ElicitationRequest, ElicitationResult};
 
-    Arc::new(move |req: ElicitationRequest| {
+    Arc::new(move |req: ElicitationRequest, server_name: &str| {
         let callback = prompt_callback.clone();
+        let server_name = server_name.to_string();
         Box::pin(async move {
             tracing::info!(
+                server = %server_name,
                 message = %req.message,
                 has_schema = req.requested_schema.is_some(),
                 "MCP elicitation request"
@@ -134,7 +137,8 @@ pub fn make_elicitation_provider(
 
             match callback {
                 Some(cb) => {
-                    let (action, content) = cb(req.message, req.requested_schema).await;
+                    let (action, content) =
+                        cb(req.message, req.requested_schema, server_name).await;
                     Ok(ElicitationResult { action, content })
                 }
                 None => {
@@ -367,10 +371,13 @@ mod tests {
     #[tokio::test]
     async fn elicitation_provider_auto_declines_without_callback() {
         let provider = make_elicitation_provider(None);
-        let result = provider(ElicitationRequest {
-            message: "Enter credentials".to_string(),
-            requested_schema: None,
-        })
+        let result = provider(
+            ElicitationRequest {
+                message: "Enter credentials".to_string(),
+                requested_schema: None,
+            },
+            "test-server",
+        )
         .await
         .unwrap();
         assert_eq!(result.action, ElicitationAction::Decline);
@@ -379,9 +386,10 @@ mod tests {
 
     #[tokio::test]
     async fn elicitation_provider_delegates_to_callback() {
-        let provider = make_elicitation_provider(Some(Arc::new(|msg, schema| {
+        let provider = make_elicitation_provider(Some(Arc::new(|msg, schema, server_name| {
             Box::pin(async move {
                 assert_eq!(msg, "Enter API key");
+                assert_eq!(server_name, "reviewer");
                 assert!(schema.is_some());
                 (
                     ElicitationAction::Accept,
@@ -390,10 +398,13 @@ mod tests {
             })
         })));
 
-        let result = provider(ElicitationRequest {
-            message: "Enter API key".to_string(),
-            requested_schema: Some(serde_json::json!({"type": "object"})),
-        })
+        let result = provider(
+            ElicitationRequest {
+                message: "Enter API key".to_string(),
+                requested_schema: Some(serde_json::json!({"type": "object"})),
+            },
+            "reviewer",
+        )
         .await
         .unwrap();
 
@@ -403,14 +414,17 @@ mod tests {
 
     #[tokio::test]
     async fn elicitation_provider_cancel_action() {
-        let provider = make_elicitation_provider(Some(Arc::new(|_msg, _schema| {
+        let provider = make_elicitation_provider(Some(Arc::new(|_msg, _schema, _server_name| {
             Box::pin(async { (ElicitationAction::Cancel, None) })
         })));
 
-        let result = provider(ElicitationRequest {
-            message: "Confirm?".to_string(),
-            requested_schema: None,
-        })
+        let result = provider(
+            ElicitationRequest {
+                message: "Confirm?".to_string(),
+                requested_schema: None,
+            },
+            "test",
+        )
         .await
         .unwrap();
 
@@ -420,14 +434,17 @@ mod tests {
 
     #[tokio::test]
     async fn elicitation_provider_decline_action() {
-        let provider = make_elicitation_provider(Some(Arc::new(|_msg, _schema| {
+        let provider = make_elicitation_provider(Some(Arc::new(|_msg, _schema, _server_name| {
             Box::pin(async { (ElicitationAction::Decline, None) })
         })));
 
-        let result = provider(ElicitationRequest {
-            message: "Share location?".to_string(),
-            requested_schema: None,
-        })
+        let result = provider(
+            ElicitationRequest {
+                message: "Share location?".to_string(),
+                requested_schema: None,
+            },
+            "test",
+        )
         .await
         .unwrap();
 
@@ -645,9 +662,10 @@ mod tests {
 
     #[tokio::test]
     async fn user_prompt_callback_type_works() {
-        let callback: UserPromptCallback = Arc::new(|msg, schema| {
+        let callback: UserPromptCallback = Arc::new(|msg, schema, server_name| {
             Box::pin(async move {
                 assert!(!msg.is_empty());
+                assert!(!server_name.is_empty());
                 let _ = schema;
                 (
                     ElicitationAction::Accept,
@@ -656,7 +674,7 @@ mod tests {
             })
         });
 
-        let (action, content) = callback("test".to_string(), None).await;
+        let (action, content) = callback("test".to_string(), None, "srv".to_string()).await;
         assert_eq!(action, ElicitationAction::Accept);
         assert!(content.is_some());
     }

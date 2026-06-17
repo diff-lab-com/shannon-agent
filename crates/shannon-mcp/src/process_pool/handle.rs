@@ -433,7 +433,7 @@ impl McpServerHandle {
                         .cloned()
                         .unwrap_or(serde_json::json!({}));
                     match serde_json::from_value::<crate::ElicitationRequest>(params) {
-                        Ok(req) => match handler(req).await {
+                        Ok(req) => match handler(req, server_name).await {
                             Ok(result) => serde_json::json!({
                                 "jsonrpc": "2.0",
                                 "id": req_id,

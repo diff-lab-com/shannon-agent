@@ -74,6 +74,7 @@ pub(crate) type SamplingProvider = Arc<
 pub(crate) type ElicitationProvider = Arc<
     dyn Fn(
             crate::ElicitationRequest,
+            &str,
         )
             -> Pin<Box<dyn Future<Output = Result<crate::ElicitationResult, String>> + Send>>
         + Send
