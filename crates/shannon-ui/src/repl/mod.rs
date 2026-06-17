@@ -1339,7 +1339,8 @@ impl Repl {
             model_routes: Vec::new(),
             checkpoint_manager: shannon_core::CheckpointManager::new(),
             notifier: {
-                let mut n = shannon_core::notifier::Notifier::new();
+                use shannon_core::notifier::{Cooldown, Notifier};
+                let mut n = Notifier::new().with_cooldown(Cooldown::new());
                 // Add desktop notifier if available
                 if shannon_core::notifier::DesktopNotifier::is_available() {
                     n.add_handler(Box::new(shannon_core::notifier::DesktopNotifier::new()));
