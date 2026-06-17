@@ -545,7 +545,7 @@
   "extensions.featured.trust.community": "社区",
   "extensions.featured.trust.unknown": "未知",
   "extensions.installed.title": "已安装扩展",
-  "extensions.installed.count": "{filtered.length} {filtered.length, plural, =1 {entry} other {entries}} across {populatedKinds.length} {populatedKinds.length, plural, =1 {category} other {categories}}",
+  "extensions.installed.count": "{entries, plural, other {# 条}}，跨越 {categories, plural, other {# 个分类}}",
   "extensions.installed.scanning": "扫描本地配置中……",
   "extensions.installed.loadError": "加载已安装扩展失败",
   "extensions.installed.nothingInstalled": "暂未安装任何内容",

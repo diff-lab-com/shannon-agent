@@ -545,7 +545,7 @@
   "extensions.featured.trust.community": "Community",
   "extensions.featured.trust.unknown": "Unknown",
   "extensions.installed.title": "Installed Extensions",
-  "extensions.installed.count": "{filtered.length} {filtered.length, plural, =1 {entry} other {entries}} across {populatedKinds.length} {populatedKinds.length, plural, =1 {category} other {categories}}",
+  "extensions.installed.count": "{entries, plural, =1 {1 entry} other {# entries}} across {categories, plural, =1 {1 category} other {# categories}}",
   "extensions.installed.scanning": "Scanning local configs…",
   "extensions.installed.loadError": "Failed to load installed addons",
   "extensions.installed.nothingInstalled": "Nothing installed yet",
