@@ -43,8 +43,9 @@ import HistoryView from '@/components/tasks/HistoryView'
 import WorktreePanel from '@/components/tasks/WorktreePanel'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
+import Triage from '@/pages/Triage'
 
-type Tab = 'active' | 'history' | 'worktrees'
+type Tab = 'active' | 'history' | 'worktrees' | 'triage'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
@@ -199,6 +200,8 @@ export default function Tasks() {
           <HistoryView />
         ) : tab === 'worktrees' ? (
           <WorktreePanel />
+        ) : tab === 'triage' ? (
+          <Triage />
         ) : (
           <>
         {errorMsg && (

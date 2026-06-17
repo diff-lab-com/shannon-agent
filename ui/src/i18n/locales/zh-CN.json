@@ -1486,7 +1486,7 @@
   "extensions.plugins.composio.description": "社区 skill 集合（约 1000 个 SKILL.md 文件）。",
   "extensions.plugins.obra.description": "高质量工作流 skills（MIT）。",
   "extensions.plugins.voltagent.description": "Claude Code 格式的 subagent 定义。",
-  "extensions.hub.close": "关闭",
   "extensions.hub.noDescription": "暂无描述。",
-  "extensions.hub.triggerLabel": "触发词：{trigger}"
+  "extensions.hub.triggerLabel": "触发词：{trigger}",
+  "tasks.tab.triage": "Triage 队列"
 }

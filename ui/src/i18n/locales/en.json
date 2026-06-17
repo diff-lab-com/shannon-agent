@@ -1486,7 +1486,7 @@
   "extensions.plugins.composio.description": "Community skill bundle (~1000 SKILL.md files).",
   "extensions.plugins.obra.description": "High-quality workflow skills (MIT).",
   "extensions.plugins.voltagent.description": "Subagent definitions in Claude Code format.",
-  "extensions.hub.close": "Close",
   "extensions.hub.noDescription": "No description available.",
-  "extensions.hub.triggerLabel": "Trigger: {trigger}"
+  "extensions.hub.triggerLabel": "Trigger: {trigger}",
+  "tasks.tab.triage": "Triage"
 }
