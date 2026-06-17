@@ -178,6 +178,9 @@ fn main() {
             commands::get_inbound_config,
             commands::save_inbound_config,
             commands::clear_inbound_config,
+            // P5 Phase 2 — inbound listener supervisor
+            commands::get_inbound_listener_status,
+            commands::stop_inbound_listener,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
             commands::get_billing_plan,
             commands::get_cost_history,
@@ -187,6 +190,13 @@ fn main() {
             let mut state = commands::AppState::new();
             state.attach_notification_handler(app.handle().clone());
             app.manage(state);
+
+            // P5 Phase 2 — auto-start inbound listener if config already exists.
+            let app_handle = app.handle().clone();
+            let state_ref: tauri::State<'_, commands::AppState> = app.state();
+            tauri::async_runtime::block_on(async move {
+                commands::bootstrap_inbound_listener(&*state_ref, &app_handle).await;
+            });
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and

@@ -10,6 +10,7 @@ const clearWebhookConfig = vi.hoisted(() => vi.fn())
 const getInboundConfig = vi.hoisted(() => vi.fn())
 const saveInboundConfig = vi.hoisted(() => vi.fn())
 const clearInboundConfig = vi.hoisted(() => vi.fn())
+const getInboundListenerStatus = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -19,6 +20,7 @@ vi.mock('@/lib/tauri-api', () => ({
   getInboundConfig: (...args: unknown[]) => getInboundConfig(...args),
   saveInboundConfig: (...args: unknown[]) => saveInboundConfig(...args),
   clearInboundConfig: (...args: unknown[]) => clearInboundConfig(...args),
+  getInboundListenerStatus: (...args: unknown[]) => getInboundListenerStatus(...args),
 }))
 
 function wrap(ui: React.ReactElement) {
@@ -36,7 +38,9 @@ beforeEach(() => {
   getInboundConfig.mockReset()
   saveInboundConfig.mockReset()
   clearInboundConfig.mockReset()
+  getInboundListenerStatus.mockReset()
   getInboundConfig.mockResolvedValue({})
+  getInboundListenerStatus.mockResolvedValue({ slack_running: false, telegram_running: false })
 })
 
 describe('NotificationsSettings', () => {
@@ -136,7 +140,7 @@ describe('NotificationsSettings', () => {
       expect(screen.getByPlaceholderText('123456789:ABC...')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('C012345, C678901')).toBeInTheDocument()
       expect(screen.getByPlaceholderText('-1001234567890, 123456789')).toBeInTheDocument()
-      expect(screen.getByText('Inbound Messages (Phase 1)')).toBeInTheDocument()
+      expect(screen.getByText('Inbound Messages (Slack + Telegram)')).toBeInTheDocument()
     })
 
     it('prefills inbound form from saved config', async () => {
@@ -201,6 +205,23 @@ describe('NotificationsSettings', () => {
       fireEvent.click(screen.getByText('Clear Inbound'))
       await waitFor(() => expect(clearInboundConfig).toHaveBeenCalledTimes(1))
       expect((screen.getByPlaceholderText('xoxb-...') as HTMLInputElement).value).toBe('')
+    })
+
+    it('queries listener status on mount', async () => {
+      render(wrap(<NotificationsSettings />))
+      await waitFor(() => expect(getInboundListenerStatus).toHaveBeenCalled())
+    })
+
+    it('shows Listener active badge after save reports running status', async () => {
+      saveInboundConfig.mockResolvedValue(undefined)
+      getInboundListenerStatus
+        .mockResolvedValueOnce({ slack_running: false, telegram_running: false })
+        .mockResolvedValueOnce({ slack_running: true, telegram_running: true })
+      render(wrap(<NotificationsSettings />))
+      await waitFor(() => expect(screen.getByPlaceholderText('xoxb-...')).toBeInTheDocument())
+      fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } })
+      fireEvent.click(screen.getByText('Save Inbound Config'))
+      await waitFor(() => expect(screen.getByText('Listener active')).toBeInTheDocument())
     })
   })
 })

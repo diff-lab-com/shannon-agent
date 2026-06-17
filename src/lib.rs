@@ -27,3 +27,6 @@ pub mod extensions_commands;
 
 #[cfg(feature = "tauri")]
 pub mod notifications;
+
+#[cfg(feature = "tauri")]
+pub mod inbound;

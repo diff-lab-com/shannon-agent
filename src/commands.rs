@@ -111,6 +111,9 @@ pub struct AppState {
     /// with a `TauriNotificationHandler` once `AppHandle` is available in
     /// `main.rs` setup via `attach_notification_handler`.
     pub(crate) notifier: Arc<shannon_core::notifier::Notifier>,
+    /// Inbound listener supervisor (Phase 2). Owns the Slack + Telegram
+    /// worker tasks. None until the first config is saved.
+    pub(crate) inbound_listener: Arc<tokio::sync::Mutex<Option<crate::inbound::InboundListener>>>,
 }
 
 /// Session metadata for session list.
@@ -346,6 +349,7 @@ impl AppState {
                 shannon_agents::message_history::MessageHistoryStore::new(),
             ),
             notifier: Arc::new(shannon_core::notifier::Notifier::new()),
+            inbound_listener: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -3910,7 +3914,11 @@ pub async fn get_inbound_config() -> Result<InboundConfigDto, String> {
 }
 
 #[tauri::command]
-pub async fn save_inbound_config(dto: InboundConfigDto) -> Result<(), String> {
+pub async fn save_inbound_config(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    dto: InboundConfigDto,
+) -> Result<(), String> {
     let path = resolve_webhook_config_path()?;
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut root: toml::Value =
@@ -3947,13 +3955,21 @@ pub async fn save_inbound_config(dto: InboundConfigDto) -> Result<(), String> {
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "inbound config saved");
+    restart_inbound_listener(&state, &app_handle, &dto).await;
     Ok(())
 }
 
 #[tauri::command]
-pub async fn clear_inbound_config() -> Result<(), String> {
+pub async fn clear_inbound_config(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let path = resolve_webhook_config_path()?;
     if !path.exists() {
+        let mut listener = state.inbound_listener.lock().await;
+        if let Some(h) = listener.as_mut() {
+            h.stop().await;
+        }
+        *listener = None;
         return Ok(());
     }
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
@@ -3968,7 +3984,79 @@ pub async fn clear_inbound_config() -> Result<(), String> {
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "inbound config cleared");
+    let mut listener = state.inbound_listener.lock().await;
+    if let Some(h) = listener.as_mut() {
+        h.stop().await;
+    }
+    *listener = None;
     Ok(())
+}
+
+/// (Re)spawn inbound workers to match `dto`. Stops any existing workers
+/// first so callers can mutate config and observe the listener reflect it.
+async fn restart_inbound_listener(
+    state: &AppState,
+    app_handle: &tauri::AppHandle,
+    dto: &InboundConfigDto,
+) {
+    let mut listener = state.inbound_listener.lock().await;
+    if let Some(h) = listener.as_mut() {
+        h.stop().await;
+    }
+    let slack = dto.slack.as_ref().map(|s| crate::inbound::SlackConfig {
+        bot_token: s.bot_token.clone(),
+        trigger_word: s.trigger_word.clone(),
+        allowed_channels: s.allowed_channels.clone(),
+    });
+    let telegram = dto.telegram.as_ref().map(|t| crate::inbound::TelegramConfig {
+        bot_token: t.bot_token.clone(),
+        trigger_word: t.trigger_word.clone(),
+        allowed_chats: t.allowed_chats.clone(),
+    });
+    *listener = Some(crate::inbound::InboundListener::start(
+        app_handle.clone(),
+        slack,
+        telegram,
+    ));
+}
+
+#[tauri::command]
+pub async fn get_inbound_listener_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<crate::inbound::InboundListenerStatus, String> {
+    let listener = state.inbound_listener.lock().await;
+    Ok(listener.as_ref().map(|h| h.status()).unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn stop_inbound_listener(
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let mut listener = state.inbound_listener.lock().await;
+    if let Some(h) = listener.as_mut() {
+        h.stop().await;
+    }
+    *listener = None;
+    Ok(())
+}
+
+/// Auto-start the listener from app setup if inbound config already exists.
+/// Called from `main.rs::setup()` after `AppState` is constructed.
+pub async fn bootstrap_inbound_listener(
+    state: &AppState,
+    app_handle: &tauri::AppHandle,
+) {
+    let dto = match get_inbound_config().await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(error = %e, "inbound bootstrap: could not read config");
+            return;
+        }
+    };
+    if dto.slack.is_none() && dto.telegram.is_none() {
+        return;
+    }
+    restart_inbound_listener(state, app_handle, &dto).await;
 }
 
 // --- Billing (P0-c) ---------------------------------------------------------

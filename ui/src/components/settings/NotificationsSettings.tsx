@@ -276,6 +276,7 @@ function InboundSection() {
   const [tgToken, setTgToken] = useState('')
   const [tgTrigger, setTgTrigger] = useState('shannon')
   const [tgChats, setTgChats] = useState('')
+  const [status, setStatus] = useState<api.InboundListenerStatus | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -296,6 +297,10 @@ function InboundSection() {
       })
       .catch((e) => console.warn('getInboundConfig error:', e))
       .finally(() => { if (!cancelled) setLoading(false) })
+    api
+      .getInboundListenerStatus()
+      .then((s) => { if (!cancelled) setStatus(s) })
+      .catch((e) => console.warn('getInboundListenerStatus error:', e))
     return () => { cancelled = true }
   }, [])
 
@@ -322,6 +327,8 @@ function InboundSection() {
     try {
       await api.saveInboundConfig(buildDto())
       toast.success(t('settings.notifications.inbound.saved'))
+      const updated = await api.getInboundListenerStatus()
+      setStatus(updated)
     } catch (e) {
       console.warn('saveInboundConfig error:', e)
       toast.error(t('settings.notifications.inbound.error.saveFailed'))
@@ -336,6 +343,8 @@ function InboundSection() {
       setSlackToken(''); setSlackTrigger('shannon'); setSlackChannels('')
       setTgToken(''); setTgTrigger('shannon'); setTgChats('')
       toast.success(t('settings.notifications.inbound.cleared'))
+      const updated = await api.getInboundListenerStatus()
+      setStatus(updated)
     } catch (e) {
       console.warn('clearInboundConfig error:', e)
       toast.error(t('settings.notifications.inbound.error.clearFailed'))
@@ -355,7 +364,15 @@ function InboundSection() {
   return (
     <div className="mt-xl bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
       <div>
-        <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.inbound.title')}</h3>
+        <div className="flex items-center gap-sm mb-xs">
+          <h3 className="font-headline-md text-on-surface">{t('settings.notifications.inbound.title')}</h3>
+          {status && (status.slack_running || status.telegram_running) && (
+            <span className="inline-flex items-center gap-xs px-sm py-xxs rounded-full bg-tertiary/20 text-tertiary font-label-sm">
+              <span className="w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse" />
+              {t('settings.notifications.inbound.listenerActive')}
+            </span>
+          )}
+        </div>
         <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.inbound.subtitle')}</p>
       </div>
 
@@ -447,7 +464,7 @@ function InboundSection() {
       </div>
 
       <p className="text-on-surface-variant text-xs pt-sm border-t border-outline-variant/30">
-        {t('settings.notifications.inbound.phase1Note')}
+        {t('settings.notifications.inbound.phase2Note')}
       </p>
     </div>
   )

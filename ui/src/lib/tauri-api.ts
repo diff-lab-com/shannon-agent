@@ -110,6 +110,29 @@ export async function clearInboundConfig(): Promise<void> {
   await invoke('clear_inbound_config')
 }
 
+export interface InboundListenerStatus {
+  telegram_running: boolean
+  slack_running: boolean
+}
+
+export async function getInboundListenerStatus(): Promise<InboundListenerStatus> {
+  return invoke('get_inbound_listener_status')
+}
+
+export async function stopInboundListener(): Promise<void> {
+  await invoke('stop_inbound_listener')
+}
+
+export interface InboundMessage {
+  provider: 'slack' | 'telegram'
+  source_id: string
+  source_name: string
+  sender_id: string
+  sender_name: string
+  text: string
+  timestamp: number
+}
+
 export async function switchProvider(req: ProviderSwitchRequest): Promise<void> {
   await invoke('switch_provider', { request: req })
 }
