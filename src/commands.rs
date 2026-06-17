@@ -107,6 +107,10 @@ pub struct AppState {
     pub(crate) plugin_registry: Arc<tokio::sync::RwLock<shannon_core::plugin::PluginRegistry>>,
     /// Append-only inter-agent message history (`~/.shannon/agent-messages/`).
     pub(crate) agent_message_history: Arc<shannon_agents::message_history::MessageHistoryStore>,
+    /// Native OS notification dispatcher (P3). Empty by default; populated
+    /// with a `TauriNotificationHandler` once `AppHandle` is available in
+    /// `main.rs` setup via `attach_notification_handler`.
+    pub(crate) notifier: Arc<shannon_core::notifier::Notifier>,
 }
 
 /// Session metadata for session list.
@@ -340,7 +344,26 @@ impl AppState {
             agent_message_history: Arc::new(
                 shannon_agents::message_history::MessageHistoryStore::new(),
             ),
+            notifier: Arc::new(shannon_core::notifier::Notifier::new()),
         }
+    }
+
+    /// Attach the Tauri notification handler to the dispatcher and enable
+    /// cooldown + level filtering. Called once from `main.rs` setup() once
+    /// the `AppHandle` is available. Idempotent — replacing any handler
+    /// previously registered under the `"tauri"` name.
+    pub fn attach_notification_handler(&mut self, app: tauri::AppHandle) {
+        use shannon_core::notifier::{
+            Cooldown, NotificationLevel, Notifier,
+        };
+
+        let mut notifier = Notifier::new()
+            .with_cooldown(Cooldown::new())
+            .with_minimum_level(NotificationLevel::Info);
+        notifier.add_handler(Box::new(
+            crate::notifications::TauriNotificationHandler::new(app),
+        ));
+        self.notifier = Arc::new(notifier);
     }
 
     fn build_client_config(cfg: &DesktopConfig) -> LlmClientConfig {
@@ -484,6 +507,7 @@ pub async fn send_message(
     let current_session_id_arc = state.current_session_id.clone();
     let state_mgr_arc = state.state_manager.clone();
     let model_arc = state.model.clone();
+    let notifier_arc = state.notifier.clone();
 
     let return_qid = qid_str.clone();
     tokio::spawn(async move {
@@ -647,14 +671,22 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
+                        let _ = fire_query_notification(
+                            &notifier_arc,
+                            NotificationKind::Completed,
+                        );
                     }
                     QueryEvent::Failed { error, .. } => {
                         let _ = app.emit(
                             event_names::QUERY_FAILED,
                             events::QueryFailedPayload {
                                 query_id: qid_str.clone(),
-                                error,
+                                error: error.clone(),
                             },
+                        );
+                        let _ = fire_query_notification(
+                            &notifier_arc,
+                            NotificationKind::Failed(error),
                         );
                     }
                     // Ignore other events in MVP
@@ -667,6 +699,10 @@ pub async fn send_message(
                             query_id: qid_str.clone(),
                             error: e.to_string(),
                         },
+                    );
+                    let _ = fire_query_notification(
+                        &notifier_arc,
+                        NotificationKind::Failed(e.to_string()),
                     );
                 }
             }
@@ -3417,9 +3453,104 @@ async fn seed_sample_data_in(tasks_dir: &std::path::Path) -> Result<SeedReport, 
     })
 }
 
+/// Payload for `send_notification`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct NotificationPayload {
+    pub title: String,
+    pub body: String,
+    /// Reserved for future use. Current tauri-plugin-notification v2 API
+    /// surface on the desktop's pinned shannon-core rev does not expose
+    /// per-level icon mapping; level is currently informational only.
+    #[serde(default)]
+    pub level: Option<String>,
+}
+
+/// Fire a native OS notification via `tauri-plugin-notification`.
+///
+/// The desktop's pinned `shannon-core` rev (`a19a15d` = v0.5.2) exposes the
+/// P1 notifications orchestrator. The frontend "Test notification" button
+/// invokes this command directly; query-event firing sites
+/// (`fire_query_notification` below) go through the shared `Notifier` on
+/// `AppState` so they benefit from cooldown + level filtering.
+#[tauri::command]
+pub async fn send_notification(
+    app: tauri::AppHandle,
+    payload: NotificationPayload,
+) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+
+    app.notification()
+        .builder()
+        .title(payload.title)
+        .body(payload.body)
+        .show()
+        .map_err(|e| format!("notification show failed: {e}"))
+}
+
+/// Query-event notification kinds used by `fire_query_notification`.
+enum NotificationKind {
+    Completed,
+    Failed(String),
+}
+
+/// Fire a cooldown-aware notification for a query lifecycle event.
+///
+/// `Completed` uses `source = "query_complete"` with a 0ms window (always
+/// fires — each query completion is worth surfacing). `Failed` uses
+/// `source = "query_error"` with a 5000ms window to coalesce cascading
+/// errors (e.g. repeated API timeouts within a retry storm).
+///
+/// Returns whether the notification was actually dispatched (`Ok(false)`
+/// means suppressed by cooldown). Production callers discard the result.
+fn fire_query_notification(
+    notifier: &shannon_core::notifier::Notifier,
+    kind: NotificationKind,
+) -> Result<bool, shannon_core::notifier::NotifierError> {
+    use shannon_core::notifier::{Notification, NotificationLevel};
+    use chrono::Utc;
+
+    let (title, body, level, source, window_ms) = match kind {
+        NotificationKind::Completed => (
+            "Shannon".to_string(),
+            "Query complete".to_string(),
+            NotificationLevel::Info,
+            "query_complete".to_string(),
+            0_u64,
+        ),
+        NotificationKind::Failed(err) => {
+            let body = if err.chars().count() > 200 {
+                let truncated: String = err.chars().take(197).collect();
+                format!("{truncated}...")
+            } else {
+                err
+            };
+            (
+                "Shannon — query failed".to_string(),
+                body,
+                NotificationLevel::Error,
+                "query_error".to_string(),
+                5_000_u64,
+            )
+        }
+    };
+
+    let notification = Notification {
+        title,
+        body,
+        level,
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: Utc::now(),
+        source: Some(source),
+        action_id: None,
+    };
+
+    notifier.notify_dedup(&notification, window_ms)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shannon_core::notifier::{Cooldown, LogNotifier, Notifier};
 
     #[test]
     fn test_app_state_new() {
@@ -3427,6 +3558,31 @@ mod tests {
         let messages = state.messages.blocking_lock();
         assert!(messages.is_empty());
         assert!(!*state.querying.blocking_lock());
+        assert_eq!(state.notifier.handler_count(), 0);
+    }
+
+    #[test]
+    fn test_fire_query_notification_completed_always_fires() {
+        let mut notifier = Notifier::new().with_cooldown(Cooldown::new());
+        notifier.add_handler(Box::new(LogNotifier::new()));
+        let first = fire_query_notification(&notifier, NotificationKind::Completed).unwrap();
+        assert!(first);
+        let second = fire_query_notification(&notifier, NotificationKind::Completed).unwrap();
+        assert!(second, "completed has 0ms window — no cooldown");
+    }
+
+    #[test]
+    fn test_fire_query_notification_failed_coalesces() {
+        let mut notifier = Notifier::new().with_cooldown(Cooldown::new());
+        notifier.add_handler(Box::new(LogNotifier::new()));
+        let first =
+            fire_query_notification(&notifier, NotificationKind::Failed("api timeout".into()))
+                .unwrap();
+        assert!(first);
+        let second =
+            fire_query_notification(&notifier, NotificationKind::Failed("api timeout 2".into()))
+                .unwrap();
+        assert!(!second, "second failure within 5s window should be coalesced");
     }
 
     #[test]
@@ -3650,6 +3806,29 @@ mod tests {
                 "sample-welcome-3".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn test_notification_payload_deserializes_with_optional_level() {
+        let json = serde_json::json!({
+            "title": "Hello",
+            "body": "World",
+        });
+        let p: NotificationPayload = serde_json::from_value(json).expect("parse");
+        assert_eq!(p.title, "Hello");
+        assert_eq!(p.body, "World");
+        assert!(p.level.is_none());
+    }
+
+    #[test]
+    fn test_notification_payload_deserializes_with_level() {
+        let json = serde_json::json!({
+            "title": "Boom",
+            "body": "broken",
+            "level": "error",
+        });
+        let p: NotificationPayload = serde_json::from_value(json).expect("parse");
+        assert_eq!(p.level.as_deref(), Some("error"));
     }
 
     #[test]
