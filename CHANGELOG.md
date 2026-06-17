@@ -11,7 +11,7 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
 
 ### Dependencies
 
-- **shannon-code engine pin to be bumped to v0.5.3** once that tag cuts. Picks up the `WebhookHandler` core types.
+- **shannon-code engine bumped to v0.5.3** (`a19a15d` → `c5a107e`). Picks up the `WebhookHandler` core types (six templates + HMAC signing) used by the new desktop wiring.
 
 ## v0.2.7 (2026-06-17) — notifications feature complete
 

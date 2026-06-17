@@ -15,14 +15,14 @@ tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-pl
 
 [dependencies]
 # Shannon engine crates — pulled from the shannon-code git repo via subpath.
-# Pinned to v0.5.2@a19a15d (notifications feature: Cooldown, NotificationsConfig,
-# Notifier::notify_dedup, ShellNotifier, --notify flag).
-shannon-core = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-core", rev = "a19a15d" }
-shannon-types = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-types", rev = "a19a15d" }
-shannon-tools = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-tools", rev = "a19a15d" }
-shannon-mcp = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-mcp", rev = "a19a15d" }
-shannon-skills = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-skills", rev = "a19a15d" }
-shannon-agents = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-agents", rev = "a19a15d" }
+# Pinned to v0.5.3@c5a107e (notifications next phase: WebhookHandler with six
+# templates + HMAC, click-to-foreground).
+shannon-core = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-core", rev = "c5a107e" }
+shannon-types = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-types", rev = "c5a107e" }
+shannon-tools = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-tools", rev = "c5a107e" }
+shannon-mcp = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-mcp", rev = "c5a107e" }
+shannon-skills = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-skills", rev = "c5a107e" }
+shannon-agents = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-agents", rev = "c5a107e" }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
