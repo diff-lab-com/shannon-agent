@@ -2,6 +2,28 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.2.6 (2026-06-17) — native notification renderer
+
+### Features
+
+- **Native OS notifications (Phase 3 of cross-repo notifications feature).** Desktop now fires system-level notifications via `tauri-plugin-notification`. The Rust side exposes a `send_notification` Tauri command wrapping the plugin's builder API; the frontend side exposes a `useNotification()` React hook that calls it.
+  - `Cargo.toml`: `tauri-plugin-notification = "2"` added as optional dep, gated behind the existing `tauri` feature.
+  - `src/main.rs`: plugin registered on the Tauri builder; command registered in `invoke_handler!`.
+  - `src/commands.rs`: `send_notification(AppHandle, NotificationPayload { title, body, level })` builds and shows a single notification via `NotificationExt::notification()`.
+  - `ui/src/hooks/useNotification.ts`: stable-callback hook wrapping `invoke('send_notification', ...)`.
+  - `ui/src/__tests__/useNotification.test.ts`: 3 vitest unit tests (basic invoke, level pass-through, callback identity stability).
+  - `src/commands.rs` tests: 2 Rust unit tests for payload deserialization.
+
+**Note on integration scope.** Desktop's pinned `shannon-core` rev (`ede2105` = v0.5.1) predates the P1 notifications work in shannon-code (Cooldown, NotificationsConfig, Notifier pipeline). The v0.2.6 release ships the rendering surface only — it does NOT consume `NotificationsConfig` or apply per-source cooldown yet. A future release that bumps the pin past P1 will wire the full pipeline transparently; the frontend hook signature stays stable.
+
+## v0.2.5 (2026-06-17) — engine sync to shannon-code v0.5.1
+
+### Dependencies
+
+- **shannon-code engine bumped to v0.5.1** (`e63ae82` → `ede2105`). All six shannon-* crates (core, types, tools, mcp, skills, agents) now track the v0.5.1 tag, picking up:
+  - **Sprint 5 MCP integration**: elicitation TUI (bounded mpsc + spoofing-resistant `[EXTERNAL MCP · {server}]` labeling), MCP prompts as `/{server}:{prompt}` slash commands, `completion/complete` Tab autocomplete, `.mcpb` bundle CLI install.
+  - **v0.5.1 security hardening on `.mcpb` install**: symlink path traversal rejection, 10 MB manifest size cap, parse-error data-loss prevention, install preview + `[y/N]` confirmation flow.
+
 ## Sprint 5 (2026-06)
 
 ### i18n — Phase 5 Long-tail Components (S5-1)
