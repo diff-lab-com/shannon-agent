@@ -180,6 +180,41 @@ impl Default for NotificationCooldownConfig {
     }
 }
 
+/// Coarse-grained notification volume preset. Acts as a layer above
+/// `minimum_level` filtering and source-prefix gating: when `Some`, the
+/// `Notifier` filters based on the preset before `minimum_level` is applied.
+///
+/// - `Quiet` — only `Error` level.
+/// - `Balanced` — `Error` + sources starting with `permission:` or `agent:`.
+/// - `Verbose` — all sources (subject to `minimum_level`).
+///
+/// `None` disables preset filtering entirely (preserves historical behaviour).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NotifPreset {
+    Quiet,
+    Balanced,
+    Verbose,
+}
+
+impl NotifPreset {
+    /// Returns `true` if a notification with the given level + source passes this preset.
+    pub fn allows(self, level: NotificationLevel, source: Option<&str>) -> bool {
+        match self {
+            Self::Quiet => level.severity() >= NotificationLevel::Error.severity(),
+            Self::Balanced => {
+                if level.severity() >= NotificationLevel::Error.severity() {
+                    return true;
+                }
+                source
+                    .map(|s| s.starts_with("permission:") || s.starts_with("agent:"))
+                    .unwrap_or(false)
+            }
+            Self::Verbose => true,
+        }
+    }
+}
+
 /// Top-level notification configuration parsed from `[notifications]` in `.shannon.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationsConfig {
@@ -192,6 +227,11 @@ pub struct NotificationsConfig {
     /// Notifications below this severity are filtered out.
     #[serde(default = "NotificationsConfig::default_minimum_level")]
     pub minimum_level: NotificationLevel,
+    /// Optional volume preset. When set, filters notifications by source pattern
+    /// (quiet = errors only; balanced = errors + permission/agent; verbose = all).
+    /// Applied before `minimum_level`.
+    #[serde(default)]
+    pub preset: Option<NotifPreset>,
     /// Per-source-type cooldown windows.
     #[serde(default)]
     pub cooldown: NotificationCooldownConfig,
@@ -215,6 +255,7 @@ impl NotificationsConfig {
             enabled: true,
             sound: true,
             minimum_level: NotificationLevel::Info,
+            preset: None,
             cooldown: NotificationCooldownConfig::default(),
             webhook: None,
         }
@@ -226,6 +267,7 @@ impl NotificationsConfig {
             enabled: false,
             sound: false,
             minimum_level: NotificationLevel::Info,
+            preset: None,
             cooldown: NotificationCooldownConfig::default(),
             webhook: None,
         }
@@ -453,6 +495,7 @@ pub struct Notifier {
     handlers: Vec<Box<dyn NotificationHandler + Send + Sync>>,
     cooldown: Option<Cooldown>,
     minimum_level: Option<NotificationLevel>,
+    preset: Option<NotifPreset>,
 }
 
 impl Notifier {
@@ -462,6 +505,7 @@ impl Notifier {
             handlers: Vec::new(),
             cooldown: None,
             minimum_level: None,
+            preset: None,
         }
     }
 
@@ -474,6 +518,13 @@ impl Notifier {
     /// Set a minimum severity level. Notifications below this level are silently dropped.
     pub fn with_minimum_level(mut self, level: NotificationLevel) -> Self {
         self.minimum_level = Some(level);
+        self
+    }
+
+    /// Set a volume preset. Filters notifications by source pattern before
+    /// `minimum_level` is applied. See [`NotifPreset`].
+    pub fn with_preset(mut self, preset: NotifPreset) -> Self {
+        self.preset = Some(preset);
         self
     }
 
@@ -497,6 +548,11 @@ impl Notifier {
     /// concatenated message.  Even if one handler fails the remaining handlers
     /// are still invoked.
     pub fn notify(&self, notification: &Notification) -> Result<(), NotifierError> {
+        if let Some(preset) = self.preset {
+            if !preset.allows(notification.level, notification.source.as_deref()) {
+                return Ok(());
+            }
+        }
         if let Some(min) = self.minimum_level {
             if notification.level.severity() < min.severity() {
                 return Ok(());
@@ -759,6 +815,15 @@ pub enum WebhookTemplate {
     Feishu,
     /// WeChat Work (企业微信) group bot. Body: `{"msgtype": "text", "text": {"content": "{title}\n{body}"}}`.
     Wechat,
+    /// Microsoft Teams incoming webhook (Workflow / connector). Body: `{"text": "**{title}**\n{body}"}`.
+    /// Markdown is best-effort — Teams renders a subset.
+    Teams,
+    /// Telegram bot API. Caller puts `chat_id` in the URL query string
+    /// (`https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>`); body
+    /// carries `{"text": "*{title}*\n{body}", "parse_mode": "Markdown"}`.
+    Telegram,
+    /// DingTalk (钉钉) custom robot. Body: `{"msgtype": "markdown", "markdown": {"title": "{title}", "text": "### {title}\n{body}"}}`.
+    DingTalk,
     /// User-supplied JSON template. `{title}`, `{body}`, `{level}` are substituted
     /// in a single pass (no re-interpretation).
     Custom(String),
@@ -787,7 +852,7 @@ pub struct WebhookConfig {
     /// Payload template. Default [`WebhookTemplate::Raw`].
     #[serde(default)]
     pub template: WebhookTemplate,
-    /// Request timeout in milliseconds. Default 3000.
+    /// Request timeout in milliseconds. Default 5000.
     #[serde(default = "WebhookConfig::default_timeout_ms")]
     pub timeout_ms: u64,
     /// When `false` (default), the notification body is omitted from the
@@ -800,7 +865,7 @@ pub struct WebhookConfig {
 
 impl WebhookConfig {
     fn default_timeout_ms() -> u64 {
-        3000
+        5000
     }
 }
 
@@ -923,6 +988,34 @@ impl WebhookHandler {
                 };
                 serde_json::json!({ "msgtype": "text", "text": { "content": text } }).to_string()
             }
+            WebhookTemplate::Teams => {
+                let text = if self.config.include_body {
+                    format!("**{title}**\n{body}")
+                } else {
+                    format!("**{title}**")
+                };
+                serde_json::json!({ "text": text }).to_string()
+            }
+            WebhookTemplate::Telegram => {
+                let text = if self.config.include_body {
+                    format!("*{title}*\n{body}")
+                } else {
+                    title
+                };
+                serde_json::json!({ "text": text, "parse_mode": "Markdown" }).to_string()
+            }
+            WebhookTemplate::DingTalk => {
+                let text = if self.config.include_body {
+                    format!("### {title}\n{body}")
+                } else {
+                    format!("### {title}")
+                };
+                serde_json::json!({
+                    "msgtype": "markdown",
+                    "markdown": { "title": title, "text": text }
+                })
+                .to_string()
+            }
             WebhookTemplate::Custom(tpl) => substitute_single_pass(
                 tpl,
                 &[
@@ -966,19 +1059,44 @@ impl NotificationHandler for WebhookHandler {
         let client = self.client.clone();
         let url = self.config.url.clone();
         handle.spawn(async move {
-            let mut req = client
-                .post(&url)
-                .header("Content-Type", "application/json")
-                .body(body);
-            if !sig.is_empty() {
-                req = req.header("X-Shannon-Signature", format!("sha256={sig}"));
-            }
-            if let Err(e) = req.send().await {
-                tracing::warn!(
-                    target: "shannon_core::notifier::webhook",
-                    error = %e,
-                    "webhook delivery failed"
-                );
+            const MAX_ATTEMPTS: u32 = 3;
+            let mut attempt: u32 = 0;
+            let mut delay_ms: u64 = 500;
+            loop {
+                attempt += 1;
+                let mut req = client
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .body(body.clone());
+                if !sig.is_empty() {
+                    req = req.header("X-Shannon-Signature", format!("sha256={sig}"));
+                }
+                match req.send().await {
+                    Ok(resp) if resp.status().is_success() => return,
+                    Ok(resp) => {
+                        tracing::warn!(
+                            target: "shannon_core::notifier::webhook",
+                            status = %resp.status(),
+                            attempt,
+                            "webhook returned non-success status"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "shannon_core::notifier::webhook",
+                            error = %e,
+                            attempt,
+                            "webhook delivery failed"
+                        );
+                    }
+                }
+                if attempt >= MAX_ATTEMPTS {
+                    return;
+                }
+                let jitter = (delay_ms / 4).max(1);
+                let actual_delay = delay_ms + (rand::random::<u64>() % jitter);
+                tokio::time::sleep(Duration::from_millis(actual_delay)).await;
+                delay_ms *= 2;
             }
         });
         Ok(())
@@ -1654,6 +1772,151 @@ enabled = true
     }
 
     #[test]
+    fn webhook_teams_template_renders_markdown_text() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Teams, true)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["text"], "**Build complete**\nAll tests passed");
+    }
+
+    #[test]
+    fn webhook_teams_template_omits_body_when_disabled() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Teams, false)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["text"], "**Build complete**");
+    }
+
+    #[test]
+    fn webhook_telegram_template_includes_parse_mode() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Telegram, true)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["parse_mode"], "Markdown");
+        assert_eq!(v["text"], "*Build complete*\nAll tests passed");
+    }
+
+    #[test]
+    fn webhook_dingtalk_template_renders_markdown_message() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::DingTalk, true)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["msgtype"], "markdown");
+        assert_eq!(v["markdown"]["title"], "Build complete");
+        assert_eq!(
+            v["markdown"]["text"],
+            "### Build complete\nAll tests passed"
+        );
+    }
+
+    #[test]
+    fn webhook_dingtalk_template_omits_body_when_disabled() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::DingTalk, false)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["markdown"]["text"], "### Build complete");
+    }
+
+    #[test]
+    fn webhook_default_timeout_is_five_seconds() {
+        assert_eq!(WebhookConfig::default_timeout_ms(), 5000);
+    }
+
+    // -- NotifPreset ---------------------------------------------------------
+
+    #[test]
+    fn preset_quiet_only_allows_errors() {
+        let preset = NotifPreset::Quiet;
+        assert!(preset.allows(NotificationLevel::Error, None));
+        assert!(preset.allows(NotificationLevel::Error, Some("agent:exit")));
+        assert!(!preset.allows(NotificationLevel::Warning, None));
+        assert!(!preset.allows(NotificationLevel::Info, Some("permission:request")));
+        assert!(!preset.allows(NotificationLevel::Success, None));
+    }
+
+    #[test]
+    fn preset_balanced_allows_errors_and_permission_agent() {
+        let preset = NotifPreset::Balanced;
+        // Errors pass regardless of source
+        assert!(preset.allows(NotificationLevel::Error, None));
+        assert!(preset.allows(NotificationLevel::Error, Some("anything")));
+        // Non-error only passes for permission/agent sources
+        assert!(preset.allows(NotificationLevel::Info, Some("permission:request")));
+        assert!(preset.allows(NotificationLevel::Info, Some("agent:exit")));
+        // Non-error with other sources is dropped
+        assert!(!preset.allows(NotificationLevel::Info, Some("tool:Edit")));
+        assert!(!preset.allows(NotificationLevel::Warning, Some("query:complete")));
+        assert!(!preset.allows(NotificationLevel::Info, None));
+    }
+
+    #[test]
+    fn preset_verbose_allows_everything() {
+        let preset = NotifPreset::Verbose;
+        assert!(preset.allows(NotificationLevel::Info, None));
+        assert!(preset.allows(NotificationLevel::Success, Some("tool:Edit")));
+        assert!(preset.allows(NotificationLevel::Error, None));
+    }
+
+    #[test]
+    fn notifier_preset_filters_before_handlers_invoked() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let fired = Arc::new(AtomicUsize::new(0));
+        let fired_clone = fired.clone();
+        let cb = CallbackNotifier::new(move |_n: &Notification| {
+            fired_clone.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        let mut notifier = Notifier::new().with_preset(NotifPreset::Quiet);
+        notifier.add_handler(Box::new(cb));
+
+        // Quiet should suppress Info, allow Error
+        let info_n = Notification {
+            title: "info".into(),
+            body: String::new(),
+            level: NotificationLevel::Info,
+            id: "1".into(),
+            timestamp: Utc::now(),
+            source: Some("tool:Edit".into()),
+            action_id: None,
+        };
+        let err_n = Notification {
+            title: "err".into(),
+            body: String::new(),
+            level: NotificationLevel::Error,
+            id: "2".into(),
+            timestamp: Utc::now(),
+            source: Some("query:complete".into()),
+            action_id: None,
+        };
+
+        notifier.notify(&info_n).unwrap();
+        assert_eq!(fired.load(Ordering::SeqCst), 0, "quiet should drop info");
+        notifier.notify(&err_n).unwrap();
+        assert_eq!(fired.load(Ordering::SeqCst), 1, "quiet should fire error");
+    }
+
+    #[test]
+    fn notifications_config_deserializes_preset_field() {
+        let toml = r#"
+enabled = true
+sound = false
+minimum_level = "info"
+preset = "balanced"
+"#;
+        let cfg: NotificationsConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.preset, Some(NotifPreset::Balanced));
+    }
+
+    #[test]
+    fn notifications_config_preset_defaults_to_none() {
+        let toml = r#"
+enabled = true
+"#;
+        let cfg: NotificationsConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.preset, None);
+    }
+
+    #[test]
     fn webhook_custom_template_substitutes_placeholders() {
         let tpl = r#"{"event":"shannon","text":"[{level}] {title}: {body}"}"#.to_string();
         let h = WebhookHandler::new(webhook_config(WebhookTemplate::Custom(tpl), true)).unwrap();
@@ -1770,7 +2033,7 @@ template = "slack"
         let cfg: WebhookConfig = toml::from_str(toml).unwrap();
         assert_eq!(cfg.url, "https://hooks.slack.com/services/abc");
         assert_eq!(cfg.template, WebhookTemplate::Slack);
-        assert_eq!(cfg.timeout_ms, 3000); // default
+        assert_eq!(cfg.timeout_ms, 5000); // default
         assert!(!cfg.include_body); // default
         assert!(cfg.secret.is_none()); // default
     }
