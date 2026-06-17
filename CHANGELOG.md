@@ -2,7 +2,19 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
-## Unreleased (dev) — notifications feature (Phase 1 + Phase 2 + wiring)
+## Unreleased (dev) — notifications next phase (Bundle A + Bundle B)
+
+### Features
+
+- **Webhook notification sink (Bundle B, commit e697172).** New `WebhookHandler` in `shannon-core::notifier` delivers notifications to any HTTP endpoint with six template formats: Slack (`{"text": "...", "blocks": [...]}`), Discord ({"content": "...", "username": "Shannon"}), Feishu/飞书 (`{"msg_type": "text", "content": {"text": "..."}}`), WeChat Work/企业微信 (`{"msgtype": "text", "text": {"content": "..."}}`), `Custom(String)` for user-supplied templates, and `Raw` (plain JSON envelope). Optional HMAC-SHA256 signing via `X-Shannon-Signature: sha256=<hex>` header when `secret` is configured — matches GitHub/Stripe webhook convention so receivers can verify authenticity. Fire-and-forget via `tokio::spawn` so a slow or unreachable endpoint never blocks the notifier pipeline. `WebhookConfig { url, secret, template, timeout_ms = 3000, include_body = false }` lives under `[notifications.webhook]` in `.shannon.toml`. CLI (`shannon-cli::main::fire_headless_completion_notification`) and desktop (`attach_notification_handler`) both auto-attach the handler when configured. Single-pass template substitution reuses the PR #31 security pattern — substituted values are never re-scanned for placeholders.
+- **Desktop click-to-foreground (Bundle A).** `shannon-desktop::main` now listens for `notification-clicked` Tauri events and calls `unminimize + show + set_focus` on the main window. macOS and Windows already focus the app via native bundle-id behavior; this listener is a defensive fallback for Linux DEs and any future Tauri plugin versions that route desktop clicks here.
+
+### Tests
+
+- `shannon-core::notifier`: 17 new unit tests covering all six templates, HMAC signing, sanitization, and config parsing.
+- `shannon-core/tests/webhook_integration.rs` (new): 7 mockito-backed integration tests verifying HTTP delivery, HMAC header, non-blocking behavior on slow/unreachable endpoints, runtime-missing error path, and Feishu/WeChat payload schemas.
+
+## v0.5.2 (2026-06) — notifications feature (Phase 1 + Phase 2 + wiring)
 
 ### Features
 

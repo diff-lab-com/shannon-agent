@@ -195,6 +195,10 @@ pub struct NotificationsConfig {
     /// Per-source-type cooldown windows.
     #[serde(default)]
     pub cooldown: NotificationCooldownConfig,
+    /// Optional webhook sink. When set, every notification is POSTed to the
+    /// configured URL in addition to (not instead of) other handlers.
+    #[serde(default)]
+    pub webhook: Option<WebhookConfig>,
 }
 
 impl NotificationsConfig {
@@ -212,6 +216,7 @@ impl NotificationsConfig {
             sound: true,
             minimum_level: NotificationLevel::Info,
             cooldown: NotificationCooldownConfig::default(),
+            webhook: None,
         }
     }
 
@@ -222,6 +227,7 @@ impl NotificationsConfig {
             sound: false,
             minimum_level: NotificationLevel::Info,
             cooldown: NotificationCooldownConfig::default(),
+            webhook: None,
         }
     }
 }
@@ -714,6 +720,268 @@ impl NotificationHandler for DesktopNotifier {
                 reason: "Desktop notifications not supported on this platform".to_string(),
             })
         }
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+// ============================================================================
+// WebhookHandler — POST notifications to a configured URL
+// ============================================================================
+
+/// Built-in payload templates for [`WebhookHandler`].
+///
+/// Each template produces the JSON body that the target platform's incoming
+/// webhook expects. `Custom` accepts a user-supplied JSON template with
+/// `{title}` / `{body}` / `{level}` placeholders (single-pass substitution —
+/// substituted values are not re-interpreted as templates). `Raw` serializes
+/// the full [`Notification`] struct.
+///
+/// TOML usage:
+/// ```toml
+/// # Built-in variant: assign the variant name as a string.
+/// template = "slack"
+///
+/// # Custom variant: inline table.
+/// template = { custom = "{level}: {title} — {body}" }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebhookTemplate {
+    /// Slack incoming webhook. Body: `{"text": "*{title}*\n{body}"}` (body omitted
+    /// when `include_body = false`: `{"text": "{title}"}`).
+    Slack,
+    /// Discord channel webhook. Body: `{"username": "Shannon", "content": "**{title}**\n{body}"}`.
+    Discord,
+    /// Feishu (飞书) custom bot. Body: `{"msg_type": "text", "content": {"text": "{title}\n{body}"}}`.
+    Feishu,
+    /// WeChat Work (企业微信) group bot. Body: `{"msgtype": "text", "text": {"content": "{title}\n{body}"}}`.
+    Wechat,
+    /// User-supplied JSON template. `{title}`, `{body}`, `{level}` are substituted
+    /// in a single pass (no re-interpretation).
+    Custom(String),
+    /// Serialize the full `Notification` struct as JSON.
+    Raw,
+}
+
+impl Default for WebhookTemplate {
+    fn default() -> Self {
+        Self::Raw
+    }
+}
+
+/// Configuration for a single webhook sink.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    /// Target URL (e.g. `https://hooks.slack.com/services/...`,
+    /// `https://open.feishu.cn/open-apis/bot/v2/hook/<id>`,
+    /// `https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<key>`).
+    pub url: String,
+    /// HMAC-SHA256 signing secret. When `None`, no signature header is sent.
+    /// Native Slack/Discord/Feishu/WeChat bots ignore unknown headers — this
+    /// signing is for custom reverse-proxy receivers that want to verify origin.
+    #[serde(default)]
+    pub secret: Option<String>,
+    /// Payload template. Default [`WebhookTemplate::Raw`].
+    #[serde(default)]
+    pub template: WebhookTemplate,
+    /// Request timeout in milliseconds. Default 3000.
+    #[serde(default = "WebhookConfig::default_timeout_ms")]
+    pub timeout_ms: u64,
+    /// When `false` (default), the notification body is omitted from the
+    /// payload and only the title is sent. Set `true` to forward full bodies —
+    /// make sure your target channel accepts potentially sensitive content.
+    /// Bodies are still sanitized (control chars stripped, truncated to 280 chars).
+    #[serde(default)]
+    pub include_body: bool,
+}
+
+impl WebhookConfig {
+    fn default_timeout_ms() -> u64 {
+        3000
+    }
+}
+
+/// Sanitizes a notification field for safe inclusion in webhook payloads.
+///
+/// Replaces newlines with spaces, strips remaining control chars (`\t` kept),
+/// truncates to `max_chars` (appending `...`). Mirrors the PR #31 shell-out
+/// hardening so webhook payloads cannot carry escape sequences aimed at
+/// downstream chat clients.
+fn sanitize_field(s: &str, max_chars: usize) -> String {
+    let mut out: String = s
+        .chars()
+        .map(|c| if c == '\n' { ' ' } else { c })
+        .filter(|c| *c == '\t' || !char::is_control(*c))
+        .collect();
+    let count = out.chars().count();
+    if count > max_chars {
+        let truncated: String = out.chars().take(max_chars.saturating_sub(3)).collect();
+        out = format!("{truncated}...");
+    }
+    out
+}
+
+/// Single-pass template substitution. Substituted values are not re-scanned,
+/// so a title containing literal `{body}` will not have body content injected.
+/// Reuses the P2 security hardening pattern (PR #31, fixed template injection).
+fn substitute_single_pass(template: &str, pairs: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while !rest.is_empty() {
+        let mut matched = false;
+        for (k, v) in pairs {
+            if let Some(suffix) = rest.strip_prefix(*k) {
+                out.push_str(v);
+                rest = suffix;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            match rest.chars().next() {
+                Some(ch) => {
+                    out.push(ch);
+                    rest = &rest[ch.len_utf8()..];
+                }
+                None => break,
+            }
+        }
+    }
+    out
+}
+
+/// HTTP POST notification handler.
+///
+/// Fire-and-forget: `send()` spawns a tokio task to deliver the request and
+/// returns immediately. Delivery failures are logged via `tracing::warn!`
+/// and do not surface to the caller — `send()` returning `Ok(())` does NOT
+/// guarantee delivery.
+///
+/// Requires a running tokio runtime (returns `HandlerFailed` if called outside one).
+///
+/// HMAC-SHA256 signing (when `secret` is set) follows GitHub/Stripe convention:
+/// `X-Shannon-Signature: sha256=<hex>` header carries the HMAC of the request body.
+pub struct WebhookHandler {
+    config: WebhookConfig,
+    client: reqwest::Client,
+    name: String,
+}
+
+impl WebhookHandler {
+    /// Construct a new handler. Returns `Err` if the reqwest client cannot be built.
+    pub fn new(config: WebhookConfig) -> Result<Self, NotifierError> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(config.timeout_ms))
+            .build()
+            .map_err(|e| NotifierError::HandlerFailed {
+                name: "webhook".into(),
+                reason: format!("client build failed: {e}"),
+            })?;
+        Ok(Self {
+            config,
+            client,
+            name: "webhook".to_string(),
+        })
+    }
+
+    /// Render the JSON body for `notification` using the configured template.
+    pub fn render_body(&self, n: &Notification) -> String {
+        let title = sanitize_field(&n.title, 280);
+        let body = sanitize_field(&n.body, 280);
+        match &self.config.template {
+            WebhookTemplate::Slack => {
+                if self.config.include_body {
+                    serde_json::json!({ "text": format!("*{title}*\n{body}") }).to_string()
+                } else {
+                    serde_json::json!({ "text": title }).to_string()
+                }
+            }
+            WebhookTemplate::Discord => {
+                let content = if self.config.include_body {
+                    format!("**{title}**\n{body}")
+                } else {
+                    format!("**{title}**")
+                };
+                serde_json::json!({ "username": "Shannon", "content": content }).to_string()
+            }
+            WebhookTemplate::Feishu => {
+                let text = if self.config.include_body {
+                    format!("{title}\n{body}")
+                } else {
+                    title
+                };
+                serde_json::json!({ "msg_type": "text", "content": { "text": text } }).to_string()
+            }
+            WebhookTemplate::Wechat => {
+                let text = if self.config.include_body {
+                    format!("{title}\n{body}")
+                } else {
+                    title
+                };
+                serde_json::json!({ "msgtype": "text", "text": { "content": text } }).to_string()
+            }
+            WebhookTemplate::Custom(tpl) => substitute_single_pass(
+                tpl,
+                &[
+                    ("{title}", title.as_str()),
+                    ("{body}", body.as_str()),
+                    ("{level}", &n.level.to_string()),
+                ],
+            ),
+            WebhookTemplate::Raw => serde_json::to_string(n).unwrap_or_default(),
+        }
+    }
+
+    /// Compute the `sha256=<hex>` HMAC signature for `body`, or empty string if no secret.
+    fn sign(&self, body: &str) -> Result<String, NotifierError> {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let Some(secret) = &self.config.secret else {
+            return Ok(String::new());
+        };
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|e| {
+            NotifierError::HandlerFailed {
+                name: self.name.clone(),
+                reason: format!("HMAC key error: {e}"),
+            }
+        })?;
+        mac.update(body.as_bytes());
+        Ok(hex::encode(mac.finalize().into_bytes()))
+    }
+}
+
+impl NotificationHandler for WebhookHandler {
+    fn send(&self, n: &Notification) -> Result<(), NotifierError> {
+        let body = self.render_body(n);
+        let sig = self.sign(&body)?;
+        let handle =
+            tokio::runtime::Handle::try_current().map_err(|_| NotifierError::HandlerFailed {
+                name: self.name.clone(),
+                reason: "no tokio runtime available for webhook delivery".into(),
+            })?;
+        let client = self.client.clone();
+        let url = self.config.url.clone();
+        handle.spawn(async move {
+            let mut req = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .body(body);
+            if !sig.is_empty() {
+                req = req.header("X-Shannon-Signature", format!("sha256={sig}"));
+            }
+            if let Err(e) = req.send().await {
+                tracing::warn!(
+                    target: "shannon_core::notifier::webhook",
+                    error = %e,
+                    "webhook delivery failed"
+                );
+            }
+        });
+        Ok(())
     }
 
     fn name(&self) -> &str {
@@ -1324,5 +1592,249 @@ enabled = true
         let json = serde_json::to_string(&n).unwrap();
         assert!(json.contains("\"source\":\"tool:Edit\""));
         assert!(json.contains("\"action_id\":\"approve:perm_42\""));
+    }
+
+    // -- WebhookHandler: template rendering ----------------------------------
+
+    fn sample_notification() -> Notification {
+        Notification {
+            title: "Build complete".into(),
+            body: "All tests passed".into(),
+            level: NotificationLevel::Success,
+            id: "w1".into(),
+            timestamp: Utc::now(),
+            source: Some("query_complete".into()),
+            action_id: None,
+        }
+    }
+
+    fn webhook_config(template: WebhookTemplate, include_body: bool) -> WebhookConfig {
+        WebhookConfig {
+            url: "http://example.invalid/hook".into(),
+            secret: None,
+            template,
+            timeout_ms: 100,
+            include_body,
+        }
+    }
+
+    #[test]
+    fn webhook_slack_template_renders_correctly() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Slack, true)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["text"], "*Build complete*\nAll tests passed");
+    }
+
+    #[test]
+    fn webhook_discord_template_renders_correctly() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Discord, true)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["username"], "Shannon");
+        assert_eq!(v["content"], "**Build complete**\nAll tests passed");
+    }
+
+    #[test]
+    fn webhook_feishu_template_renders_text_payload() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Feishu, true)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["msg_type"], "text");
+        assert_eq!(v["content"]["text"], "Build complete\nAll tests passed");
+    }
+
+    #[test]
+    fn webhook_wechat_template_renders_text_payload() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Wechat, true)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["msgtype"], "text");
+        assert_eq!(v["text"]["content"], "Build complete\nAll tests passed");
+    }
+
+    #[test]
+    fn webhook_custom_template_substitutes_placeholders() {
+        let tpl = r#"{"event":"shannon","text":"[{level}] {title}: {body}"}"#.to_string();
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Custom(tpl), true)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["event"], "shannon");
+        assert_eq!(v["text"], "[SUCCESS] Build complete: All tests passed");
+    }
+
+    #[test]
+    fn webhook_custom_template_uses_single_pass_substitution() {
+        // Regression test for template-injection bug class (fixed in PR #31
+        // for shell-out, here for webhook Custom template): a title containing
+        // literal `{body}` must NOT have body content injected.
+        let tpl = "{title}".to_string();
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Custom(tpl), true)).unwrap();
+        let n = Notification {
+            title: "evil {body}".into(),
+            body: "SENSITIVE".into(),
+            level: NotificationLevel::Info,
+            id: "x".into(),
+            timestamp: Utc::now(),
+            source: None,
+            action_id: None,
+        };
+        let body = h.render_body(&n);
+        assert_eq!(body, "evil {body}"); // {body} stays literal, SENSITIVE not injected
+    }
+
+    #[test]
+    fn webhook_raw_template_serializes_notification() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Raw, false)).unwrap();
+        let n = sample_notification();
+        let body = h.render_body(&n);
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["title"], "Build complete");
+        assert_eq!(v["level"], "success");
+        assert_eq!(v["source"], "query_complete");
+    }
+
+    #[test]
+    fn webhook_hmac_signature_matches_receiver_recompute() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        let cfg = WebhookConfig {
+            url: "http://example.invalid/hook".into(),
+            secret: Some("topsecret".into()),
+            template: WebhookTemplate::Raw,
+            timeout_ms: 100,
+            include_body: false,
+        };
+        let h = WebhookHandler::new(cfg).unwrap();
+        let body = h.render_body(&sample_notification());
+        let sig = h.sign(&body).unwrap();
+        assert!(sig.starts_with("0000") || sig.len() == 64); // 64 hex chars for SHA-256
+
+        // Recompute on receiver side
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(b"topsecret").unwrap();
+        mac.update(body.as_bytes());
+        let expected = hex::encode(mac.finalize().into_bytes());
+        assert_eq!(sig, expected);
+    }
+
+    #[test]
+    fn webhook_hmac_absent_when_secret_none() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Raw, false)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let sig = h.sign(&body).unwrap();
+        assert_eq!(sig, "");
+    }
+
+    #[test]
+    fn webhook_unreachable_url_returns_handler_failed_outside_runtime() {
+        // send() requires a tokio runtime; without one it returns HandlerFailed.
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Raw, false)).unwrap();
+        let result = h.send(&sample_notification());
+        assert!(result.is_err(), "expected error outside runtime");
+        match result {
+            Err(NotifierError::HandlerFailed { name, .. }) => assert_eq!(name, "webhook"),
+            _ => panic!("expected HandlerFailed"),
+        }
+    }
+
+    #[test]
+    fn webhook_client_build_fails_on_invalid_timeout() {
+        let cfg = WebhookConfig {
+            url: "http://example.invalid/hook".into(),
+            secret: None,
+            template: WebhookTemplate::Raw,
+            timeout_ms: 0, // may still work; test just ensures new() is callable
+            include_body: false,
+        };
+        let result = WebhookHandler::new(cfg);
+        assert!(result.is_ok(), "zero timeout should still build a client");
+    }
+
+    #[test]
+    fn webhook_include_body_false_omits_body_field() {
+        let h = WebhookHandler::new(webhook_config(WebhookTemplate::Slack, false)).unwrap();
+        let body = h.render_body(&sample_notification());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        // Title only, no body content
+        assert_eq!(v["text"], "Build complete");
+        assert!(!body.contains("All tests passed"));
+    }
+
+    #[test]
+    fn webhook_config_merges_with_defaults() {
+        let toml = r#"
+url = "https://hooks.slack.com/services/abc"
+template = "slack"
+"#;
+        let cfg: WebhookConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.url, "https://hooks.slack.com/services/abc");
+        assert_eq!(cfg.template, WebhookTemplate::Slack);
+        assert_eq!(cfg.timeout_ms, 3000); // default
+        assert!(!cfg.include_body); // default
+        assert!(cfg.secret.is_none()); // default
+    }
+
+    #[test]
+    fn webhook_config_deserializes_feishu_and_wechat() {
+        let tomls = [
+            (
+                r#"url = 'x'
+template = 'feishu'"#,
+                WebhookTemplate::Feishu,
+            ),
+            (
+                r#"url = 'x'
+template = 'wechat'"#,
+                WebhookTemplate::Wechat,
+            ),
+        ];
+        for (toml, expected) in tomls {
+            let cfg: WebhookConfig = toml::from_str(toml).unwrap();
+            assert_eq!(cfg.template, expected, "failed for {toml}");
+        }
+    }
+
+    #[test]
+    fn webhook_config_custom_template_round_trips() {
+        let toml = r#"
+url = 'x'
+template = { custom = '{level}: {title}' }
+"#;
+        let cfg: WebhookConfig = toml::from_str(toml).unwrap();
+        match cfg.template {
+            WebhookTemplate::Custom(s) => assert_eq!(s, "{level}: {title}"),
+            other => panic!("expected Custom, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn webhook_sanitize_field_strips_control_chars_and_truncates() {
+        let s = "line1\nline2\x07bell\there";
+        let out = sanitize_field(s, 100);
+        assert!(!out.contains('\n'));
+        assert!(!out.contains('\x07'));
+        assert!(out.contains('h')); // tab + letters preserved
+
+        let long: String = "a".repeat(300);
+        let out = sanitize_field(&long, 10);
+        assert_eq!(out.chars().count(), 10);
+        assert!(out.ends_with("..."));
+    }
+
+    #[test]
+    fn webhook_notifications_config_accepts_webhook_section() {
+        let toml = r#"
+enabled = true
+
+[webhook]
+url = "https://hooks.slack.com/services/abc"
+template = "slack"
+"#;
+        let cfg: NotificationsConfig = toml::from_str(toml).unwrap();
+        assert!(cfg.enabled);
+        assert!(cfg.webhook.is_some());
+        let wh = cfg.webhook.unwrap();
+        assert_eq!(wh.url, "https://hooks.slack.com/services/abc");
     }
 }

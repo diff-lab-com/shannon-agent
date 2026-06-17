@@ -193,6 +193,42 @@ export SHANNON_MODEL="llama3"
 
 </details>
 
+<details>
+<summary>Notifications (optional)</summary>
+
+Shannon fires notifications on query completion / errors / tool-use events.
+The REPL renders them via the terminal's native notifier; headless mode
+(`--notify` flag) shells out to `notify-send` / `osascript` / BurntToast.
+
+To also push notifications to a chat webhook (Slack, Discord, Feishu,
+WeChat Work, or any custom endpoint), add a `[notifications.webhook]`
+block to your `.shannon.toml`:
+
+```toml
+[notifications.webhook]
+url = "https://hooks.slack.com/services/T.../B..."
+template = "slack"      # slack | discord | feishu | wechat | raw | custom = "<template>"
+include_body = true      # include notification body in the payload (default false)
+# Optional HMAC-SHA256 signing — receivers verify via X-Shannon-Signature header
+secret = "your-shared-secret"
+timeout_ms = 3000
+```
+
+**Verifying HMAC signatures on the receiver side** (GitHub/Stripe
+convention; the signature is sent as `X-Shannon-Signature: sha256=<hex>`):
+
+```python
+import hmac, hashlib
+
+def verify(raw_body: bytes, sig_header: str, secret: str) -> bool:
+    if not sig_header.startswith("sha256="):
+        return False
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(sig_header.removeprefix("sha256="), expected)
+```
+
+</details>
+
 ### 3. Run
 
 ```bash
