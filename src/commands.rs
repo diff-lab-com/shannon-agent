@@ -3417,6 +3417,40 @@ async fn seed_sample_data_in(tasks_dir: &std::path::Path) -> Result<SeedReport, 
     })
 }
 
+/// Payload for `send_notification`.
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct NotificationPayload {
+    pub title: String,
+    pub body: String,
+    /// Reserved for future use. Current tauri-plugin-notification v2 API
+    /// surface on the desktop's pinned shannon-core rev does not expose
+    /// per-level icon mapping; level is currently informational only.
+    #[serde(default)]
+    pub level: Option<String>,
+}
+
+/// Fire a native OS notification via `tauri-plugin-notification`.
+///
+/// The desktop's pinned `shannon-core` rev (`ede2105` = v0.5.1) predates the
+/// P1 notifications work in shannon-code, so this command is self-contained —
+/// it does NOT consume `NotificationsConfig`/`Cooldown` from shannon-core.
+/// A future desktop release that bumps the pin past P1 will wire the full
+/// pipeline (per-source dedup, level filtering, config-driven defaults).
+#[tauri::command]
+pub async fn send_notification(
+    app: tauri::AppHandle,
+    payload: NotificationPayload,
+) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+
+    app.notification()
+        .builder()
+        .title(payload.title)
+        .body(payload.body)
+        .show()
+        .map_err(|e| format!("notification show failed: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3650,6 +3684,29 @@ mod tests {
                 "sample-welcome-3".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn test_notification_payload_deserializes_with_optional_level() {
+        let json = serde_json::json!({
+            "title": "Hello",
+            "body": "World",
+        });
+        let p: NotificationPayload = serde_json::from_value(json).expect("parse");
+        assert_eq!(p.title, "Hello");
+        assert_eq!(p.body, "World");
+        assert!(p.level.is_none());
+    }
+
+    #[test]
+    fn test_notification_payload_deserializes_with_level() {
+        let json = serde_json::json!({
+            "title": "Boom",
+            "body": "broken",
+            "level": "error",
+        });
+        let p: NotificationPayload = serde_json::from_value(json).expect("parse");
+        assert_eq!(p.level.as_deref(), Some("error"));
     }
 
     #[test]

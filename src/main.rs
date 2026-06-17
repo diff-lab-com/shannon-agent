@@ -42,6 +42,7 @@ fn main() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::send_message,
             commands::get_conversation,
@@ -167,6 +168,8 @@ fn main() {
             shannon_desktop::scheduled_commands::prune_task_worktrees,
             // Onboarding seed (#75) — first-run sample tasks
             commands::seed_sample_data,
+            // P3 notifications — native OS notification bridge
+            commands::send_notification,
         ])
         .setup(|app| {
             let state = commands::AppState::new();
