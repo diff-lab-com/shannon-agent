@@ -2,6 +2,46 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.3.0 (2026-06-18) — navigation restructure + per-session working dir + Extensions Hub + i18n audit
+
+### Features
+
+- **P1 — Sidebar navigation restructure.** Sidebar now exposes only Chat + Scheduled as top-level entries. Automation, Goals, Triage, and Mission Control removed from primary nav; Tasks moved to internal tabs within Scheduled. Cuts the surface area to what the redesigned chat-first flow actually uses.
+- **P2 — Chat right context panel + inline QuickFix/Editor.** Chat page gains a right-side context panel (token usage with context-window bar, active tools with live status, file context chips). QuickFix and Editor — previously top-level routes — are now inline modals launched from the chat input toolbar. Lazy-loaded so the main chat bundle stays small.
+- **P3 — Scheduled Sprint 2 form.** Dual-mode schedule input at the top of `ScheduleForm`: natural-language ("every weekday at 9am") parses to a cron preview, plus the raw cron editor underneath for power users. Picks up shannon-code engine B6 (event-triggered routines) + B9 (per-task worktrees) wire-compatible schemas.
+- **P4 — Extensions catalog expansion + Models quick-setup presets.** MCP registry installer surfaces a `tool_count` badge on installed servers. New Models quick-setup cards for Deepseek / GLM / MiniMax / OpenAI / Kimi — each card takes an inline API key and calls `switchProvider` with the right `base_url` + `model`.
+- **P5 Phase 1 — Slack + Telegram inbound config storage.** `NotificationsSettings` gains an Inbound section for Slack (bot_token + trigger_word + allowed_channels) and Telegram (bot_token + trigger_word + allowed_chats). Persisted to `~/.shannon/desktop/config.json` under `[notifications.inbound]`. Listener (Phase 2) not yet wired — this commit only lands storage + UI.
+- **Per-session working directory.** `SessionMeta` gains an optional `working_dir`. New `set_session_working_dir(id, path)` Tauri command canonicalizes the path, updates session metadata, syncs the process cwd when the session is active, and emits `CONFIG_UPDATED`. `switch_session` restores the process cwd from session metadata so each conversation remembers its own project root. Chat page exposes this via a header strip breadcrumb chip with native folder picker.
+
+### Fixes
+
+- **P0 — timestamp millis.** Engine contract uses Unix epoch milliseconds for `chrono_timestamp()`. Desktop was passing through seconds, which broke every "x minutes ago" computation in the UI. Now serializes millis consistently across `QueryEvent` payloads and session metadata.
+- **P0 — MCP registry wrapped shape.** `list_mcp_registry_servers` was unwrapping a paginated envelope. Now returns the inner `servers[]` array the frontend expects.
+- **P0 — billing demo data.** `get_billing_plan` / `get_cost_history` / `get_billing_history` were stubs returning empty; now return demo data so the Usage & Billing page renders meaningfully out of the box.
+- **P0 — Advanced rename.** Renamed the Advanced Settings subpage (was mislabeled "Performance" in nav) so labels match across sidebar, page header, and route.
+- **P0 — `/perf` route removal.** Legacy performance route still linked from a stale nav entry. Removed the route and all inbound links.
+- **Chat page visual refresh.** New header strip shows session title + working directory breadcrumb + provider/model pill. Subtle ambient backdrop for depth. Session list items show working-directory hint when set. Refined spacing and typography on message bubbles.
+
+### Accessibility
+
+- **T9 — WCAG AA on NotificationsSettings** (carried over from v0.2.9). Loading spinners have `role="status"` + `aria-live="polite"`. Form fields use associated `<label htmlFor>` elements. Show/hide secret button exposes `aria-label`. Save/Clear states communicated via disabled + label change.
+- **Per-session WD chip** keyboard-accessible: focus-visible ring, aria-label, native folder picker.
+
+### i18n
+
+- **P7 — McpServers + Installed bilingual coverage.** Both Extensions Hub tabs now have every user-visible string wrapped with `intl.formatMessage`. ICU message fix: `extensions.installed.count` was using `{filtered.length}` (invalid — ICU doesn't allow dotted variable names); restructured to use plain `entries` / `categories` variables.
+- **GeneralSettings audit.** Header, subheader, all 5 approval modes (label + description), session info labels (Provider / Active Provider / Model / Working Directory), toast messages ("Approval mode: X", "Failed to update approval mode") — all bilingual.
+- **Plugins tab audit.** Previously fully English. Now wraps title, description (with rich-text `<code>` via FormattedMessage), "Coming in P3" preview, "Soon" badge, entries count, and all 4 placeholder repo descriptions.
+- **OPCKanbanBoard variant cards.** Critical / Review / Done / Archived / In Progress / "Proposed by {name}" / "Assigned to {name}" — all localized in both blocked, active, done, failed, and default card variants.
+- **TaskDAGView legend.** Completed / Running / Pending legend + "Click any task to view details" hint localized.
+- **ExtensionsHub detail pane.** Close button, "No description available." fallback, "Trigger: X" label localized.
+- **Chat beautification i18n.** 12 new `chat.header.*` and `chat.session.workingDirHint` keys for the per-session working directory UI.
+- All keys at full parity between `en.json` and `zh-CN.json` (zero missing on either side).
+
+### Dependencies
+
+- shannon-code engine remains at v0.5.5 (no rev bump this sprint — see Cargo.toml `[patch."ssh://..."]` block for the path-dep override).
+
 ## v0.2.9 (2026-06-17) — webhook config UI + load fix + i18n
 
 ### Features
