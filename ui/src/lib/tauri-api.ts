@@ -61,6 +61,26 @@ export async function configure(update: ConfigUpdate): Promise<void> {
   await invoke('configure', { update })
 }
 
+export interface WebhookConfigDto {
+  url: string
+  template: string
+  secret: string | null
+  timeout_ms: number
+  include_body: boolean
+}
+
+export async function getWebhookConfig(): Promise<WebhookConfigDto | null> {
+  return invoke('get_webhook_config')
+}
+
+export async function saveWebhookConfig(dto: WebhookConfigDto): Promise<void> {
+  await invoke('save_webhook_config', { dto })
+}
+
+export async function clearWebhookConfig(): Promise<void> {
+  await invoke('clear_webhook_config')
+}
+
 export async function switchProvider(req: ProviderSwitchRequest): Promise<void> {
   await invoke('switch_provider', { request: req })
 }

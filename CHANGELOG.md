@@ -2,6 +2,30 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.2.9 (2026-06-17) — webhook config UI + load fix + i18n
+
+### Features
+
+- **Webhook config UI (C7).** New `NotificationsSettings` page in Settings lets users configure webhook delivery from the desktop UI instead of editing `.shannon.toml` by hand. Form fields: URL, template dropdown (Slack / Discord / Feishu / WeChat Work / Microsoft Teams / Telegram / DingTalk / Raw / Custom JSON), optional shared secret (show/hide toggle), `timeout_ms`, and `include_body` switch. Save writes the merged config back to `.shannon.toml` via `toml::Value` read-modify-write so unrelated tables are preserved. Clear removes the `[notifications.webhook]` section. Sidebar entry added under Settings.
+  - 3 new Tauri commands: `get_webhook_config`, `save_webhook_config`, `clear_webhook_config`. Config path resolution prefers `.shannon.toml` then falls back to `~/.shannon/config.toml`.
+  - 6 vitest tests covering loading state, empty defaults, prefill from saved config, save blocked on empty URL, save dto shape, and clear behavior.
+
+### Fixes
+
+- **Desktop webhook config actually loads.** Reused the shannon-code v0.5.4 fix: replaces `ConfigBuilder::load_local_toml()` (skipped nested `[notifications.webhook]` table) with `toml::from_str::<ShannonConfig>` direct parse. `.shannon.toml` first, `~/.shannon/config.toml` fallback.
+
+### Accessibility
+
+- **WCAG AA on NotificationsSettings (T9).** Loading spinner has `role="status"` + `aria-live="polite"` + sr-only text. All form fields have associated `<label htmlFor>` elements. Show/hide secret button has `aria-label`. Save/Clear button states (saving/clearing) communicated via disabled state + label change.
+
+### i18n
+
+- **26 new translation keys** added to both `en.json` and `zh-CN.json`: `nav.notifications`, `settings.notifications.{title, subtitle, loading, url, template, templateCustom, customBody, customBodyHint, secret, secretPlaceholder, secretHint, timeoutMs, includeBody, save, saving, clear, clearing, saved, cleared, toggleSecret, restartHint, error.urlRequired, error.saveFailed, error.clearFailed}`.
+
+### Dependencies
+
+- **shannon-code engine bumped to v0.5.5.** Picks up C9 (Teams/Telegram/DingTalk templates), T7 (retry/backoff + 5s default timeout), T5 (Quiet/Balanced/Verbose presets), T2 (permission prompt notification), T3 (agent exit notification). The desktop webhook config UI reads/writes the same `[notifications.webhook]` schema so future core changes stay wire-compatible.
+
 ## v0.2.8 (2026-06-17) — notifications next phase (Bundle A + Bundle B)
 
 ### Features

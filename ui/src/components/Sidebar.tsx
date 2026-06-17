@@ -396,6 +396,14 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
                   </>
                 )}
              </NavLink>
+             <NavLink to="/settings/notifications" className={getSubNavClass}>
+                {({ isActive }) => (
+                  <>
+                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
+                    {intl.formatMessage({ id: 'nav.notifications' })}
+                  </>
+                )}
+             </NavLink>
           </div>
         )}
 

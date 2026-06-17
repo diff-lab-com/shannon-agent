@@ -3562,12 +3562,174 @@ fn fire_query_notification(
     notifier.notify_dedup(&notification, window_ms)
 }
 
-/// Best-effort load of `[notifications.webhook]` from `.shannon.toml` in the
-/// current working directory. Returns `None` on any error — never panics the
-/// app on config issues.
+/// Best-effort load of `[notifications.webhook]` from `~/.shannon/config.toml`
+/// and `.shannon.toml` (project-local). Returns `None` on any error — never
+/// panics the app on config issues.
 fn load_desktop_webhook_config() -> Option<shannon_core::notifier::WebhookConfig> {
-    let cfg = shannon_core::unified_config::ConfigBuilder::new().build();
+    let cfg = shannon_core::unified_config::ConfigBuilder::new()
+        .load_global_toml()
+        .load_local_toml()
+        .build();
     cfg.notifications.and_then(|n| n.webhook)
+}
+
+/// Serializable webhook config mirror — keeps the TS boundary clean and
+/// avoids leaking `WebhookTemplate`'s serde-tagged enum directly.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WebhookConfigDto {
+    pub url: String,
+    pub template: String,
+    pub secret: Option<String>,
+    pub timeout_ms: u64,
+    pub include_body: bool,
+}
+
+#[tauri::command]
+pub async fn get_webhook_config() -> Result<Option<WebhookConfigDto>, String> {
+    let cfg = load_desktop_webhook_config();
+    Ok(cfg.map(|c| WebhookConfigDto {
+        url: c.url,
+        template: template_to_str(&c.template),
+        secret: c.secret,
+        timeout_ms: c.timeout_ms,
+        include_body: c.include_body,
+    }))
+}
+
+#[tauri::command]
+pub async fn save_webhook_config(dto: WebhookConfigDto) -> Result<(), String> {
+    save_webhook_config_to_disk(&dto)
+}
+
+#[tauri::command]
+pub async fn clear_webhook_config() -> Result<(), String> {
+    clear_webhook_config_on_disk()
+}
+
+fn template_to_str(t: &shannon_core::notifier::WebhookTemplate) -> String {
+    use shannon_core::notifier::WebhookTemplate::*;
+    match t {
+        Slack => "slack".into(),
+        Discord => "discord".into(),
+        Feishu => "feishu".into(),
+        Wechat => "wechat".into(),
+        Teams => "teams".into(),
+        Telegram => "telegram".into(),
+        DingTalk => "dingtalk".into(),
+        Raw => "raw".into(),
+        Custom(s) => format!("custom:{s}"),
+    }
+}
+
+fn template_from_str(s: &str) -> shannon_core::notifier::WebhookTemplate {
+    use shannon_core::notifier::WebhookTemplate::*;
+    match s {
+        "slack" => Slack,
+        "discord" => Discord,
+        "feishu" => Feishu,
+        "wechat" => Wechat,
+        "teams" => Teams,
+        "telegram" => Telegram,
+        "dingtalk" => DingTalk,
+        "raw" => Raw,
+        other => {
+            if let Some(custom) = other.strip_prefix("custom:") {
+                Custom(custom.to_string())
+            } else {
+                Raw
+            }
+        }
+    }
+}
+
+/// Resolve the config file path used for the webhook section. Prefers the
+/// project-local `.shannon.toml` if it exists; otherwise uses the global
+/// `~/.shannon/config.toml` (creating the parent directory if missing).
+fn resolve_webhook_config_path() -> Result<std::path::PathBuf, String> {
+    let local = std::path::Path::new(".shannon.toml");
+    if local.exists() {
+        return Ok(local.to_path_buf());
+    }
+    let home = dirs::home_dir().ok_or_else(|| "could not resolve $HOME".to_string())?;
+    let dir = home.join(".shannon");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    Ok(dir.join("config.toml"))
+}
+
+/// Read-modify-write the `[notifications.webhook]` table on disk. Preserves
+/// all other top-level tables and keys. Comments and formatting are lost
+/// (TOML round-trip via `toml::Value`), which is acceptable for a settings
+/// UI write path.
+fn save_webhook_config_to_disk(dto: &WebhookConfigDto) -> Result<(), String> {
+    let path = resolve_webhook_config_path()?;
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut root: toml::Value =
+        toml::from_str(&existing).unwrap_or(toml::Value::Table(toml::value::Table::new()));
+
+    let table = root.as_table_mut().ok_or_else(|| {
+        "config root is not a table — refusing to overwrite user config".to_string()
+    })?;
+
+    let template_val = match template_from_str(&dto.template) {
+        shannon_core::notifier::WebhookTemplate::Custom(s) => {
+            toml::Value::Table({
+                let mut t = toml::value::Table::new();
+                t.insert("custom".into(), toml::Value::String(s));
+                t
+            })
+        }
+        t => toml::Value::String(template_to_str(&t)),
+    };
+
+    let mut wh = toml::value::Table::new();
+    wh.insert("url".into(), toml::Value::String(dto.url.clone()));
+    if let Some(s) = &dto.secret {
+        wh.insert("secret".into(), toml::Value::String(s.clone()));
+    }
+    wh.insert("template".into(), template_val);
+    wh.insert(
+        "timeout_ms".into(),
+        toml::Value::Integer(dto.timeout_ms as i64),
+    );
+    wh.insert(
+        "include_body".into(),
+        toml::Value::Boolean(dto.include_body),
+    );
+
+    let notifications = table
+        .entry("notifications")
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    let notif_table = notifications
+        .as_table_mut()
+        .ok_or_else(|| "notifications is not a table".to_string())?;
+    notif_table.insert("webhook".into(), toml::Value::Table(wh));
+
+    let serialized =
+        toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    tracing::info!(path = %path.display(), "webhook config saved");
+    Ok(())
+}
+
+fn clear_webhook_config_on_disk() -> Result<(), String> {
+    let path = resolve_webhook_config_path()?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let Ok(mut root) = toml::from_str::<toml::Value>(&existing) else {
+        return Ok(());
+    };
+    if let Some(table) = root.as_table_mut() {
+        if let Some(notif) = table.get_mut("notifications").and_then(|v| v.as_table_mut()) {
+            notif.remove("webhook");
+        }
+    }
+    let serialized =
+        toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    tracing::info!(path = %path.display(), "webhook config cleared");
+    Ok(())
 }
 
 #[cfg(test)]
