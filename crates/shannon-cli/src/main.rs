@@ -1620,22 +1620,52 @@ fn fire_headless_completion_notification(exit_code: HeadlessExitCode, prompt: &s
     if let Some(webhook_cfg) = load_headless_webhook_config() {
         match shannon_core::notifier::WebhookHandler::new(webhook_cfg) {
             Ok(handler) => {
-                if let Err(e) =
-                    shannon_core::notifier::NotificationHandler::send(&handler, &notification)
-                {
-                    eprintln!("[notify:webhook] {e}");
-                }
+                // WebhookHandler::send uses tokio::spawn internally, which
+                // requires a running runtime. The headless block above has
+                // already dropped its runtime by this point, so spin up a
+                // short-lived runtime that keeps the spawned task alive
+                // until delivery completes (or timeout_ms elapses).
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        eprintln!("[notify:webhook] runtime init failed: {e}");
+                        return;
+                    }
+                };
+                rt.block_on(async move {
+                    if let Err(e) =
+                        shannon_core::notifier::NotificationHandler::send(&handler, &notification)
+                    {
+                        eprintln!("[notify:webhook] {e}");
+                    }
+                    // give the spawned fire-and-forget task time to deliver
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                });
             }
             Err(e) => eprintln!("[notify:webhook] handler init failed: {e}"),
         }
     }
 }
 
-/// Best-effort load of `[notifications.webhook]` from `.shannon.toml`.
-/// Returns `None` on any error (missing file, parse failure, no webhook section).
+/// Best-effort load of `[notifications.webhook]` from `.shannon.toml`
+/// (project-local) or `~/.shannon/config.toml` (global). Project-local takes
+/// precedence. Returns `None` on any error — never breaks the headless run.
+///
+/// Uses `toml::from_str` directly because `ConfigBuilder::load_local_toml`
+/// does simple key=value parsing (no nested tables) — see
+/// `shannon_core::unified_config::load_config_file` for details.
 fn load_headless_webhook_config() -> Option<shannon_core::notifier::WebhookConfig> {
-    use shannon_core::unified_config::ConfigBuilder;
-    let cfg = ConfigBuilder::new().build();
+    use shannon_core::unified_config::ShannonConfig;
+    let read_cfg = |path: &std::path::Path| -> Option<ShannonConfig> {
+        let content = std::fs::read_to_string(path).ok()?;
+        toml::from_str::<ShannonConfig>(&content).ok()
+    };
+    let local = std::path::Path::new(".shannon.toml");
+    let cfg = read_cfg(local).or_else(|| {
+        dirs::home_dir()
+            .map(|h| h.join(".shannon").join("config.toml"))
+            .and_then(|p| read_cfg(&p))
+    })?;
     cfg.notifications.and_then(|n| n.webhook)
 }
 
