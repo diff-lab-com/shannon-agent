@@ -219,32 +219,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
           )}
         </div>
 
-        <div className="space-y-1">
-          <NavLink
-            to="/quickfix"
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-lg font-label-md text-label-md transition-all duration-200",
-              location.pathname === '/quickfix'
-                ? "bg-primary/10 text-primary font-bold"
-                : "text-on-surface-variant hover:bg-surface-container-high/50 hover:text-primary",
-            )}
-          >
-            <span className="material-symbols-outlined text-[20px]">build</span>
-            <span>{intl.formatMessage({ id: 'nav.quickFix' })}</span>
-          </NavLink>
-          <NavLink
-            to="/editor"
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-lg font-label-md text-label-md transition-all duration-200",
-              location.pathname === '/editor'
-                ? "bg-primary/10 text-primary font-bold"
-                : "text-on-surface-variant hover:bg-surface-container-high/50 hover:text-primary",
-            )}
-          >
-            <span className="material-symbols-outlined text-[20px]">code</span>
-            <span>{intl.formatMessage({ id: 'nav.editor' })}</span>
-          </NavLink>
-        </div>
         </>
         )}
         </ScrollArea>

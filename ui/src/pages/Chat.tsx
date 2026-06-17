@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo } from 'react'
+import { useState, useRef, useEffect, memo, lazy, Suspense } from 'react'
 import { useIntl } from 'react-intl'
 import ReactMarkdown from 'react-markdown'
 import { toast } from 'sonner'
@@ -14,6 +14,12 @@ import DiffDialog from '@/components/diff/DiffDialog'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, FileContext } from '@/types'
+
+// QuickFix and Editor are no longer top-level routes — they are inline
+// tools launched from the chat input toolbar. Lazy-loaded so the main
+// chat bundle stays small.
+const QuickFixPanel = lazy(() => import('@/pages/QuickFix'))
+const EditorPanel = lazy(() => import('@/pages/Editor'))
 
 // Render a tiny subset of Markdown (headings, paragraphs, hr, fenced code,
 // **bold**, `code`) into an existing DOM node. Built with createElement +
@@ -95,6 +101,8 @@ export default function Chat() {
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set())
   const [sessionPage, setSessionPage] = useState(1)
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [quickFixOpen, setQuickFixOpen] = useState(false)
+  const [editorOpen, setEditorOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -423,6 +431,12 @@ export default function Chat() {
               <Button variant="ghost" aria-label={t('chat.input.attach.aria')} className="p-md text-on-surface-variant hover:text-primary" onClick={handleAttach}>
                 <span className="material-symbols-outlined text-[20px]" aria-hidden="true">attach_file</span>
               </Button>
+              <Button variant="ghost" aria-label={t('nav.quickFix')} title={t('nav.quickFix')} className="p-md text-on-surface-variant hover:text-primary" onClick={() => setQuickFixOpen(true)}>
+                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">build</span>
+              </Button>
+              <Button variant="ghost" aria-label={t('nav.editor')} title={t('nav.editor')} className="p-md text-on-surface-variant hover:text-primary" onClick={() => setEditorOpen(true)}>
+                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">code</span>
+              </Button>
               <span className="material-symbols-outlined p-md text-primary" aria-hidden="true">{isQuerying ? 'hourglass_empty' : 'auto_awesome'}</span>
               <textarea
                 className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-outline-variant/80 text-on-surface resize-none min-h-[24px] max-h-[200px]"
@@ -466,6 +480,64 @@ export default function Chat() {
             <div className="flex justify-end gap-sm">
               <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setDeleteTarget(null)}>{t('chat.delete.cancel')}</Button>
               <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={() => { deleteSession(deleteTarget); setDeleteTarget(null) }}>{t('chat.delete.confirmButton')}</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inline QuickFix panel — opened from the chat input toolbar. */}
+      {quickFixOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('nav.quickFix')}
+          className="fixed inset-0 z-[85] bg-black/40 backdrop-blur-sm flex items-center justify-center p-lg"
+          onClick={() => setQuickFixOpen(false)}
+          onKeyDown={e => { if (e.key === 'Escape') setQuickFixOpen(false) }}
+        >
+          <div
+            className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 w-full max-w-3xl max-h-[85vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="sticky top-0 z-10 flex items-center justify-between px-lg py-md bg-surface-container-lowest/95 backdrop-blur-md border-b border-outline-variant/20">
+              <h3 className="font-headline-md text-on-surface">{t('nav.quickFix')}</h3>
+              <Button variant="ghost" aria-label={t('chat.delete.cancel')} onClick={() => setQuickFixOpen(false)}>
+                <span className="material-symbols-outlined">close</span>
+              </Button>
+            </div>
+            <div className="p-lg">
+              <Suspense fallback={<div className="flex items-center justify-center py-xl"><span className="material-symbols-outlined animate-spin text-primary">progress_activity</span></div>}>
+                <QuickFixPanel />
+              </Suspense>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inline Editor panel — opened from the chat input toolbar. */}
+      {editorOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('nav.editor')}
+          className="fixed inset-0 z-[85] bg-black/40 backdrop-blur-sm flex items-center justify-center p-md"
+          onClick={() => setEditorOpen(false)}
+          onKeyDown={e => { if (e.key === 'Escape') setEditorOpen(false) }}
+        >
+          <div
+            className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/30 w-full max-w-5xl h-[90vh] flex flex-col"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-lg py-md bg-surface-container-lowest/95 backdrop-blur-md border-b border-outline-variant/20">
+              <h3 className="font-headline-md text-on-surface">{t('nav.editor')}</h3>
+              <Button variant="ghost" aria-label={t('chat.delete.cancel')} onClick={() => setEditorOpen(false)}>
+                <span className="material-symbols-outlined">close</span>
+              </Button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <Suspense fallback={<div className="flex items-center justify-center py-xl"><span className="material-symbols-outlined animate-spin text-primary">progress_activity</span></div>}>
+                <EditorPanel />
+              </Suspense>
             </div>
           </div>
         </div>
