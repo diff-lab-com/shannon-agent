@@ -7,17 +7,20 @@ import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import type { ApprovalMode } from '@/types'
 
-const APPROVAL_MODES: { value: ApprovalMode; label: string; description: string }[] = [
-  { value: 'suggest', label: 'Suggest', description: 'AI suggests only, you apply' },
-  { value: 'confirm', label: 'Confirm', description: 'High supervision, approve every action' },
-  { value: 'plan', label: 'Plan', description: 'Shared context, approve plans' },
-  { value: 'auto_edit', label: 'Auto Edit', description: 'Auto-approve file edits' },
-  { value: 'full_auto', label: 'Full Auto', description: 'Result focused, minimal intervention' },
+type ApprovalModeKey = ApprovalMode
+
+const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptionKey: string }[] = [
+  { value: 'suggest', labelKey: 'settings.general.approvalMode.suggest.label', descriptionKey: 'settings.general.approvalMode.suggest.description' },
+  { value: 'confirm', labelKey: 'settings.general.approvalMode.confirm.label', descriptionKey: 'settings.general.approvalMode.confirm.description' },
+  { value: 'plan', labelKey: 'settings.general.approvalMode.plan.label', descriptionKey: 'settings.general.approvalMode.plan.description' },
+  { value: 'auto_edit', labelKey: 'settings.general.approvalMode.autoEdit.label', descriptionKey: 'settings.general.approvalMode.autoEdit.description' },
+  { value: 'full_auto', labelKey: 'settings.general.approvalMode.fullAuto.label', descriptionKey: 'settings.general.approvalMode.fullAuto.description' },
 ]
 
 export default function GeneralSettings() {
   const { config, refreshConfig } = useApp()
   const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const { locale, setLocale } = useI18n()
   const notify = useNotification()
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
@@ -47,7 +50,7 @@ export default function GeneralSettings() {
 
   useEffect(() => {
     if (config?.approval_mode) {
-      const idx = APPROVAL_MODES.findIndex(m => m.value === config.approval_mode)
+      const idx = APPROVAL_MODE_KEYS.findIndex(m => m.value === config.approval_mode)
       if (idx >= 0) setApprovalMode(idx)
     }
   }, [config])
@@ -56,20 +59,20 @@ export default function GeneralSettings() {
     setApprovalMode(idx)
     setSaving(true)
     try {
-      await api.configure({ key: 'approval_mode', value: APPROVAL_MODES[idx].value })
+      await api.configure({ key: 'approval_mode', value: APPROVAL_MODE_KEYS[idx].value })
       await refreshConfig()
-      toast.success(`Approval mode: ${APPROVAL_MODES[idx].label}`)
-    } catch (e) { console.warn("GeneralSettings error:", e); toast.error('Failed to update approval mode') }
+      toast.success(intl.formatMessage({ id: 'settings.general.approvalMode.updated' }, { label: t(APPROVAL_MODE_KEYS[idx].labelKey) }))
+    } catch (e) { console.warn("GeneralSettings error:", e); toast.error(t('settings.general.approvalMode.updateFailed')) }
     setSaving(false)
   }
 
-  const currentMode = APPROVAL_MODES[approvalMode]
+  const currentMode = APPROVAL_MODE_KEYS[approvalMode]
 
   return (
     <div className="max-w-3xl">
       <header className="mb-xl">
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">System Settings</h2>
-        <p className="font-body-md text-on-surface-variant">Refine your AI workflow and interface preferences.</p>
+        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-xs">{t('settings.general.header')}</h2>
+        <p className="font-body-md text-on-surface-variant">{t('settings.general.subheader')}</p>
       </header>
 
       <div className="space-y-lg">
@@ -77,28 +80,31 @@ export default function GeneralSettings() {
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm transition-all hover:shadow-md">
           <div className="flex items-center gap-md mb-xs">
             <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>auto_awesome</span>
-            <h3 className="font-headline-md text-headline-md">Approval Mode</h3>
+            <h3 className="font-headline-md text-headline-md">{t('settings.general.approvalMode.title')}</h3>
             {saving && <span className="material-symbols-outlined text-primary animate-spin text-[18px]">progress_activity</span>}
           </div>
           <p className="font-body-sm text-on-surface-variant mb-xl">
-            Current: <strong className="text-primary">{currentMode.label}</strong> — {currentMode.description}
+            {intl.formatMessage({ id: 'settings.general.approvalMode.current' }, {
+              label: t(currentMode.labelKey),
+              description: t(currentMode.descriptionKey),
+            })}
           </p>
           <div className="space-y-sm">
             <input
               className="w-full appearance-none bg-outline-variant/30 h-1 rounded-full cursor-pointer outline-none slider-thumb-primary"
-              max={APPROVAL_MODES.length - 1} min={0} type="range" value={approvalMode}
-              aria-valuenow={approvalMode} aria-valuemin={0} aria-valuemax={APPROVAL_MODES.length - 1}
+              max={APPROVAL_MODE_KEYS.length - 1} min={0} type="range" value={approvalMode}
+              aria-valuenow={approvalMode} aria-valuemin={0} aria-valuemax={APPROVAL_MODE_KEYS.length - 1}
               onChange={e => handleModeChange(Number(e.target.value))}
             />
             <div className="flex justify-between font-label-sm text-outline px-1">
-              {APPROVAL_MODES.map((m, i) => (
+              {APPROVAL_MODE_KEYS.map((m, i) => (
                 <button
                   key={m.value}
                   onClick={() => handleModeChange(i)}
                   className={`text-center cursor-pointer transition-colors ${i === approvalMode ? 'text-primary font-bold' : 'text-on-surface-variant hover:text-primary'}`}
                 >
-                  <p className="font-bold">{m.label}</p>
-                  <p className="text-[10px]">{m.description}</p>
+                  <p className="font-bold">{t(m.labelKey)}</p>
+                  <p className="text-[10px]">{t(m.descriptionKey)}</p>
                 </button>
               ))}
             </div>
@@ -132,19 +138,19 @@ export default function GeneralSettings() {
 
         {/* Session Info */}
         <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
-          <h3 className="font-headline-md text-headline-md mb-md">Provider</h3>
+          <h3 className="font-headline-md text-headline-md mb-md">{t('settings.general.sessionInfo.title')}</h3>
           <div className="space-y-sm">
             <div className="flex justify-between items-center py-sm">
-              <span className="font-label-md text-on-surface-variant">Active Provider</span>
-              <span className="font-label-md text-on-surface font-bold">{config?.provider ?? 'Not configured'}</span>
+              <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.activeProvider')}</span>
+              <span className="font-label-md text-on-surface font-bold">{config?.provider ?? t('settings.general.sessionInfo.notConfigured')}</span>
             </div>
             <div className="flex justify-between items-center py-sm">
-              <span className="font-label-md text-on-surface-variant">Model</span>
-              <span className="font-label-md text-on-surface font-bold">{config?.model ?? 'Not configured'}</span>
+              <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.model')}</span>
+              <span className="font-label-md text-on-surface font-bold">{config?.model ?? t('settings.general.sessionInfo.notConfigured')}</span>
             </div>
             <div className="flex justify-between items-center py-sm">
-              <span className="font-label-md text-on-surface-variant">Working Directory</span>
-              <span className="font-label-md text-on-surface font-bold font-mono text-sm truncate max-w-[300px]">{config?.working_dir ?? 'Not set'}</span>
+              <span className="font-label-md text-on-surface-variant">{t('settings.general.sessionInfo.workingDir')}</span>
+              <span className="font-label-md text-on-surface font-bold font-mono text-sm truncate max-w-[300px]">{config?.working_dir ?? t('settings.general.sessionInfo.notSet')}</span>
             </div>
           </div>
         </section>

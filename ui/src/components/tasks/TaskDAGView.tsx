@@ -240,17 +240,17 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
       <div className="flex items-center gap-md mt-md pt-md border-t border-outline-variant/20 text-label-sm text-on-surface-variant">
         <span className="flex items-center gap-xs">
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusFill('completed') }} />
-          Completed
+          {t('tasks.dag.legendCompleted')}
         </span>
         <span className="flex items-center gap-xs">
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusFill('in_progress') }} />
-          Running
+          {t('tasks.dag.legendRunning')}
         </span>
         <span className="flex items-center gap-xs">
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusFill('pending') }} />
-          Pending
+          {t('tasks.dag.legendPending')}
         </span>
-        <span className="ml-auto text-[11px]">Click any task to view details</span>
+        <span className="ml-auto text-[11px]">{t('tasks.dag.clickHint')}</span>
       </div>
     </div>
   )

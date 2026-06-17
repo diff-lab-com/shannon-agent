@@ -1,13 +1,15 @@
+import { FormattedMessage, useIntl } from "react-intl";
 import { useOutletContext } from "react-router-dom";
 
-/**
- * P1 placeholder for the Plugins tab.
- *
- * Plugins are bundles — `.claude-plugin/marketplace.json` repos that install
- * multiple skills/agents/MCP configs at once. The installer lands in P3
- * (MarketplacePluginInstaller); this tab shows empty state until then.
- */
+const PLACEHOLDER_REPOS = [
+  { repo: "anthropics/skills", entries: 149, descKey: "extensions.plugins.anthropics.description" },
+  { repo: "ComposioHQ/awesome-claude-skills", entries: 1000, descKey: "extensions.plugins.composio.description" },
+  { repo: "obra/superpowers", entries: 20, descKey: "extensions.plugins.obra.description" },
+  { repo: "VoltAgent/awesome-claude-code-subagents", entries: 100, descKey: "extensions.plugins.voltagent.description" },
+];
+
 export default function Plugins() {
+  const intl = useIntl();
   const { search } = useOutletContext<{ search: string }>();
 
   return (
@@ -17,16 +19,23 @@ export default function Plugins() {
           <span className="material-symbols-outlined text-primary text-[32px]">workspaces</span>
         </div>
         <h2 className="text-headline-md font-bold text-on-surface mb-sm">
-          Plugins
+          {intl.formatMessage({ id: "extensions.plugins.title" })}
         </h2>
         <p className="text-body-md text-on-surface-variant max-w-md mx-auto">
-          Install a bundle of skills, agents, and MCP servers from a single
-          <code className="mx-xs px-xs py-[1px] bg-surface-container-low rounded font-mono text-label-sm">.claude-plugin/marketplace.json</code>
-          repo. Coming in P3.
+          <FormattedMessage
+            id="extensions.plugins.description"
+            values={{
+              code: (chunks) => (
+                <code className="mx-xs px-xs py-[1px] bg-surface-container-low rounded font-mono text-label-sm">
+                  {chunks}
+                </code>
+              ),
+            }}
+          />
         </p>
         {search && (
           <p className="text-label-sm text-outline mt-md">
-            (search "{search}" — catalog not yet available)
+            <FormattedMessage id="extensions.plugins.searchPreview" values={{ query: search }} />
           </p>
         )}
       </div>
@@ -40,39 +49,18 @@ export default function Plugins() {
             <div className="flex items-start justify-between mb-xs">
               <div>
                 <h3 className="font-bold text-label-md text-on-surface">{repo.repo}</h3>
-                <p className="text-label-xs text-on-surface-variant">{repo.entries} entries</p>
+                <p className="text-label-xs text-on-surface-variant">
+                  <FormattedMessage id="extensions.plugins.entries" values={{ count: repo.entries }} />
+                </p>
               </div>
               <span className="text-label-xs px-sm py-[2px] rounded-full bg-tertiary-container/50 text-on-tertiary-container font-bold">
-                Soon
+                {intl.formatMessage({ id: "extensions.plugins.comingSoon" })}
               </span>
             </div>
-            <p className="text-label-sm text-on-surface-variant">{repo.description}</p>
+            <p className="text-label-sm text-on-surface-variant">{intl.formatMessage({ id: repo.descKey })}</p>
           </div>
         ))}
       </div>
     </div>
   );
 }
-
-const PLACEHOLDER_REPOS = [
-  {
-    repo: "anthropics/skills",
-    entries: 149,
-    description: "Official Anthropic skill examples (Apache-2.0).",
-  },
-  {
-    repo: "ComposioHQ/awesome-claude-skills",
-    entries: 1000,
-    description: "Community skill bundle (~1000 SKILL.md files).",
-  },
-  {
-    repo: "obra/superpowers",
-    entries: 20,
-    description: "High-quality workflow skills (MIT).",
-  },
-  {
-    repo: "VoltAgent/awesome-claude-code-subagents",
-    entries: 100,
-    description: "Subagent definitions in Claude Code format.",
-  },
-];

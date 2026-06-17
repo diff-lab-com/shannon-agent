@@ -104,11 +104,11 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
       <KanbanBoard
         tasks={effectiveTasks}
         mode="interact"
-        boardTitle="KANBAN"
+        boardTitle={t('opc.kanban.boardTitle')}
         toolbar={toolbar}
         onMoveTask={handleMoveTask}
         renderCard={(task, family) => (
-          <VariantCard key={task.id} task={task} family={family} />
+          <VariantCard key={task.id} task={task} family={family} intl={intl} />
         )}
         emptyLabel={family => family === 'failed'
           ? t('opc.kanban.noDeprecated')
@@ -135,17 +135,17 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
  * active, check row on done, etc. Default falls through to a draggable card
  * that matches the old "todo" / "deprecated" look.
  */
-function VariantCard({ task, family }: { task: TaskItem; family: TaskStatusFamily }) {
+function VariantCard({ task, family, intl }: { task: TaskItem; family: TaskStatusFamily; intl: ReturnType<typeof useIntl> }) {
   switch (family) {
-    case 'blocked': return <BlockedCard task={task} />
-    case 'active':  return <ActiveCard task={task} />
-    case 'done':    return <DoneCard task={task} />
-    case 'failed':  return <FailedCard task={task} />
-    default:        return <DefaultDraggableCard task={task} />
+    case 'blocked': return <BlockedCard task={task} intl={intl} />
+    case 'active':  return <ActiveCard task={task} intl={intl} />
+    case 'done':    return <DoneCard task={task} intl={intl} />
+    case 'failed':  return <FailedCard task={task} intl={intl} />
+    default:        return <DefaultDraggableCard task={task} intl={intl} />
   }
 }
 
-function DefaultDraggableCard({ task }: { task: TaskItem }) {
+function DefaultDraggableCard({ task, intl }: { task: TaskItem; intl: ReturnType<typeof useIntl> }) {
   return (
     <div
       draggable
@@ -167,14 +167,14 @@ function DefaultDraggableCard({ task }: { task: TaskItem }) {
       {task.description ? <p className="font-body-sm text-[12px] text-on-surface-variant mb-2 leading-snug line-clamp-2">{task.description}</p> : null}
       <div className="flex justify-between items-center">
         {task.assignee ? (
-          <span className="font-label-sm text-[11px] text-on-surface-variant">Proposed by <strong className="text-on-surface">{task.assignee}</strong></span>
+          <span className="font-label-sm text-[11px] text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.proposedBy' }, { name: task.assignee })}</span>
         ) : null}
       </div>
     </div>
   )
 }
 
-function BlockedCard({ task }: { task: TaskItem }) {
+function BlockedCard({ task, intl }: { task: TaskItem; intl: ReturnType<typeof useIntl> }) {
   return (
     <div
       draggable
@@ -185,21 +185,21 @@ function BlockedCard({ task }: { task: TaskItem }) {
       <div className="flex justify-between items-start mb-2 ml-1">
         <span className="font-label-sm text-[10px] font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
         {task.priority === 'high' ? (
-          <span className="bg-error/10 text-error text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">Critical</span>
+          <span className="bg-error/10 text-error text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.critical' })}</span>
         ) : null}
       </div>
       <h4 className="font-label-md text-[15px] font-bold mb-2 leading-tight ml-1">{task.title}</h4>
       {task.assignee ? (
         <div className="flex justify-between items-center ml-1">
-          <span className="font-label-sm text-[11px] text-on-surface-variant">Assigned to <strong className="text-on-surface">{task.assignee}</strong></span>
-          <span className="font-label-sm text-[12px] text-primary font-bold">Review</span>
+          <span className="font-label-sm text-[11px] text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.assignedTo' }, { name: task.assignee })}</span>
+          <span className="font-label-sm text-[12px] text-primary font-bold">{intl.formatMessage({ id: 'opc.kanban.review' })}</span>
         </div>
       ) : null}
     </div>
   )
 }
 
-function ActiveCard({ task }: { task: TaskItem }) {
+function ActiveCard({ task, intl }: { task: TaskItem; intl: ReturnType<typeof useIntl> }) {
   return (
     <div
       draggable
@@ -223,7 +223,7 @@ function ActiveCard({ task }: { task: TaskItem }) {
           </div>
           <div className="flex justify-between items-center">
             <span className="font-label-sm text-[10px] text-on-surface-variant">{task.assignee}</span>
-            <span className="font-label-sm text-[10px] font-bold text-on-surface-variant">{task.progress != null ? `${Math.min(100, Math.max(0, Math.round(task.progress)))}%` : 'In Progress'}</span>
+            <span className="font-label-sm text-[10px] font-bold text-on-surface-variant">{task.progress != null ? `${Math.min(100, Math.max(0, Math.round(task.progress)))}%` : intl.formatMessage({ id: 'opc.kanban.inProgress' })}</span>
           </div>
         </div>
       ) : null}
@@ -231,7 +231,7 @@ function ActiveCard({ task }: { task: TaskItem }) {
   )
 }
 
-function DoneCard({ task }: { task: TaskItem }) {
+function DoneCard({ task, intl }: { task: TaskItem; intl: ReturnType<typeof useIntl> }) {
   return (
     <Link
       to="/opc/task"
@@ -244,13 +244,13 @@ function DoneCard({ task }: { task: TaskItem }) {
           <span className="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
           <span className="font-label-md text-[13px] text-on-surface">{task.title}</span>
         </div>
-        <span className="font-label-sm text-[10px] text-on-surface-variant">Done</span>
+        <span className="font-label-sm text-[10px] text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.done' })}</span>
       </div>
     </Link>
   )
 }
 
-function FailedCard({ task }: { task: TaskItem }) {
+function FailedCard({ task, intl }: { task: TaskItem; intl: ReturnType<typeof useIntl> }) {
   return (
     <div
       draggable
@@ -262,7 +262,7 @@ function FailedCard({ task }: { task: TaskItem }) {
           <span className="material-symbols-outlined text-[16px] text-on-surface-variant">archive</span>
           <span className="font-label-md text-[13px] text-on-surface-variant line-through">{task.title}</span>
         </div>
-        <span className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">Archived</span>
+        <span className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.archived' })}</span>
       </div>
     </div>
   )
