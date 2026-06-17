@@ -2,6 +2,22 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.3.1 (2026-06-18) — full-text session search + keyboard shortcuts + test coverage
+
+### Features
+
+- **C1 — Full-text session search.** `search_sessions` now also scans session messages for matches when the title doesn't match. Title hits rank first; content matches fill the rest (capped at 200 sessions/keystroke to bound cost). Chat sidebar debounces the backend call (250 ms) once the query is ≥ 3 chars; shorter queries stay on the client-side title filter for instant feedback. Backend errors fall back to the client filter so the UI never dead-ends.
+- **C2 — Cmd/Ctrl+K quick session switcher.** CommandPalette session items now call `switchSession(id)` instead of just navigating to `/chat`, so the palette works as a real session switcher (already had keyboard arrow nav + Enter).
+- **C2 — Cmd/Ctrl+D change working directory.** New `mod+d` shortcut dispatches a window-level `shannon:change-wd` event. The Chat page listens via a ref and opens the same native folder picker the WD chip button uses — so users can repoint the WD without leaving the keyboard.
+
+### Fixes
+
+- **KeyboardShortcutsHelp missing translations.** The dialog was rendering raw key strings (`shortcuts.help.goChat`, etc.) for 7 of its 10 rows because those keys didn't exist in `en.json` / `zh-CN.json`. Added all 11 `shortcuts.help.*` keys (including the new `changeWorkingDir`) at full parity.
+
+### Tests
+
+- **B2 — coverage for new Tauri commands.** 12 new tests: 7 for the per-session WD chip in `Chat.test.tsx` (placeholder, breadcrumb, config fallback, folder picker, cancel-noop, session-list hint, provider pill), 5 for the `InboundSection` of `NotificationsSettings.test.tsx` (render, prefill, save wiring, empty-token omission, clear). Mocks for `setSessionWorkingDir` + `get/save/clear_inbound_config` added to `setup.ts`. Total: 819 tests across 76 files, all passing.
+
 ## v0.3.0 (2026-06-18) — navigation restructure + per-session working dir + Extensions Hub + i18n audit
 
 ### Features
