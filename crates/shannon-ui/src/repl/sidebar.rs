@@ -274,6 +274,28 @@ impl super::Repl {
                         }
                     }
                 }
+
+                // T3: fire notification for agents that vanished from the
+                // registry entirely (process exited without transitioning to
+                // Completed/Failed — e.g. killed by signal, team teardown,
+                // or coordinator dropped the entry). Uses a 5s cooldown window
+                // so batch team teardowns coalesce into a single notification.
+                let current_names: std::collections::HashSet<&str> =
+                    new_agents.iter().map(|a| a.name.as_str()).collect();
+                for prev_name in &prev_names {
+                    if !current_names.contains(prev_name.as_str()) {
+                        let notification = Notification {
+                            title: format!("Agent {prev_name} exited"),
+                            body: "Process no longer registered".to_string(),
+                            level: NotificationLevel::Warning,
+                            id: format!("agent-{prev_name}-exit"),
+                            timestamp: Utc::now(),
+                            source: Some(format!("agent:exit:{prev_name}")),
+                            action_id: None,
+                        };
+                        let _ = self.notifier.notify_dedup(&notification, 5_000);
+                    }
+                }
             }
 
             self.state.active_agents = new_agents;

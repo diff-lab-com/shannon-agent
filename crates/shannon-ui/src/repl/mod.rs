@@ -1517,6 +1517,33 @@ impl Repl {
                     self.state.permission_dialog = Some(permission_req.prompt.clone());
                     self.state.permission_response_tx = Some(permission_req.response_tx);
 
+                    // T2: fire an informational notification when a permission
+                    // prompt becomes visible. Default is info-only (no inline
+                    // approve button) so the user must return to the terminal
+                    // to act — this is a security trade-off documented in the
+                    // notifications roadmap. 10s cooldown per tool so repeated
+                    // prompts within a short window coalesce.
+                    if self.notifications_enabled {
+                        let tool_name = permission_req.prompt.tool_name.clone();
+                        let body: String = permission_req
+                            .prompt
+                            .description
+                            .lines()
+                            .take(3)
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let notification = shannon_core::notifier::Notification {
+                            title: format!("Permission required: {tool_name}"),
+                            body,
+                            level: shannon_core::notifier::NotificationLevel::Warning,
+                            id: format!("permission-request-{tool_name}"),
+                            timestamp: chrono::Utc::now(),
+                            source: Some(format!("permission:request:{tool_name}")),
+                            action_id: None,
+                        };
+                        let _ = self.notifier.notify_dedup(&notification, 10_000);
+                    }
+
                     // Also populate the tool approval widget for enhanced display
                     let risk = match permission_req.prompt.risk_level {
                         shannon_core::permissions::RiskLevel::Safe
