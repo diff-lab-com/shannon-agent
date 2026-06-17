@@ -176,6 +176,23 @@ fn main() {
             state.attach_notification_handler(app.handle().clone());
             app.manage(state);
 
+            // Bundle A — Click-to-foreground: when a Shannon notification is
+            // clicked, bring the main window to the foreground. On macOS and
+            // Windows the OS already focuses the app automatically (native
+            // behavior for notifications from a registered bundle identifier);
+            // this listener ensures explicit focus when the event fires, which
+            // covers Linux DEs that emit click events and any future Tauri
+            // plugin versions that route desktop clicks here.
+            let click_handle = app.handle().clone();
+            let _ = app.listen("notification-clicked", move |_event| {
+                use tauri::Manager;
+                if let Some(webview_window) = click_handle.get_webview_window("main") {
+                    let _ = webview_window.unminimize();
+                    let _ = webview_window.show();
+                    let _ = webview_window.set_focus();
+                }
+            });
+
             // Register global shortcut handlers
             use tauri_plugin_global_shortcut::GlobalShortcutExt;
 

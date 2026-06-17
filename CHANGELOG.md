@@ -2,6 +2,17 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.2.8 (2026-06-17) — notifications next phase (Bundle A + Bundle B)
+
+### Features
+
+- **Webhook sink wiring.** `AppState::attach_notification_handler` now conditionally attaches a `shannon_core::notifier::WebhookHandler` when `[notifications.webhook]` is configured in `.shannon.toml`. Config is loaded best-effort via `ConfigBuilder`; init failures are logged at `warn` level and never panic the app. Surfaces six templates (Slack / Discord / Feishu / WeChat Work / custom / raw) with optional HMAC-SHA256 signing. Fires are async and fire-and-forget so a slow endpoint can't block the UI.
+- **Click-to-foreground.** `main.rs` listens for `notification-clicked` Tauri events and calls `unminimize + show + set_focus` on the main window. macOS and Windows already focus the app natively via bundle-id behavior; this listener is a defensive fallback for Linux DEs and any future Tauri plugin versions that route desktop clicks here.
+
+### Dependencies
+
+- **shannon-code engine bumped to v0.5.3** (`a19a15d` → `c5a107e`). Picks up the `WebhookHandler` core types (six templates + HMAC signing) used by the new desktop wiring.
+
 ## v0.2.7 (2026-06-17) — notifications feature complete
 
 ### Features
