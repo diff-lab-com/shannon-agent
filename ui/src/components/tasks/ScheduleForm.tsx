@@ -124,6 +124,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       setNlError(t('tasks.scheduleForm.parseError'))
       return
     }
+    setTriggerType('cron')
     setCronExpr(parsed.expression)
     setNlMatch(parsed.description)
   }
@@ -145,6 +146,46 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
       </div>
 
       <ScheduleTemplates onApply={applyTemplate} />
+
+      {/* Natural-language input — surfaced at the top so users can describe
+          the schedule in plain English ("daily at 9am", "weekdays at 8:30")
+          and have the cron expression filled automatically. Parsing is
+          best-effort; unmatched input falls through to the manual fields
+          below. */}
+      <div className="flex flex-col gap-xs p-md bg-primary/5 border border-primary/20 rounded-lg">
+        <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.naturalLanguage')}</span>
+        <div className="flex gap-xs items-end">
+          <input
+            type="text"
+            aria-label={t('tasks.scheduleForm.nlAria')}
+            placeholder={t('tasks.scheduleForm.nlPlaceholder')}
+            value={nlInput}
+            onChange={e => { setNlInput(e.target.value); setNlError(null); setNlMatch(null) }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); tryParseNl() } }}
+            className="flex-1 bg-surface-container-lowest rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+          <button
+            type="button"
+            onClick={tryParseNl}
+            disabled={!nlInput.trim()}
+            className="px-md py-sm rounded-lg border border-primary/40 bg-primary text-on-primary font-label-md text-[12px] hover:bg-primary/90 disabled:opacity-40 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          >
+            {t('tasks.scheduleForm.parse')}
+          </button>
+        </div>
+        {nlError ? (
+          <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
+            <span className="material-symbols-outlined text-[14px]">error</span>
+            {nlError}
+          </div>
+        ) : null}
+        {nlMatch ? (
+          <div className="font-label-sm text-[11px] text-tertiary flex items-center gap-xs">
+            <span className="material-symbols-outlined text-[14px]">check_circle</span>
+            {t('tasks.scheduleForm.parsed')} {nlMatch}
+          </div>
+        ) : null}
+      </div>
 
       <label className="flex flex-col gap-xs">
         <span className="font-label-md text-on-surface-variant">{t('tasks.scheduleForm.nameLabel')}</span>
@@ -238,40 +279,6 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                 {cronPreview.error ?? t('tasks.scheduleForm.invalidCron')}
               </div>
             )
-          ) : null}
-          <div className="flex gap-xs items-end">
-            <label className="flex flex-col gap-xs flex-1">
-              <span className="font-label-sm text-[11px] text-on-surface-variant">{t('tasks.scheduleForm.naturalLanguage')}</span>
-              <input
-                type="text"
-                aria-label={t('tasks.scheduleForm.nlAria')}
-                placeholder={t('tasks.scheduleForm.nlPlaceholder')}
-                value={nlInput}
-                onChange={e => { setNlInput(e.target.value); setNlError(null); setNlMatch(null) }}
-                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); tryParseNl() } }}
-                className="bg-surface-container-low rounded-lg border border-outline-variant/30 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
-            </label>
-            <button
-              type="button"
-              onClick={tryParseNl}
-              disabled={!nlInput.trim()}
-              className="px-sm py-sm rounded-lg border border-primary/40 bg-primary/10 text-primary font-label-md text-[12px] hover:bg-primary/20 disabled:opacity-40 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-            >
-              {t('tasks.scheduleForm.parse')}
-            </button>
-          </div>
-          {nlError ? (
-            <div className="font-label-sm text-[11px] text-error flex items-center gap-xs">
-              <span className="material-symbols-outlined text-[14px]">error</span>
-              {nlError}
-            </div>
-          ) : null}
-          {nlMatch ? (
-            <div className="font-label-sm text-[11px] text-tertiary flex items-center gap-xs">
-              <span className="material-symbols-outlined text-[14px]">check_circle</span>
-              {t('tasks.scheduleForm.parsed')} {nlMatch}
-            </div>
           ) : null}
         </div>
       ) : null}
