@@ -10,12 +10,6 @@ import { Layout } from './components/Layout';
 const Welcome = lazy(() => import('./pages/Welcome'));
 const Chat = lazy(() => import('./pages/Chat'));
 const Tasks = lazy(() => import('./pages/Tasks'));
-const MissionControl = lazy(() => import('./pages/MissionControl'));
-const Triage = lazy(() => import('./pages/Triage'));
-const Goals = lazy(() => import('./pages/Goals'));
-const Routines = lazy(() => import('./pages/Routines'));
-const Hooks = lazy(() => import('./pages/Hooks'));
-const Profiles = lazy(() => import('./pages/Profiles'));
 const Extensions = lazy(() => import('./pages/Extensions'));
 const Settings = lazy(() => import('./pages/Settings'));
 const OPC = lazy(() => import('./pages/OPC'));
@@ -59,12 +53,17 @@ export default function App() {
                 <Route path="/background-tasks" element={<Navigate to="/tasks" replace />} />
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/tasks" element={<Tasks />} />
-                <Route path="/mission-control" element={<MissionControl />} />
-                <Route path="/triage" element={<Triage />} />
-                <Route path="/goals" element={<Goals />} />
-                <Route path="/routines" element={<Routines />} />
-                <Route path="/hooks" element={<Hooks />} />
-                <Route path="/profiles" element={<Profiles />} />
+                {/* P1 navigation cleanup — these pages are no longer in the
+                    sidebar. Routes redirect to /tasks so existing bookmarks
+                    and deep links keep working. Pages and their tests remain
+                    for now; they will be absorbed into Tasks tabs in a later
+                    iteration or removed once superseded. */}
+                <Route path="/mission-control" element={<Navigate to="/tasks" replace />} />
+                <Route path="/triage" element={<Navigate to="/tasks" replace />} />
+                <Route path="/goals" element={<Navigate to="/tasks" replace />} />
+                <Route path="/routines" element={<Navigate to="/tasks" replace />} />
+                <Route path="/hooks" element={<Navigate to="/tasks" replace />} />
+                <Route path="/profiles" element={<Navigate to="/tasks" replace />} />
                 <Route path="/extensions" element={<Extensions />}>
                   <Route index element={<Navigate to="featured" replace />} />
                   <Route path="featured" element={<Featured />} />

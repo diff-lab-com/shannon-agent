@@ -93,9 +93,9 @@ describe('Header component', () => {
     expect(screen.getByText('Deny')).toBeInTheDocument()
   })
 
-  it('renders Goals title on /goals route', () => {
-    render(wrap(<Header />, { route: '/goals' }))
-    expect(screen.getByText('Goals')).toBeInTheDocument()
+  it('renders Chat title on /chat route (legacy /goals redirects)', () => {
+    render(wrap(<Header />, { route: '/chat' }))
+    expect(screen.getByText('Chat')).toBeInTheDocument()
   })
 
   it('renders Scheduled title on /tasks route', () => {

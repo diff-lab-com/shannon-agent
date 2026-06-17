@@ -40,7 +40,6 @@ describe('Sidebar', () => {
   it('renders primary nav links', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Projects')).toBeInTheDocument()
     expect(screen.getByText('Scheduled')).toBeInTheDocument()
   })
 
@@ -79,23 +78,6 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
   })
 
-  it('shows Automations section in Simple mode (collapsed by default)', () => {
-    render(wrap(<Sidebar />))
-    expect(screen.getByText('Automations')).toBeInTheDocument()
-    // Sub-links hidden until expanded
-    expect(screen.queryByText('Schedules')).not.toBeInTheDocument()
-    expect(screen.queryByText('Triggers')).not.toBeInTheDocument()
-    expect(screen.queryByText('Permission Modes')).not.toBeInTheDocument()
-  })
-
-  it('expands Automations in Simple mode on click', () => {
-    render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByText('Automations'))
-    expect(screen.getByText('Schedules')).toBeInTheDocument()
-    expect(screen.getByText('Triggers')).toBeInTheDocument()
-    expect(screen.getByText('Permission Modes')).toBeInTheDocument()
-  })
-
   it('hides OPC section in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.queryByText('OPC')).not.toBeInTheDocument()
@@ -111,10 +93,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('still shows core nav in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Projects')).toBeInTheDocument()
     expect(screen.getByText('Scheduled')).toBeInTheDocument()
-    expect(screen.getByText('Conversations')).toBeInTheDocument()
-    expect(screen.getByText('Inbox')).toBeInTheDocument()
   })
 
   it('toggles to Advanced mode on mode button click', () => {

@@ -33,7 +33,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const { close: closeMobile } = useSidebar();
   const [opcOpen, setOpcOpen] = useState(true);
   const [extensionsOpen, setExtensionsOpen] = useState(true);
-  const [automationOpen, setAutomationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mode, toggleMode] = useSidebarMode();
   const [width, setWidth] = useState(() => {
@@ -80,7 +79,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
   const isOpcActive = location.pathname.includes('/opc') && !location.pathname.includes('/extensions');
   const isExtensionsActive = location.pathname.includes('/extensions');
-  const isAutomationActive = location.pathname.includes('/routines') || location.pathname.includes('/hooks') || location.pathname.includes('/profiles');
   const isSettingsActive = location.pathname.includes('/settings');
 
   const getNavClass = ({ isActive }: { isActive: boolean }) =>
@@ -141,71 +139,11 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘1</kbd>
         </NavLink>
-        <NavLink to="/goals" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">ads_click</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.projects' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
-        </NavLink>
         <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">task_alt</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘3</kbd>
+           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
         </NavLink>
-        <NavLink to="/mission-control" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">dashboard</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.conversations' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘4</kbd>
-        </NavLink>
-        <NavLink to="/triage" className={getNavClass} onClick={handleNavClick}>
-           <span className="material-symbols-outlined">flag</span>
-           <span className="flex-1">{intl.formatMessage({ id: 'nav.inbox' })}</span>
-        </NavLink>
-
-        {/* Automations — top-level (visible in Simple + Dev) */}
-        <div className="space-y-1">
-          <Button
-            variant="ghost"
-            onClick={() => setAutomationOpen(!automationOpen)}
-            aria-label={intl.formatMessage({ id: 'nav.automations.toggle.aria' })}
-            aria-expanded={automationOpen}
-            className={cn("w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300", isAutomationActive ? "bg-primary/10 text-primary font-bold shadow-sm" : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5")}
-          >
-            <div className="flex items-center gap-3">
-              <span className="material-symbols-outlined">bolt</span>
-              <span>{intl.formatMessage({ id: 'nav.automations' })}</span>
-            </div>
-            <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: automationOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
-          </Button>
-
-          {automationOpen && (
-            <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.automations.section.aria' })}>
-               <NavLink to="/routines" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.schedules' })}
-                    </>
-                  )}
-               </NavLink>
-               <NavLink to="/hooks" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.triggers' })}
-                    </>
-                  )}
-               </NavLink>
-               <NavLink to="/profiles" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.permissionModes' })}
-                    </>
-                  )}
-               </NavLink>
-            </div>
-          )}
-        </div>
 
         {mode === 'dev' && (
         <>
