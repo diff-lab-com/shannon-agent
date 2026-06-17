@@ -1545,7 +1545,9 @@ fn run_headless_query(
 ///
 /// Spawns a `ShellNotifier` even when the platform binary may be missing —
 /// failures are swallowed (logged to stderr when debug is on) so a missing
-/// `notify-send` never breaks a headless run.
+/// `notify-send` never breaks a headless run. When `[notifications.webhook]`
+/// is configured in `.shannon.toml`, the same notification is also POSTed to
+/// the webhook URL (Slack / Discord / Feishu / WeChat Work / custom / raw).
 fn fire_headless_completion_notification(exit_code: HeadlessExitCode, prompt: &str) {
     use shannon_core::notifier::{Notification, NotificationLevel};
 
@@ -1614,6 +1616,27 @@ fn fire_headless_completion_notification(exit_code: HeadlessExitCode, prompt: &s
     if let Err(e) = shannon_core::notifier::NotificationHandler::send(&notifier, &notification) {
         eprintln!("[notify] {e}");
     }
+
+    if let Some(webhook_cfg) = load_headless_webhook_config() {
+        match shannon_core::notifier::WebhookHandler::new(webhook_cfg) {
+            Ok(handler) => {
+                if let Err(e) =
+                    shannon_core::notifier::NotificationHandler::send(&handler, &notification)
+                {
+                    eprintln!("[notify:webhook] {e}");
+                }
+            }
+            Err(e) => eprintln!("[notify:webhook] handler init failed: {e}"),
+        }
+    }
+}
+
+/// Best-effort load of `[notifications.webhook]` from `.shannon.toml`.
+/// Returns `None` on any error (missing file, parse failure, no webhook section).
+fn load_headless_webhook_config() -> Option<shannon_core::notifier::WebhookConfig> {
+    use shannon_core::unified_config::ConfigBuilder;
+    let cfg = ConfigBuilder::new().build();
+    cfg.notifications.and_then(|n| n.webhook)
 }
 
 /// Read all of stdin into a String. Returns empty string if stdin is a terminal
