@@ -223,8 +223,8 @@ describe('Welcome component — 4-step flow', () => {
     expect(stepper).toBeInTheDocument()
   })
 
-  // Step 3 — Done: Developer mode opt-in
-  it('Done step shows developer mode checkbox unchecked by default', async () => {
+  // Step 3 — Done: Advanced mode opt-in
+  it('Done step shows advanced mode checkbox unchecked by default', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByText('Ollama'))
@@ -232,12 +232,12 @@ describe('Welcome component — 4-step flow', () => {
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
-    const cb = screen.getByLabelText('Enable developer features') as HTMLInputElement
+    const cb = screen.getByLabelText('Enable advanced features') as HTMLInputElement
     expect(cb).toBeInTheDocument()
     expect(cb.checked).toBe(false)
   })
 
-  it('toggles developer mode checkbox on click', async () => {
+  it('toggles advanced mode checkbox on click', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByText('Ollama'))
@@ -245,12 +245,12 @@ describe('Welcome component — 4-step flow', () => {
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
-    const cb = screen.getByLabelText('Enable developer features') as HTMLInputElement
+    const cb = screen.getByLabelText('Enable advanced features') as HTMLInputElement
     fireEvent.click(cb)
     expect(cb.checked).toBe(true)
   })
 
-  it('writes SIDEBAR_MODE_KEY=dev on finish when developer mode checked', async () => {
+  it('writes SIDEBAR_MODE_KEY=dev on finish when advanced mode checked', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByText('Ollama'))
@@ -258,12 +258,12 @@ describe('Welcome component — 4-step flow', () => {
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
-    fireEvent.click(screen.getByLabelText('Enable developer features'))
+    fireEvent.click(screen.getByLabelText('Enable advanced features'))
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
     expect(window.localStorage.getItem('shannon-sidebar-mode')).toBe('dev')
   })
 
-  it('does NOT write SIDEBAR_MODE_KEY when developer mode unchecked', async () => {
+  it('does NOT write SIDEBAR_MODE_KEY when advanced mode unchecked', async () => {
     wrap()
     fireEvent.click(screen.getByText('Continue →'))
     fireEvent.click(screen.getByText('Ollama'))
@@ -271,7 +271,7 @@ describe('Welcome component — 4-step flow', () => {
     await waitFor(() => expect(screen.getByText('Pick your tools')).toBeInTheDocument())
     fireEvent.click(screen.getByText('Continue →'))
     await waitFor(() => expect(screen.getByText("You're all set")).toBeInTheDocument())
-    // Leave developer mode unchecked
+    // Leave advanced mode unchecked
     fireEvent.click(screen.getByRole('button', { name: /Start using Shannon/ }))
     expect(window.localStorage.getItem('shannon-sidebar-mode')).toBeNull()
   })

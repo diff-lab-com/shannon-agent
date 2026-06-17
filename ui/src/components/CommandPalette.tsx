@@ -65,7 +65,6 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       { id: 'p-hooks', label: t('palette.page.hooks'), icon: 'webhook', category: t('palette.category.pages'), action: () => navigate('/hooks') },
       { id: 'p-profiles', label: t('palette.page.permissionProfiles'), icon: 'shield', category: t('palette.category.pages'), action: () => navigate('/profiles') },
       { id: 'p-editor', label: t('palette.page.codeEditor'), icon: 'code', category: t('palette.category.pages'), action: () => navigate('/editor') },
-      { id: 'p-perf', label: t('nav.performance'), icon: 'speed', category: t('palette.category.pages'), action: () => navigate('/perf') },
       { id: 'p-set', label: t('nav.settings'), icon: 'settings', category: t('palette.category.pages'), action: () => navigate('/settings') },
       { id: 'p-theme', label: t('palette.page.themeSettings'), icon: 'palette', category: t('palette.category.settings'), action: () => navigate('/settings/theme') },
       { id: 'p-models', label: t('palette.page.modelSettings'), icon: 'neurology', category: t('palette.category.settings'), action: () => navigate('/settings/models') },

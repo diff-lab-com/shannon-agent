@@ -351,7 +351,7 @@ impl McpRegistryClient {
         }
 
         CatalogEntry {
-            id: format!("mcp-reg:{}", server.id),
+            id: format!("mcp-reg:{}", if server.id.is_empty() { &server.name } else { &server.id }),
             kind: AddonKind::Mcp,
             name: server.name.clone(),
             description: server.description.clone().unwrap_or_default(),
@@ -402,12 +402,17 @@ impl McpRegistryClient {
 /// ignored so registry additions don't break parsing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_registry_servers")]
     pub servers: Vec<RegistryServer>,
 }
 
+/// Inner server payload returned by the registry. The real API wraps each
+/// entry as `{"server": {...}, "_meta": {...}}`; we accept that shape as well
+/// as a flat `{id, name, ...}` for backward compatibility with cached files
+/// and tests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryServer {
+    #[serde(default)]
     pub id: String,
     pub name: String,
     #[serde(default)]
@@ -429,6 +434,48 @@ pub struct RegistryServer {
     pub verified: bool,
     #[serde(default)]
     pub package: Option<RegistryPackage>,
+}
+
+fn deserialize_registry_servers<'de, D>(deserializer: D) -> Result<Vec<RegistryServer>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    let Some(arr) = raw.as_array() else {
+        return Ok(Vec::new());
+    };
+
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let (server_val, meta_val) = match item.get("server") {
+            Some(inner) => (inner.clone(), item.get("_meta").cloned()),
+            None => (item.clone(), None),
+        };
+
+        let mut server: RegistryServer = serde_json::from_value(server_val)
+            .map_err(serde::de::Error::custom)?;
+
+        if server.id.is_empty() {
+            server.id = server.name.clone();
+        }
+
+        if let Some(meta) = meta_val {
+            if let Some(status) = meta
+                .get("io.modelcontextprotocol.registry/official")
+                .and_then(|v| v.get("status"))
+                .and_then(|v| v.as_str())
+            {
+                if status == "active" {
+                    server.verified = true;
+                }
+            }
+        }
+
+        out.push(server);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -668,5 +715,39 @@ mod tests {
 
         let _ = client.list_servers().await.unwrap();
         let _ = client.list_servers().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn registry_client_parses_real_wrapped_api_shape() {
+        let body = r#"{
+            "servers": [
+                {
+                    "server": {
+                        "name": "ac.inference.sh/mcp",
+                        "description": "Run 150+ AI apps.",
+                        "title": "inference.sh",
+                        "version": "1.0.0",
+                        "remotes": [
+                            {"type": "streamable-http", "url": "https://sh.inference.ac"}
+                        ]
+                    },
+                    "_meta": {
+                        "io.modelcontextprotocol.registry/official": {
+                            "status": "active",
+                            "publishedAt": "2026-04-13T17:32:20.852269Z"
+                        }
+                    }
+                }
+            ],
+            "metadata": {"nextCursor": "x", "count": 1}
+        }"#;
+        let fetcher: Arc<dyn HttpFetch> = Arc::new(StaticFetch(body.into()));
+        let client = McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let servers = client.list_servers().await.expect("fetch");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "ac.inference.sh/mcp");
+        assert_eq!(servers[0].id, "ac.inference.sh/mcp", "id defaults from name");
+        assert_eq!(servers[0].version.as_deref(), Some("1.0.0"));
+        assert!(servers[0].verified, "active official status marks verified");
     }
 }

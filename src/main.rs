@@ -173,6 +173,10 @@ fn main() {
             commands::get_webhook_config,
             commands::save_webhook_config,
             commands::clear_webhook_config,
+            // P0-c — billing demo data (UI shows "Demo mode" banner)
+            commands::get_billing_plan,
+            commands::get_cost_history,
+            commands::get_billing_history,
         ])
         .setup(|app| {
             let mut state = commands::AppState::new();

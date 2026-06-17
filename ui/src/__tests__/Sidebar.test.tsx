@@ -70,7 +70,7 @@ describe('Sidebar — Simple mode (default)', () => {
 
   it('defaults to Simple mode', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByRole('button', { name: /Switch to Dev mode/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Switch to Advanced mode/ })).toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
 
@@ -102,11 +102,10 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.queryByText('One Person Company')).not.toBeInTheDocument()
   })
 
-  it('hides Quick Fix, Editor, Performance in Simple mode', () => {
+  it('hides Quick Fix, Editor in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.queryByText('Quick Fix')).not.toBeInTheDocument()
     expect(screen.queryByText('Editor')).not.toBeInTheDocument()
-    expect(screen.queryByText('Performance')).not.toBeInTheDocument()
   })
 
   it('still shows core nav in Simple mode', () => {
@@ -118,37 +117,37 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.getByText('Inbox')).toBeInTheDocument()
   })
 
-  it('toggles to Dev mode on mode button click', () => {
+  it('toggles to Advanced mode on mode button click', () => {
     render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Switch to Dev mode/ }))
-    // Now in Dev mode — Extensions visible
+    fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
+    // Now in Advanced mode — Extensions visible
     expect(screen.getByText('Extensions')).toBeInTheDocument()
-    expect(screen.getByText('Dev mode')).toBeInTheDocument()
+    expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
   it('persists mode to localStorage', () => {
     render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Switch to Dev mode/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
     expect(window.localStorage.getItem(SIDEBAR_MODE_KEY)).toBe('dev')
   })
 
-  it('remembers Dev mode from localStorage on subsequent mount', () => {
+  it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
     expect(screen.getByText('Extensions')).toBeInTheDocument()
-    expect(screen.getByText('Dev mode')).toBeInTheDocument()
+    expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
   it('mode toggle button has correct aria-pressed', () => {
     render(wrap(<Sidebar />))
-    const toggle = screen.getByRole('button', { name: /Switch to Dev mode/ })
+    const toggle = screen.getByRole('button', { name: /Switch to Advanced mode/ })
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(toggle)
     expect(screen.getByRole('button', { name: /Switch to Simple mode/ })).toHaveAttribute('aria-pressed', 'true')
   })
 })
 
-describe('Sidebar — Dev mode', () => {
+describe('Sidebar — Advanced mode', () => {
   beforeEach(() => {
     window.localStorage.clear()
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
