@@ -85,7 +85,7 @@ function appendMarkdownToElement(parent: HTMLElement, md: string) {
 export default function Chat() {
   const {
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
-    sessions, currentSessionId, error,
+    sessions, currentSessionId, error, config, status,
     sendMessage, cancelQuery, createSession, switchSession, deleteSession, renameSession,
   } = useApp()
   const intl = useIntl()
@@ -248,6 +248,30 @@ export default function Chat() {
 
   const untitled = t('chat.session.untitled')
 
+  const currentSession = sessions.find(s => s.id === currentSessionId)
+  const sessionWorkingDir = currentSession?.working_dir ?? config?.working_dir ?? ''
+
+  const handleChangeWorkingDir = async () => {
+    if (!currentSessionId) {
+      toast.error(t('chat.header.workingDir.changeFailed'), { description: t('chat.empty.start') })
+      return
+    }
+    try {
+      const selected = await openDialog({ directory: true, multiple: false })
+      if (!selected || Array.isArray(selected)) return
+      await api.setSessionWorkingDir(currentSessionId, selected as string)
+      toast.success(t('chat.header.workingDir.changed'), { description: selected as string })
+    } catch (err) {
+      toast.error(t('chat.header.workingDir.changeFailed'), { description: String(err) })
+    }
+  }
+
+  const formatDirBreadcrumb = (full: string) => {
+    const parts = full.replace(/\\/g, '/').split('/').filter(Boolean)
+    if (parts.length <= 2) return full
+    return '…/' + parts.slice(-2).join('/')
+  }
+
   return (
     <div className="flex-1 flex w-full h-full relative">
       {/* Left Sidebar - Session History */}
@@ -339,6 +363,12 @@ export default function Chat() {
                   <p className="text-body-sm text-on-surface-variant opacity-70 truncate">
                     {intl.formatMessage({ id: 'chat.session.meta' }, { count: session.message_count, time: formatTime(session.created_at) })}
                   </p>
+                  {session.working_dir && (
+                    <p className="text-label-xs text-outline font-mono truncate mt-[2px] flex items-center gap-[4px]" title={session.working_dir}>
+                      <span className="material-symbols-outlined text-[12px] opacity-70">folder</span>
+                      <span className="truncate">{formatDirBreadcrumb(session.working_dir)}</span>
+                    </p>
+                  )}
                 </>
               )}
             </div>
@@ -349,8 +379,58 @@ export default function Chat() {
 
       {/* Main Chat Canvas */}
       <section className="flex-1 flex flex-col relative bg-surface-container-lowest/40 overflow-hidden">
+        {/* Ambient backdrop — subtle radial accents for depth without distraction */}
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-60">
+          <div className="absolute -top-32 -right-32 w-96 h-96 rounded-full bg-primary/5 blur-3xl"></div>
+          <div className="absolute top-1/3 -left-32 w-80 h-80 rounded-full bg-tertiary/5 blur-3xl"></div>
+        </div>
+
+        {/* Header strip — session title + working directory breadcrumb */}
+        <header
+          role="banner"
+          aria-label={t('chat.header.aria')}
+          className="relative shrink-0 flex items-center gap-md px-lg py-sm border-b border-outline-variant/15 bg-gradient-to-r from-surface-container-lowest/80 via-surface-container-low/40 to-surface-container-lowest/80 backdrop-blur-sm"
+        >
+          <div className="flex items-center gap-sm min-w-0 flex-1">
+            <span className="material-symbols-outlined text-primary text-[20px] shrink-0">forum</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-label-xs uppercase tracking-wider text-on-surface-variant opacity-70 leading-none">
+                {t('chat.header.sessionLabel')}
+              </p>
+              <h2 className="font-label-lg font-bold text-on-surface truncate leading-tight mt-[2px]">
+                {currentSession?.title || untitled || t('chat.empty.start')}
+              </h2>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleChangeWorkingDir}
+            aria-label={t('chat.header.workingDir.aria')}
+            title={sessionWorkingDir
+              ? intl.formatMessage({ id: 'chat.header.workingDir.tooltip' }, { path: sessionWorkingDir })
+              : t('chat.header.workingDir.unset')}
+            className={`group flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 ${
+              sessionWorkingDir
+                ? 'border-primary/30 bg-primary/5 text-on-surface hover:bg-primary/10 hover:border-primary/50'
+                : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[16px]">folder_open</span>
+            <span className="max-w-[180px] truncate font-mono">
+              {sessionWorkingDir ? formatDirBreadcrumb(sessionWorkingDir) : t('chat.header.workingDir.unset')}
+            </span>
+            <span className="material-symbols-outlined text-[14px] opacity-50 group-hover:opacity-100 group-hover:text-primary transition-opacity">change_folder</span>
+          </button>
+          {status && (
+            <div className="hidden md:flex items-center gap-xs px-sm py-xs rounded-full bg-surface-container-lowest/60 border border-outline-variant/20 shrink-0" title={`${status.provider} · ${status.model}`}>
+              <span className="w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse"></span>
+              <span className="text-label-sm text-on-surface-variant font-mono truncate max-w-[160px]">{status.provider}/{status.model}</span>
+            </div>
+          )}
+        </header>
+
         {/* Message Area */}
-        <ScrollArea className="flex-1 p-xl space-y-xl pb-32">
+        <ScrollArea className="flex-1 px-xl pt-lg space-y-lg pb-32">
           {messages.length === 0 && !streamingText && (
             sessions.length === 0 ? (
               <WelcomeState onSelectPrompt={setInput} />

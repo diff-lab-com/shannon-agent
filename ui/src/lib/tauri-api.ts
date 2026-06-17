@@ -150,6 +150,10 @@ export async function switchSession(id: string): Promise<ChatMessage[]> {
   return invoke('switch_session', { id })
 }
 
+export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
+  await invoke('set_session_working_dir', { id, path })
+}
+
 export async function deleteSession(id: string): Promise<boolean> {
   return invoke('delete_session', { id })
 }

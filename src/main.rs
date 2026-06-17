@@ -60,6 +60,7 @@ fn main() {
             commands::export_session,
             commands::save_text_file,
             commands::switch_session,
+            commands::set_session_working_dir,
             commands::delete_session,
             commands::rename_session,
             commands::duplicate_session,

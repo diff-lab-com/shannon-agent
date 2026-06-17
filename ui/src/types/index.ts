@@ -98,6 +98,8 @@ export interface SessionInfo {
   is_scheduled?: boolean
   /** True if the user has pinned this conversation. */
   is_pinned?: boolean
+  /** Per-session working directory override (absolute path). */
+  working_dir?: string
 }
 
 export interface StatusResponse {

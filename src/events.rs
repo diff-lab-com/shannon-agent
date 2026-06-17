@@ -108,6 +108,8 @@ pub struct SessionInfo {
     pub title: String,
     pub created_at: i64,
     pub message_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
 }
 
 /// Session loaded event with messages.
@@ -263,6 +265,7 @@ mod tests {
             title: "My Chat".into(),
             created_at: 1700000000,
             message_count: 5,
+            working_dir: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: SessionInfo = serde_json::from_str(&json).unwrap();

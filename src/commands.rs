@@ -120,6 +120,7 @@ struct SessionMeta {
     title: String,
     created_at: i64,
     message_count: usize,
+    working_dir: Option<String>,
 }
 
 /// Background task metadata.
@@ -1308,6 +1309,7 @@ pub async fn new_session(
         title: title.clone(),
         created_at: now,
         message_count: 0,
+        working_dir: None,
     };
 
     // Add to sessions list
@@ -1347,6 +1349,7 @@ pub async fn list_sessions(
             title: s.title.clone(),
             created_at: s.created_at,
             message_count: s.message_count,
+            working_dir: s.working_dir.clone(),
         })
         .collect();
     Ok(result)
@@ -1369,6 +1372,7 @@ pub async fn search_sessions(
             title: s.title.clone(),
             created_at: s.created_at,
             message_count: s.message_count,
+            working_dir: s.working_dir.clone(),
         })
         .collect();
     Ok(result)
@@ -1622,6 +1626,25 @@ pub async fn switch_session(
         *msgs = messages.clone();
     }
 
+    // Restore working_dir from session metadata if present.
+    {
+        let sessions = state.sessions.lock().await;
+        if let Some(meta) = sessions.iter().find(|s| s.id == id) {
+            if let Some(ref wd) = meta.working_dir {
+                let _ = std::env::set_current_dir(wd);
+                let mut desktop_cfg = state.desktop_config.write().await;
+                desktop_cfg.working_dir = Some(wd.clone());
+                let _ = app_handle.emit(
+                    event_names::CONFIG_UPDATED,
+                    events::ConfigUpdatedPayload {
+                        key: "working_dir".into(),
+                        value: wd.clone(),
+                    },
+                );
+            }
+        }
+    }
+
     // Emit session loaded event
     let event_messages: Vec<events::ChatMessage> = messages
         .iter()
@@ -1639,6 +1662,57 @@ pub async fn switch_session(
     );
 
     Ok(messages)
+}
+
+/// Set working directory for a session. Updates in-memory metadata, the
+/// process cwd, and the persisted desktop config. Pass an empty string to
+/// reset to the Shannon home directory.
+#[tauri::command]
+pub async fn set_session_working_dir(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+    path: String,
+) -> Result<(), String> {
+    let wd = if path.trim().is_empty() {
+        None
+    } else {
+        let canonical = std::fs::canonicalize(&path)
+            .map_err(|e| format!("Invalid path {path}: {e}"))?;
+        Some(canonical.to_string_lossy().into_owned())
+    };
+
+    // Update session metadata
+    {
+        let mut sessions = state.sessions.lock().await;
+        if let Some(meta) = sessions.iter_mut().find(|s| s.id == id) {
+            meta.working_dir = wd.clone();
+        }
+    }
+
+    // If this is the current session, switch process cwd + desktop config
+    let current = state.current_session_id.lock().await.clone();
+    let is_current = current.as_deref() == Some(id.as_str());
+    if is_current {
+        if let Some(ref p) = wd {
+            let _ = std::env::set_current_dir(p);
+        }
+        let mut desktop_cfg = state.desktop_config.write().await;
+        desktop_cfg.working_dir = wd.clone();
+        drop(desktop_cfg);
+        let desktop_cfg = state.desktop_config.read().await;
+        let _ = config::save_config(&desktop_cfg);
+        let _ = app_handle.emit(
+            event_names::CONFIG_UPDATED,
+            events::ConfigUpdatedPayload {
+                key: "working_dir".into(),
+                value: wd.clone().unwrap_or_default(),
+            },
+        );
+    }
+
+    let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+    Ok(())
 }
 
 /// Delete a session by ID.
@@ -1764,6 +1838,7 @@ pub async fn duplicate_session(
         title: new_title.clone(),
         created_at: now,
         message_count: session_data.messages.len(),
+        working_dir: None,
     };
     drop(sessions);
     {
@@ -1779,6 +1854,7 @@ pub async fn duplicate_session(
         title: new_title,
         created_at: now,
         message_count: session_data.messages.len(),
+        working_dir: None,
     })
 }
 
