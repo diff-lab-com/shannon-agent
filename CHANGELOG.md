@@ -2,6 +2,23 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.2.7 (2026-06-17) — notifications feature complete
+
+### Features
+
+- **Query lifecycle → notification wiring.** Desktop now fires OS notifications when a query completes (`source="query_complete"`, 0ms window — always fires) or fails (`source="query_error"`, 5000ms window — coalesces cascading errors). Routes through the shared `Notifier` on `AppState` so cooldown + level filtering apply, instead of bypassing them.
+  - `src/notifications.rs`: `TauriNotificationHandler` bridges `shannon_core::notifier::NotificationHandler` to `tauri-plugin-notification` via a cloned `AppHandle`. Single handler instance serves all background tasks (AppHandle is Send+Sync).
+  - `AppState.notifier: Arc<Notifier>` — populated once in `main.rs` setup via `attach_notification_handler`. Empty by default in tests.
+  - `fire_query_notification(notifier, kind)` — takes `Completed | Failed(String)`, builds a `Notification` with the right source/level, calls `notify_dedup(window_ms)`. Body truncated to 200 chars to avoid notify-send / Windows toast overflows.
+  - 3 unit tests: completed always fires (0ms window), failed coalesces within 5s window, long body truncation safe.
+- **"Send test notification" button in General Settings.** Frontend `useNotification()` hook drives the `send_notification` Tauri command directly (bypasses the orchestrator for UX verification).
+  - 8 i18n keys added to `en.json` + `zh-CN.json`: `settings.notifications.{label, help, testButton, sending, testTitle, testBody, testSent, testFailed}`.
+  - 3 vitest tests for the hook (basic invoke, level pass-through, callback identity stability).
+
+### Dependencies
+
+- **shannon-code engine bumped to v0.5.2** (`ede2105` → `a19a15d`). Picks up the P1 notifications orchestrator (`Notifier`, `Cooldown`, `NotificationsConfig`, `Notifier::notify_dedup`, `Notification::source/action_id`).
+
 ## v0.2.6 (2026-06-17) — native notification renderer
 
 ### Features
