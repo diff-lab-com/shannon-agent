@@ -820,7 +820,7 @@ impl Repl {
             let sampling = shannon_mcp::make_sampling_provider(llm);
             let elicitation_tx = elicitation_tx.clone();
             let elicitation = shannon_mcp::make_elicitation_provider(Some(std::sync::Arc::new(
-                move |message: String, schema: Option<serde_json::Value>| {
+                move |message: String, schema: Option<serde_json::Value>, server_name: String| {
                     let tx = elicitation_tx.clone();
                     Box::pin(async move {
                         let (responder, receiver) = tokio::sync::oneshot::channel();
@@ -830,7 +830,7 @@ impl Repl {
                             .and_then(|p| p.as_str())
                             .map(|s| s.to_string());
                         let pending = PendingElicitation {
-                            server_name: "mcp".to_string(),
+                            server_name,
                             message,
                             placeholder,
                             responder,
@@ -1881,10 +1881,9 @@ impl Repl {
                             // Stronger visual distinction: MCP servers are
                             // untrusted third-party code, so label them as
                             // EXTERNAL rather than blending in with system
-                            // dialogs. Include the server name (currently
-                            // hardcoded "mcp"; will be wired to the real name
-                            // in a follow-up) and cap message length to keep
-                            // the title bar readable.
+                            // dialogs. Include the originating server name
+                            // (passed through the elicitation provider) and
+                            // cap message length to keep the title bar readable.
                             const MAX_MSG_LEN: usize = 200;
                             let truncated = if req.message.chars().count() > MAX_MSG_LEN {
                                 let mut s: String = req.message.chars().take(MAX_MSG_LEN).collect();

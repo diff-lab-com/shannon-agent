@@ -2,6 +2,27 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
+## Unreleased (dev) — notifications feature (Phase 1 + Phase 2)
+
+### Features
+
+- **Notifications core types + config (Phase 1, PR #30).** New `NotificationsConfig` and `NotificationCooldownConfig` in `shannon-core::notifier` with `interactive_default()` (sound on, level=info) and `headless_default()` (disabled — opt-in via config or `--notify`). `Cooldown` struct (DashMap-backed) provides per-source dedup with configurable windows (`permission_ms=0`, `query_complete_ms=0`, `tool_complete_ms=3000`, `error_ms=5000`, `agent_idle_ms=10000`). `Notification` struct gains `source: Option<String>` and `action_id: Option<String>` for richer routing. `Notifier` gains `with_cooldown()`, `with_minimum_level()`, `notify_dedup()` which returns `Ok(false)` when suppressed. `ShannonConfig.notifications: Option<NotificationsConfig>` with merge semantics. `NotificationLevel` serde-hardened with `rename_all="snake_case"` and `alias="critical"` for back-compat.
+- **CLI shell-out notifier (Phase 2, PR #31).** New `shannon-cli::notifications::ShellNotifier` fires OS-native notifications by spawning platform binaries: `notify-send` (Linux), `osascript` (macOS), `powershell BurntToast` (Windows). Spawns via `std::process::Command` args array (no shell). New `--notify` CLI flag opt-in for headless mode. `fire_headless_completion_notification` maps exit code → notification level (success/warning/error) with source key `headless:{exit_code:?}`.
+
+### Security
+
+- **Shell-out injection hardening (commit f0d2675 on PR #31).** Security review of the initial P2 implementation identified three issues, all fixed before merge:
+  - **AppleScript command injection** (CRITICAL): macOS template wraps values in `"..."` AppleScript strings but `sanitize()` did not escape `"` or `\`. A malicious title like `Evil ") & (do shell script "rm -rf ~")` could break out and execute arbitrary shell commands. Fixed: `escape_applescript()` escapes `\` first then `"`.
+  - **PowerShell command injection** (CRITICAL): Windows template wraps values in `'...'` PowerShell strings but `'` was not escaped. Fixed: `escape_powershell()` doubles single quotes (the correct PowerShell escape).
+  - **Template injection** (HIGH): Chained `str::replace` calls re-scan substituted values, so a title containing literal `{body}` would have body content injected. Fixed: single-pass `substitute()` helper scans the template once — substituted values are not re-interpreted.
+  - **Arbitrary binary execution** (HIGH, acknowledged): `ShellNotifier::with_spec()` accepts any binary path; documented as a developer-API trust boundary. Platform-default path (`CommandSpec::platform_default()`) is the only user-reachable path. MVP does not expose config-driven binary selection.
+  - **Test coverage**: 11 new unit tests verify escaping correctness via balanced-quote counters that simulate AppleScript/PowerShell parsing. The exact malicious payloads from the security report are used as test inputs.
+
+### Tests
+
+- P1: +15 unit tests in `shannon-core::notifier`.
+- P2: +20 unit tests in `shannon-cli::notifications` (9 original + 11 security hardening).
+
 ## v0.5.1 (2026-06) — `.mcpb` install security hardening
 
 ### Security

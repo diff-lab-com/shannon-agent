@@ -4757,13 +4757,13 @@ fn test_elicitation_channel_send_and_receive() {
 #[test]
 fn test_elicitation_provider_callback_accept_path() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PendingElicitation>();
-    let callback: shannon_mcp::process_pool::UserPromptCallback =
-        std::sync::Arc::new(move |message: String, _schema: Option<serde_json::Value>| {
+    let callback: shannon_mcp::process_pool::UserPromptCallback = std::sync::Arc::new(
+        move |message: String, _schema: Option<serde_json::Value>, server_name: String| {
             let tx = tx.clone();
             Box::pin(async move {
                 let (responder, receiver) = tokio::sync::oneshot::channel();
                 let pending = PendingElicitation {
-                    server_name: "mcp".to_string(),
+                    server_name,
                     message,
                     placeholder: None,
                     responder,
@@ -4776,7 +4776,8 @@ fn test_elicitation_provider_callback_accept_path() {
                     Err(_) => (shannon_mcp::ElicitationAction::Cancel, None),
                 }
             })
-        });
+        },
+    );
 
     let provider = shannon_mcp::make_elicitation_provider(Some(callback));
     let rt = tokio::runtime::Runtime::new().unwrap();
@@ -4785,10 +4786,11 @@ fn test_elicitation_provider_callback_accept_path() {
             message: "Pick a number".to_string(),
             requested_schema: None,
         };
-        provider(req).await
+        provider(req, "test-server").await
     });
 
     let pending = rx.blocking_recv().expect("channel closed");
+    assert_eq!(pending.server_name, "test-server");
     pending
         .responder
         .send(shannon_mcp::ElicitationResult {
@@ -4811,13 +4813,13 @@ fn test_elicitation_provider_callback_accept_path() {
 #[test]
 fn test_elicitation_provider_callback_cancel_on_dropped_responder() {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<PendingElicitation>();
-    let callback: shannon_mcp::process_pool::UserPromptCallback =
-        std::sync::Arc::new(move |message: String, _schema: Option<serde_json::Value>| {
+    let callback: shannon_mcp::process_pool::UserPromptCallback = std::sync::Arc::new(
+        move |message: String, _schema: Option<serde_json::Value>, server_name: String| {
             let tx = tx.clone();
             Box::pin(async move {
                 let (responder, receiver) = tokio::sync::oneshot::channel();
                 let pending = PendingElicitation {
-                    server_name: "mcp".to_string(),
+                    server_name,
                     message,
                     placeholder: None,
                     responder,
@@ -4830,7 +4832,8 @@ fn test_elicitation_provider_callback_cancel_on_dropped_responder() {
                     Err(_) => (shannon_mcp::ElicitationAction::Cancel, None),
                 }
             })
-        });
+        },
+    );
 
     // Drop rx without responding — provider should observe Cancel.
     drop(rx);
@@ -4842,7 +4845,7 @@ fn test_elicitation_provider_callback_cancel_on_dropped_responder() {
                 message: "ignored".to_string(),
                 requested_schema: None,
             };
-            provider(req).await
+            provider(req, "test").await
         })
         .unwrap();
     assert!(matches!(

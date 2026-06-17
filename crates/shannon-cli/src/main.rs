@@ -4,6 +4,7 @@ use clap::Subcommand;
 use futures::StreamExt;
 
 mod mcp_install;
+mod notifications;
 use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
     api::LlmClientConfig,
@@ -434,6 +435,13 @@ struct Cli {
     ///          shannon --prompt "analyze" --schema '{"type":"object","required":["result"]}'
     #[arg(long)]
     schema: Option<String>,
+
+    /// Fire OS-native notifications on query completion, errors, or permission
+    /// prompts in headless / non-interactive mode. Best-effort: ignores failures
+    /// from missing platform binaries (e.g. `notify-send` not installed).
+    /// Overridden by `[notifications] enabled = true|false` in `.shannon.toml`.
+    #[arg(long)]
+    notify: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -1093,6 +1101,7 @@ fn run_headless_query(
     diff_only: bool,
     resume_session: Option<shannon_core::state::SessionData>,
     schema_config: Option<&shannon_core::StructuredOutputConfig>,
+    notify: bool,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let exit_code: HeadlessExitCode = rt.block_on(async {
@@ -1524,8 +1533,87 @@ fn run_headless_query(
         Ok::<HeadlessExitCode, anyhow::Error>(exit_code)
     })?;
 
+    if notify {
+        fire_headless_completion_notification(exit_code, prompt);
+    }
+
     // Exit with the appropriate code
     std::process::exit(i32::from(exit_code));
+}
+
+/// Fire an OS-native notification describing the headless run outcome.
+///
+/// Spawns a `ShellNotifier` even when the platform binary may be missing —
+/// failures are swallowed (logged to stderr when debug is on) so a missing
+/// `notify-send` never breaks a headless run.
+fn fire_headless_completion_notification(exit_code: HeadlessExitCode, prompt: &str) {
+    use shannon_core::notifier::{Notification, NotificationLevel};
+
+    let (title, body, level) = match exit_code {
+        HeadlessExitCode::Success => (
+            "Shannon — task complete",
+            prompt
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect::<String>(),
+            NotificationLevel::Success,
+        ),
+        HeadlessExitCode::TurnLimit => (
+            "Shannon — max turns reached",
+            prompt
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect::<String>(),
+            NotificationLevel::Warning,
+        ),
+        HeadlessExitCode::PermissionDenied => (
+            "Shannon — permission denied",
+            "A required tool was blocked in non-interactive mode.".to_string(),
+            NotificationLevel::Warning,
+        ),
+        HeadlessExitCode::RateLimited => (
+            "Shannon — rate limited",
+            "API provider returned 429; retry later.".to_string(),
+            NotificationLevel::Error,
+        ),
+        HeadlessExitCode::ContextOverflow => (
+            "Shannon — context overflow",
+            "Conversation exceeded the model's context window.".to_string(),
+            NotificationLevel::Error,
+        ),
+        HeadlessExitCode::Error | HeadlessExitCode::Timeout => (
+            "Shannon — task failed",
+            prompt
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(120)
+                .collect::<String>(),
+            NotificationLevel::Error,
+        ),
+    };
+
+    let notification = Notification {
+        title: title.into(),
+        body,
+        level,
+        id: uuid::Uuid::new_v4().to_string(),
+        timestamp: chrono::Utc::now(),
+        source: Some(format!("headless:{exit_code:?}")),
+        action_id: None,
+    };
+
+    let notifier = notifications::ShellNotifier::new();
+    if let Err(e) = shannon_core::notifier::NotificationHandler::send(&notifier, &notification) {
+        eprintln!("[notify] {e}");
+    }
 }
 
 /// Read all of stdin into a String. Returns empty string if stdin is a terminal
@@ -2304,6 +2392,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             cli.diff_only,
             resume_data,
             schema_config.as_ref(),
+            cli.notify,
         );
     }
 

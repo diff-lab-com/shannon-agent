@@ -253,6 +253,8 @@ impl super::Repl {
                             level: NotificationLevel::Success,
                             id: format!("agent-{}-done", agent.name),
                             timestamp: Utc::now(),
+                            source: Some(format!("agent:{}:completed", agent.name)),
+                            action_id: None,
                         };
                         let _ = notifier.send(&notification);
                     } else if status.starts_with("failed") {
@@ -262,6 +264,8 @@ impl super::Repl {
                             level: NotificationLevel::Error,
                             id: format!("agent-{}-fail", agent.name),
                             timestamp: Utc::now(),
+                            source: Some(format!("agent:{}:failed", agent.name)),
+                            action_id: None,
                         };
                         let _ = notifier.send(&notification);
                     }

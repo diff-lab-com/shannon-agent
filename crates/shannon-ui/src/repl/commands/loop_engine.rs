@@ -827,6 +827,8 @@ pub(crate) fn notify_query_complete(
         level: shannon_core::notifier::NotificationLevel::Info,
         id: uuid::Uuid::new_v4().to_string(),
         timestamp: chrono::Utc::now(),
+        source: Some("query_complete".to_string()),
+        action_id: None,
     };
     let _ = notifier.notify(&notification);
 }
