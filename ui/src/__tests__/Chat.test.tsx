@@ -223,6 +223,48 @@ describe('Chat page', () => {
     expect(screen.queryByText('Python Debug')).not.toBeInTheDocument()
   })
 
+  // C1: backend full-text search debounced — fires when query ≥ 3 chars.
+  it('calls searchSessions backend after debounce for queries ≥ 3 chars', async () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Python Debug', created_at: Date.now(), updated_at: Date.now() },
+      { id: 's2', title: 'React Setup', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    vi.mocked(api.searchSessions).mockResolvedValue([
+      { id: 's2', title: 'React Setup', created_at: 0, message_count: 0 },
+    ])
+    renderChat()
+    fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'hook' } })
+    await waitFor(() => expect(api.searchSessions).toHaveBeenCalledWith('hook'))
+  })
+
+  it('uses backend hits to surface sessions whose title does not match query', async () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Python Debug', created_at: Date.now(), updated_at: Date.now() },
+      { id: 's2', title: 'React Setup', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    // Backend reports s2 as a content match for "useState" (no title overlap)
+    vi.mocked(api.searchSessions).mockResolvedValue([
+      { id: 's2', title: 'React Setup', created_at: 0, message_count: 0 },
+    ])
+    renderChat()
+    fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'useState' } })
+    await waitFor(() => expect(api.searchSessions).toHaveBeenCalledWith('useState'))
+    await waitFor(() => expect(screen.getByText(/React/)).toBeInTheDocument())
+    expect(screen.queryByText('Python Debug')).not.toBeInTheDocument()
+  })
+
+  it('does not call backend when query is shorter than 3 chars', () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Go', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    renderChat()
+    fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'go' } })
+    expect(api.searchSessions).not.toHaveBeenCalled()
+  })
+
   it('renders error message when error present', () => {
     resetCtx()
     ctx.error = 'Something went wrong'

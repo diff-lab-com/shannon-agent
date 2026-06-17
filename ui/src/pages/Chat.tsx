@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, memo, lazy, Suspense } from 'react'
+import { useState, useRef, useEffect, useMemo, memo, lazy, Suspense } from 'react'
 import { useIntl } from 'react-intl'
 import ReactMarkdown from 'react-markdown'
 import { toast } from 'sonner'
@@ -13,7 +13,7 @@ import WelcomeState from '@/components/WelcomeState'
 import DiffDialog from '@/components/diff/DiffDialog'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
-import type { ChatMessage, ToolCall, FileContext } from '@/types'
+import type { ChatMessage, ToolCall, FileContext, SessionInfo } from '@/types'
 
 // QuickFix and Editor are no longer top-level routes — they are inline
 // tools launched from the chat input toolbar. Lazy-loaded so the main
@@ -93,6 +93,7 @@ export default function Chat() {
 
   const [input, setInput] = useState('')
   const [sessionSearch, setSessionSearch] = useState('')
+  const [backendSessionHits, setBackendSessionHits] = useState<SessionInfo[] | null>(null)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [diffPath, setDiffPath] = useState<string | null>(null)
@@ -112,6 +113,27 @@ export default function Chat() {
   useEffect(() => {
     api.getFileContext().then(setFileContext).catch(e => console.warn('Failed to load file context:', e))
   }, [messages])
+
+  // Debounced backend full-text search. Backend matches title first, then
+  // message content. Short queries fall back to a client-side title filter
+  // (cheaper, instant feedback, no IPC round-trip).
+  useEffect(() => {
+    const q = sessionSearch.trim()
+    if (q.length < 3) {
+      setBackendSessionHits(null)
+      return
+    }
+    let cancelled = false
+    const handle = setTimeout(() => {
+      api.searchSessions(q)
+        .then(hits => { if (!cancelled) setBackendSessionHits(hits) })
+        .catch(e => {
+          console.warn('searchSessions failed, falling back to client filter:', e)
+          if (!cancelled) setBackendSessionHits(null)
+        })
+    }, 250)
+    return () => { cancelled = true; clearTimeout(handle) }
+  }, [sessionSearch])
 
   const handleSend = () => {
     const trimmed = input.trim()
@@ -157,9 +179,16 @@ export default function Chat() {
     }
   }
 
-  const filteredSessions = sessionSearch
-    ? sessions.filter(s => s.title.toLowerCase().includes(sessionSearch.toLowerCase()))
-    : sessions
+  const filteredSessions = useMemo(() => {
+    const q = sessionSearch.trim()
+    if (!q) return sessions
+    if (backendSessionHits === null) {
+      const ql = q.toLowerCase()
+      return sessions.filter(s => s.title.toLowerCase().includes(ql))
+    }
+    const byId = new Map(sessions.map(s => [s.id, s]))
+    return backendSessionHits.map(h => byId.get(h.id) ?? h)
+  }, [sessions, sessionSearch, backendSessionHits])
 
   const sortedSessions = [...filteredSessions].sort((a, b) => {
     const aPin = pinnedIds.has(a.id) ? 1 : 0

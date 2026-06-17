@@ -1355,27 +1355,63 @@ pub async fn list_sessions(
     Ok(result)
 }
 
-/// Search sessions by title substring.
+/// Search sessions by title substring or message content.
+///
+/// Title matches rank first; content matches fill the rest. Only the first
+/// `CONTENT_SCAN_LIMIT` sessions without a title match have their messages
+/// loaded, so cost stays bounded per keystroke.
 #[tauri::command]
 pub async fn search_sessions(
     state: tauri::State<'_, AppState>,
     query: String,
 ) -> Result<Vec<events::SessionInfo>, String> {
-    let sessions = state.sessions.lock().await;
-    let query_lower = query.to_lowercase();
+    const CONTENT_SCAN_LIMIT: usize = 200;
 
-    let result: Vec<events::SessionInfo> = sessions
-        .iter()
-        .filter(|s| s.title.to_lowercase().contains(&query_lower))
-        .map(|s| events::SessionInfo {
+    let query_lower = query.to_lowercase();
+    if query_lower.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sessions = state.sessions.lock().await;
+    let mut title_matches: Vec<events::SessionInfo> = Vec::new();
+    let mut content_matches: Vec<events::SessionInfo> = Vec::new();
+
+    for s in sessions.iter() {
+        let info = || events::SessionInfo {
             id: s.id.clone(),
             title: s.title.clone(),
             created_at: s.created_at,
             message_count: s.message_count,
             working_dir: s.working_dir.clone(),
-        })
-        .collect();
-    Ok(result)
+        };
+
+        if s.title.to_lowercase().contains(&query_lower) {
+            title_matches.push(info());
+            continue;
+        }
+
+        if content_matches.len() + title_matches.len() >= CONTENT_SCAN_LIMIT {
+            continue;
+        }
+
+        if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
+            if let Ok(Some(data)) = state.state_manager.load_session(&uuid) {
+                let hit = data.messages.iter().any(|m| match &m.content {
+                    shannon_core::api::MessageContent::Text(t) => t.to_lowercase().contains(&query_lower),
+                    shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter().any(|b| match b {
+                        shannon_core::api::ContentBlock::Text { text } => text.to_lowercase().contains(&query_lower),
+                        _ => false,
+                    }),
+                });
+                if hit {
+                    content_matches.push(info());
+                }
+            }
+        }
+    }
+
+    title_matches.extend(content_matches);
+    Ok(title_matches)
 }
 
 /// Load a session by ID.
