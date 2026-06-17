@@ -2,7 +2,32 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
-## Unreleased (dev) — notifications next phase (Bundle A + Bundle B)
+## v0.5.5 (2026-06-17) — notifications next phase (T-series + C9)
+
+### Features
+
+- **3 new webhook templates (C9, PR #36).** `WebhookTemplate` gains three variants: `Teams` (Office 365 connector: `{"text": "**{title}**\n{body}"}`), `Telegram` (Bot API Markdown: `{"text": "*{title}*\n{body}", "parse_mode": "Markdown"}` — caller includes `chat_id` via URL query), `DingTalk` (`{"msgtype": "markdown", "markdown": {"title": ..., "text": ...}}`). Renders verified via JSON parse in unit tests.
+- **Webhook retry + bumped default timeout (T7, PR #36).** `WebhookHandler::send` now retries up to 3 attempts with exponential backoff (500ms → 1s → 2s, ±25% jitter via `rand`). Returns early on 2xx; logs `warn` on non-success status or transport error. Default `timeout_ms` bumped 3000 → 5000 to accommodate slow chat APIs (Slack/Discord can take 2–3s under load).
+- **3-tier volume presets (T5, PR #36).** New `NotifPreset` enum (`Quiet` / `Balanced` / `Verbose`) on `NotificationsConfig.preset: Option<NotifPreset>`. `Quiet` = errors only; `Balanced` = errors + `permission:*` + `agent:*` sources; `Verbose` = all (subject to `minimum_level`). `Notifier::with_preset()` builder; filter applied before `minimum_level`. Defaults to `None` to preserve existing behavior.
+- **Permission prompt notification (T2, PR #37).** REPL now fires a Warning notification when a permission dialog becomes visible in the event loop. Body shows the first 3 lines of the prompt description. Default is informational only — no inline approve button, per security trade-off documented in roadmap. 10s per-tool cooldown via `notify_dedup`.
+- **Agent exit notification (T3, PR #37).** Sidebar's `refresh_agents()` extends the existing completed/failed detection with a third branch that diffs `prev_names` against `current_names` — catches agents that vanish from the registry without transitioning to Completed/Failed (signal kill, team teardown, coordinator drop). 5s cooldown coalesces batch teardowns.
+
+### Tests
+
+- `shannon-core::notifier`: +6 tests for C9 templates, T7 retry behavior, and T5 preset filtering.
+- T2/T3 verified via `cargo nextest run -p shannon-ui` (1351 passed, 1 skipped).
+
+## v0.5.4 (2026-06-17) — CLI webhook runtime fix
+
+### Fixes
+
+- **CLI webhook actually fires (PR #35).** Two compounding bugs made the v0.5.3 CLI webhook wiring non-functional for headless users:
+  - **Config never loaded.** `load_headless_webhook_config` used `ConfigBuilder::new().build()`, but `ConfigBuilder::new()` doesn't auto-load any files. Even calling `.load_local_toml()` didn't help because the underlying `load_config_file` only does simple `key=value` parsing — it explicitly skips nested TOML tables like `[notifications.webhook]`. Rewrote the loader to call `toml::from_str::<ShannonConfig>` directly (toml crate is already in shannon-cli's deps). Reads `.shannon.toml` first, then falls back to `~/.shannon/config.toml`.
+  - **No tokio runtime.** `fire_headless_completion_notification` runs AFTER the headless runtime block has been dropped, so `WebhookHandler::send` → `tokio::spawn` failed with `HandlerFailed { name: "webhook", reason: "no tokio runtime ..." }`. Wrapped the webhook send in a fresh `Runtime::new()` with a 3s `block_on` to keep the fire-and-forget task alive until delivery completes.
+
+  Verified end-to-end with `nc -lk` listener: HMAC-SHA256 signature header present, Slack template body renders correctly.
+
+## v0.5.3 (2026-06-17) — notifications next phase (Bundle A + Bundle B)
 
 ### Features
 
