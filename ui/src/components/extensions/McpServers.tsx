@@ -79,7 +79,7 @@ export default function McpServers() {
       // Tier-3 servers that lack a resolver — those need the manual form.
       setFeedback({
         id: server.id,
-        msg: "Use the manual form below for Tier-3 stdio servers, or Featured tab for OAuth.",
+        msg: t("extensions.mcp.tier3Note"),
         ok: false,
       });
     } finally {
@@ -92,7 +92,7 @@ export default function McpServers() {
     setFeedback(null);
     try {
       await uninstallMcpServer(name);
-      setFeedback({ id: `uninstall:${name}`, msg: `Removed ${name}`, ok: true });
+      setFeedback({ id: `uninstall:${name}`, msg: intl.formatMessage({ id: 'extensions.mcp.removed' }, { name }), ok: true });
       refreshInstalled();
     } catch (err) {
       setFeedback({ id: `uninstall:${name}`, msg: String(err), ok: false });
@@ -187,28 +187,30 @@ function RegistrySection({
   onInstall: (server: RegistryServer) => void;
   installedNames: Set<string>;
 }) {
+  const intl = useIntl();
+  const t = (id: string) => intl.formatMessage({ id });
   return (
     <section>
       <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-        Registry · {servers.length}
+        {t('extensions.mcp.registry')} · {servers.length}
       </h3>
 
       {loading && (
         <div className="text-center py-lg text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          Fetching registry…
+          {t('extensions.mcp.fetching')}
         </div>
       )}
 
       {error && (
         <div className="border border-error/30 rounded-xl p-md bg-error-container/10 text-label-sm text-error">
-          Registry unavailable: <span className="font-mono">{error}</span>
+          {t('extensions.mcp.registryError')} <span className="font-mono">{error}</span>
         </div>
       )}
 
       {!loading && !error && servers.length === 0 && (
         <div className="text-center py-lg text-on-surface-variant text-label-md">
-          No servers found.
+          {t('extensions.mcp.noServers')}
         </div>
       )}
 
@@ -271,7 +273,7 @@ function RegistrySection({
                       rel="noreferrer"
                       className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest"
                     >
-                      Repo
+                      {t('extensions.mcp.repo')}
                     </a>
                   )}
                   <button
@@ -280,7 +282,7 @@ function RegistrySection({
                     disabled={isBusy || isInstalled}
                     className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {isBusy ? "…" : isInstalled ? "Installed" : "Install"}
+                    {isBusy ? "…" : isInstalled ? t('extensions.mcp.installed') : t('extensions.mcp.install')}
                   </button>
                 </div>
               </div>
@@ -313,7 +315,7 @@ function McpbUploadSection({
 
   async function handleFile(file: File) {
     if (!name.trim()) {
-      onError("Enter a server name first.");
+      onError(t('extensions.mcp.needName'));
       return;
     }
     setBusy(true);
@@ -333,9 +335,9 @@ function McpbUploadSection({
 
   return (
     <section className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/30">
-      <h3 className="text-label-lg font-bold text-on-surface mb-xs">Upload .mcpb bundle</h3>
+      <h3 className="text-label-lg font-bold text-on-surface mb-xs">{t('extensions.mcp.uploadTitle')}</h3>
       <p className="text-label-sm text-on-surface-variant mb-sm">
-        Install an MCP server from a <code>.mcpb</code> ZIP archive on disk.
+        {t('extensions.mcp.uploadDesc')}
       </p>
       <div className="flex flex-wrap gap-xs items-end">
         <label className="flex-1 min-w-[200px]">
@@ -364,7 +366,7 @@ function McpbUploadSection({
       {busy && (
         <p className="text-label-xs text-on-surface-variant mt-xs">
           <span className="material-symbols-outlined animate-spin align-middle mr-xs text-[14px]">progress_activity</span>
-          Extracting & installing…
+          {t('extensions.mcp.extracting')}
         </p>
       )}
     </section>
@@ -417,7 +419,7 @@ function StdioManualForm({
 
   async function handleSubmit() {
     if (!name.trim() || !command.trim()) {
-      onError("Server name and command are required.");
+      onError(t('extensions.mcp.needNameAndCommand'));
       return;
     }
     setBusy(true);
@@ -446,11 +448,11 @@ function StdioManualForm({
     <section className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/30">
       <h3 className="text-label-lg font-bold text-on-surface mb-xs">{t('extensions.mcp.addStdioTitle')}</h3>
       <p className="text-label-sm text-on-surface-variant mb-sm">
-        Tier-3 escape hatch: specify command, args, and env directly.
+        {t('extensions.mcp.manualDesc')}
       </p>
       <div className="space-y-sm">
         <label className="block">
-          <span className="block text-label-xs text-on-surface-variant mb-[2px]">Server name *</span>
+          <span className="block text-label-xs text-on-surface-variant mb-[2px]">{t('extensions.mcp.serverNameRequired')}</span>
           <input
             type="text"
             value={name}
@@ -461,7 +463,7 @@ function StdioManualForm({
           />
         </label>
         <label className="block">
-          <span className="block text-label-xs text-on-surface-variant mb-[2px]">Command *</span>
+          <span className="block text-label-xs text-on-surface-variant mb-[2px]">{t('extensions.mcp.commandRequired')}</span>
           <input
             type="text"
             value={command}
@@ -472,7 +474,7 @@ function StdioManualForm({
           />
         </label>
         <label className="block">
-          <span className="block text-label-xs text-on-surface-variant mb-[2px]">Args (space-separated, quotes allowed)</span>
+          <span className="block text-label-xs text-on-surface-variant mb-[2px]">{t('extensions.mcp.argsLabel')}</span>
           <input
             type="text"
             value={argsText}
@@ -483,7 +485,7 @@ function StdioManualForm({
           />
         </label>
         <label className="block">
-          <span className="block text-label-xs text-on-surface-variant mb-[2px]">Env (KEY=value, one per line)</span>
+          <span className="block text-label-xs text-on-surface-variant mb-[2px]">{t('extensions.mcp.envLabel')}</span>
           <textarea
             value={envText}
             onChange={(e) => setEnvText(e.target.value)}
@@ -502,12 +504,12 @@ function StdioManualForm({
           {busy ? (
             <>
               <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
-              Installing…
+              {t('extensions.mcp.installing')}
             </>
           ) : (
             <>
               <span className="material-symbols-outlined text-[16px]">add</span>
-              Install
+              {t('extensions.mcp.install')}
             </>
           )}
         </button>
@@ -536,13 +538,13 @@ function InstalledSection({
   return (
     <section>
       <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-        Installed · {servers.length}
+        {t('extensions.mcp.installedSection')} · {servers.length}
       </h3>
       {loading ? (
-        <div className="text-center py-md text-on-surface-variant text-label-sm">Loading…</div>
+        <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.mcp.loading')}</div>
       ) : servers.length === 0 ? (
         <div className="text-center py-md text-on-surface-variant text-label-sm">
-          No MCP servers configured.
+          {t('extensions.mcp.noMcpServers')}
         </div>
       ) : (
         <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">
@@ -579,7 +581,7 @@ function InstalledSection({
                 disabled={busyId === `uninstall:${srv.name}`}
                 className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
               >
-                {busyId === `uninstall:${srv.name}` ? "…" : "Remove"}
+                {busyId === `uninstall:${srv.name}` ? "…" : t('extensions.mcp.remove')}
               </button>
             </div>
           ))}

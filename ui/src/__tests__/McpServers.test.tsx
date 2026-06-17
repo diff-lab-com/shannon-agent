@@ -87,7 +87,7 @@ describe('McpServers (P2 wire-up)', () => {
     listMcpServers.mockResolvedValue([])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText(/Registry unavailable:/)).toBeInTheDocument()
+      expect(screen.getByText(/Registry unavailable/)).toBeInTheDocument()
     })
     expect(screen.getByText(/Network down/)).toBeInTheDocument()
   })
