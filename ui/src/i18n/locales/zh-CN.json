@@ -133,6 +133,7 @@
   "nav.notifications": "通知",
   "settings.notifications.title": "通知",
   "settings.notifications.subtitle": "为桌面通知配置 Webhook 投递。设置会写入你的 Shannon 配置文件。",
+  "settings.notifications.loading": "正在加载通知设置…",
   "settings.notifications.url": "Webhook URL",
   "settings.notifications.template": "Payload 模板",
   "settings.notifications.templateCustom": "自定义 JSON 模板",

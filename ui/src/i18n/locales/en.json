@@ -133,6 +133,7 @@
   "nav.notifications": "Notifications",
   "settings.notifications.title": "Notifications",
   "settings.notifications.subtitle": "Configure webhook delivery for desktop notifications. Settings are written to your Shannon config file.",
+  "settings.notifications.loading": "Loading notifications settings…",
   "settings.notifications.url": "Webhook URL",
   "settings.notifications.template": "Payload template",
   "settings.notifications.templateCustom": "Custom JSON template",

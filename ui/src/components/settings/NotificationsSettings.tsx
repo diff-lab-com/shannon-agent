@@ -112,8 +112,9 @@ export default function NotificationsSettings() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <span className="material-symbols-outlined text-[32px] text-primary animate-spin">progress_activity</span>
+      <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
+        <span className="material-symbols-outlined text-[32px] text-primary animate-spin" aria-hidden="true">progress_activity</span>
+        <span className="sr-only">{t('settings.notifications.loading')}</span>
       </div>
     )
   }
