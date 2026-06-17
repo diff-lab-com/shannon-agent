@@ -671,7 +671,7 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
-                        fire_query_notification(
+                        let _ = fire_query_notification(
                             &notifier_arc,
                             NotificationKind::Completed,
                         );
@@ -684,7 +684,7 @@ pub async fn send_message(
                                 error: error.clone(),
                             },
                         );
-                        fire_query_notification(
+                        let _ = fire_query_notification(
                             &notifier_arc,
                             NotificationKind::Failed(error),
                         );
