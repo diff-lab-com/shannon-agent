@@ -114,6 +114,16 @@ export default function Chat() {
     api.getFileContext().then(setFileContext).catch(e => console.warn('Failed to load file context:', e))
   }, [messages])
 
+  // C2: Cmd/Ctrl+D triggers the WD picker from anywhere. The handler is
+  // defined later in the component but stable per-render — we always
+  // dispatch through a ref so the listener doesn't need to re-bind.
+  const changeWorkingDirRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    const handler = () => changeWorkingDirRef.current()
+    window.addEventListener('shannon:change-wd', handler)
+    return () => window.removeEventListener('shannon:change-wd', handler)
+  }, [])
+
   // Debounced backend full-text search. Backend matches title first, then
   // message content. Short queries fall back to a client-side title filter
   // (cheaper, instant feedback, no IPC round-trip).
@@ -294,6 +304,7 @@ export default function Chat() {
       toast.error(t('chat.header.workingDir.changeFailed'), { description: String(err) })
     }
   }
+  changeWorkingDirRef.current = handleChangeWorkingDir
 
   const formatDirBreadcrumb = (full: string) => {
     const parts = full.replace(/\\/g, '/').split('/').filter(Boolean)

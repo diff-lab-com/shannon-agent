@@ -472,6 +472,21 @@ describe('Chat page', () => {
     })
   })
 
+  // C2: Cmd/Ctrl+D dispatches shannon:change-wd which Chat listens for and
+  // opens the same folder picker as the WD chip button.
+  it('opens folder picker when shannon:change-wd event fires', async () => {
+    resetCtx()
+    ctx.currentSessionId = 's1'
+    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/via-shortcut')
+    renderChat()
+    window.dispatchEvent(new Event('shannon:change-wd'))
+    await waitFor(() => {
+      expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ directory: true }))
+      expect(api.setSessionWorkingDir).toHaveBeenCalledWith('s1', '/home/alice/via-shortcut')
+    })
+  })
+
   it('does not call setSessionWorkingDir when folder picker cancelled', async () => {
     resetCtx()
     ctx.currentSessionId = 's1'

@@ -59,6 +59,15 @@ describe('useKeyboardShortcuts', () => {
     expect(toggle).toHaveBeenCalled()
   })
 
+  it('dispatches shannon:change-wd event on mod+d', () => {
+    const handler = vi.fn()
+    window.addEventListener('shannon:change-wd', handler)
+    renderHook(() => useKeyboardShortcuts())
+    fireKeyDown('d', { metaKey: true })
+    expect(handler).toHaveBeenCalledTimes(1)
+    window.removeEventListener('shannon:change-wd', handler)
+  })
+
   it('ignores shortcuts when focus is in input', () => {
     renderHook(() => useKeyboardShortcuts())
     const input = document.createElement('input')

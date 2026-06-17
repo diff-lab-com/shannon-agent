@@ -42,7 +42,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
-  const { sessions, models, tasks, agents, refreshConfig } = useApp()
+  const { sessions, models, tasks, agents, refreshConfig, switchSession } = useApp()
   const intl = useIntl()
 
   const t = (id: string) => intl.formatMessage({ id })
@@ -80,7 +80,10 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       action: () => navigate('/agents'),
     }))
     const sessionItems: PaletteItem[] = sessions.slice(0, 10).map(s => ({
-      id: `s-${s.id}`, label: s.title || t('palette.untitled'), icon: 'history', category: t('palette.category.recentChats'), action: () => navigate('/chat'),
+      id: `s-${s.id}`, label: s.title || t('palette.untitled'), icon: 'history', category: t('palette.category.recentChats'), action: () => {
+        switchSession(s.id)
+        navigate('/chat')
+      },
     }))
     const modelItems: PaletteItem[] = models.slice(0, 5).map(m => ({
       id: `m-${m.id}`, label: m.name, icon: 'neurology', category: t('palette.category.switchModel'), action: () => {
@@ -95,7 +98,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       },
     }))
     return [...actions, ...pages, ...taskItems, ...agentItems, ...sessionItems, ...modelItems]
-  }, [intl, navigate, sessions, models, tasks, agents, refreshConfig, t])
+  }, [intl, navigate, sessions, models, tasks, agents, refreshConfig, switchSession, t])
 
   // Fuzzy-scored + ranked results. Empty query returns items unchanged (stable
   // category order). Non-matching items drop out; matches sort by score desc.
