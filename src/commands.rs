@@ -3562,11 +3562,14 @@ fn fire_query_notification(
     notifier.notify_dedup(&notification, window_ms)
 }
 
-/// Best-effort load of `[notifications.webhook]` from `.shannon.toml` in the
-/// current working directory. Returns `None` on any error — never panics the
-/// app on config issues.
+/// Best-effort load of `[notifications.webhook]` from `~/.shannon/config.toml`
+/// and `.shannon.toml` (project-local). Returns `None` on any error — never
+/// panics the app on config issues.
 fn load_desktop_webhook_config() -> Option<shannon_core::notifier::WebhookConfig> {
-    let cfg = shannon_core::unified_config::ConfigBuilder::new().build();
+    let cfg = shannon_core::unified_config::ConfigBuilder::new()
+        .load_global_toml()
+        .load_local_toml()
+        .build();
     cfg.notifications.and_then(|n| n.webhook)
 }
 
