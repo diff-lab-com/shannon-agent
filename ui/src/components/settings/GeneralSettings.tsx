@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { useIntl } from 'react-intl'
 import { useApp } from '@/context/AppContext'
 import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
+import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import type { ApprovalMode } from '@/types'
 
@@ -18,8 +19,26 @@ export default function GeneralSettings() {
   const { config, refreshConfig } = useApp()
   const intl = useIntl()
   const { locale, setLocale } = useI18n()
+  const notify = useNotification()
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
   const [saving, setSaving] = useState(false)
+  const [testingNotification, setTestingNotification] = useState(false)
+
+  const handleTestNotification = async () => {
+    setTestingNotification(true)
+    try {
+      await notify({
+        title: intl.formatMessage({ id: 'settings.notifications.testTitle' }),
+        body: intl.formatMessage({ id: 'settings.notifications.testBody' }),
+        level: 'info',
+      })
+      toast.success(intl.formatMessage({ id: 'settings.notifications.testSent' }))
+    } catch (e) {
+      console.warn('Test notification failed:', e)
+      toast.error(intl.formatMessage({ id: 'settings.notifications.testFailed' }))
+    }
+    setTestingNotification(false)
+  }
 
   const handleLocaleChange = (next: Locale) => {
     setLocale(next)
@@ -128,6 +147,24 @@ export default function GeneralSettings() {
               <span className="font-label-md text-on-surface font-bold font-mono text-sm truncate max-w-[300px]">{config?.working_dir ?? 'Not set'}</span>
             </div>
           </div>
+        </section>
+
+        {/* Notifications */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>notifications</span>
+            <h3 className="font-headline-md text-headline-md">{intl.formatMessage({ id: 'settings.notifications.label' })}</h3>
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{intl.formatMessage({ id: 'settings.notifications.help' })}</p>
+          <button
+            onClick={handleTestNotification}
+            disabled={testingNotification}
+            className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-primary text-on-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            {testingNotification
+              ? intl.formatMessage({ id: 'settings.notifications.sending' })
+              : intl.formatMessage({ id: 'settings.notifications.testButton' })}
+          </button>
         </section>
       </div>
     </div>
