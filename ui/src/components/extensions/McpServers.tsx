@@ -531,6 +531,8 @@ function InstalledSection({
   busyId: string | null;
   onUninstall: (name: string) => void;
 }) {
+  const intl = useIntl();
+  const t = (id: string) => intl.formatMessage({ id });
   return (
     <section>
       <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
@@ -551,7 +553,20 @@ function InstalledSection({
             >
               <span className="material-symbols-outlined text-primary text-[20px]">cloud</span>
               <div className="flex-1 min-w-0">
-                <div className="font-bold text-label-md text-on-surface truncate">{srv.name}</div>
+                <div className="flex items-center gap-xs">
+                  <div className="font-bold text-label-md text-on-surface truncate">{srv.name}</div>
+                  <span
+                    className={`text-label-xs px-xs py-[1px] rounded-full font-bold shrink-0 ${
+                      srv.connected
+                        ? "bg-primary-container/60 text-on-primary-container"
+                        : "bg-surface-container-highest text-on-surface-variant"
+                    }`}
+                  >
+                    {srv.connected
+                      ? t("extensions.mcp.toolCount").replace("{count}", String(srv.tool_count))
+                      : t("extensions.mcp.offline")}
+                  </span>
+                </div>
                 {srv.command && (
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">
                     {srv.command}
