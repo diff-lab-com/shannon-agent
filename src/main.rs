@@ -170,6 +170,9 @@ fn main() {
             commands::seed_sample_data,
             // P3 notifications — native OS notification bridge
             commands::send_notification,
+            commands::get_webhook_config,
+            commands::save_webhook_config,
+            commands::clear_webhook_config,
         ])
         .setup(|app| {
             let mut state = commands::AppState::new();

@@ -4600,6 +4600,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-util",
+ "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
  "url",
