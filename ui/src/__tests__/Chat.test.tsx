@@ -16,6 +16,8 @@ const ctx = vi.hoisted(() => ({
   sessions: [] as any[],
   currentSessionId: null as string | null,
   error: null as string | null,
+  config: null as any,
+  status: null as any,
   sendMessage: vi.fn(),
   cancelQuery: vi.fn(),
   createSession: vi.fn(),
@@ -38,6 +40,8 @@ function resetCtx() {
   ctx.sessions = []
   ctx.currentSessionId = null
   ctx.error = null
+  ctx.config = null
+  ctx.status = null
   ctx.sendMessage = vi.fn()
   ctx.cancelQuery = vi.fn()
   ctx.createSession = vi.fn()
@@ -380,5 +384,81 @@ describe('Chat page', () => {
       expect(api.exportSession).toHaveBeenCalledWith('s1', 'markdown')
       expect(spy).toHaveBeenCalledWith('', '_blank', 'width=900,height=700')
     })
+  })
+
+  // Per-session working directory chip (P-WD).
+  it('shows "Set working directory" placeholder when no WD configured', () => {
+    resetCtx()
+    ctx.currentSessionId = 's1'
+    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
+    renderChat()
+    expect(screen.getByRole('button', { name: /Change working directory/i })).toHaveTextContent('Set working directory')
+  })
+
+  it('shows working directory breadcrumb when session has working_dir', () => {
+    resetCtx()
+    ctx.currentSessionId = 's1'
+    ctx.sessions = [{
+      id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0,
+      working_dir: '/home/alice/projects/shannon',
+    }]
+    renderChat()
+    const chip = screen.getByRole('button', { name: /Change working directory/i })
+    expect(chip).toHaveTextContent('…/projects/shannon')
+  })
+
+  it('falls back to config.working_dir when session has none', () => {
+    resetCtx()
+    ctx.currentSessionId = 's1'
+    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
+    ctx.config = { working_dir: '/tmp/foo' }
+    renderChat()
+    const chip = screen.getByRole('button', { name: /Change working directory/i })
+    expect(chip).toHaveTextContent('/tmp/foo')
+  })
+
+  it('opens folder picker and calls setSessionWorkingDir on selection', async () => {
+    resetCtx()
+    ctx.currentSessionId = 's1'
+    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
+    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/newdir')
+    renderChat()
+    fireEvent.click(screen.getByRole('button', { name: /Change working directory/i }))
+    await waitFor(() => {
+      expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ directory: true }))
+      expect(api.setSessionWorkingDir).toHaveBeenCalledWith('s1', '/home/alice/newdir')
+    })
+  })
+
+  it('does not call setSessionWorkingDir when folder picker cancelled', async () => {
+    resetCtx()
+    ctx.currentSessionId = 's1'
+    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
+    vi.mocked(dialog.open).mockResolvedValueOnce(null)
+    renderChat()
+    fireEvent.click(screen.getByRole('button', { name: /Change working directory/i }))
+    await waitFor(() => {
+      expect(dialog.open).toHaveBeenCalled()
+    })
+    expect(api.setSessionWorkingDir).not.toHaveBeenCalled()
+  })
+
+  it('shows WD hint in session list item when set', () => {
+    resetCtx()
+    ctx.sessions = [{
+      id: 's1', title: 'Project Chat', created_at: Date.now(), message_count: 3,
+      working_dir: '/home/alice/code/myproject',
+    }]
+    renderChat()
+    expect(screen.getByText('…/code/myproject')).toBeInTheDocument()
+  })
+
+  it('shows provider/model pill when status is present', () => {
+    resetCtx()
+    ctx.currentSessionId = 's1'
+    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
+    ctx.status = { provider: 'anthropic', model: 'claude-sonnet-4-6', querying: false, message_count: 0, working_dir: '' }
+    renderChat()
+    expect(screen.getByText(/anthropic\/claude-sonnet-4-6/)).toBeInTheDocument()
   })
 })

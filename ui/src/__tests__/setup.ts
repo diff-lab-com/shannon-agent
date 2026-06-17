@@ -92,6 +92,7 @@ vi.mock('@/lib/tauri-api', () => ({
   searchSessions: vi.fn().mockResolvedValue([]),
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
+  setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),
   deleteSession: vi.fn().mockResolvedValue(true),
   renameSession: vi.fn().mockResolvedValue(true),
   duplicateSession: vi.fn().mockResolvedValue({ id: 'dup-1', title: 'Copy', created_at: 0 }),
@@ -119,4 +120,7 @@ vi.mock('@/lib/tauri-api', () => ({
   getBillingHistory: vi.fn().mockResolvedValue([]),
   getFileContext: vi.fn().mockResolvedValue([]),
   getTaskDetail: vi.fn().mockResolvedValue({ id: '1', title: 'Test', status: 'pending' }),
+  getInboundConfig: vi.fn().mockResolvedValue({ slack: null, telegram: null }),
+  saveInboundConfig: vi.fn().mockResolvedValue(undefined),
+  clearInboundConfig: vi.fn().mockResolvedValue(undefined),
 }))
