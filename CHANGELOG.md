@@ -2,12 +2,13 @@
 
 All notable changes to Shannon Code are documented here. Entries are grouped by category.
 
-## Unreleased (dev) — notifications feature (Phase 1 + Phase 2)
+## Unreleased (dev) — notifications feature (Phase 1 + Phase 2 + wiring)
 
 ### Features
 
 - **Notifications core types + config (Phase 1, PR #30).** New `NotificationsConfig` and `NotificationCooldownConfig` in `shannon-core::notifier` with `interactive_default()` (sound on, level=info) and `headless_default()` (disabled — opt-in via config or `--notify`). `Cooldown` struct (DashMap-backed) provides per-source dedup with configurable windows (`permission_ms=0`, `query_complete_ms=0`, `tool_complete_ms=3000`, `error_ms=5000`, `agent_idle_ms=10000`). `Notification` struct gains `source: Option<String>` and `action_id: Option<String>` for richer routing. `Notifier` gains `with_cooldown()`, `with_minimum_level()`, `notify_dedup()` which returns `Ok(false)` when suppressed. `ShannonConfig.notifications: Option<NotificationsConfig>` with merge semantics. `NotificationLevel` serde-hardened with `rename_all="snake_case"` and `alias="critical"` for back-compat.
 - **CLI shell-out notifier (Phase 2, PR #31).** New `shannon-cli::notifications::ShellNotifier` fires OS-native notifications by spawning platform binaries: `notify-send` (Linux), `osascript` (macOS), `powershell BurntToast` (Windows). Spawns via `std::process::Command` args array (no shell). New `--notify` CLI flag opt-in for headless mode. `fire_headless_completion_notification` maps exit code → notification level (success/warning/error) with source key `headless:{exit_code:?}`.
+- **REPL notification wiring (PR #33).** Sidebar's `refresh_agents` now routes agent-completion events through the shared `Notifier` via `notify_dedup(&notification, 10_000)` so the `notifications_enabled` gate is honored and same-agent successive refreshes coalesce within a 10s window (previously constructed a fresh `DesktopNotifier` per iteration and called `.send()` directly, bypassing both gate and cooldown). `ReplState::new()` attaches `Cooldown::new()` to the shared `Notifier` so `notify_dedup` actually dedups across all callers. `loop_engine::notify_query_complete` switches from `notify` to `notify_dedup(..., 0)` — source key already set, window=0 matches the configured `query_complete_ms` default.
 
 ### Security
 

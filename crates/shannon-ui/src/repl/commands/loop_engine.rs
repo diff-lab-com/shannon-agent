@@ -830,7 +830,8 @@ pub(crate) fn notify_query_complete(
         source: Some("query_complete".to_string()),
         action_id: None,
     };
-    let _ = notifier.notify(&notification);
+    // window_ms=0 — each query completion is unique and worth surfacing.
+    let _ = notifier.notify_dedup(&notification, 0);
 }
 
 /// Handle custom agent definition commands

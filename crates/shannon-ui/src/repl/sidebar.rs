@@ -236,38 +236,42 @@ impl super::Repl {
                 })
                 .collect();
 
-            // Send desktop notification for newly completed agents
+            // Send desktop notification for newly completed agents.
+            // Routes through `self.notifier` (shared Notifier with DesktopNotifier
+            // handler) so the `notifications_enabled` gate and per-source cooldown
+            // apply — multiple agents completing in a batch coalesce.
             use chrono::Utc;
-            use shannon_core::notifier::{
-                DesktopNotifier, Notification, NotificationHandler, NotificationLevel,
-            };
+            use shannon_core::notifier::{Notification, NotificationLevel};
 
-            for agent in &new_agents {
-                if !agent.active && prev_names.contains(&agent.name) {
-                    let notifier = DesktopNotifier::new();
-                    let status = &agent.status;
-                    if status == "completed" {
-                        let notification = Notification {
-                            title: format!("Agent {} completed", agent.name),
-                            body: format!("Finished after {} turns", agent.turns_used),
-                            level: NotificationLevel::Success,
-                            id: format!("agent-{}-done", agent.name),
-                            timestamp: Utc::now(),
-                            source: Some(format!("agent:{}:completed", agent.name)),
-                            action_id: None,
-                        };
-                        let _ = notifier.send(&notification);
-                    } else if status.starts_with("failed") {
-                        let notification = Notification {
-                            title: format!("Agent {} failed", agent.name),
-                            body: status.clone(),
-                            level: NotificationLevel::Error,
-                            id: format!("agent-{}-fail", agent.name),
-                            timestamp: Utc::now(),
-                            source: Some(format!("agent:{}:failed", agent.name)),
-                            action_id: None,
-                        };
-                        let _ = notifier.send(&notification);
+            if self.notifications_enabled {
+                for agent in &new_agents {
+                    if !agent.active && prev_names.contains(&agent.name) {
+                        let status = &agent.status;
+                        if status == "completed" {
+                            let notification = Notification {
+                                title: format!("Agent {} completed", agent.name),
+                                body: format!("Finished after {} turns", agent.turns_used),
+                                level: NotificationLevel::Success,
+                                id: format!("agent-{}-done", agent.name),
+                                timestamp: Utc::now(),
+                                source: Some(format!("agent:{}:completed", agent.name)),
+                                action_id: None,
+                            };
+                            // 10s window — coalesce duplicate refreshes of the
+                            // same agent landing as "completed" within one batch.
+                            let _ = self.notifier.notify_dedup(&notification, 10_000);
+                        } else if status.starts_with("failed") {
+                            let notification = Notification {
+                                title: format!("Agent {} failed", agent.name),
+                                body: status.clone(),
+                                level: NotificationLevel::Error,
+                                id: format!("agent-{}-fail", agent.name),
+                                timestamp: Utc::now(),
+                                source: Some(format!("agent:{}:failed", agent.name)),
+                                action_id: None,
+                            };
+                            let _ = self.notifier.notify_dedup(&notification, 10_000);
+                        }
                     }
                 }
             }
