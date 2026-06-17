@@ -352,10 +352,12 @@ impl AppState {
     /// cooldown + level filtering. Called once from `main.rs` setup() once
     /// the `AppHandle` is available. Idempotent — replacing any handler
     /// previously registered under the `"tauri"` name.
+    ///
+    /// Also attaches a `WebhookHandler` when `[notifications.webhook]` is
+    /// configured in `.shannon.toml` (Slack / Discord / Feishu / WeChat Work
+    /// / custom / raw templates).
     pub fn attach_notification_handler(&mut self, app: tauri::AppHandle) {
-        use shannon_core::notifier::{
-            Cooldown, NotificationLevel, Notifier,
-        };
+        use shannon_core::notifier::{Cooldown, NotificationLevel, Notifier};
 
         let mut notifier = Notifier::new()
             .with_cooldown(Cooldown::new())
@@ -363,6 +365,19 @@ impl AppState {
         notifier.add_handler(Box::new(
             crate::notifications::TauriNotificationHandler::new(app),
         ));
+
+        if let Some(wh_cfg) = load_desktop_webhook_config() {
+            match shannon_core::notifier::WebhookHandler::new(wh_cfg) {
+                Ok(handler) => {
+                    tracing::info!("notifications: webhook handler attached");
+                    notifier.add_handler(Box::new(handler));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "notifications: webhook handler init failed");
+                }
+            }
+        }
+
         self.notifier = Arc::new(notifier);
     }
 
@@ -3545,6 +3560,14 @@ fn fire_query_notification(
     };
 
     notifier.notify_dedup(&notification, window_ms)
+}
+
+/// Best-effort load of `[notifications.webhook]` from `.shannon.toml` in the
+/// current working directory. Returns `None` on any error — never panics the
+/// app on config issues.
+fn load_desktop_webhook_config() -> Option<shannon_core::notifier::WebhookConfig> {
+    let cfg = shannon_core::unified_config::ConfigBuilder::new().build();
+    cfg.notifications.and_then(|n| n.webhook)
 }
 
 #[cfg(test)]
