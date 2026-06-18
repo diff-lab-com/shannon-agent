@@ -129,5 +129,7 @@ vi.mock('@/lib/tauri-api', () => ({
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
   installAgentFromRepo: vi.fn().mockResolvedValue({ id: 'agent-1', name: 'Test Agent', install_path: '/path/to/agent' }),
+  listDataSourceCatalog: vi.fn().mockResolvedValue([]),
+  listInstalledDataSources: vi.fn().mockResolvedValue([]),
   queryDataSource: vi.fn().mockResolvedValue({ items: [], total: 0, has_more: false }),
 }))
