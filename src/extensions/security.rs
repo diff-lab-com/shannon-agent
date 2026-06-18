@@ -205,12 +205,22 @@ pub fn scan_with_readme(description: &str, readme: Option<&str>) -> InjectionRep
 // ---------------------------------------------------------------------------
 
 /// Outcome of a `.mcpb` signature check.
+///
+/// **Honesty note:** Shannon does NOT currently perform any cryptographic
+/// verification of bundle signatures. The `SelfDeclared` status below means
+/// the bundle *claims* to be signed by a known identifier, but that claim has
+/// not been authenticated. Real Ed25519 verification is tracked as a separate
+/// effort; until it lands, treat every signed bundle with the same caution as
+/// an unsigned one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SignatureStatus {
-    /// Bundle is signed by a Shannon-trusted key.
-    Trusted,
-    /// Signed but the key is not in our trust list.
+    /// Bundle carries a signature file whose `signer:` field matches a name in
+    /// our known-publishers list. **The signature itself was NOT verified** —
+    /// only the claimed identity. UI must present this as "self-declared", not
+    /// "trusted".
+    SelfDeclared,
+    /// Signature file present but the declared signer is not in our known list.
     UntrustedSignature,
     /// No signature file present.
     Unsigned,
@@ -228,19 +238,28 @@ pub struct SignatureReport {
     pub note: String,
 }
 
-/// Shannon's static trust list — identifiers we treat as `Trusted`.
+/// Shannon's static list of known publisher identifiers. A bundle whose
+/// signature file declares one of these is classified [`SignatureStatus::SelfDeclared`].
 ///
-/// For the MVP we trust Shannon's own publishing key only. Future iterations
-/// should load this from `~/.shannon/trusted-signers.txt` and support key
-/// rotation.
-const TRUSTED_SIGNERS: &[&str] = &["shannon-publishing", "shannon-release"];
+/// **This is not a trust anchor.** Matching a name on this list only means we
+/// recognise the claimed publisher — the signature is still not cryptographically
+/// verified. Real Ed25519 verification (with pinned public keys) is a follow-up;
+/// until then every bundle must be reviewed on its own merits regardless of
+/// status. The list exists so the UI can show a softer "self-declared known
+/// publisher" badge distinct from a random/unknown signer string.
+const KNOWN_SIGNERS: &[&str] = &["shannon-publishing", "shannon-release"];
 
 /// Verify a signature file body. The body is the contents of the
 /// `.mcpb/SIGNATURE.txt` (or equivalent) file inside the bundle.
 ///
-/// Format (MVP): two lines — `signer: <id>` and `signature: <hex>`. The
-/// actual crypto is deferred — for now we just check the signer against the
-/// trust list. Real Ed25519 verification is a follow-up.
+/// Format (MVP): two lines — `signer: <id>` and `signature: <hex>`.
+///
+/// **No cryptographic verification is performed.** The signature hex is parsed
+/// only enough to confirm a `signer:` line exists; we never check it against a
+/// public key. The returned [`SignatureStatus`] reflects whether the *claimed*
+/// signer matches a known publisher, not whether the signature is authentic.
+/// Callers (and the UI) must convey this honestly — see the doc comment on
+/// [`SignatureStatus`] and the `SelfDeclared` variant in particular.
 pub fn verify_signature(signature_body: Option<&str>) -> SignatureReport {
     let Some(body) = signature_body else {
         return SignatureReport {
@@ -257,18 +276,24 @@ pub fn verify_signature(signature_body: Option<&str>) -> SignatureReport {
             note: "Signature file missing `signer:` line.".into(),
         },
         Some(name) => {
-            let trusted = TRUSTED_SIGNERS.contains(&name.as_str());
+            let known = KNOWN_SIGNERS.contains(&name.as_str());
             SignatureReport {
-                status: if trusted {
-                    SignatureStatus::Trusted
+                status: if known {
+                    SignatureStatus::SelfDeclared
                 } else {
                     SignatureStatus::UntrustedSignature
                 },
                 signer: Some(name.clone()),
-                note: if trusted {
-                    format!("Signed by trusted key `{name}`.")
+                note: if known {
+                    format!(
+                        "Bundle declares signer `{name}` (known publisher). \
+                         The signature was NOT cryptographically verified."
+                    )
                 } else {
-                    format!("Signed by untrusted key `{name}` — review before install.")
+                    format!(
+                        "Bundle declares signer `{name}` (unknown). \
+                         The signature was NOT cryptographically verified."
+                    )
                 },
             }
         }
@@ -439,11 +464,19 @@ mod tests {
     }
 
     #[test]
-    fn trusted_signer_passes() {
+    fn known_signer_is_self_declared_not_trusted() {
         let body = "signer: shannon-publishing\nsignature: deadbeef\n";
         let report = verify_signature(Some(body));
-        assert_eq!(report.status, SignatureStatus::Trusted);
+        // Honest status: the bundle *claims* a known publisher but the
+        // signature is NOT cryptographically verified.
+        assert_eq!(report.status, SignatureStatus::SelfDeclared);
         assert_eq!(report.signer.as_deref(), Some("shannon-publishing"));
+        // The note must tell the user the signature was not verified.
+        assert!(
+            report.note.contains("NOT cryptographically verified"),
+            "note should warn that signature is unverified, got: {}",
+            report.note
+        );
     }
 
     #[test]

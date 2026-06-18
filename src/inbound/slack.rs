@@ -258,15 +258,92 @@ fn handle_event(
     );
 }
 
+/// Strip the trigger prefix from `text` (case-insensitive, trim-tolerant).
+///
+/// UTF-8 safe: never slices on a byte index that could land inside a multibyte
+/// sequence. Uses `char_indices` + `eq_ignore_ascii_case` on whole-char slices
+/// rather than `text[..len]` which panics on multibyte triggers (e.g. `帮我`).
+/// Returns the remainder (left-trimmed) on match, or the trimmed original on
+/// no match.
 fn strip_trigger(text: &str, trigger: &str) -> String {
     let trig = trigger.trim();
     if trig.is_empty() {
         return text.trim().to_string();
     }
-    let trig_lower = trig.to_lowercase();
-    if text.len() >= trig_lower.len() && text[..trig_lower.len()].eq_ignore_ascii_case(trig) {
-        text[trig_lower.len()..].trim_start().to_string()
+    if starts_with_ignore_case(text, trig) {
+        // Safe: `trig.chars().count()` gives us a *character* count; we then
+        // walk `text`'s char boundaries to find the byte offset of the Nth
+        // char. Slicing at a char boundary never panics.
+        let prefix_chars = trig.chars().count();
+        let split_at = text
+            .char_indices()
+            .nth(prefix_chars)
+            .map(|(byte_idx, _)| byte_idx)
+            .unwrap_or(text.len());
+        text[split_at..].trim_start().to_string()
     } else {
         text.trim().to_string()
+    }
+}
+
+/// Case-insensitive prefix check that is UTF-8 safe. Compares character by
+/// character so multibyte triggers (CJK, emoji, etc.) work correctly.
+fn starts_with_ignore_case(haystack: &str, needle: &str) -> bool {
+    let mut h = haystack.chars();
+    let mut n = needle.chars();
+    loop {
+        match (n.next(), h.next()) {
+            (None, _) => return true,
+            (Some(nc), Some(hc)) if nc.eq_ignore_ascii_case(&hc) => continue,
+            (Some(_), _) => return false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_trigger_ascii_case_insensitive() {
+        assert_eq!(strip_trigger("Shannon do the thing", "shannon"), "do the thing");
+        assert_eq!(strip_trigger("shannon: run tests", "Shannon"), ": run tests");
+        assert_eq!(strip_trigger("not prefixed", "shannon"), "not prefixed");
+        assert_eq!(strip_trigger("Shannon", "shannon"), "");
+    }
+
+    #[test]
+    fn empty_trigger_returns_trimmed_text() {
+        assert_eq!(strip_trigger("  hello  ", ""), "hello");
+    }
+
+    #[test]
+    fn strip_trigger_multibyte_chinese_does_not_panic() {
+        // Regression for audit #9: byte-slice `text[..trig_lower.len()]` would
+        // panic here because `帮我` is 6 bytes but only 2 chars; slicing by
+        // byte length landed mid-codepoint.
+        let trigger = "帮我";
+        let text = "帮我写个测试 please";
+        assert_eq!(strip_trigger(text, trigger), "写个测试 please");
+    }
+
+    #[test]
+    fn strip_trigger_multibyte_emoji() {
+        // 4-byte UTF-8 trigger; verifies char-boundary safety.
+        let trigger = "🚀";
+        let text = "🚀 launch it";
+        assert_eq!(strip_trigger(text, trigger), "launch it");
+    }
+
+    #[test]
+    fn strip_trigger_multibyte_no_match_returns_original() {
+        assert_eq!(strip_trigger("hello world", "帮我"), "hello world");
+    }
+
+    #[test]
+    fn starts_with_ignore_case_handles_multibyte() {
+        assert!(starts_with_ignore_case("帮我 go", "帮我"));
+        assert!(!starts_with_ignore_case("帮他 go", "帮我"));
+        assert!(starts_with_ignore_case("SHANNON go", "shannon"));
     }
 }

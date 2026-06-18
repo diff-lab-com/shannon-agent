@@ -199,16 +199,38 @@ fn format_tg_chat_name(chat: &TgChat) -> String {
 
 /// Strip the trigger prefix from the message body. If the trigger isn't
 /// found (case-insensitive trim), returns the text unchanged.
+///
+/// UTF-8 safe: walks `char_indices` rather than slicing by byte length, so
+/// multibyte triggers (CJK, emoji) do not panic.
 fn strip_trigger(text: &str, trigger: &str) -> String {
     let trig = trigger.trim();
     if trig.is_empty() {
         return text.trim().to_string();
     }
-    let trig_lower = trig.to_lowercase();
-    if text.len() >= trig_lower.len() && text[..trig_lower.len()].eq_ignore_ascii_case(trig) {
-        text[trig_lower.len()..].trim_start().to_string()
+    if starts_with_ignore_case(text, trig) {
+        let prefix_chars = trig.chars().count();
+        let split_at = text
+            .char_indices()
+            .nth(prefix_chars)
+            .map(|(byte_idx, _)| byte_idx)
+            .unwrap_or(text.len());
+        text[split_at..].trim_start().to_string()
     } else {
         text.trim().to_string()
+    }
+}
+
+/// Case-insensitive prefix check that is UTF-8 safe. Compares character by
+/// character so multibyte triggers (CJK, emoji, etc.) work correctly.
+fn starts_with_ignore_case(haystack: &str, needle: &str) -> bool {
+    let mut h = haystack.chars();
+    let mut n = needle.chars();
+    loop {
+        match (n.next(), h.next()) {
+            (None, _) => return true,
+            (Some(nc), Some(hc)) if nc.eq_ignore_ascii_case(&hc) => continue,
+            (Some(_), _) => return false,
+        }
     }
 }
 
@@ -235,6 +257,27 @@ mod tests {
         assert_eq!(strip_trigger("shannon: run tests", "Shannon"), ": run tests");
         assert_eq!(strip_trigger("not prefixed", "shannon"), "not prefixed");
         assert_eq!(strip_trigger("Shannon", "shannon"), "");
+    }
+
+    #[test]
+    fn strip_trigger_multibyte_chinese_does_not_panic() {
+        // Regression for audit #9: byte-slice `text[..trig_lower.len()]` would
+        // panic on multibyte triggers. `帮我` is 6 bytes / 2 chars.
+        let trigger = "帮我";
+        let text = "帮我写个测试 please";
+        assert_eq!(strip_trigger(text, trigger), "写个测试 please");
+    }
+
+    #[test]
+    fn strip_trigger_multibyte_emoji() {
+        let trigger = "🚀";
+        let text = "🚀 launch it";
+        assert_eq!(strip_trigger(text, trigger), "launch it");
+    }
+
+    #[test]
+    fn strip_trigger_multibyte_no_match_returns_original() {
+        assert_eq!(strip_trigger("hello world", "帮我"), "hello world");
     }
 
     #[test]
