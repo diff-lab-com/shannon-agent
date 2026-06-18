@@ -178,6 +178,22 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* shadcn/ui color aliases — reference the per-theme :root vars so the
+     Select / Dialog / DropdownMenu components render correct backgrounds
+     under every theme variant (material, dark, tokyo-night, etc.). */
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--primary-foreground);
 }
 
 /* Map shadcn CSS vars to MD3 design tokens */
