@@ -485,7 +485,7 @@ export default function Chat() {
           )}
 
           {messages.map((msg, i) => (
-            <MessageBubble key={`${msg.timestamp}-${i}`} message={msg} onViewDiff={setDiffPath} />
+            <MessageBubble key={`${msg.timestamp}-${i}`} message={msg} messageIndex={i} onViewDiff={setDiffPath} />
           ))}
 
           {/* Streaming response */}
@@ -753,10 +753,11 @@ export default function Chat() {
   )
 }
 
-const MessageBubble = memo(function MessageBubble({ message, isBranch, onViewDiff }: { message: ChatMessage; isBranch?: boolean; onViewDiff: (path: string) => void }) {
+const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff }: { message: ChatMessage; messageIndex: number; isBranch?: boolean; onViewDiff: (path: string) => void }) {
   const isUser = message.role === 'user'
   const [liked, setLiked] = useState(false)
-  const { sendMessage } = useApp()
+  const [isBranching, setIsBranching] = useState(false)
+  const { sendMessage, currentSessionId, switchSession, refreshSessions } = useApp()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -766,6 +767,26 @@ const MessageBubble = memo(function MessageBubble({ message, isBranch, onViewDif
 
   const handleRegenerate = () => {
     sendMessage('Regenerate the previous response').catch(() => toast.error(t('chat.toast.regenerateFailed')))
+  }
+
+  const handleBranch = async () => {
+    if (!currentSessionId || isBranching) return
+
+    const confirmed = window.confirm(t('chat.message.branch.confirm'))
+    if (!confirmed) return
+
+    setIsBranching(true)
+    try {
+      const newSession = await api.branchSession(currentSessionId, messageIndex)
+      await refreshSessions()
+      await switchSession(newSession.id)
+      toast.success(t('chat.message.branch.success'))
+    } catch (error) {
+      console.error('Branch failed:', error)
+      toast.error(t('chat.message.branch.failed'))
+    } finally {
+      setIsBranching(false)
+    }
   }
 
   if (isUser) {
@@ -780,6 +801,19 @@ const MessageBubble = memo(function MessageBubble({ message, isBranch, onViewDif
           )}
           <div className="bg-primary-fixed text-on-primary-fixed px-lg py-md rounded-2xl rounded-tr-none shadow-sm">
             <p className="font-body-md whitespace-pre-wrap">{message.content}</p>
+          </div>
+          <div className="flex gap-sm mt-xs justify-end">
+            <Button
+              aria-label={t('chat.message.branch.aria')}
+              onClick={handleBranch}
+              disabled={isBranching || !currentSessionId}
+              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors"
+              title={t('chat.message.branch.button')}
+            >
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                {isBranching ? 'hourglass_empty' : 'fork_right'}
+              </span>
+            </Button>
           </div>
         </div>
       </div>
