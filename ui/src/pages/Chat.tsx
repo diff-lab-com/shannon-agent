@@ -11,6 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Pagination } from '@/components/ui/pagination'
 import WelcomeState from '@/components/WelcomeState'
 import DiffDialog from '@/components/diff/DiffDialog'
+import ChatInput from '@/components/chat/ChatInput'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import type { ChatMessage, ToolCall, FileContext, SessionInfo } from '@/types'
@@ -158,35 +159,12 @@ export default function Chat() {
   // absolute paths (the backend reads bytes via std::fs and base64-encodes).
   // The browser <input type="file"> only exposes File objects with opaque
   // "fakepath" paths, which never resolve on disk — that was the dead-button bug.
-  const handleAttach = async () => {
-    try {
-      const selected = await openDialog({
-        multiple: true,
-        filters: [
-          { name: t('chat.export.documents'), extensions: ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp'] },
-        ],
-      })
-      if (!selected) return
-      const paths = (Array.isArray(selected) ? selected : [selected]) as string[]
-      if (paths.length > 0) setAttachedFiles(prev => [...prev, ...paths])
-    } catch (err) {
-      toast.error(t('chat.toast.attachFailed'), { description: String(err) })
-    }
+  const handleAttach = async (files: string[]) => {
+    if (files.length > 0) setAttachedFiles(prev => [...prev, ...files])
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
-    }
-    if (e.key === 'Escape' && isQuerying) {
-      cancelQuery()
-    }
-    if (e.key === 'ArrowUp' && e.altKey && input === '' && messages.length > 0) {
-      e.preventDefault()
-      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')
-      if (lastUserMsg) setInput(lastUserMsg.content)
-    }
+  const handleDetachAll = () => {
+    setAttachedFiles([])
   }
 
   const filteredSessions = useMemo(() => {
@@ -534,56 +512,21 @@ export default function Chat() {
         >
           <div className="max-w-4xl mx-auto relative group">
             <div className="absolute inset-0 bg-primary/10 blur-xl rounded-full opacity-50 group-focus-within:opacity-100 transition-opacity duration-500"></div>
-            {attachedFiles.length > 0 && (
-              <div className="flex flex-wrap gap-xs mb-sm relative">
-                {attachedFiles.map((path, i) => (
-                  <span key={i} className="inline-flex items-center gap-xs px-sm py-xs bg-primary/10 text-primary rounded-lg font-label-sm">
-                    <span className="material-symbols-outlined text-[14px]">description</span>
-                    {path.split('/').pop()}
-                    <button className="hover:text-error cursor-pointer" onClick={() => setAttachedFiles(prev => prev.filter((_, j) => j !== i))}>
-                      <span className="material-symbols-outlined text-[14px]">close</span>
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="relative glass-card bg-surface-container-lowest/80 rounded-2xl border border-outline-variant/30 px-sm py-xs flex items-center shadow-lg group-focus-within:border-primary/50 group-focus-within:shadow-primary/10 transition-all duration-300">
-              <Button variant="ghost" aria-label={t('chat.input.attach.aria')} className="p-md text-on-surface-variant hover:text-primary" onClick={handleAttach}>
-                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">attach_file</span>
-              </Button>
-              <Button variant="ghost" aria-label={t('nav.quickFix')} title={t('nav.quickFix')} className="p-md text-on-surface-variant hover:text-primary" onClick={() => setQuickFixOpen(true)}>
-                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">build</span>
-              </Button>
-              <Button variant="ghost" aria-label={t('nav.editor')} title={t('nav.editor')} className="p-md text-on-surface-variant hover:text-primary" onClick={() => setEditorOpen(true)}>
-                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">code</span>
-              </Button>
-              <span className="material-symbols-outlined p-md text-primary" aria-hidden="true">{isQuerying ? 'hourglass_empty' : 'auto_awesome'}</span>
-              <textarea
-                className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-outline-variant/80 text-on-surface resize-none min-h-[24px] max-h-[200px]"
-                placeholder={isQuerying ? t('chat.input.processing') : t('chat.input.placeholder')}
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                rows={1}
-                disabled={isQuerying}
-              />
-              <div className="flex items-center gap-2 px-sm">
-                {isQuerying ? (
-                  <Button aria-label={t('chat.input.stop.aria')} className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all" onClick={cancelQuery}>
-                    <span className="material-symbols-outlined text-[20px]" aria-hidden="true">stop</span>
-                  </Button>
-                ) : (
-                  <Button
-                    aria-label={t('chat.input.send.aria')}
-                    className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-md hover:shadow-primary/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                    onClick={handleSend}
-                    disabled={!input.trim()}
-                  >
-                    <span className="material-symbols-outlined text-[20px]" aria-hidden="true">arrow_upward</span>
-                  </Button>
-                )}
-              </div>
-            </div>
+            <ChatInput
+              value={input}
+              onChange={setInput}
+              onSend={handleSend}
+              attachedFiles={attachedFiles}
+              onAttach={handleAttach}
+              onDetachAll={handleDetachAll}
+              disabled={isQuerying}
+              isQuerying={isQuerying}
+              onCancelQuery={cancelQuery}
+              currentSessionId={currentSessionId}
+              sessionWorkingDir={sessionWorkingDir}
+              onOpenQuickFix={() => setQuickFixOpen(true)}
+              onOpenEditor={() => setEditorOpen(true)}
+            />
           </div>
         </div>
       </section>
