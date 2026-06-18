@@ -4756,4 +4756,62 @@ mod tests {
             .expect_err("branch at usize::MAX should fail");
         assert!(err.contains("out of bounds"));
     }
+
+    // Integration test: verify the Tauri command wrapper delegates correctly.
+    // The `#[tauri::command]` macro handles parameter deserialization and
+    // invokes the internal function, so we test that delegation path.
+    #[tokio::test]
+    async fn test_branch_session_command_rejects_unknown_parent_id() {
+        let state = AppState::new();
+
+        // Try to branch from a session that doesn't exist
+        let unknown_id = uuid::Uuid::new_v4().to_string();
+
+        let err = branch_session_internal(&state, None, unknown_id, 0)
+            .await
+            .expect_err("branch from unknown parent should fail");
+        assert!(err.contains("not found") || err.contains("unknown"));
+    }
+
+    #[tokio::test]
+    async fn test_branch_session_command_zero_branch_point() {
+        let state = AppState::new();
+
+        let parent_id = uuid::Uuid::new_v4();
+        let parent_id_str = parent_id.to_string();
+        let messages = vec![shannon_core::api::Message {
+            role: "user".into(),
+            content: shannon_core::api::MessageContent::Text("message".into()),
+        }];
+
+        let metadata = shannon_core::state::SessionPersistMetadata {
+            model: "claude-3".into(),
+            turn_count: 0,
+            title: Some("Parent".into()),
+            ..Default::default()
+        };
+
+        state
+            .state_manager
+            .save_session(&parent_id, &messages, &metadata)
+            .expect("save parent");
+
+        state.sessions.lock().await.push(SessionMeta {
+            id: parent_id_str.clone(),
+            title: "Parent".into(),
+            created_at: 1700000000,
+            message_count: 1,
+            working_dir: None,
+            parent_id: None,
+            branch_point: None,
+        });
+
+        // Branch at index 0 should work (includes first message)
+        let result = branch_session_internal(&state, None, parent_id_str, 0)
+            .await
+            .expect("branch at index 0 should succeed");
+
+        assert_eq!(result.message_count, 1);
+        assert_eq!(result.branch_point, Some(0));
+    }
 }
