@@ -151,24 +151,29 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘1</kbd>
         </NavLink>
-        <div
-           className={cn(
-              "flex items-center gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300 cursor-pointer",
-              location.pathname.includes('/tasks')
-                ? "text-primary bg-primary/10 font-bold shadow-sm"
-                : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5"
-           )}
-           onClick={() => setTriageDrawerOpen(true)}
-        >
+        <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">task_alt</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
-           {triageStats.unread > 0 && (
-              <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full">
-                 {triageStats.unread}
-              </span>
-           )}
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
-        </div>
+        </NavLink>
+
+        {/* Triage Drawer Trigger */}
+        <button
+          onClick={() => setTriageDrawerOpen(true)}
+          className={cn(
+            "flex items-center gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300 relative",
+            "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5"
+          )}
+          aria-label={intl.formatMessage({ id: 'nav.triage.aria' })}
+        >
+          <span className="material-symbols-outlined">inbox</span>
+          <span className="flex-1">{intl.formatMessage({ id: 'nav.triage' })}</span>
+          {triageStats.unread > 0 && (
+            <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full">
+              {triageStats.unread}
+            </span>
+          )}
+        </button>
 
         {mode === 'dev' && (
         <>

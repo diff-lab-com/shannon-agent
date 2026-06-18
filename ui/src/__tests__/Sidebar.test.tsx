@@ -1,9 +1,17 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { I18nProvider } from '@/i18n'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { Sidebar, SIDEBAR_MODE_KEY } from '@/components/Sidebar'
+
+// Mock useTriageStats hook
+vi.mock('@/hooks/scheduled-tasks', () => ({
+  useTriageStats: () => ({
+    stats: { unread: 3, total: 5 },
+    refresh: vi.fn(),
+  }),
+}))
 
 function wrap(ui: React.ReactElement, { path = '/chat' } = {}) {
   return (
@@ -15,6 +23,12 @@ function wrap(ui: React.ReactElement, { path = '/chat' } = {}) {
       </AppProvider>
     </I18nProvider>
   )
+}
+
+// Helper component to capture current location
+function LocationCapture() {
+  const location = useLocation()
+  return <div data-testid="current-location">{location.pathname}</div>
 }
 
 describe('Sidebar', () => {
@@ -181,5 +195,44 @@ describe('Sidebar — Advanced mode', () => {
     fireEvent.click(screen.getByRole('button', { name: /Switch to Simple mode/ }))
     expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
+  })
+})
+
+describe('Sidebar — Navigation', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('navigates to /tasks when clicking Scheduled', async () => {
+    render(
+      wrap(
+        <>
+          <Sidebar />
+          <LocationCapture />
+        </>
+      )
+    )
+
+    const scheduledLink = screen.getByText('Scheduled')
+    fireEvent.click(scheduledLink)
+
+    await waitFor(() => {
+      const location = screen.getByTestId('current-location')
+      expect(location.textContent).toBe('/tasks')
+    })
+  })
+
+  it('renders Triage button with badge when there are unread items', () => {
+    render(wrap(<Sidebar />))
+
+    expect(screen.getByText('Triage')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument() // Badge shows unread count
+  })
+
+  it('Triage button has proper aria-label', () => {
+    render(wrap(<Sidebar />))
+
+    const triageButton = screen.getByRole('button', { name: /Open Triage drawer/i })
+    expect(triageButton).toBeInTheDocument()
   })
 })
