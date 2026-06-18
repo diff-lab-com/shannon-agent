@@ -178,7 +178,7 @@ export default function Tasks() {
 
         {/* P2.2: Active / History / Worktrees tab switcher */}
         <div role="tablist" aria-label={t('tasks.tabs.aria')} className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'history', 'worktrees'] as const).map(tabId => {
+          {(['active', 'history', 'worktrees', 'triage'] as const).map(tabId => {
             const selected = tab === tabId
             return (
               <button

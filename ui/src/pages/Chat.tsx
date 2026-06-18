@@ -420,25 +420,6 @@ export default function Chat() {
               </h2>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={handleChangeWorkingDir}
-            aria-label={t('chat.header.workingDir.aria')}
-            title={sessionWorkingDir
-              ? intl.formatMessage({ id: 'chat.header.workingDir.tooltip' }, { path: sessionWorkingDir })
-              : t('chat.header.workingDir.unset')}
-            className={`group flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 ${
-              sessionWorkingDir
-                ? 'border-primary/30 bg-primary/5 text-on-surface hover:bg-primary/10 hover:border-primary/50'
-                : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
-            }`}
-          >
-            <span className="material-symbols-outlined text-[16px]">folder_open</span>
-            <span className="max-w-[180px] truncate font-mono">
-              {sessionWorkingDir ? formatDirBreadcrumb(sessionWorkingDir) : t('chat.header.workingDir.unset')}
-            </span>
-            <span className="material-symbols-outlined text-[14px] opacity-50 group-hover:opacity-100 group-hover:text-primary transition-opacity">change_folder</span>
-          </button>
           {status && (
             <div className="hidden md:flex items-center gap-xs px-sm py-xs rounded-full bg-surface-container-lowest/60 border border-outline-variant/20 shrink-0" title={`${status.provider} · ${status.model}`}>
               <span className="w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse"></span>

@@ -417,7 +417,10 @@ pub struct RegistryServer {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
+    /// Registry API returns this as an object `{url, source, id?, subfolder?}`;
+    /// older cache files may store a plain string. Normalized to the string
+    /// form (`owner/name` or URL) for downstream use.
+    #[serde(default, deserialize_with = "deserialize_repository")]
     pub repository: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
@@ -434,6 +437,29 @@ pub struct RegistryServer {
     pub verified: bool,
     #[serde(default)]
     pub package: Option<RegistryPackage>,
+}
+
+/// Accept `repository` as either a string (legacy cache) or an object with
+/// a `url` field (current registry API). Other object fields are dropped.
+fn deserialize_repository<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    if raw.is_null() {
+        return Ok(None);
+    }
+    if let Some(s) = raw.as_str() {
+        return Ok(Some(s.to_string()));
+    }
+    if let Some(obj) = raw.as_object() {
+        if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
+            return Ok(Some(url.to_string()));
+        }
+    }
+    Ok(None)
 }
 
 fn deserialize_registry_servers<'de, D>(deserializer: D) -> Result<Vec<RegistryServer>, D::Error>

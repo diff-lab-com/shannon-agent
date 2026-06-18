@@ -428,77 +428,9 @@ describe('Chat page', () => {
     })
   })
 
-  // Per-session working directory chip (P-WD).
-  it('shows "Set working directory" placeholder when no WD configured', () => {
-    resetCtx()
-    ctx.currentSessionId = 's1'
-    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
-    renderChat()
-    expect(screen.getByRole('button', { name: /Change working directory for this session/i })).toHaveTextContent('Set working directory')
-  })
-
-  it('shows working directory breadcrumb when session has working_dir', () => {
-    resetCtx()
-    ctx.currentSessionId = 's1'
-    ctx.sessions = [{
-      id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0,
-      working_dir: '/home/alice/projects/shannon',
-    }]
-    renderChat()
-    const chip = screen.getByRole('button', { name: /Change working directory for this session/i })
-    expect(chip).toHaveTextContent('…/projects/shannon')
-  })
-
-  it('falls back to config.working_dir when session has none', () => {
-    resetCtx()
-    ctx.currentSessionId = 's1'
-    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
-    ctx.config = { working_dir: '/tmp/foo' }
-    renderChat()
-    const chip = screen.getByRole('button', { name: /Change working directory for this session/i })
-    expect(chip).toHaveTextContent('/tmp/foo')
-  })
-
-  it('opens folder picker and calls setSessionWorkingDir on selection', async () => {
-    resetCtx()
-    ctx.currentSessionId = 's1'
-    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
-    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/newdir')
-    renderChat()
-    fireEvent.click(screen.getByRole('button', { name: /Change working directory for this session/i }))
-    await waitFor(() => {
-      expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ directory: true }))
-      expect(api.setSessionWorkingDir).toHaveBeenCalledWith('s1', '/home/alice/newdir')
-    })
-  })
-
-  // C2: Cmd/Ctrl+D dispatches shannon:change-wd which Chat listens for and
-  // opens the same folder picker as the WD chip button.
-  it('opens folder picker when shannon:change-wd event fires', async () => {
-    resetCtx()
-    ctx.currentSessionId = 's1'
-    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
-    vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/via-shortcut')
-    renderChat()
-    window.dispatchEvent(new Event('shannon:change-wd'))
-    await waitFor(() => {
-      expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ directory: true }))
-      expect(api.setSessionWorkingDir).toHaveBeenCalledWith('s1', '/home/alice/via-shortcut')
-    })
-  })
-
-  it('does not call setSessionWorkingDir when folder picker cancelled', async () => {
-    resetCtx()
-    ctx.currentSessionId = 's1'
-    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
-    vi.mocked(dialog.open).mockResolvedValueOnce(null)
-    renderChat()
-    fireEvent.click(screen.getByRole('button', { name: /Change working directory for this session/i }))
-    await waitFor(() => {
-      expect(dialog.open).toHaveBeenCalled()
-    })
-    expect(api.setSessionWorkingDir).not.toHaveBeenCalled()
-  })
+  // Header working-directory chip was removed when ChatInput took ownership
+  // of WD selection. Per-input chip behavior is covered in ChatInput.test.tsx;
+  // session-list hint below remains.
 
   it('shows WD hint in session list item when set', () => {
     resetCtx()

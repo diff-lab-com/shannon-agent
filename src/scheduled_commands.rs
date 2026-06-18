@@ -758,16 +758,24 @@ pub async fn get_triage_stats(state: tauri::State<'_, AppState>) -> Result<Triag
 }
 
 /// List execution records for a task, newest first.
+/// When `task_id` is None, returns recent runs across all tasks.
 #[tauri::command]
 pub async fn list_task_executions(
     state: tauri::State<'_, AppState>,
-    task_id: String,
+    task_id: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<TaskExecution>, String> {
-    let runs = state
-        .scheduled_runs_store()
-        .list_by_task(&task_id, limit.unwrap_or(50))
-        .map_err(|e| e.to_string())?;
+    let cap = limit.unwrap_or(50);
+    let runs = match task_id.as_deref() {
+        Some(id) if !id.is_empty() => state
+            .scheduled_runs_store()
+            .list_by_task(id, cap)
+            .map_err(|e| e.to_string())?,
+        _ => state
+            .scheduled_runs_store()
+            .list_recent(cap)
+            .map_err(|e| e.to_string())?,
+    };
     Ok(runs.iter().map(run_to_execution).collect())
 }
 
