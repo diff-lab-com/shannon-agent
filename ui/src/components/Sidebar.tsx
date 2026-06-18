@@ -6,6 +6,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '../lib/utils';
 import { useApp } from '@/context/AppContext';
 import { useSidebar } from './Layout';
+import { useTriageStats } from '@/hooks/scheduled-tasks';
+import { TriageDrawer } from './triage/TriageDrawer';
 
 const MIN_W = 200
 const MAX_W = 400
@@ -34,6 +36,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const [opcOpen, setOpcOpen] = useState(true);
   const [extensionsOpen, setExtensionsOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [triageDrawerOpen, setTriageDrawerOpen] = useState(false);
   const [mode, toggleMode] = useSidebarMode();
   const [width, setWidth] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
@@ -43,6 +46,15 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const location = useLocation();
   const { status, createSession } = useApp();
   const intl = useIntl();
+  const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
+
+  // Poll triage stats every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refreshTriageStats();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [refreshTriageStats]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
@@ -139,11 +151,24 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘1</kbd>
         </NavLink>
-        <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
+        <div
+           className={cn(
+              "flex items-center gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300 cursor-pointer",
+              location.pathname.includes('/tasks')
+                ? "text-primary bg-primary/10 font-bold shadow-sm"
+                : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5"
+           )}
+           onClick={() => setTriageDrawerOpen(true)}
+        >
            <span className="material-symbols-outlined">task_alt</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
+           {triageStats.unread > 0 && (
+              <span className="bg-error text-on-error text-[11px] font-bold px-1.5 py-0.5 rounded-full">
+                 {triageStats.unread}
+              </span>
+           )}
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
-        </NavLink>
+        </div>
 
         {mode === 'dev' && (
         <>
@@ -223,6 +248,12 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         )}
         </ScrollArea>
       </nav>
+
+      {/* Triage Drawer */}
+      <TriageDrawer
+        open={triageDrawerOpen}
+        onOpenChange={setTriageDrawerOpen}
+      />
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-1">
         <button

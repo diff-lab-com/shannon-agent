@@ -191,6 +191,10 @@ export async function duplicateSession(id: string): Promise<SessionInfo> {
   return invoke('duplicate_session', { id })
 }
 
+export async function branchSession(parentId: string, branchPoint: number): Promise<SessionInfo> {
+  return invoke('branch_session', { parentId, branchPoint })
+}
+
 export async function exportSession(id: string, format: 'markdown' | 'json'): Promise<string> {
   return invoke('export_session', { id, format })
 }

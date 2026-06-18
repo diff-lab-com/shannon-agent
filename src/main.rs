@@ -64,6 +64,7 @@ fn main() {
             commands::delete_session,
             commands::rename_session,
             commands::duplicate_session,
+            commands::branch_session,
             commands::request_permission,
             commands::respond_permission,
             commands::get_file_diff,

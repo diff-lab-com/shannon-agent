@@ -110,6 +110,10 @@ pub struct SessionInfo {
     pub message_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_point: Option<usize>,
 }
 
 /// Session loaded event with messages.
@@ -266,6 +270,8 @@ mod tests {
             created_at: 1700000000,
             message_count: 5,
             working_dir: None,
+            parent_id: None,
+            branch_point: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         let deserialized: SessionInfo = serde_json::from_str(&json).unwrap();

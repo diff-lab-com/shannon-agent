@@ -124,6 +124,8 @@ struct SessionMeta {
     created_at: i64,
     message_count: usize,
     working_dir: Option<String>,
+    parent_id: Option<String>,
+    branch_point: Option<usize>,
 }
 
 /// Background task metadata.
@@ -1314,6 +1316,8 @@ pub async fn new_session(
         created_at: now,
         message_count: 0,
         working_dir: None,
+        parent_id: None,
+        branch_point: None,
     };
 
     // Add to sessions list
@@ -1354,6 +1358,8 @@ pub async fn list_sessions(
             created_at: s.created_at,
             message_count: s.message_count,
             working_dir: s.working_dir.clone(),
+            parent_id: s.parent_id.clone(),
+            branch_point: s.branch_point,
         })
         .collect();
     Ok(result)
@@ -1387,6 +1393,8 @@ pub async fn search_sessions(
             created_at: s.created_at,
             message_count: s.message_count,
             working_dir: s.working_dir.clone(),
+            parent_id: s.parent_id.clone(),
+            branch_point: s.branch_point,
         };
 
         if s.title.to_lowercase().contains(&query_lower) {
@@ -1879,6 +1887,8 @@ pub async fn duplicate_session(
         created_at: now,
         message_count: session_data.messages.len(),
         working_dir: None,
+        parent_id: None,
+        branch_point: None,
     };
     drop(sessions);
     {
@@ -1895,7 +1905,113 @@ pub async fn duplicate_session(
         created_at: now,
         message_count: session_data.messages.len(),
         working_dir: None,
+        parent_id: None,
+        branch_point: None,
     })
+}
+
+/// Internal helper for branch_session (shared with tests).
+async fn branch_session_internal(
+    state: &AppState,
+    app_handle: Option<&tauri::AppHandle>,
+    parent_id: String,
+    branch_point: usize,
+) -> Result<events::SessionInfo, String> {
+    let parent_uuid = uuid::Uuid::parse_str(&parent_id).map_err(|e| format!("Invalid UUID: {}", e))?;
+
+    // Find parent session
+    let sessions = state.sessions.lock().await;
+    let parent_session = sessions
+        .iter()
+        .find(|s| s.id == parent_id)
+        .ok_or_else(|| format!("Session not found: {}", parent_id))?;
+
+    // Clone parent session data before dropping sessions
+    let parent_title = parent_session.title.clone();
+    let parent_working_dir = parent_session.working_dir.clone();
+
+    // Load parent session data
+    let session_data = state
+        .state_manager
+        .load_session(&parent_uuid)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Session data not found: {}", parent_id))?;
+
+    // Create new session with messages up to branch point
+    let new_id = uuid::Uuid::new_v4();
+    let new_id_str = new_id.to_string();
+    let new_title = format!("Branch of {}", parent_title);
+    let now = chrono_timestamp();
+
+    // Slice messages to include only up to branch point
+    let branch_messages: Vec<shannon_core::api::Message> = session_data.messages
+        .iter()
+        .take(branch_point + 1)
+        .cloned()
+        .collect();
+
+    let model_name = state.model.lock().await.clone();
+    let metadata = shannon_core::state::SessionPersistMetadata {
+        model: model_name,
+        turn_count: branch_messages.len() / 2,
+        title: Some(new_title.clone()),
+        parent_session_id: Some(parent_uuid),
+        branch_point_message_index: Some(branch_point),
+        ..Default::default()
+    };
+
+    state
+        .state_manager
+        .save_session(&new_id, &branch_messages, &metadata)
+        .map_err(|e| e.to_string())?;
+
+    // Drop sessions lock before re-acquiring for push
+    drop(sessions);
+
+    // Add to sessions list with parent/branch info
+    let new_session_meta = SessionMeta {
+        id: new_id_str.clone(),
+        title: new_title.clone(),
+        created_at: now,
+        message_count: branch_messages.len(),
+        working_dir: parent_working_dir.clone(),
+        parent_id: Some(parent_id.clone()),
+        branch_point: Some(branch_point),
+    };
+    {
+        let mut sessions = state.sessions.lock().await;
+        sessions.push(new_session_meta);
+    }
+
+    // Emit sessions updated event
+    if let Some(handle) = app_handle {
+        let _ = handle.emit(event_names::SESSIONS_UPDATED, ());
+    }
+
+    Ok(events::SessionInfo {
+        id: new_id_str,
+        title: new_title,
+        created_at: now,
+        message_count: branch_messages.len(),
+        working_dir: parent_working_dir,
+        parent_id: Some(parent_id),
+        branch_point: Some(branch_point),
+    })
+}
+
+/// Branch a session at a specific message index.
+///
+/// Creates a new session with messages up to (and including) the branch point,
+/// copying the first N messages from the parent session. Sets parent_id and
+/// branch_point to track the relationship.
+#[tauri::command]
+pub async fn branch_session(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    parent_id: String,
+    branch_point: usize,
+) -> Result<events::SessionInfo, String> {
+    branch_session_internal(&state, Some(&app_handle), parent_id, branch_point).await
 }
 
 /// Request permission for a tool execution.
@@ -4454,5 +4570,133 @@ mod tests {
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
             .count();
         assert_eq!(count, 3, "no duplicate files after re-seed");
+    }
+
+    // P6: Branch session tests
+    #[tokio::test]
+    async fn test_branch_session_creates_correct_metadata() {
+        let state = AppState::new();
+
+        // Create parent session with 4 messages using string roles
+        let parent_id = uuid::Uuid::new_v4();
+        let parent_id_str = parent_id.to_string();
+        let messages = vec![
+            shannon_core::api::Message {
+                role: "user".into(),
+                content: shannon_core::api::MessageContent::Text("msg 1".into()),
+            },
+            shannon_core::api::Message {
+                role: "assistant".into(),
+                content: shannon_core::api::MessageContent::Text("resp 1".into()),
+            },
+            shannon_core::api::Message {
+                role: "user".into(),
+                content: shannon_core::api::MessageContent::Text("msg 2".into()),
+            },
+            shannon_core::api::Message {
+                role: "assistant".into(),
+                content: shannon_core::api::MessageContent::Text("resp 2".into()),
+            },
+        ];
+
+        let parent_metadata = shannon_core::state::SessionPersistMetadata {
+            model: "claude-3".into(),
+            turn_count: 2,
+            title: Some("Parent Session".into()),
+            ..Default::default()
+        };
+
+        state
+            .state_manager
+            .save_session(&parent_id, &messages, &parent_metadata)
+            .expect("save parent");
+
+        // Add parent to sessions list
+        let parent_meta = SessionMeta {
+            id: parent_id_str.clone(),
+            title: "Parent Session".into(),
+            created_at: 1700000000,
+            message_count: 4,
+            working_dir: None,
+            parent_id: None,
+            branch_point: None,
+        };
+        state.sessions.lock().await.push(parent_meta);
+
+        // Branch at message index 1 (should include first 2 messages)
+        let branch_result = branch_session_internal(
+            &state,
+            None,
+            parent_id_str.clone(),
+            1,
+        )
+        .await
+        .expect("branch_session_internal");
+
+        // Verify branch session metadata
+        assert_eq!(branch_result.message_count, 2, "branch has only first 2 messages");
+        assert_eq!(branch_result.parent_id, Some(parent_id_str.clone()));
+        assert_eq!(branch_result.branch_point, Some(1));
+        assert!(branch_result.title.contains("Branch of"));
+
+        // Verify branch session data
+        let branch_uuid = uuid::Uuid::parse_str(&branch_result.id).expect("parse uuid");
+        let branch_data = state
+            .state_manager
+            .load_session(&branch_uuid)
+            .expect("load branch")
+            .expect("branch data exists");
+
+        assert_eq!(branch_data.messages.len(), 2, "branch has 2 messages");
+    }
+
+    #[tokio::test]
+    async fn test_branch_session_preserves_parent_fields() {
+        let state = AppState::new();
+
+        // Create parent session with working dir
+        let parent_id = uuid::Uuid::new_v4();
+        let parent_id_str = parent_id.to_string();
+        let messages = vec![shannon_core::api::Message {
+            role: "user".into(),
+            content: shannon_core::api::MessageContent::Text("single message".into()),
+        }];
+
+        let parent_metadata = shannon_core::state::SessionPersistMetadata {
+            model: "claude-3".into(),
+            turn_count: 0,
+            title: Some("Parent".into()),
+            ..Default::default()
+        };
+
+        state
+            .state_manager
+            .save_session(&parent_id, &messages, &parent_metadata)
+            .expect("save parent");
+
+        let parent_meta = SessionMeta {
+            id: parent_id_str.clone(),
+            title: "Parent".into(),
+            created_at: 1700000000,
+            message_count: 1,
+            working_dir: Some("/home/user/project".into()),
+            parent_id: None,
+            branch_point: None,
+        };
+        state.sessions.lock().await.push(parent_meta);
+
+        // Branch at message index 0
+        let branch_result = branch_session_internal(
+            &state,
+            None,
+            parent_id_str.clone(),
+            0,
+        )
+        .await
+        .expect("branch_session_internal");
+
+        // Verify working_dir is inherited
+        assert_eq!(branch_result.working_dir, Some("/home/user/project".into()));
+        assert_eq!(branch_result.parent_id, Some(parent_id_str));
     }
 }

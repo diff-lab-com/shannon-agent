@@ -100,6 +100,10 @@ export interface SessionInfo {
   is_pinned?: boolean
   /** Per-session working directory override (absolute path). */
   working_dir?: string
+  /** Parent session ID if this is a branch */
+  parent_id?: string | null
+  /** Message index in parent where this branch diverged */
+  branch_point?: number | null
 }
 
 export interface StatusResponse {
