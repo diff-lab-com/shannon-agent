@@ -5,6 +5,7 @@
 // mirrors how `AppContext.tsx` consumes the existing API module.
 
 import { useCallback, useEffect, useState } from 'react'
+import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import type {
@@ -23,6 +24,8 @@ import type {
 // ─── Scheduled tasks (CRUD) ────────────────────────────────────────────────
 
 export function useScheduledTasks() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [tasks, setTasks] = useState<ScheduledRoutine[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -44,71 +47,71 @@ export function useScheduledTasks() {
   const create = useCallback(async (payload: CreateTaskPayload): Promise<ScheduledRoutine | null> => {
     try {
       const task = await api.createScheduledTask(payload)
-      toast.success('Task created')
+      toast.success(t('tasks.toast.created'))
       await refresh()
       return task
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to create task'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.create')
       setError(msg)
-      toast.error('Failed to create task')
+      toast.error(t('tasks.toast.failed.create'))
       return null
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   const update = useCallback(async (payload: UpdateTaskPayload): Promise<ScheduledRoutine | null> => {
     try {
       const task = await api.updateScheduledTask(payload)
-      toast.success('Task updated')
+      toast.success(t('tasks.toast.updated'))
       await refresh()
       return task
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to update task'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.update')
       setError(msg)
-      toast.error('Failed to update task')
+      toast.error(t('tasks.toast.failed.update'))
       return null
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   const remove = useCallback(async (id: string): Promise<boolean> => {
     try {
       await api.deleteScheduledTask(id)
-      toast.success('Task deleted')
+      toast.success(t('tasks.toast.deleted'))
       await refresh()
       return true
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to delete task'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.delete')
       setError(msg)
-      toast.error('Failed to delete task')
+      toast.error(t('tasks.toast.failed.delete'))
       return false
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   const toggle = useCallback(async (id: string, enabled: boolean): Promise<ScheduledRoutine | null> => {
     try {
       const task = await api.toggleScheduledTask(id, enabled)
-      toast.success(enabled ? 'Task enabled' : 'Task disabled')
+      toast.success(t(enabled ? 'tasks.toast.enabled' : 'tasks.toast.disabled'))
       await refresh()
       return task
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to toggle task'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.toggle')
       setError(msg)
-      toast.error('Failed to toggle task')
+      toast.error(t('tasks.toast.failed.toggle'))
       return null
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   const trigger = useCallback(async (id: string): Promise<boolean> => {
     try {
       await api.triggerTaskNow(id)
-      toast.success('Task triggered')
+      toast.success(t('tasks.toast.triggeredNoName'))
       return true
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to trigger task'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.trigger')
       setError(msg)
-      toast.error('Failed to trigger task')
+      toast.error(t('tasks.toast.failed.trigger'))
       return false
     }
-  }, [])
+  }, [intl])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -118,6 +121,8 @@ export function useScheduledTasks() {
 // ─── Triage items ──────────────────────────────────────────────────────────
 
 export function useTriageItems(initialFilter?: TriageFilter) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [filter, setFilter] = useState<TriageFilter | undefined>(initialFilter)
   const [items, setItems] = useState<TriageItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -143,26 +148,26 @@ export function useTriageItems(initialFilter?: TriageFilter) {
       await refresh()
       return true
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to mark item read'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.markRead')
       setError(msg)
-      toast.error('Failed to mark item read')
+      toast.error(t('tasks.toast.failed.markRead'))
       return false
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   const archive = useCallback(async (id: string): Promise<boolean> => {
     try {
       await api.archiveTriageItem(id)
-      toast.success('Item archived')
+      toast.success(t('tasks.toast.archived'))
       await refresh()
       return true
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to archive item'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.archive')
       setError(msg)
-      toast.error('Failed to archive item')
+      toast.error(t('tasks.toast.failed.archive'))
       return false
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -172,6 +177,8 @@ export function useTriageItems(initialFilter?: TriageFilter) {
 // ─── Task executions (history) ─────────────────────────────────────────────
 
 export function useTaskExecutions(taskId?: string) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const [executions, setExecutions] = useState<TaskExecution[]>([])
   const [detail, setDetail] = useState<TaskExecutionDetail | null>(null)
   const [loading, setLoading] = useState(false)
@@ -197,12 +204,12 @@ export function useTaskExecutions(taskId?: string) {
       setDetail(d)
       return d
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to load execution detail'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.loadExecution')
       setError(msg)
-      toast.error('Failed to load execution detail')
+      toast.error(t('tasks.toast.failed.loadExecution'))
       return null
     }
-  }, [])
+  }, [intl])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -271,6 +278,8 @@ export function useTriageStats() {
 // ─── Task worktrees (P2.5) ─────────────────────────────────────────────────
 
 export function useTaskWorktrees() {
+  const intl = useIntl()
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
   const [worktrees, setWorktrees] = useState<TaskWorktreeDto[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -292,44 +301,48 @@ export function useTaskWorktrees() {
   const create = useCallback(async (taskId: string): Promise<TaskWorktreeDto | null> => {
     try {
       const wt = await api.createTaskWorktree(taskId)
-      toast.success(`Worktree created for "${wt.task_name}"`)
+      toast.success(t('tasks.toast.worktreeCreated', { name: wt.task_name }))
       await refresh()
       return wt
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to create worktree'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.createWorktree')
       setError(msg)
-      toast.error('Failed to create worktree')
+      toast.error(t('tasks.toast.failed.createWorktree'))
       return null
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   const remove = useCallback(async (path: string): Promise<boolean> => {
     try {
       await api.removeTaskWorktree(path)
-      toast.success('Worktree removed')
+      toast.success(t('tasks.toast.worktreeRemoved'))
       await refresh()
       return true
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to remove worktree'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.removeWorktree')
       setError(msg)
-      toast.error('Failed to remove worktree')
+      toast.error(t('tasks.toast.failed.removeWorktree'))
       return false
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   const prune = useCallback(async (): Promise<string[] | null> => {
     try {
       const removed = await api.pruneTaskWorktrees()
-      toast.success(removed.length === 0 ? 'No stale worktrees to prune' : `Pruned ${removed.length} worktree${removed.length === 1 ? '' : 's'}`)
+      if (removed.length === 0) {
+        toast.success(t('tasks.toast.worktreePrunedNone'))
+      } else {
+        toast.success(t('tasks.toast.worktreePruned', { count: removed.length }))
+      }
       await refresh()
       return removed
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to prune worktrees'
+      const msg = e instanceof Error ? e.message : t('tasks.toast.failed.pruneWorktrees')
       setError(msg)
-      toast.error('Failed to prune worktrees')
+      toast.error(t('tasks.toast.failed.pruneWorktrees'))
       return null
     }
-  }, [refresh])
+  }, [refresh, intl])
 
   useEffect(() => { refresh() }, [refresh])
 

@@ -56,7 +56,7 @@ export default function ConversationsList({ sessions }: Props) {
     const groups: Record<string, SessionInfo[]> = {}
     for (const s of filtered) {
       const d = new Date(s.created_at)
-      const key = d.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+      const key = d.toLocaleDateString(intl.locale, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
       ;(groups[key] ??= []).push(s)
     }
     return Object.entries(groups)
@@ -145,7 +145,7 @@ export default function ConversationsList({ sessions }: Props) {
                         <div className="font-label-sm text-on-surface-variant mt-xs">
                           {intl.formatMessage({ id: 'conversations.list.messageCount' }, { count: s.message_count })}
                           {' · '}
-                          {new Date(s.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(s.created_at).toLocaleTimeString(intl.locale, { hour: '2-digit', minute: '2-digit' })}
                         </div>
                       </div>
                       <span className="material-symbols-outlined text-outline-variant opacity-0 group-hover:opacity-100 transition-opacity">chevron_right</span>

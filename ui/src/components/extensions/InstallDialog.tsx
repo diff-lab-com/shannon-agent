@@ -16,7 +16,7 @@
 // On a successful install the dialog dispatches `shannon:extension-installed`
 // (same contract Plugins.tsx used before) so the Extensions shell can refresh.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -24,6 +24,7 @@ import * as api from "@/lib/tauri-api";
 import { isValidPackageName, safeErrorMessage } from "@/lib/packageValidation";
 import type { AddonKind, CatalogEntry } from "@/types";
 import { KIND_ROUTE } from "./Plugins";
+import { useModalFocus } from "@/hooks/useModalFocus";
 
 export interface InstallDialogProps {
   entry: CatalogEntry | null;
@@ -84,6 +85,9 @@ export default function InstallDialog({
     intl.formatMessage({ id }, values);
 
   const [installing, setInstalling] = useState(false);
+
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalFocus(open, modalRef);
 
   // Reset local state each time the dialog opens.
   useEffect(() => {
@@ -363,6 +367,7 @@ export default function InstallDialog({
       onClick={onClose}
     >
       <div
+        ref={modalRef}
         onClick={(e) => e.stopPropagation()}
         className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 w-full max-w-lg max-h-[90vh] overflow-y-auto p-lg flex flex-col gap-md"
       >

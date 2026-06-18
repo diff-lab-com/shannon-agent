@@ -14,7 +14,7 @@
 // `onInstalled` and call it after every successful install so the page
 // refreshes.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useIntl } from "react-intl";
 import { toast } from "sonner";
 import {
@@ -28,6 +28,7 @@ import {
   isValidVersion,
   safeErrorMessage,
 } from "@/lib/packageValidation";
+import { useModalFocus } from "@/hooks/useModalFocus";
 
 export interface McpAddServerDialogProps {
   open: boolean;
@@ -211,6 +212,9 @@ export default function McpAddServerDialog({
 
   const [tab, setTab] = useState<TabKey>("search");
 
+  const modalRef = useRef<HTMLDivElement>(null);
+  useModalFocus(open, modalRef);
+
   // Reset to the first tab whenever the dialog is opened.
   useEffect(() => {
     if (open) setTab("search");
@@ -243,6 +247,7 @@ export default function McpAddServerDialog({
       onClick={onClose}
     >
       <div
+        ref={modalRef}
         onClick={(e) => e.stopPropagation()}
         className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 w-full max-w-2xl max-h-[90vh] overflow-y-auto p-lg flex flex-col gap-md"
       >

@@ -1,9 +1,10 @@
-import { useState, memo } from 'react'
+import { useState, useRef, memo } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/context/AppContext'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
 import {
@@ -36,6 +37,8 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [open, setOpen] = useState(false)
+  const modalRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, modalRef)
   const isImage = isImagePath(attachment.path)
 
   const handleClick = () => setOpen(true)
@@ -64,6 +67,7 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
 
       {open && (
         <div
+          ref={modalRef}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-lg"
           onClick={() => setOpen(false)}
           role="dialog"
