@@ -77,6 +77,7 @@ export default function App() {
                 </Route>
                 <Route path="/opc" element={<OPC />} />
                 <Route path="/opc/task" element={<OPCTask />} />
+                <Route path="/opc/task/:id" element={<OPCTask />} />
                 <Route path="/quickfix" element={<QuickFix />} />
                 <Route path="/editor" element={<Editor />} />
                 <Route path="/settings" element={<Settings />}>

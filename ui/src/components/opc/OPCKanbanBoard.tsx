@@ -14,8 +14,8 @@
 //   - bucketFor() is kept as a thin wrapper over classifyStatus() so existing
 //     callers (and tests) keep working. It now returns the unified family.
 
-import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useCallback, useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -45,8 +45,13 @@ interface Props {
 export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  const navigate = useNavigate()
   const [quickTask, setQuickTask] = useState('')
   const [overrides, setOverrides] = useState<Record<string, string>>({})
+
+  const openTask = useCallback((id: string) => {
+    navigate(`/opc/task/${id}`)
+  }, [navigate])
 
   const effectiveTasks: TaskItem[] = useMemo(
     () => tasks.map(t => (overrides[t.id] ? { ...t, status: overrides[t.id] } : t)),
@@ -108,7 +113,7 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
         toolbar={toolbar}
         onMoveTask={handleMoveTask}
         renderCard={(task, family) => (
-          <VariantCard key={task.id} task={task} family={family} intl={intl} />
+          <VariantCard key={task.id} task={task} family={family} intl={intl} openTask={openTask} />
         )}
         emptyLabel={family => family === 'failed'
           ? t('opc.kanban.noDeprecated')
@@ -135,17 +140,17 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
  * active, check row on done, etc. Default falls through to a draggable card
  * that matches the old "todo" / "deprecated" look.
  */
-function VariantCard({ task, family, intl }: { task: TaskItem; family: TaskStatusFamily; intl: ReturnType<typeof useIntl> }) {
+function VariantCard({ task, family, intl, openTask }: { task: TaskItem; family: TaskStatusFamily; intl: ReturnType<typeof useIntl>; openTask: (id: string) => void }) {
   switch (family) {
     case 'blocked': return <BlockedCard task={task} intl={intl} />
     case 'active':  return <ActiveCard task={task} intl={intl} />
     case 'done':    return <DoneCard task={task} intl={intl} />
     case 'failed':  return <FailedCard task={task} intl={intl} />
-    default:        return <DefaultDraggableCard task={task} intl={intl} />
+    default:        return <DefaultDraggableCard task={task} intl={intl} openTask={openTask} />
   }
 }
 
-function DefaultDraggableCard({ task, intl }: { task: TaskItem; intl: ReturnType<typeof useIntl> }) {
+function DefaultDraggableCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType<typeof useIntl>; openTask: (id: string) => void }) {
   return (
     <div
       draggable
@@ -153,7 +158,9 @@ function DefaultDraggableCard({ task, intl }: { task: TaskItem; intl: ReturnType
       className="bg-surface-container-lowest rounded-xl p-md border border-outline-variant/30 shadow-sm mb-3 cursor-pointer hover:border-primary/50 hover:shadow-md transition-all group/card focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none"
       tabIndex={0}
       role="button"
-      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); window.location.hash = `/opc/task/${task.id}` } }}
+      aria-label={task.title}
+      onClick={() => openTask(task.id)}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openTask(task.id) } }}
     >
       <div className="flex justify-between items-start mb-2">
         <span className="font-label-sm text-[10px] font-bold text-on-surface-variant tracking-wider">{task.id.slice(0, 8)}</span>
