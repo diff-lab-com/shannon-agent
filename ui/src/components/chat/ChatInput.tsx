@@ -96,7 +96,6 @@ export default function ChatInput({
     const files: FileList = e.dataTransfer.files
     if (!files || files.length === 0) return
 
-    // Extract paths from dropped files (Tauri exposes real paths)
     const paths: string[] = []
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
@@ -153,9 +152,8 @@ export default function ChatInput({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {/* Drag-drop hint overlay */}
       {isDragging && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm">
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
             <span className="material-symbols-outlined text-[32px]">cloud_upload</span>
             <p className="font-label-md">{t('chat.input.attach.dropHint')}</p>
@@ -164,88 +162,19 @@ export default function ChatInput({
       )}
 
       <div className="max-w-4xl mx-auto">
-        {/* Control Strip */}
-        <div className="flex items-center gap-xs mb-xs px-xs">
-          {/* Working Directory Chip */}
-          <button
-            type="button"
-            onClick={handleChangeWorkingDir}
-            disabled={!currentSessionId}
-            aria-label={t('chat.input.wd.aria')}
-            title={sessionWorkingDir || t('chat.input.wd.title')}
-            className={`group/wd flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 ${
-              sessionWorkingDir
-                ? 'border-primary/30 bg-primary/5 text-on-surface hover:bg-primary/10 hover:border-primary/50'
-                : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
-            } disabled:opacity-50 disabled:cursor-not-allowed`}
-          >
-            <span className="material-symbols-outlined text-[16px]">folder_open</span>
-            <span className="max-w-[120px] truncate font-mono">
-              {workingDirBasename || t('chat.input.wd.title')}
-            </span>
-            <span className="material-symbols-outlined text-[14px] opacity-50 group-hover/wd:opacity-100 group-hover/wd:text-primary transition-opacity">change_folder</span>
-          </button>
+        <div className="glass-card bg-surface-container-lowest/80 rounded-2xl border border-outline-variant/30 shadow-lg flex flex-col group-focus-within:border-primary/50 group-focus-within:shadow-primary/10 transition-all duration-300 overflow-hidden">
 
-          {/* Permission Mode Selector */}
-          <Select value={currentMode} onValueChange={handleModeChange}>
-            <SelectTrigger
-              size="sm"
-              aria-label={t('chat.input.mode.label')}
-              className={`border ${selectedMode.color} bg-surface-container-lowest/60 hover:bg-surface-container-low/50 transition-colors`}
-            >
-              <span className="material-symbols-outlined text-[16px]">{selectedMode.icon}</span>
-              <SelectValue placeholder={t('chat.input.mode.label')} />
-            </SelectTrigger>
-            <SelectContent>
-              {modeOptions.map(mode => (
-                <SelectItem key={mode.value} value={mode.value}>
-                  <div className="flex items-center gap-xs">
-                    <span className="material-symbols-outlined text-[16px]">{mode.icon}</span>
-                    <span>{mode.label}</span>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {/* Model Selector */}
-          <Select value={currentModelId} onValueChange={handleModelChange}>
-            <SelectTrigger
-              size="sm"
-              aria-label={t('chat.input.model.label')}
-              className="border border-outline-variant/30 bg-surface-container-lowest/60 hover:bg-surface-container-low/50 transition-colors"
-            >
-              <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
-              <SelectValue placeholder={t('chat.input.model.label')} />
-            </SelectTrigger>
-            <SelectContent>
-              {modelList.map(model => (
-                <SelectItem key={model.id} value={model.id}>
-                  <div className="flex items-center gap-xs">
-                    <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
-                    <div className="flex flex-col">
-                      <span className="text-sm">{model.name}</span>
-                      <span className="text-xs text-on-surface-variant">{model.provider}</span>
-                    </div>
-                  </div>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Input Bar */}
-        <div className="relative glass-card bg-surface-container-lowest/80 rounded-2xl border border-outline-variant/30 px-sm py-xs flex items-center shadow-lg group-focus-within:border-primary/50 group-focus-within:shadow-primary/10 transition-all duration-300">
           {attachedFiles.length > 0 && (
-            <div className="flex flex-wrap gap-xs mr-xs">
+            <div className="flex flex-wrap items-center gap-xs px-md pt-md">
               {attachedFiles.map((path, i) => (
                 <span key={i} className="inline-flex items-center gap-xs px-sm py-xs bg-primary/10 text-primary rounded-lg font-label-sm">
                   <span className="material-symbols-outlined text-[14px]">description</span>
                   {path.split('/').pop()}
                   <button
+                    type="button"
                     className="hover:text-error cursor-pointer"
+                    aria-label={t('chat.input.attach.remove')}
                     onClick={() => {
-                      // Remove individual file by filtering
                       const newFiles = attachedFiles.filter((_, idx) => idx !== i)
                       onAttach(newFiles)
                     }}
@@ -256,7 +185,8 @@ export default function ChatInput({
               ))}
               {attachedFiles.length > 1 && (
                 <button
-                  className="text-xs text-on-surface-variant hover:text-error cursor-pointer underline"
+                  type="button"
+                  className="text-xs text-on-surface-variant hover:text-error cursor-pointer underline ml-xs"
                   onClick={onDetachAll}
                 >
                   {t('chat.input.attach.detachAll')}
@@ -265,69 +195,139 @@ export default function ChatInput({
             </div>
           )}
 
-          <Button
-            variant="ghost"
-            aria-label={t('chat.input.attach.aria')}
-            className="p-md text-on-surface-variant hover:text-primary shrink-0"
-            onClick={handleAttachClick}
-          >
-            <span className="material-symbols-outlined text-[20px]">attach_file</span>
-          </Button>
+          <div className="flex items-start px-sm">
+            <span className="material-symbols-outlined p-md text-primary shrink-0">
+              {isQuerying ? 'hourglass_empty' : 'auto_awesome'}
+            </span>
+            <textarea
+              ref={textareaRef}
+              className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-outline-variant/80 text-on-surface resize-none min-h-[24px] max-h-[200px]"
+              placeholder={isQuerying ? t('chat.input.processing') : t('chat.input.placeholder')}
+              value={value}
+              onChange={e => onChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              rows={1}
+              disabled={disabled}
+            />
+          </div>
 
-          <Button
-            variant="ghost"
-            aria-label={t('nav.quickFix')}
-            title={t('nav.quickFix')}
-            className="p-md text-on-surface-variant hover:text-primary shrink-0"
-            onClick={onOpenQuickFix}
-          >
-            <span className="material-symbols-outlined text-[20px]">build</span>
-          </Button>
-
-          <Button
-            variant="ghost"
-            aria-label={t('nav.editor')}
-            title={t('nav.editor')}
-            className="p-md text-on-surface-variant hover:text-primary shrink-0"
-            onClick={onOpenEditor}
-          >
-            <span className="material-symbols-outlined text-[20px]">code</span>
-          </Button>
-
-          <span className="material-symbols-outlined p-md text-primary shrink-0">
-            {isQuerying ? 'hourglass_empty' : 'auto_awesome'}
-          </span>
-
-          <textarea
-            ref={textareaRef}
-            className="flex-1 bg-transparent border-none outline-none focus:ring-0 font-body-lg py-md px-sm placeholder:text-outline-variant/80 text-on-surface resize-none min-h-[24px] max-h-[200px]"
-            placeholder={isQuerying ? t('chat.input.processing') : t('chat.input.placeholder')}
-            value={value}
-            onChange={e => onChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            disabled={disabled}
-          />
-
-          <div className="flex items-center gap-2 px-sm shrink-0">
-            {isQuerying ? (
-              <Button
-                aria-label={t('chat.input.stop.aria')}
-                className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
-                onClick={onCancelQuery}
+          <div className="flex items-center justify-between gap-xs px-sm py-xs border-t border-outline-variant/20 bg-surface-container-low/30">
+            <div className="flex items-center gap-xs flex-wrap min-w-0">
+              <button
+                type="button"
+                onClick={handleChangeWorkingDir}
+                disabled={!currentSessionId}
+                aria-label={t('chat.input.wd.aria')}
+                title={sessionWorkingDir || t('chat.input.wd.title')}
+                className={`group/wd flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 ${
+                  sessionWorkingDir
+                    ? 'border-primary/30 bg-primary/5 text-on-surface hover:bg-primary/10 hover:border-primary/50'
+                    : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
-                <span className="material-symbols-outlined text-[20px]">stop</span>
-              </Button>
-            ) : (
+                <span className="material-symbols-outlined text-[16px]">folder_open</span>
+                <span className="max-w-[120px] truncate font-mono">
+                  {workingDirBasename || t('chat.input.wd.title')}
+                </span>
+                <span className="material-symbols-outlined text-[14px] opacity-50 group-hover/wd:opacity-100 group-hover/wd:text-primary transition-opacity">change_folder</span>
+              </button>
+
+              <Select value={currentMode} onValueChange={handleModeChange}>
+                <SelectTrigger
+                  size="sm"
+                  aria-label={t('chat.input.mode.label')}
+                  className={`border ${selectedMode.color} bg-surface-container-lowest/60 hover:bg-surface-container-low/50 transition-colors`}
+                >
+                  <span className="material-symbols-outlined text-[16px]">{selectedMode.icon}</span>
+                  <SelectValue placeholder={t('chat.input.mode.label')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {modeOptions.map(mode => (
+                    <SelectItem key={mode.value} value={mode.value}>
+                      <div className="flex items-center gap-xs">
+                        <span className="material-symbols-outlined text-[16px]">{mode.icon}</span>
+                        <span>{mode.label}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={currentModelId} onValueChange={handleModelChange}>
+                <SelectTrigger
+                  size="sm"
+                  aria-label={t('chat.input.model.label')}
+                  className="border border-outline-variant/30 bg-surface-container-lowest/60 hover:bg-surface-container-low/50 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                  <SelectValue placeholder={t('chat.input.model.label')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {modelList.map(model => (
+                    <SelectItem key={model.id} value={model.id}>
+                      <div className="flex items-center gap-xs">
+                        <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                        <div className="flex flex-col">
+                          <span className="text-sm">{model.name}</span>
+                          <span className="text-xs text-on-surface-variant">{model.provider}</span>
+                        </div>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-xs shrink-0">
               <Button
-                aria-label={t('chat.input.send.aria')}
-                className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-md hover:shadow-primary/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-                onClick={onSend}
-                disabled={!value.trim()}
+                variant="ghost"
+                aria-label={t('chat.input.attach.aria')}
+                title={t('chat.input.attach.aria')}
+                className="p-md text-on-surface-variant hover:text-primary"
+                onClick={handleAttachClick}
               >
-                <span className="material-symbols-outlined text-[20px]">arrow_upward</span>
+                <span className="material-symbols-outlined text-[20px]">attach_file</span>
               </Button>
-            )}
+
+              <Button
+                variant="ghost"
+                aria-label={t('nav.quickFix')}
+                title={t('nav.quickFix')}
+                className="p-md text-on-surface-variant hover:text-primary"
+                onClick={onOpenQuickFix}
+              >
+                <span className="material-symbols-outlined text-[20px]">build</span>
+              </Button>
+
+              <Button
+                variant="ghost"
+                aria-label={t('nav.editor')}
+                title={t('nav.editor')}
+                className="p-md text-on-surface-variant hover:text-primary"
+                onClick={onOpenEditor}
+              >
+                <span className="material-symbols-outlined text-[20px]">code</span>
+              </Button>
+
+              {isQuerying ? (
+                <Button
+                  aria-label={t('chat.input.stop.aria')}
+                  className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
+                  onClick={onCancelQuery}
+                >
+                  <span className="material-symbols-outlined text-[20px]">stop</span>
+                </Button>
+              ) : (
+                <Button
+                  aria-label={t('chat.input.send.aria')}
+                  className="bg-primary text-on-primary p-3 rounded-xl active:scale-95 hover:shadow-md hover:shadow-primary/30 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={onSend}
+                  disabled={!value.trim()}
+                >
+                  <span className="material-symbols-outlined text-[20px]">arrow_upward</span>
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </div>

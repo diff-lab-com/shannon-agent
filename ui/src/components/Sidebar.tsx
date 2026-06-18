@@ -7,7 +7,6 @@ import { cn } from '../lib/utils';
 import { useApp } from '@/context/AppContext';
 import { useSidebar } from './Layout';
 import { useTriageStats } from '@/hooks/scheduled-tasks';
-import { TriageDrawer } from './triage/TriageDrawer';
 
 const MIN_W = 200
 const MAX_W = 400
@@ -36,7 +35,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const [opcOpen, setOpcOpen] = useState(true);
   const [extensionsOpen, setExtensionsOpen] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [triageDrawerOpen, setTriageDrawerOpen] = useState(false);
   const [mode, toggleMode] = useSidebarMode();
   const [width, setWidth] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
@@ -157,14 +155,12 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
         </NavLink>
 
-        {/* Triage Drawer Trigger */}
-        <button
-          onClick={() => setTriageDrawerOpen(true)}
-          className={cn(
-            "flex items-center gap-3 px-4 py-3 rounded-xl font-label-md text-label-md transition-all duration-300 relative",
-            "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5"
-          )}
+        {/* Triage full-page navigation */}
+        <NavLink
+          to="/triage"
           aria-label={intl.formatMessage({ id: 'nav.triage.aria' })}
+          className={getNavClass}
+          onClick={handleNavClick}
         >
           <span className="material-symbols-outlined">inbox</span>
           <span className="flex-1">{intl.formatMessage({ id: 'nav.triage' })}</span>
@@ -173,7 +169,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
               {triageStats.unread}
             </span>
           )}
-        </button>
+        </NavLink>
 
         {mode === 'dev' && (
         <>
@@ -253,13 +249,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         )}
         </ScrollArea>
       </nav>
-
-      {/* Triage Drawer */}
-      <TriageDrawer
-        open={triageDrawerOpen}
-        onOpenChange={setTriageDrawerOpen}
-        onStatsRefresh={refreshTriageStats}
-      />
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-1">
         <button

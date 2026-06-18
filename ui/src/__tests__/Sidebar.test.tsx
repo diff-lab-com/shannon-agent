@@ -229,10 +229,10 @@ describe('Sidebar — Navigation', () => {
     expect(screen.getByText('3')).toBeInTheDocument() // Badge shows unread count
   })
 
-  it('Triage button has proper aria-label', () => {
+  it('Triage link has proper aria-label', () => {
     render(wrap(<Sidebar />))
 
-    const triageButton = screen.getByRole('button', { name: /Open Triage drawer/i })
-    expect(triageButton).toBeInTheDocument()
+    const triageLink = screen.getByRole('link', { name: /Open Triage page/i })
+    expect(triageLink).toBeInTheDocument()
   })
 })

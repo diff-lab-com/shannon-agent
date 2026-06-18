@@ -43,9 +43,8 @@ import HistoryView from '@/components/tasks/HistoryView'
 import WorktreePanel from '@/components/tasks/WorktreePanel'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
-import Triage from '@/pages/Triage'
 
-type Tab = 'active' | 'history' | 'worktrees' | 'triage'
+type Tab = 'active' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
@@ -178,7 +177,7 @@ export default function Tasks() {
 
         {/* P2.2: Active / History / Worktrees tab switcher */}
         <div role="tablist" aria-label={t('tasks.tabs.aria')} className="flex gap-xs mb-lg border-b border-outline-variant/30">
-          {(['active', 'history', 'worktrees', 'triage'] as const).map(tabId => {
+          {(['active', 'history', 'worktrees'] as const).map(tabId => {
             const selected = tab === tabId
             return (
               <button
@@ -200,8 +199,6 @@ export default function Tasks() {
           <HistoryView />
         ) : tab === 'worktrees' ? (
           <WorktreePanel />
-        ) : tab === 'triage' ? (
-          <Triage />
         ) : (
           <>
         {errorMsg && (

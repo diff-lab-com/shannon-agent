@@ -1,9 +1,6 @@
 import { useState, useRef, useEffect, useMemo, memo, lazy, Suspense } from 'react'
 import { useIntl } from 'react-intl'
-import ReactMarkdown from 'react-markdown'
 import { toast } from 'sonner'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,9 +9,11 @@ import { Pagination } from '@/components/ui/pagination'
 import WelcomeState from '@/components/WelcomeState'
 import DiffDialog from '@/components/diff/DiffDialog'
 import ChatInput from '@/components/chat/ChatInput'
+import { Markdown } from '@/components/chat/Markdown'
+import { MessageBubble, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
-import type { ChatMessage, ToolCall, FileContext, SessionInfo } from '@/types'
+import type { FileContext, SessionInfo } from '@/types'
 
 // QuickFix and Editor are no longer top-level routes — they are inline
 // tools launched from the chat input toolbar. Lazy-loaded so the main
@@ -470,7 +469,10 @@ export default function Chat() {
                 ))}
                 {streamingText && (
                   <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm">
-                    <p className="font-body-md text-on-surface whitespace-pre-wrap">{streamingText}<span className="inline-block w-2 h-5 bg-primary/60 ml-xs animate-pulse align-text-bottom"></span></p>
+                    <div className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
+                      <Markdown>{streamingText}</Markdown>
+                      <span className="inline-block w-2 h-5 bg-primary/60 ml-xs animate-pulse align-text-bottom"></span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -677,107 +679,6 @@ export default function Chat() {
   )
 }
 
-const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff }: { message: ChatMessage; messageIndex: number; isBranch?: boolean; onViewDiff: (path: string) => void }) {
-  const isUser = message.role === 'user'
-  const [liked, setLiked] = useState(false)
-  const [isBranching, setIsBranching] = useState(false)
-  const { sendMessage, currentSessionId, switchSession, refreshSessions } = useApp()
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(message.content).catch(() => toast.error(t('chat.toast.copyFailed')))
-  }
-
-  const handleRegenerate = () => {
-    sendMessage('Regenerate the previous response').catch(() => toast.error(t('chat.toast.regenerateFailed')))
-  }
-
-  const handleBranch = async () => {
-    if (!currentSessionId || isBranching) return
-
-    const confirmed = window.confirm(t('chat.message.branch.confirm'))
-    if (!confirmed) return
-
-    setIsBranching(true)
-    try {
-      const newSession = await api.branchSession(currentSessionId, messageIndex)
-      await refreshSessions()
-      await switchSession(newSession.id)
-      toast.success(t('chat.message.branch.success'))
-    } catch (error) {
-      console.error('Branch failed:', error)
-      toast.error(t('chat.message.branch.failed'))
-    } finally {
-      setIsBranching(false)
-    }
-  }
-
-  if (isUser) {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[80%]">
-          {isBranch && (
-            <div className="flex items-center gap-xs mb-xs justify-end">
-              <span className="material-symbols-outlined text-[14px] text-on-surface-variant/50">fork_right</span>
-              <span className="font-label-sm text-on-surface-variant/50">{t('chat.message.branch')}</span>
-            </div>
-          )}
-          <div className="bg-primary-fixed text-on-primary-fixed px-lg py-md rounded-2xl rounded-tr-none shadow-sm">
-            <p className="font-body-md whitespace-pre-wrap">{message.content}</p>
-          </div>
-          <div className="flex gap-sm mt-xs justify-end">
-            <Button
-              aria-label={t('chat.message.branch.aria')}
-              onClick={handleBranch}
-              disabled={isBranching || !currentSessionId}
-              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors"
-              title={t('chat.message.branch.button')}
-            >
-              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
-                {isBranching ? 'hourglass_empty' : 'fork_right'}
-              </span>
-            </Button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex gap-md max-w-[90%]">
-      <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-md">
-        <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>
-      </div>
-      <div className="space-y-md flex-1">
-        <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm">
-          <div className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{message.content}</ReactMarkdown>
-          </div>
-          {message.tool_calls && message.tool_calls.length > 0 && (
-            <div className="mt-md space-y-sm">
-              {message.tool_calls.map(tc => (
-                <ToolCallDisplay key={tc.tool_use_id} toolCall={tc} onViewDiff={onViewDiff} />
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="flex gap-sm">
-          <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
-            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
-          </Button>
-          <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
-            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
-          </Button>
-          <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
-            <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
-          </Button>
-        </div>
-      </div>
-    </div>
-  )
-});
-
 const HighlightText = memo(function HighlightText({ text, query }: { text: string; query: string }) {
   if (!query) return <>{text}</>
   const idx = text.toLowerCase().indexOf(query.toLowerCase())
@@ -788,65 +689,5 @@ const HighlightText = memo(function HighlightText({ text, query }: { text: strin
       <mark className="bg-primary/20 text-inherit rounded-sm px-[1px]">{text.slice(idx, idx + query.length)}</mark>
       {text.slice(idx + query.length)}
     </>
-  )
-});
-
-const FILE_MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'str_replace_editor', 'replace'])
-
-function extractFilePath(toolName: string, input: unknown): string | null {
-  if (!input || typeof input !== 'object') return null
-  const obj = input as Record<string, unknown>
-  const raw = typeof obj.path === 'string' ? obj.path
-    : typeof obj.file_path === 'string' ? obj.file_path
-    : typeof obj.filePath === 'string' ? obj.filePath
-    : null
-  if (!raw) return null
-  return FILE_MUTATING_TOOLS.has(toolName) ? raw : null
-}
-
-const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewDiff }: { toolCall: ToolCall; onViewDiff: (path: string) => void }) {
-  const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
-  const [expanded, setExpanded] = useState(false)
-  const statusIcon = toolCall.status === 'running' ? 'hourglass_empty' : toolCall.status === 'error' ? 'error' : 'check_circle'
-  const statusColor = toolCall.status === 'running' ? 'text-secondary' : toolCall.status === 'error' ? 'text-error' : 'text-tertiary'
-  const filePath = extractFilePath(toolCall.tool_name, toolCall.tool_input)
-  const canDiff = filePath != null && toolCall.status === 'completed' && !toolCall.is_error
-
-  return (
-    <div className="p-sm bg-surface-container-low rounded-xl border border-outline-variant/10">
-      <div className="flex items-center gap-sm cursor-pointer" onClick={() => setExpanded(!expanded)}>
-        <span className={`material-symbols-outlined text-[16px] ${statusColor} ${toolCall.status === 'running' ? 'animate-spin' : ''}`}>{statusIcon}</span>
-        <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
-        {canDiff && (
-          <button
-            type="button"
-            aria-label={intl.formatMessage({ id: 'chat.message.diff.aria' }, { path: filePath })}
-            className="flex items-center gap-xs px-xs py-[2px] rounded-md text-tertiary hover:bg-tertiary-container/40 text-[11px] cursor-pointer"
-            onClick={(e) => { e.stopPropagation(); onViewDiff(filePath!) }}
-          >
-            <span className="material-symbols-outlined text-[14px]">difference</span>
-            {t('chat.message.diff')}
-          </button>
-        )}
-        <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{expanded ? 'expand_less' : 'expand_more'}</span>
-      </div>
-      {expanded && (
-        <div className="mt-sm space-y-xs">
-          {toolCall.tool_input ? (
-            <pre className="text-body-sm text-on-surface-variant bg-surface-container p-sm rounded-lg overflow-x-auto max-h-[200px]">{JSON.stringify(toolCall.tool_input ?? null, null, 2)}</pre>
-          ) : null}
-          {toolCall.result && (
-            toolCall.is_error ? (
-              <pre className="text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px] bg-error/5 text-error">{toolCall.result}</pre>
-            ) : (
-              <div className="text-body-sm p-sm rounded-lg overflow-x-auto max-h-[200px] bg-surface-container text-on-surface-variant prose prose-sm max-w-none prose-pre:bg-surface-container-lowest prose-pre:p-sm prose-pre:rounded prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{toolCall.result}</ReactMarkdown>
-              </div>
-            )
-          )}
-        </div>
-      )}
-    </div>
   )
 });

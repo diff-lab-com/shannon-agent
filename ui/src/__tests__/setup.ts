@@ -16,6 +16,7 @@ vi.mock('@testing-library/react', async () => {
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
+  convertFileSrc: (path: string) => `asset://localhost/${path.replace(/^\//, '')}`,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
