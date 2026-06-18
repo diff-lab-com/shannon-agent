@@ -75,7 +75,7 @@ pub struct AppState {
     /// Query engine configuration.
     qe_config: Arc<RwLock<shannon_core::query_engine::QueryEngineConfig>>,
     /// Desktop config (persisted).
-    desktop_config: Arc<RwLock<DesktopConfig>>,
+    pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
     /// Pending permission requests (request_id -> sender).
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     /// Session metadata for session list.
@@ -234,6 +234,10 @@ fn detect_media_type(path: &str) -> Option<String> {
 }
 
 /// Read file and convert to base64, returning (base64_string, media_type).
+///
+/// Security: `path` must already be validated by the caller — see
+/// `validate_attachment_path`. This helper does no path checking on its own
+/// because callers sometimes pass already-canonicalized paths.
 fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
     use std::fs;
@@ -442,6 +446,8 @@ pub async fn send_message(
 
     // Add user message
     let now = chrono_timestamp();
+    // Resolve working directory once for attachment-path validation below.
+    let attachment_working_dir = resolve_working_dir(&state).await;
     let attachments = file_paths.and_then(|paths| {
         if paths.is_empty() {
             None
@@ -450,21 +456,33 @@ pub async fn send_message(
                 paths
                     .into_iter()
                     .filter_map(|path| {
-                        std::path::Path::new(&path)
+                        // Security: reject any attachment path that resolves
+                        // outside the working directory. A compromised
+                        // frontend must not be able to exfiltrate
+                        // `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`,
+                        // or any other sensitive file via the attachment
+                        // pipeline.
+                        let canonical = crate::resolve_path_in_working_dir(
+                            &path,
+                            &attachment_working_dir,
+                        )
+                        .ok()?;
+                        let canonical_str = canonical.to_string_lossy().into_owned();
+                        std::path::Path::new(&canonical)
                             .file_name()
                             .and_then(|name| name.to_str())
                             .and_then(|name_str| {
-                                std::fs::metadata(&path).ok().and_then(|meta| {
+                                std::fs::metadata(&canonical).ok().and_then(|meta| {
                                     // Try to read file and convert to base64 for images
-                                    file_to_base64(&path).ok().map(|(base64_data, media_type)| {
-                                        FileAttachment {
+                                    file_to_base64(&canonical_str).ok().map(
+                                        |(base64_data, media_type)| FileAttachment {
                                             name: name_str.to_string(),
-                                            path: path.clone(),
+                                            path: canonical_str.clone(),
                                             size: meta.len(),
                                             media_type: Some(media_type),
                                             base64_data: Some(base64_data),
-                                        }
-                                    })
+                                        },
+                                    )
                                 })
                             })
                     })
@@ -3087,21 +3105,27 @@ fn provider_from_str(s: &str) -> shannon_core::api::types::LlmProvider {
 /// Apply diff with hunk actions.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
-pub async fn apply_diff(file_path: String, hunks: Vec<HunkAction>) -> Result<(), String> {
+pub async fn apply_diff(
+    state: tauri::State<'_, AppState>,
+    file_path: String,
+    hunks: Vec<HunkAction>,
+) -> Result<(), String> {
     use std::fs;
     use std::io::Write;
 
-    // Validate file path — prevent path traversal
-    let path = std::path::Path::new(&file_path);
-    if file_path.contains("..") {
-        return Err("Invalid file path: path traversal not allowed".into());
-    }
+    // Security: validate the file path is inside the working directory. The
+    // previous `contains("..")` check was insufficient — it allowed absolute
+    // paths like `/etc/hosts`, and did not catch symlinks that escape the
+    // workspace. Canonicalize + starts_with closes all three holes at once.
+    let working_dir = resolve_working_dir(&state).await;
+    let path = crate::resolve_path_in_working_dir(&file_path, &working_dir)?;
     if !path.is_file() {
-        return Err(format!("File not found: {}", file_path));
+        return Err(format!("File not found: {}", path.display()));
     }
+    let file_path = path.to_string_lossy().into_owned();
 
     // Read current file content
-    let content = fs::read_to_string(&file_path)
+    let content = fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
 
     let mut lines: Vec<&str> = content.lines().collect();
@@ -5259,4 +5283,85 @@ mod tests {
                 crate::extensions::types::TrustLevel::Verified => {}
             }
         }
+    }
+
+    // --- Security hardening tests (audit issues #1, #2, #4, #10) ---
+
+    #[test]
+    fn resolve_path_in_working_dir_accepts_inside_relative() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        let file = sub.join("a.rs");
+        std::fs::write(&file, "x").unwrap();
+
+        let resolved = crate::resolve_path_in_working_dir(
+            "sub/a.rs",
+            tmp.path(),
+        )
+        .expect("relative path inside working dir should resolve");
+        assert_eq!(resolved, file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_path_in_working_dir_accepts_inside_absolute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("a.rs");
+        std::fs::write(&file, "x").unwrap();
+
+        let resolved = crate::resolve_path_in_working_dir(
+            &file.to_string_lossy(),
+            tmp.path(),
+        )
+        .expect("absolute path inside working dir should resolve");
+        assert_eq!(resolved, file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_path_in_working_dir_rejects_dotdot_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Create a sibling directory *outside* the working dir (same parent).
+        let parent = tmp.path().parent().unwrap().to_path_buf();
+        let sibling = parent.join("shannon_test_sibling_target");
+        let _ = std::fs::create_dir(&sibling);
+        let target = sibling.join("secret.txt");
+        std::fs::write(&target, "secret").ok();
+
+        // `../shannon_test_sibling_target/secret.txt` escapes the working dir.
+        let rel = "../shannon_test_sibling_target/secret.txt";
+        let err = crate::resolve_path_in_working_dir(rel, tmp.path())
+            .expect_err("path traversal via .. must be rejected");
+        assert!(
+            err.contains("outside"),
+            "expected 'outside' in error, got: {err}"
+        );
+
+        // Cleanup the sibling we created outside the tempdir.
+        let _ = std::fs::remove_dir_all(&sibling);
+    }
+
+    #[test]
+    fn resolve_path_in_working_dir_rejects_absolute_outside_path() {
+        // Security #10 regression: `apply_diff`'s old `contains("..")` check
+        // let `/etc/hosts` through. The new helper must reject it.
+        let tmp = tempfile::tempdir().unwrap();
+        let err = crate::resolve_path_in_working_dir("/etc/hosts", tmp.path())
+            .expect_err("absolute path outside working dir must be rejected");
+        // On Linux /etc/hosts exists, so we expect the "outside" error. On
+        // other platforms it may be "not found" — either is a valid rejection.
+        assert!(
+            err.contains("outside") || err.contains("not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_path_in_working_dir_rejects_missing_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = crate::resolve_path_in_working_dir(
+            "does_not_exist.rs",
+            tmp.path(),
+        )
+        .expect_err("missing path should fail canonicalize");
+        assert!(err.contains("not found"));
     }

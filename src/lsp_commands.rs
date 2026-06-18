@@ -12,12 +12,60 @@
 //! For applying, the frontend sends back the chosen action; we apply its
 //! `WorkspaceEdit` to disk via simple text replacements.
 
+use crate::resolve_path_in_working_dir;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::timeout;
 
 const LSP_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Allow-list of LSP server binaries that the frontend may ask us to spawn.
+/// This mirrors `DEFAULT_DIAGNOSTICS_SERVERS` in
+/// `ui/src/lib/tauri-api.ts`. A compromised frontend cannot bypass this by
+/// passing an arbitrary absolute path: the basename (or full path) of
+/// `server_cmd` must match one of these entries.
+const ALLOWED_LSP_SERVERS: &[&str] = &[
+    "rust-analyzer",
+    "typescript-language-server",
+    "gopls",
+    "pylsp",
+];
+
+/// Validate that `server_cmd` resolves to one of the allow-listed binaries.
+/// Accepts both bare names (`rust-analyzer`, resolved via PATH by the LSP
+/// client) and absolute paths whose file name matches an allowed entry.
+fn validate_lsp_server(server_cmd: &str) -> Result<(), String> {
+    let basename = Path::new(server_cmd)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    let is_allowed = ALLOWED_LSP_SERVERS.iter().any(|allowed| {
+        // Direct match (bare name) or basename match (absolute path).
+        *allowed == server_cmd || *allowed == basename
+    });
+    if is_allowed {
+        Ok(())
+    } else {
+        Err(format!(
+            "server_cmd '{server_cmd}' is not in the allow-list (allowed: {})",
+            ALLOWED_LSP_SERVERS.join(", ")
+        ))
+    }
+}
+
+/// Resolve the working directory for path validation. Prefers the persisted
+/// desktop config `working_dir`, falls back to the process cwd. Used by IPC
+/// commands that take file paths from the frontend.
+async fn resolve_working_dir(state: &crate::commands::AppState) -> PathBuf {
+    let cfg = state.desktop_config.read().await;
+    cfg.working_dir
+        .clone()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+        })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodeActionDto {
@@ -51,7 +99,27 @@ pub struct CodeActionRequest {
 /// of action DTOs the frontend can render as quick-fix buttons.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
-pub async fn lsp_code_actions(req: CodeActionRequest) -> Result<CodeActionsResponse, String> {
+pub async fn lsp_code_actions(
+    state: tauri::State<'_, crate::commands::AppState>,
+    req: CodeActionRequest,
+) -> Result<CodeActionsResponse, String> {
+    let working_dir = resolve_working_dir(&state).await;
+    lsp_code_actions_inner(&working_dir, req).await
+}
+
+/// Test- and reuse-friendly inner: takes an explicit working directory so it
+/// can be exercised without a `tauri::State`.
+pub async fn lsp_code_actions_inner(
+    working_dir: &Path,
+    req: CodeActionRequest,
+) -> Result<CodeActionsResponse, String> {
+    // Defense-in-depth: validate the server binary against an allow-list
+    // before we spawn anything. The file path itself is also validated below
+    // during canonicalize + LspClient open.
+    validate_lsp_server(&req.server_cmd)?;
+    // Validate the file path is inside the working directory before spawning
+    // the LSP server against it.
+    resolve_path_in_working_dir(&req.file_path, working_dir)?;
     timeout(LSP_TIMEOUT, run_code_actions(req))
         .await
         .map_err(|_| format!("LSP request timed out after {}s", LSP_TIMEOUT.as_secs()))?
@@ -140,9 +208,24 @@ async fn run_code_actions(req: CodeActionRequest) -> Result<CodeActionsResponse,
 /// Apply a code action's workspace edit to disk. Currently supports only
 /// `TextEdit` entries against the document the diagnostic came from. Other
 /// resource changes (renames, creates, deletes) are skipped with a log line.
+///
+/// Security: every resource URI in the edit payload is validated to be
+/// inside the working directory before any file is read or written.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
-pub async fn apply_code_action(edit: serde_json::Value) -> Result<u32, String> {
+pub async fn apply_code_action(
+    state: tauri::State<'_, crate::commands::AppState>,
+    edit: serde_json::Value,
+) -> Result<u32, String> {
+    let working_dir = resolve_working_dir(&state).await;
+    apply_code_action_inner(&working_dir, edit).await
+}
+
+/// Test-friendly inner taking an explicit working directory.
+async fn apply_code_action_inner(
+    working_dir: &Path,
+    edit: serde_json::Value,
+) -> Result<u32, String> {
     // Parse minimal shape: { changes?: { [uri]: TextEdit[] } }
     let changes = edit
         .get("changes")
@@ -151,7 +234,9 @@ pub async fn apply_code_action(edit: serde_json::Value) -> Result<u32, String> {
 
     let mut applied = 0u32;
     for (uri, edits) in changes {
-        let path = uri_to_path(uri)?;
+        let raw_path = uri_to_path(uri)?;
+        // Validate the path is inside the working directory before touching it.
+        let path = resolve_path_in_working_dir(&raw_path.to_string_lossy(), working_dir)?;
         let content = std::fs::read_to_string(&path)
             .map_err(|e| format!("read {}: {e}", path.display()))?;
         // Apply edits in reverse order so offsets stay valid.
@@ -265,21 +350,38 @@ pub fn language_id_from_extension(ext: &str) -> String {
 /// Read a source file from disk and return its content plus a best-effort
 /// language id derived from the extension. Refuses paths that don't exist or
 /// aren't valid UTF-8.
+///
+/// Security: the path must resolve to a location inside the working
+/// directory. A compromised frontend cannot use this to exfiltrate
+/// `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`, or any other file
+/// outside the workspace.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
-pub async fn read_source_file(path: String) -> Result<SourceFileDto, String> {
-    let p = Path::new(&path);
-    if !p.is_file() {
-        return Err(format!("not a file: {path}"));
+pub async fn read_source_file(
+    state: tauri::State<'_, crate::commands::AppState>,
+    path: String,
+) -> Result<SourceFileDto, String> {
+    let working_dir = resolve_working_dir(&state).await;
+    read_source_file_inner(&working_dir, path).await
+}
+
+/// Test-friendly inner taking an explicit working directory.
+async fn read_source_file_inner(
+    working_dir: &Path,
+    path: String,
+) -> Result<SourceFileDto, String> {
+    let canonical = resolve_path_in_working_dir(&path, working_dir)?;
+    if !canonical.is_file() {
+        return Err(format!("not a file: {}", canonical.display()));
     }
-    let content = std::fs::read_to_string(p)
-        .map_err(|e| format!("read {}: {e}", p.display()))?;
-    let ext = p
+    let content = std::fs::read_to_string(&canonical)
+        .map_err(|e| format!("read {}: {e}", canonical.display()))?;
+    let ext = canonical
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
     Ok(SourceFileDto {
-        path: path.clone(),
+        path: canonical.to_string_lossy().into_owned(),
         content,
         language_id: language_id_from_extension(ext),
     })
@@ -293,8 +395,22 @@ pub async fn read_source_file(path: String) -> Result<SourceFileDto, String> {
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn run_file_diagnostics(
+    state: tauri::State<'_, crate::commands::AppState>,
     req: FileDiagnosticsRequest,
 ) -> Result<FileDiagnosticsResponse, String> {
+    let working_dir = resolve_working_dir(&state).await;
+    run_file_diagnostics_inner(&working_dir, req).await
+}
+
+/// Test-friendly inner taking an explicit working directory.
+async fn run_file_diagnostics_inner(
+    working_dir: &Path,
+    req: FileDiagnosticsRequest,
+) -> Result<FileDiagnosticsResponse, String> {
+    // Validate the LSP server binary against the allow-list.
+    validate_lsp_server(&req.server_cmd)?;
+    // Validate the file path is inside the working directory before spawning.
+    resolve_path_in_working_dir(&req.file_path, working_dir)?;
     timeout(LSP_TIMEOUT, run_diagnostics(req))
         .await
         .map_err(|_| format!("diagnostics timed out after {}s", LSP_TIMEOUT.as_secs()))?
@@ -389,9 +505,13 @@ mod tests {
 
     #[test]
     fn apply_code_action_rejects_missing_changes_field() {
+        let tmp = tempfile::tempdir().unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let err = rt
-            .block_on(apply_code_action(serde_json::json!({})))
+            .block_on(apply_code_action_inner(
+                tmp.path(),
+                serde_json::json!({}),
+            ))
             .unwrap_err();
         assert!(err.contains("changes"));
     }
@@ -418,7 +538,9 @@ mod tests {
         });
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let count = rt.block_on(apply_code_action(edit)).unwrap();
+        let count = rt
+            .block_on(apply_code_action_inner(tmp.path(), edit))
+            .unwrap();
         assert_eq!(count, 1);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "let _x = 1;\n");
     }
@@ -454,7 +576,9 @@ mod tests {
         });
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let count = rt.block_on(apply_code_action(edit)).unwrap();
+        let count = rt
+            .block_on(apply_code_action_inner(tmp.path(), edit))
+            .unwrap();
         assert_eq!(count, 2);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "X\nb\nZ\n");
     }
@@ -479,7 +603,7 @@ mod tests {
         });
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(apply_code_action(edit)).unwrap();
+        rt.block_on(apply_code_action_inner(tmp.path(), edit)).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "world\n");
     }
 
@@ -505,13 +629,16 @@ mod tests {
         });
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let count = rt.block_on(apply_code_action(edit)).unwrap();
+        let count = rt
+            .block_on(apply_code_action_inner(tmp.path(), edit))
+            .unwrap();
         assert_eq!(count, 0, "multi-line edit skipped");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nb\n");
     }
 
     #[test]
     fn apply_code_action_errors_on_missing_file() {
+        let tmp = tempfile::tempdir().unwrap();
         let edit = serde_json::json!({
             "changes": {
                 "file:///nonexistent/path/lib.rs": [{
@@ -524,8 +651,42 @@ mod tests {
             }
         });
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = rt.block_on(apply_code_action(edit)).unwrap_err();
-        assert!(err.contains("read"));
+        let err = rt
+            .block_on(apply_code_action_inner(tmp.path(), edit))
+            .unwrap_err();
+        // Missing file fails canonicalize in path validation, before any
+        // read attempt.
+        assert!(err.contains("not found") || err.contains("outside"));
+    }
+
+    #[test]
+    fn apply_code_action_rejects_path_outside_working_dir() {
+        // Security #2: a workspace edit payload pointing at /etc/hosts must
+        // be rejected, not written.
+        let tmp = tempfile::tempdir().unwrap();
+        let edit = serde_json::json!({
+            "changes": {
+                "file:///etc/hosts": [{
+                    "range": {
+                        "start": {"line": 0, "character": 0},
+                        "end": {"line": 0, "character": 1}
+                    },
+                    "newText": "x"
+                }]
+            }
+        });
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(apply_code_action_inner(tmp.path(), edit))
+            .unwrap_err();
+        // Path validation runs before any read; /etc/hosts exists on Linux
+        // but is outside the tempdir, so we expect the "outside" error.
+        // (On systems where /etc/hosts doesn't exist, we'd get "not found"
+        // instead — either is acceptable as a rejection.)
+        assert!(
+            err.contains("outside") || err.contains("not found"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -557,7 +718,10 @@ mod tests {
         std::fs::write(&path, "fn main() {}\n").unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let dto = rt
-            .block_on(read_source_file(path.to_string_lossy().into_owned()))
+            .block_on(read_source_file_inner(
+                tmp.path(),
+                path.to_string_lossy().into_owned(),
+            ))
             .unwrap();
         assert_eq!(dto.content, "fn main() {}\n");
         assert_eq!(dto.language_id, "rust");
@@ -565,25 +729,51 @@ mod tests {
 
     #[test]
     fn read_source_file_rejects_missing_path() {
+        let tmp = tempfile::tempdir().unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let err = rt
-            .block_on(read_source_file("/no/such/file.rs".into()))
+            .block_on(read_source_file_inner(
+                tmp.path(),
+                "/no/such/file.rs".into(),
+            ))
             .unwrap_err();
-        assert!(err.contains("not a file"));
+        // The validation helper canonicalizes first; missing paths fail there.
+        assert!(err.contains("not found"));
     }
 
     #[test]
     fn read_source_file_rejects_directory() {
         let tmp = tempfile::tempdir().unwrap();
+        let subdir = tmp.path().join("somedir");
+        std::fs::create_dir(&subdir).unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let err = rt
-            .block_on(read_source_file(tmp.path().to_string_lossy().into_owned()))
+            .block_on(read_source_file_inner(
+                tmp.path(),
+                subdir.to_string_lossy().into_owned(),
+            ))
             .unwrap_err();
         assert!(err.contains("not a file"));
     }
 
     #[test]
+    fn read_source_file_rejects_path_outside_working_dir() {
+        // Security #1: attempting to read /etc/passwd must be rejected,
+        // regardless of whether the file exists.
+        let tmp = tempfile::tempdir().unwrap();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(read_source_file_inner(tmp.path(), "/etc/passwd".into()))
+            .unwrap_err();
+        assert!(
+            err.contains("outside") || err.contains("not found"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn run_file_diagnostics_rejects_missing_path() {
+        let tmp = tempfile::tempdir().unwrap();
         let req = FileDiagnosticsRequest {
             file_path: "/no/such/file.rs".into(),
             server_cmd: "rust-analyzer".into(),
@@ -592,8 +782,75 @@ mod tests {
             content: "fn main() {}".into(),
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = rt.block_on(run_file_diagnostics(req)).unwrap_err();
-        assert!(err.contains("canonicalize") || err.contains("timed out"));
+        let err = rt
+            .block_on(run_file_diagnostics_inner(tmp.path(), req))
+            .unwrap_err();
+        // The validation helper canonicalizes first; missing paths fail there
+        // before the LSP timeout can fire.
+        assert!(
+            err.contains("not found") || err.contains("outside"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn run_file_diagnostics_rejects_disallowed_server_cmd() {
+        // Security #3: an arbitrary server_cmd must be rejected, even if the
+        // file path is valid.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("demo.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let req = FileDiagnosticsRequest {
+            file_path: path.to_string_lossy().into_owned(),
+            server_cmd: "/bin/sh".into(),
+            server_args: vec!["-c".into(), "echo pwned".into()],
+            language_id: "rust".into(),
+            content: "fn main() {}".into(),
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(run_file_diagnostics_inner(tmp.path(), req))
+            .unwrap_err();
+        assert!(err.contains("allow-list"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn lsp_code_actions_rejects_disallowed_server_cmd() {
+        // Security #3: same check on the lsp_code_actions entry point.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("demo.rs");
+        std::fs::write(&path, "fn main() {}\n").unwrap();
+        let req = CodeActionRequest {
+            file_path: path.to_string_lossy().into_owned(),
+            server_cmd: "/usr/bin/python3".into(),
+            server_args: vec![],
+            start_line: 0,
+            start_character: 0,
+            end_line: 0,
+            end_character: 1,
+            language_id: "rust".into(),
+            diagnostic_messages: vec!["unused".into()],
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(lsp_code_actions_inner(tmp.path(), req))
+            .unwrap_err();
+        assert!(err.contains("allow-list"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_lsp_server_accepts_bare_names_and_absolute_paths() {
+        // Bare names listed in the allow-list are OK.
+        assert!(validate_lsp_server("rust-analyzer").is_ok());
+        assert!(validate_lsp_server("gopls").is_ok());
+        // Absolute paths whose basename matches an allow-list entry are OK.
+        assert!(validate_lsp_server("/usr/bin/rust-analyzer").is_ok());
+        assert!(validate_lsp_server("/home/user/.cargo/bin/rust-analyzer").is_ok());
+        // Anything else is rejected.
+        assert!(validate_lsp_server("/bin/sh").is_err());
+        assert!(validate_lsp_server("python3").is_err());
+        assert!(validate_lsp_server("/usr/bin/python3").is_err());
+        assert!(validate_lsp_server("").is_err());
     }
 
     #[test]
