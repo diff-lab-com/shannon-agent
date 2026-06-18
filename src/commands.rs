@@ -1943,6 +1943,15 @@ async fn branch_session_internal(
     let new_title = format!("Branch of {}", parent_title);
     let now = chrono_timestamp();
 
+    if branch_point >= session_data.messages.len() {
+        return Err(format!(
+            "Branch point {} out of bounds: session has {} messages (valid range: 0-{})",
+            branch_point,
+            session_data.messages.len(),
+            session_data.messages.len().saturating_sub(1)
+        ));
+    }
+
     // Slice messages to include only up to branch point
     let branch_messages: Vec<shannon_core::api::Message> = session_data.messages
         .iter()
@@ -4698,5 +4707,53 @@ mod tests {
         // Verify working_dir is inherited
         assert_eq!(branch_result.working_dir, Some("/home/user/project".into()));
         assert_eq!(branch_result.parent_id, Some(parent_id_str));
+    }
+
+    #[tokio::test]
+    async fn test_branch_session_rejects_out_of_bounds_branch_point() {
+        let state = AppState::new();
+
+        let parent_id = uuid::Uuid::new_v4();
+        let parent_id_str = parent_id.to_string();
+        let messages = vec![shannon_core::api::Message {
+            role: "user".into(),
+            content: shannon_core::api::MessageContent::Text("only message".into()),
+        }];
+
+        state
+            .state_manager
+            .save_session(
+                &parent_id,
+                &messages,
+                &shannon_core::state::SessionPersistMetadata {
+                    model: "claude-3".into(),
+                    turn_count: 0,
+                    title: Some("Parent".into()),
+                    ..Default::default()
+                },
+            )
+            .expect("save parent");
+
+        state.sessions.lock().await.push(SessionMeta {
+            id: parent_id_str.clone(),
+            title: "Parent".into(),
+            created_at: 1700000000,
+            message_count: 1,
+            working_dir: None,
+            parent_id: None,
+            branch_point: None,
+        });
+
+        // branch_point == len() should fail
+        let err = branch_session_internal(&state, None, parent_id_str.clone(), 1)
+            .await
+            .expect_err("branch at len() should fail");
+        assert!(err.contains("out of bounds"));
+
+        // branch_point >> len() should also fail
+        let err = branch_session_internal(&state, None, parent_id_str, usize::MAX)
+            .await
+            .expect_err("branch at usize::MAX should fail");
+        assert!(err.contains("out of bounds"));
     }
 }
