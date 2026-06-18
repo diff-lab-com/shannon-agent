@@ -104,6 +104,10 @@ export default function Chat() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [quickFixOpen, setQuickFixOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
+  const [contextPanelOpen, setContextPanelOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia('(min-width: 1280px)').matches
+  })
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -396,17 +400,11 @@ export default function Chat() {
 
       {/* Main Chat Canvas */}
       <section className="flex-1 flex flex-col relative bg-surface-container-lowest/40 overflow-hidden">
-        {/* Ambient backdrop — subtle radial accents for depth without distraction */}
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-60">
-          <div className="absolute -top-32 -right-32 w-96 h-96 rounded-full bg-primary/5 blur-3xl"></div>
-          <div className="absolute top-1/3 -left-32 w-80 h-80 rounded-full bg-tertiary/5 blur-3xl"></div>
-        </div>
-
         {/* Header strip — session title + working directory breadcrumb */}
         <header
           role="banner"
           aria-label={t('chat.header.aria')}
-          className="relative shrink-0 flex items-center gap-md px-lg py-sm border-b border-outline-variant/15 bg-gradient-to-r from-surface-container-lowest/80 via-surface-container-low/40 to-surface-container-lowest/80 backdrop-blur-sm"
+          className="relative shrink-0 flex items-center gap-md px-lg py-sm bg-surface/60 backdrop-blur-sm border-b border-outline-variant/15"
         >
           <div className="flex items-center gap-sm min-w-0 flex-1">
             <span className="material-symbols-outlined text-primary text-[20px] shrink-0">forum</span>
@@ -425,6 +423,17 @@ export default function Chat() {
               <span className="text-label-sm text-on-surface-variant font-mono truncate max-w-[160px]">{status.provider}/{status.model}</span>
             </div>
           )}
+          <button
+            type="button"
+            onClick={() => setContextPanelOpen(v => !v)}
+            className="p-xs rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0"
+            title="Toggle context panel"
+            aria-label={t('chat.context.aria')}
+            aria-expanded={contextPanelOpen}
+            aria-pressed={contextPanelOpen}
+          >
+            <span className="material-symbols-outlined text-[20px]">{contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}</span>
+          </button>
         </header>
 
         {/* Message Area */}
@@ -491,7 +500,7 @@ export default function Chat() {
 
         {/* Input Bar */}
         <div
-          className="absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg bg-gradient-to-t from-background via-background/90 to-transparent transition-colors"
+          className="absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg bg-gradient-to-t from-background to-background/0 transition-colors"
         >
           <div className="max-w-4xl mx-auto relative group">
             <div className="absolute inset-0 bg-primary/10 blur-xl rounded-full opacity-50 group-focus-within:opacity-100 transition-opacity duration-500"></div>
@@ -589,8 +598,17 @@ export default function Chat() {
         </div>
       )}
 
-      {/* Right Sidebar - Context */}
-      <aside aria-label={t('chat.context.aria')} className="w-[300px] border-l border-outline-variant/10 glass-panel shrink-0 p-lg overflow-y-auto bg-surface-container-lowest/50 hidden lg:block">
+      {/* Right Sidebar - Context (collapsible) */}
+      <aside
+        aria-label={t('chat.context.aria')}
+        className="glass-panel shrink-0 overflow-y-auto p-lg border-l border-outline-variant/10 bg-surface-container-lowest/50 transition-all duration-300 ease-in-out"
+        style={{
+          width: contextPanelOpen ? 300 : 0,
+          padding: contextPanelOpen ? undefined : 0,
+          borderWidth: contextPanelOpen ? undefined : 0,
+          opacity: contextPanelOpen ? 1 : 0,
+        }}
+      >
         <div className="space-y-xl">
           {/* Token Usage */}
           {usage && (

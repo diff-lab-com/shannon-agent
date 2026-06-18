@@ -2,12 +2,67 @@ import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import * as api from '@/lib/tauri-api'
 import SlackWizard from './notifications/SlackWizard'
 import TelegramWizard from './notifications/TelegramWizard'
 import EmailWizard from './notifications/EmailWizard'
 
 type ChannelType = 'slack' | 'telegram' | 'email' | null
+
+/** Channel preset id — stored as the webhook `template` discriminator. */
+type WebhookPreset = 'feishu' | 'dingtalk' | 'wechat' | 'slack' | 'custom'
+
+const PRESET_IDS: WebhookPreset[] = ['feishu', 'dingtalk', 'wechat', 'slack', 'custom']
+
+const PRESET_META: Record<
+  WebhookPreset,
+  { icon: string; urlPlaceholder: string; urlHintKey: string; labelKey: string }
+> = {
+  feishu: {
+    icon: 'forum',
+    urlPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/send/<token>',
+    urlHintKey: 'settings.notifications.preset.urlHint.feishu',
+    labelKey: 'settings.notifications.preset.feishu',
+  },
+  dingtalk: {
+    icon: 'notifications',
+    urlPlaceholder: 'https://oapi.dingtalk.com/robot/send?access_token=<token>',
+    urlHintKey: 'settings.notifications.preset.urlHint.dingtalk',
+    labelKey: 'settings.notifications.preset.dingtalk',
+  },
+  wechat: {
+    icon: 'chat',
+    urlPlaceholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<key>',
+    urlHintKey: 'settings.notifications.preset.urlHint.wechat',
+    labelKey: 'settings.notifications.preset.wechat',
+  },
+  slack: {
+    icon: 'tag',
+    urlPlaceholder: 'https://hooks.slack.com/services/...',
+    urlHintKey: 'settings.notifications.preset.urlHint.slack',
+    labelKey: 'settings.notifications.preset.slack',
+  },
+  custom: {
+    icon: 'tune',
+    urlPlaceholder: 'https://example.com/webhook',
+    urlHintKey: 'settings.notifications.url',
+    labelKey: 'settings.notifications.preset.custom',
+  },
+}
+
+/** Map a stored template string back to its preset id. Unknown values → 'custom'. */
+function presetFromTemplate(template: string | undefined): WebhookPreset {
+  if (!template) return 'custom'
+  if (template.startsWith('custom:')) return 'custom'
+  return PRESET_IDS.includes(template as WebhookPreset) ? (template as WebhookPreset) : 'custom'
+}
 
 function WebhookSection() {
   const intl = useIntl()
@@ -18,6 +73,7 @@ function WebhookSection() {
   const [clearing, setClearing] = useState(false)
   const [url, setUrl] = useState('')
   const [template, setTemplate] = useState('raw')
+  const [preset, setPreset] = useState<WebhookPreset>('custom')
   const [customBody, setCustomBody] = useState('')
   const [secret, setSecret] = useState('')
   const [timeoutMs, setTimeoutMs] = useState(5000)
@@ -31,6 +87,7 @@ function WebhookSection() {
         if (cancelled || !dto) return
         setUrl(dto.url)
         setTemplate(dto.template || 'raw')
+        setPreset(presetFromTemplate(dto.template))
         if (dto.template?.startsWith('custom:')) setCustomBody(dto.template.slice('custom:'.length))
         setSecret(dto.secret ?? '')
         setTimeoutMs(dto.timeout_ms || 5000)
@@ -45,6 +102,14 @@ function WebhookSection() {
     }
   }, [])
 
+  const handlePresetChange = (next: WebhookPreset) => {
+    setPreset(next)
+    // Only pre-fill the URL when the user hasn't typed one yet.
+    if (!url.trim()) {
+      setUrl(PRESET_META[next].urlPlaceholder)
+    }
+  }
+
   const handleSave = async () => {
     if (!url.trim()) {
       toast.error(t('settings.notifications.error.urlRequired'))
@@ -52,9 +117,17 @@ function WebhookSection() {
     }
     setSaving(true)
     try {
+      // Encode the selected preset as the template discriminator. Preserves the
+      // legacy `custom:<body>` shape for the Custom preset.
+      const encodedTemplate =
+        preset === 'custom'
+          ? template.startsWith('custom:')
+            ? template
+            : `custom:${customBody}`
+          : preset
       await api.saveWebhookConfig({
         url: url.trim(),
-        template: template.startsWith('custom:') ? template : `custom:${customBody}`,
+        template: encodedTemplate,
         secret: secret.trim() || null,
         timeout_ms: timeoutMs,
         include_body: includeBody,
@@ -73,6 +146,7 @@ function WebhookSection() {
       await api.clearWebhookConfig()
       setUrl('')
       setTemplate('raw')
+      setPreset('custom')
       setCustomBody('')
       setSecret('')
       setTimeoutMs(5000)
@@ -94,11 +168,43 @@ function WebhookSection() {
     )
   }
 
+  const presetMeta = PRESET_META[preset]
+
   return (
     <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
       <div>
         <h3 className="font-headline-md text-on-surface">{t('settings.notifications.webhook.title')}</h3>
         <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
+      </div>
+
+      <div>
+        <label
+          id="webhook-preset-label"
+          className="block font-label-lg text-on-surface mb-sm"
+        >
+          {t('settings.notifications.preset.label')}
+        </label>
+        <Select value={preset} onValueChange={(v) => handlePresetChange(v as WebhookPreset)}>
+          <SelectTrigger
+            aria-labelledby="webhook-preset-label"
+            className="w-full border-outline bg-surface text-on-surface"
+          >
+            <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">
+              {presetMeta.icon}
+            </span>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PRESET_IDS.map((id) => (
+              <SelectItem key={id} value={id}>
+                <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                  {PRESET_META[id].icon}
+                </span>
+                <span>{t(PRESET_META[id].labelKey)}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div>
@@ -110,9 +216,13 @@ function WebhookSection() {
           type="url"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://hooks.slack.com/services/..."
+          placeholder={presetMeta.urlPlaceholder}
+          aria-describedby="webhook-url-hint"
           className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
         />
+        <p id="webhook-url-hint" className="mt-xs text-on-surface-variant font-body-sm">
+          {t(presetMeta.urlHintKey)}
+        </p>
       </div>
 
       <div className="flex gap-sm pt-md">

@@ -184,10 +184,16 @@ describe('Plugins (marketplace browser)', () => {
     renderPlugins()
     await waitFor(() => expect(screen.getByText('Test Skill')).toBeInTheDocument())
 
-    const installButton = screen.getByText('Install')
-    fireEvent.click(installButton)
+    // Click the card's Install button — opens the InstallDialog.
+    fireEvent.click(screen.getByText('Install'))
 
-    expect(api.installSkillFromRepo).toHaveBeenCalledWith('Test Skill', 'test/skill', 'main')
+    // The dialog shows the repo; click its Install button (the last one in the DOM).
+    await waitFor(() => expect(screen.getByText('test/skill')).toBeInTheDocument())
+    fireEvent.click(screen.getAllByText('Install').at(-1)!)
+
+    await waitFor(() => {
+      expect(api.installSkillFromRepo).toHaveBeenCalledWith('Test Skill', 'test/skill', 'main')
+    })
   })
 
   it('dispatches shannon:extension-installed event after successful install', async () => {
@@ -210,8 +216,10 @@ describe('Plugins (marketplace browser)', () => {
     renderPlugins()
     await waitFor(() => expect(screen.getByText('Test Skill')).toBeInTheDocument())
 
-    const installButton = screen.getByText('Install')
-    fireEvent.click(installButton)
+    // Open the dialog, then click through to install.
+    fireEvent.click(screen.getByText('Install'))
+    await waitFor(() => expect(screen.getByText('test/skill')).toBeInTheDocument())
+    fireEvent.click(screen.getAllByText('Install').at(-1)!)
 
     await waitFor(() => {
       expect(eventSpy).toHaveBeenCalledTimes(1)

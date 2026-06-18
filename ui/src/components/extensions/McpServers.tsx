@@ -14,6 +14,84 @@ import {
 import type { McpServerInfo } from "@/types";
 
 /**
+ * Package metadata shipped by the MCP registry for one-click installs.
+ * Mirrors `extensions::RegistryPackage` on the Rust side. Declared locally
+ * because the shared `RegistryServer` interface in tauri-api.ts predates the
+ * `package` field; the runtime payload still includes it.
+ */
+interface RegistryPackage {
+  kind: string; // "npm" | "pip" | "docker" | …
+  name?: string;
+  registry_url?: string;
+  version?: string;
+}
+
+/**
+ * `RegistryServer` augmented with the optional `package` field that the
+ * backend serializes but the shared TS interface does not yet declare.
+ */
+type RegistryServerWithPackage = RegistryServer & { package?: RegistryPackage | null };
+
+const STDIO_MANUAL_FORM_ID = "mcp-stdio-manual-form";
+
+/**
+ * Build a stdio spec from registry package metadata. Returns `null` when the
+ * package kind is unknown or required fields (e.g. npm/pip/docker name) are
+ * missing — callers should fall back to the manual form.
+ */
+function buildSpecFromPackage(
+  serverName: string,
+  pkg: RegistryPackage | null | undefined,
+): StdioMcpSpecPayload | null {
+  if (!pkg) return null;
+  const name = pkg.name?.trim();
+  const versionSuffix = pkg.version?.trim() ? `@${pkg.version.trim()}` : "";
+  switch (pkg.kind) {
+    case "npm":
+      if (!name) return null;
+      return {
+        server_name: serverName,
+        command: "npx",
+        args: ["-y", versionSuffix ? `${name}${versionSuffix}` : name],
+        env: [],
+      };
+    case "pip":
+      if (!name) return null;
+      return {
+        server_name: serverName,
+        command: "uvx",
+        args: [name],
+        env: [],
+      };
+    case "docker":
+      if (!name) return null;
+      return {
+        server_name: serverName,
+        command: "docker",
+        args: ["run", "-i", "--rm", name],
+        env: [],
+      };
+    default:
+      return null;
+  }
+}
+
+/** Human-readable label for the package manager backing a one-click install. */
+function packageManagerLabel(pkg: RegistryPackage | null | undefined): string | null {
+  if (!pkg) return null;
+  switch (pkg.kind) {
+    case "npm":
+      return "npx";
+    case "pip":
+      return "uvx";
+    case "docker":
+      return "docker";
+    default:
+      return null;
+  }
+}
+
+/**
  * P2 MCP Servers tab — registry browser + .mcpb upload + manual stdio form.
  *
  * Three flows:
@@ -71,15 +149,39 @@ export default function McpServers() {
   }, []);
 
   async function handleInstall(server: RegistryServer) {
+    const serverWithPkg = server as RegistryServerWithPackage;
+    const spec = buildSpecFromPackage(server.name, serverWithPkg.package);
+    if (!spec) {
+      setFeedback({
+        id: server.id,
+        msg: intl.formatMessage({ id: "extensions.mcp.oneClick.noPackageMetadata" }),
+        ok: false,
+      });
+      document
+        .getElementById(STDIO_MANUAL_FORM_ID)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
     setBusyId(server.id);
     setFeedback(null);
     try {
-      // For P2: the backend resolver picks OAuth / .mcpb / stdio based on
-      // registry metadata. The UI calls install_mcp_stdio as a fallback for
-      // Tier-3 servers that lack a resolver — those need the manual form.
+      await installMcpStdio(spec);
       setFeedback({
         id: server.id,
-        msg: t("extensions.mcp.tier3Note"),
+        msg: intl.formatMessage(
+          { id: "extensions.mcp.oneClick.installSuccess" },
+          { name: server.name },
+        ),
+        ok: true,
+      });
+      refreshInstalled();
+    } catch (err) {
+      setFeedback({
+        id: server.id,
+        msg: intl.formatMessage(
+          { id: "extensions.mcp.oneClick.installFailed" },
+          { error: String(err) },
+        ),
         ok: false,
       });
     } finally {
@@ -220,6 +322,9 @@ function RegistrySection({
             const isBusy = busyId === server.id;
             const isInstalled = installedNames.has(server.name);
             const serverFeedback = feedback?.id === server.id ? feedback : null;
+            const pkgManager = packageManagerLabel(
+              (server as RegistryServerWithPackage).package,
+            );
             return (
               <div
                 key={server.id}
@@ -284,6 +389,25 @@ function RegistrySection({
                   >
                     {isBusy ? "…" : isInstalled ? t('extensions.mcp.installed') : t('extensions.mcp.install')}
                   </button>
+                  {pkgManager && !isInstalled && (
+                    <span
+                      className="inline-flex items-center text-on-surface-variant"
+                      title={intl.formatMessage(
+                        { id: "extensions.mcp.oneClick.autoInstallHint" },
+                        { packageManager: pkgManager },
+                      )}
+                    >
+                      <span
+                        className="material-symbols-outlined text-[16px] cursor-help"
+                        aria-label={intl.formatMessage(
+                          { id: "extensions.mcp.oneClick.autoInstallHint" },
+                          { packageManager: pkgManager },
+                        )}
+                      >
+                        help_outline
+                      </span>
+                    </span>
+                  )}
                 </div>
               </div>
             );
@@ -445,7 +569,10 @@ function StdioManualForm({
   }
 
   return (
-    <section className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/30">
+    <section
+      id={STDIO_MANUAL_FORM_ID}
+      className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/30 scroll-mt-md"
+    >
       <h3 className="text-label-lg font-bold text-on-surface mb-xs">{t('extensions.mcp.addStdioTitle')}</h3>
       <p className="text-label-sm text-on-surface-variant mb-sm">
         {t('extensions.mcp.manualDesc')}
