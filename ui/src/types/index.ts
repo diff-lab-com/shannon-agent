@@ -245,6 +245,32 @@ export interface InstalledAddonSummary {
   enabled: boolean
 }
 
+/// Tagged union mirroring Rust `CatalogSource`. Discriminated via `type`.
+export type CatalogSource =
+  | { type: 'mcp_registry'; publisher: string }
+  | { type: 'featured_vendor' }
+  | { type: 'git_hub_repo'; repo: string; ref_?: string | null }
+  | { type: 'custom'; url: string }
+  | { type: 'native' }
+
+/// One row in the marketplace catalog. Mirrors Rust `CatalogEntry`.
+export interface CatalogEntry {
+  id: string
+  kind: AddonKind
+  name: string
+  description: string
+  author?: string | null
+  version?: string | null
+  homepage_url?: string | null
+  license?: string | null
+  stars?: number | null
+  last_updated?: string | null
+  source: CatalogSource
+  trust: TrustLevel
+  metadata?: Record<string, unknown>
+  tags?: string[]
+}
+
 // --- Task Types ---
 
 export interface TaskItem {

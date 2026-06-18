@@ -2,6 +2,18 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.3.2 (2026-06-18) — plugin marketplace browser + 4 more data source adapters
+
+### Features
+
+- **D1 — Plugin marketplace browser.** Replaced the placeholder Plugins tab with a real catalog browser backed by the existing `list_plugin_marketplace` command. Cards render per entry (name, author, description, trust badge, stars, license, version, source). Filter chips group by kind (MCP / Skills / Agents / Data Sources / Plugins), the kind picker narrows the list, and the layout search input drives client-side text search across name/description/tags/source. Install button routes to the specialized tab per kind (e.g. MCP entries jump to MCP Servers, skills to Skills) since per-kind installers need their own forms. Typed `CatalogEntry` / `CatalogSource` / `TrustLevel` shared between Rust and TS via the existing extensions type surface. Full `en` + `zh-CN` parity for 22 new i18n keys.
+- **D2 — 4 more data source adapters.** Added Notion, Linear, GitHub Issues, and Jira to the native data source catalog. Each ships as a declarative `DataSourceAdapter` with install-form fields (token + optional default scope), surfaced automatically in the Extensions → Data Sources tab. Catalog now exposes 6 adapters total (Obsidian, Email IMAP, Notion, Linear, GitHub Issues, Jira).
+
+### Tests
+
+- 9 new UI tests for the marketplace browser (`Plugins.marketplace.test.tsx`): loading, empty, error, kind filtering, kind grouping, trust badges, license/version/stars rendering, homepage link, search-via-outlet-context.
+- 4 new Rust tests for the data source catalog: notion token field, jira required fields, snake_case serialization across all kinds, expanded adapter list assertion.
+
 ## v0.3.1 (2026-06-18) — full-text session search + keyboard shortcuts + test coverage
 
 ### Features

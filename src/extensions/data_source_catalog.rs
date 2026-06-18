@@ -5,9 +5,13 @@
 //! adapter-specific config (vault path, IMAP credentials) and writes the
 //! config to `~/.shannon/data-sources/<slug>.toml`.
 //!
-//! Two adapters ship today:
+//! Six adapters ship today:
 //! 1. **Obsidian Vault** — reads markdown notes from a local vault directory.
 //! 2. **Email (IMAP)** — connects to an IMAP server to read mailbox messages.
+//! 3. **Notion** — queries pages/databases via the Notion REST API.
+//! 4. **Linear** — queries issues via the Linear GraphQL API.
+//! 5. **GitHub Issues** — queries issues/PRs via the GitHub REST API.
+//! 6. **Jira** — queries issues via the Jira Cloud REST API.
 
 use serde::{Deserialize, Serialize};
 
@@ -19,6 +23,11 @@ use super::types::{AddonKind, CatalogEntry, CatalogSource, TrustLevel};
 pub enum DataSourceKind {
     Obsidian,
     EmailImap,
+    Notion,
+    Linear,
+    #[serde(rename = "github_issues")]
+    GitHubIssues,
+    Jira,
 }
 
 impl DataSourceKind {
@@ -26,6 +35,10 @@ impl DataSourceKind {
         match self {
             DataSourceKind::Obsidian => "obsidian",
             DataSourceKind::EmailImap => "email_imap",
+            DataSourceKind::Notion => "notion",
+            DataSourceKind::Linear => "linear",
+            DataSourceKind::GitHubIssues => "github_issues",
+            DataSourceKind::Jira => "jira",
         }
     }
 }
@@ -143,6 +156,138 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                 },
             ],
         },
+        DataSourceAdapter {
+            slug: "notion".into(),
+            kind: DataSourceKind::Notion,
+            name: "Notion".into(),
+            description: "Query Notion pages and databases via the REST API.".into(),
+            homepage_url: Some("https://developers.notion.com/".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "integration_token".into(),
+                    label: "Integration token".into(),
+                    kind: "password".into(),
+                    required: true,
+                    placeholder: Some("secret_...".into()),
+                    help: Some(
+                        "Create an internal integration at notion.so/my-integrations.".into(),
+                    ),
+                },
+                DataSourceField {
+                    key: "database_id".into(),
+                    label: "Default database ID".into(),
+                    kind: "text".into(),
+                    required: false,
+                    placeholder: Some("32-char hex ID".into()),
+                    help: Some(
+                        "Optional: pre-filter searches to this database.".into(),
+                    ),
+                },
+            ],
+        },
+        DataSourceAdapter {
+            slug: "linear".into(),
+            kind: DataSourceKind::Linear,
+            name: "Linear".into(),
+            description: "Query Linear issues via the GraphQL API.".into(),
+            homepage_url: Some("https://developers.linear.app/".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "api_key".into(),
+                    label: "Personal API key".into(),
+                    kind: "password".into(),
+                    required: true,
+                    placeholder: Some("lin_api_...".into()),
+                    help: Some(
+                        "Generate at linear.app/settings/api".into(),
+                    ),
+                },
+                DataSourceField {
+                    key: "team_key".into(),
+                    label: "Default team key".into(),
+                    kind: "text".into(),
+                    required: false,
+                    placeholder: Some("ENG".into()),
+                    help: Some(
+                        "Optional: pre-filter queries to one team.".into(),
+                    ),
+                },
+            ],
+        },
+        DataSourceAdapter {
+            slug: "github-issues".into(),
+            kind: DataSourceKind::GitHubIssues,
+            name: "GitHub Issues".into(),
+            description: "Query issues and pull requests via the GitHub REST API.".into(),
+            homepage_url: Some("https://docs.github.com/rest".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "token".into(),
+                    label: "Personal access token".into(),
+                    kind: "password".into(),
+                    required: true,
+                    placeholder: Some("ghp_...".into()),
+                    help: Some(
+                        "Needs `repo` (classic) or `issues:read` (fine-grained).".into(),
+                    ),
+                },
+                DataSourceField {
+                    key: "default_repo".into(),
+                    label: "Default repo (owner/name)".into(),
+                    kind: "text".into(),
+                    required: false,
+                    placeholder: Some("shannon-agent/shannon-code".into()),
+                    help: Some(
+                        "Optional: pre-filter queries to one repository.".into(),
+                    ),
+                },
+            ],
+        },
+        DataSourceAdapter {
+            slug: "jira".into(),
+            kind: DataSourceKind::Jira,
+            name: "Jira".into(),
+            description: "Query Jira issues via the Cloud REST API.".into(),
+            homepage_url: Some("https://developer.atlassian.com/cloud/jira/platform/rest/v3/".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "domain".into(),
+                    label: "Jira Cloud domain".into(),
+                    kind: "text".into(),
+                    required: true,
+                    placeholder: Some("your-team.atlassian.net".into()),
+                    help: None,
+                },
+                DataSourceField {
+                    key: "email".into(),
+                    label: "Account email".into(),
+                    kind: "text".into(),
+                    required: true,
+                    placeholder: Some("you@team.com".into()),
+                    help: None,
+                },
+                DataSourceField {
+                    key: "api_token".into(),
+                    label: "API token".into(),
+                    kind: "password".into(),
+                    required: true,
+                    placeholder: None,
+                    help: Some(
+                        "Create at id.atlassian.com/manage-profile/security/api-tokens.".into(),
+                    ),
+                },
+                DataSourceField {
+                    key: "project_key".into(),
+                    label: "Default project key".into(),
+                    kind: "text".into(),
+                    required: false,
+                    placeholder: Some("SHAN".into()),
+                    help: Some(
+                        "Optional: pre-filter queries to one project.".into(),
+                    ),
+                },
+            ],
+        },
     ]
 }
 
@@ -192,12 +337,16 @@ mod tests {
         let slugs: Vec<&str> = adapters.iter().map(|a| a.slug.as_str()).collect();
         assert!(slugs.contains(&"obsidian-vault"));
         assert!(slugs.contains(&"email-imap"));
+        assert!(slugs.contains(&"notion"));
+        assert!(slugs.contains(&"linear"));
+        assert!(slugs.contains(&"github-issues"));
+        assert!(slugs.contains(&"jira"));
     }
 
     #[test]
     fn catalog_entries_have_native_source_and_verified_trust() {
         let entries = data_source_catalog_entries();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 6);
         for entry in &entries {
             assert_eq!(entry.kind, AddonKind::DataSource);
             assert_eq!(entry.source, CatalogSource::Native);
@@ -252,5 +401,42 @@ mod tests {
             serde_json::to_string(&DataSourceKind::Obsidian).unwrap(),
             "\"obsidian\""
         );
+        assert_eq!(
+            serde_json::to_string(&DataSourceKind::GitHubIssues).unwrap(),
+            "\"github_issues\""
+        );
+    }
+
+    #[test]
+    fn notion_adapter_has_integration_token_field() {
+        let entries = data_source_catalog_entries();
+        let notion = entries
+            .iter()
+            .find(|e| e.name == "Notion")
+            .expect("notion");
+        let fields = notion.metadata.get("fields").expect("fields");
+        let fields: Vec<DataSourceField> =
+            serde_json::from_value(fields.clone()).expect("deserialize fields");
+        let token = fields
+            .iter()
+            .find(|f| f.key == "integration_token")
+            .expect("integration_token field");
+        assert_eq!(token.kind, "password");
+        assert!(token.required);
+    }
+
+    #[test]
+    fn jira_adapter_requires_domain_email_and_token() {
+        let entries = data_source_catalog_entries();
+        let jira = entries.iter().find(|e| e.name == "Jira").expect("jira");
+        let fields = jira.metadata.get("fields").expect("fields");
+        let fields: Vec<DataSourceField> =
+            serde_json::from_value(fields.clone()).expect("deserialize fields");
+        let keys: Vec<&str> = fields.iter().map(|f| f.key.as_str()).collect();
+        assert!(keys.contains(&"domain"));
+        assert!(keys.contains(&"email"));
+        assert!(keys.contains(&"api_token"));
+        let token = fields.iter().find(|f| f.key == "api_token").expect("token");
+        assert_eq!(token.kind, "password");
     }
 }

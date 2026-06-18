@@ -21,6 +21,7 @@ import type {
   FileDiff,
   FileNode,
   WorkingDirInfo,
+  CatalogEntry,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -652,7 +653,7 @@ export async function updatePlugin(name: string): Promise<void> {
   await invoke('update_plugin', { name })
 }
 
-export async function listPluginMarketplace(): Promise<unknown[]> {
+export async function listPluginMarketplace(): Promise<CatalogEntry[]> {
   return invoke('list_plugin_marketplace')
 }
 

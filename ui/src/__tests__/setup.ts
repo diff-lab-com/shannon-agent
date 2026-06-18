@@ -125,4 +125,6 @@ vi.mock('@/lib/tauri-api', () => ({
   clearInboundConfig: vi.fn().mockResolvedValue(undefined),
   getInboundListenerStatus: vi.fn().mockResolvedValue({ slack_running: false, telegram_running: false }),
   stopInboundListener: vi.fn().mockResolvedValue(undefined),
+  listPluginMarketplace: vi.fn().mockResolvedValue([]),
+  saveTextFile: vi.fn().mockResolvedValue(undefined),
 }))
