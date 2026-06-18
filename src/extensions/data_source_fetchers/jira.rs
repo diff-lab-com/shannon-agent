@@ -7,7 +7,7 @@
 
 use super::{DataSourceError, DataSourceFetcher, DataSourceItem, DataSourceResult};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// Jira API fetcher.
@@ -149,8 +149,6 @@ impl JiraFetcher {
 struct JiraResponse {
     #[serde(rename = "startAt")]
     start_at: usize,
-    #[serde(rename = "maxResults")]
-    max_results: usize,
     total: usize,
     issues: Vec<JiraIssue>,
 }

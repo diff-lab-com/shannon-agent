@@ -7,7 +7,7 @@
 
 use super::{DataSourceError, DataSourceFetcher, DataSourceItem, DataSourceResult};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// Notion API fetcher.
