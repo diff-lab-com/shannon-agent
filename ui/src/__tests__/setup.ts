@@ -126,5 +126,6 @@ vi.mock('@/lib/tauri-api', () => ({
   getInboundListenerStatus: vi.fn().mockResolvedValue({ slack_running: false, telegram_running: false }),
   stopInboundListener: vi.fn().mockResolvedValue(undefined),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
-  saveTextFile: vi.fn().mockResolvedValue(undefined),
+  installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
+  installAgentFromRepo: vi.fn().mockResolvedValue({ id: 'agent-1', name: 'Test Agent', install_path: '/path/to/agent' }),
 }))

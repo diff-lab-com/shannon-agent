@@ -7,6 +7,8 @@ import type { AddonKind, CatalogEntry, CatalogSource, TrustLevel } from "@/types
 
 const KIND_ORDER: AddonKind[] = ["mcp", "skill", "agent", "data_source", "plugin"];
 
+type SortMode = "trust" | "stars" | "name" | "recent";
+
 const KIND_ICON: Record<AddonKind, string> = {
   mcp: "cloud",
   skill: "extension",
@@ -51,6 +53,13 @@ const TRUST_BADGE_CLASS: Record<TrustLevel, string> = {
   verified: "bg-tertiary/20 text-tertiary",
 };
 
+const TRUST_ORDER: Record<TrustLevel, number> = {
+  verified: 0,
+  official: 1,
+  community: 2,
+  unknown: 3,
+};
+
 function sourceLabel(src: CatalogSource): string {
   switch (src.type) {
     case "mcp_registry":
@@ -76,6 +85,7 @@ export default function Plugins() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<AddonKind | "all">("all");
+  const [sortMode, setSortMode] = useState<SortMode>("trust");
   const [installingId, setInstallingId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -118,10 +128,85 @@ export default function Plugins() {
       list.push(e);
       map.set(e.kind, list);
     }
-    return KIND_ORDER.filter((k) => map.has(k)).map((k) => ({ kind: k, rows: map.get(k)! }));
-  }, [filtered]);
+
+    // Sort within each kind group based on sortMode
+    const sortFn = (a: CatalogEntry, b: CatalogEntry) => {
+      switch (sortMode) {
+        case "trust":
+          // Lower trust order number = higher trust (verified=0, official=1, etc.)
+          const trustDiff = TRUST_ORDER[a.trust] - TRUST_ORDER[b.trust];
+          if (trustDiff !== 0) return trustDiff;
+          // Tie-break by name
+          return a.name.localeCompare(b.name);
+        case "stars":
+          // More stars first, nulls last
+          const aStars = a.stars ?? -1;
+          const bStars = b.stars ?? -1;
+          if (aStars !== bStars) return bStars - aStars;
+          return a.name.localeCompare(b.name);
+        case "name":
+          return a.name.localeCompare(b.name);
+        case "recent":
+          // More recent first, nulls last
+          const aDate = a.last_updated ? new Date(a.last_updated).getTime() : 0;
+          const bDate = b.last_updated ? new Date(b.last_updated).getTime() : 0;
+          if (aDate !== bDate) return bDate - aDate;
+          return a.name.localeCompare(b.name);
+        default:
+          return 0;
+      }
+    };
+
+    return KIND_ORDER.filter((k) => map.has(k)).map((k) => ({
+      kind: k,
+      rows: map.get(k)!.sort(sortFn)
+    }));
+  }, [filtered, sortMode]);
 
   const handleInstall = async (entry: CatalogEntry) => {
+    // For skills/agents with git_hub_repo source, call the real installer
+    if (entry.source.type === "git_hub_repo") {
+      if (entry.kind === "skill") {
+        setInstallingId(entry.id);
+        try {
+          const result = await api.installSkillFromRepo(entry.name, entry.source.repo, entry.source.ref_ || "main");
+          toast.success(intl.formatMessage({ id: "extensions.plugins.installSuccess" }, { name: result.name }));
+          // Emit event for auto-refresh
+          window.dispatchEvent(new CustomEvent("shannon:extension-installed", {
+            detail: { kind: entry.kind, name: result.name }
+          }));
+        } catch (e) {
+          console.error("Skill install error:", e);
+          toast.error(intl.formatMessage({ id: "extensions.plugins.installError" }, {
+            error: e instanceof Error ? e.message : String(e)
+          }));
+        } finally {
+          setInstallingId(null);
+        }
+        return;
+      }
+      if (entry.kind === "agent") {
+        setInstallingId(entry.id);
+        try {
+          const result = await api.installAgentFromRepo(entry.name, entry.source.repo, entry.source.ref_ || "main");
+          toast.success(intl.formatMessage({ id: "extensions.plugins.installSuccess" }, { name: result.name }));
+          // Emit event for auto-refresh
+          window.dispatchEvent(new CustomEvent("shannon:extension-installed", {
+            detail: { kind: entry.kind, name: result.name }
+          }));
+        } catch (e) {
+          console.error("Agent install error:", e);
+          toast.error(intl.formatMessage({ id: "extensions.plugins.installError" }, {
+            error: e instanceof Error ? e.message : String(e)
+          }));
+        } finally {
+          setInstallingId(null);
+        }
+        return;
+      }
+    }
+
+    // For MCP and data_source, still route to the specialized tab (installers need UI/forms)
     const route = KIND_ROUTE[entry.kind];
     if (route) {
       navigate(route);
@@ -133,6 +218,7 @@ export default function Plugins() {
       );
       return;
     }
+
     // Plugin bundles: no dedicated installer yet — prompt user to follow homepage.
     setInstallingId(entry.id);
     try {
@@ -267,9 +353,22 @@ export default function Plugins() {
             </button>
           ))}
         </div>
-        <span className="text-label-sm text-on-surface-variant shrink-0">
-          <FormattedMessage id="extensions.plugins.count" values={{ count: filtered.length }} />
-        </span>
+        <div className="flex items-center gap-xs">
+          <span className="text-label-sm text-on-surface-variant">{t("extensions.plugins.sortLabel")}</span>
+          <select
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value as SortMode)}
+            className="px-sm py-xs rounded-lg bg-surface-container-low text-on-surface text-label-sm font-bold cursor-pointer hover:bg-surface-container-high transition-colors"
+          >
+            <option value="trust">{t("extensions.plugins.sortTrust")}</option>
+            <option value="stars">{t("extensions.plugins.sortStars")}</option>
+            <option value="name">{t("extensions.plugins.sortName")}</option>
+            <option value="recent">{t("extensions.plugins.sortRecent")}</option>
+          </select>
+          <span className="text-label-sm text-on-surface-variant shrink-0">
+            <FormattedMessage id="extensions.plugins.count" values={{ count: filtered.length }} />
+          </span>
+        </div>
       </div>
 
       {loading ? (

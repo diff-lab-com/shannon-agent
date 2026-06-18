@@ -271,6 +271,23 @@ export interface CatalogEntry {
   tags?: string[]
 }
 
+/// Data source fetcher result — normalized shape across all sources.
+export interface DataSourceResult {
+  items: DataSourceItem[]
+  total: number
+  has_more: boolean
+}
+
+/// Single item from a data source query.
+export interface DataSourceItem {
+  id: string
+  title: string
+  body?: string | null
+  url?: string | null
+  kind: string
+  updated_at?: string | null
+}
+
 // --- Task Types ---
 
 export interface TaskItem {

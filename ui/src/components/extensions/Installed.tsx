@@ -44,6 +44,25 @@ export default function Installed() {
     };
   }, []);
 
+  // Auto-refresh when an extension is installed from the marketplace
+  useEffect(() => {
+    const handleInstalledEvent = () => {
+      listInstalledAddons()
+        .then((rows) => {
+          setAddons(rows);
+          setError(null);
+        })
+        .catch((err) => {
+          setError(String(err));
+        });
+    };
+
+    window.addEventListener("shannon:extension-installed", handleInstalledEvent);
+    return () => {
+      window.removeEventListener("shannon:extension-installed", handleInstalledEvent);
+    };
+  }, []);
+
   const filtered = search
     ? addons.filter(
         (a) =>

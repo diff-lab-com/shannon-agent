@@ -40,6 +40,8 @@ describe('Plugins (marketplace browser)', () => {
   beforeEach(() => {
     vi.mocked(api.listPluginMarketplace).mockReset()
     vi.mocked(api.saveTextFile).mockReset()
+    vi.mocked(api.installSkillFromRepo).mockReset()
+    vi.mocked(api.installAgentFromRepo).mockReset()
     ;(globalThis as { __PLUGINS_SEARCH__?: string }).__PLUGINS_SEARCH__ = ''
   })
 
@@ -129,5 +131,95 @@ describe('Plugins (marketplace browser)', () => {
     renderPlugins()
     await waitFor(() => expect(screen.getByText('Notion Sync')).toBeInTheDocument())
     expect(screen.queryByText('Unrelated Tool')).not.toBeInTheDocument()
+  })
+
+  it('sorts entries by stars in descending order', async () => {
+    vi.mocked(api.listPluginMarketplace).mockResolvedValue([
+      entry({ id: 'a', name: 'Low Stars', stars: 100 }),
+      entry({ id: 'b', name: 'High Stars', stars: 5000 }),
+      entry({ id: 'c', name: 'Medium Stars', stars: 1000 }),
+    ])
+    renderPlugins()
+    await waitFor(() => expect(screen.getByText('Low Stars')).toBeInTheDocument())
+
+    // Find the sort dropdown by label text
+    const sortLabel = screen.getByText('Sort by')
+    const sortSelect = sortLabel.nextElementSibling as HTMLSelectElement
+    expect(sortSelect).toBeInTheDocument()
+
+    // Change to stars sort
+    fireEvent.change(sortSelect, { target: { value: 'stars' } })
+
+    // After sorting by stars (5000 > 1000 > 100), High Stars should come before Medium Stars before Low Stars
+    await waitFor(() => {
+      const allText = document.body.textContent || ''
+      const highStarsIndex = allText.indexOf('High Stars')
+      const mediumStarsIndex = allText.indexOf('Medium Stars')
+      const lowStarsIndex = allText.indexOf('Low Stars')
+
+      expect(highStarsIndex).toBeGreaterThan(-1)
+      expect(mediumStarsIndex).toBeGreaterThan(-1)
+      expect(lowStarsIndex).toBeGreaterThan(-1)
+
+      // Verify ordering: high stars should appear first
+      expect(highStarsIndex).toBeLessThan(mediumStarsIndex)
+      expect(mediumStarsIndex).toBeLessThan(lowStarsIndex)
+    })
+  })
+
+  it('calls installSkillFromRepo when installing a skill with git_hub_repo source', async () => {
+    const skillEntry = entry({
+      id: 'skill-1',
+      kind: 'skill',
+      name: 'Test Skill',
+      source: { type: 'git_hub_repo', repo: 'test/skill', ref_: 'main' }
+    })
+    vi.mocked(api.listPluginMarketplace).mockResolvedValue([skillEntry])
+    vi.mocked(api.installSkillFromRepo).mockResolvedValue({
+      id: 'skill-1',
+      name: 'Test Skill',
+      install_path: '/path/to/skill'
+    })
+
+    renderPlugins()
+    await waitFor(() => expect(screen.getByText('Test Skill')).toBeInTheDocument())
+
+    const installButton = screen.getByText('Install')
+    fireEvent.click(installButton)
+
+    expect(api.installSkillFromRepo).toHaveBeenCalledWith('Test Skill', 'test/skill', 'main')
+  })
+
+  it('dispatches shannon:extension-installed event after successful install', async () => {
+    const eventSpy = vi.fn()
+    window.addEventListener('shannon:extension-installed', eventSpy)
+
+    const skillEntry = entry({
+      id: 'skill-1',
+      kind: 'skill',
+      name: 'Test Skill',
+      source: { type: 'git_hub_repo', repo: 'test/skill', ref_: 'main' }
+    })
+    vi.mocked(api.listPluginMarketplace).mockResolvedValue([skillEntry])
+    vi.mocked(api.installSkillFromRepo).mockResolvedValue({
+      id: 'skill-1',
+      name: 'Test Skill',
+      install_path: '/path/to/skill'
+    })
+
+    renderPlugins()
+    await waitFor(() => expect(screen.getByText('Test Skill')).toBeInTheDocument())
+
+    const installButton = screen.getByText('Install')
+    fireEvent.click(installButton)
+
+    await waitFor(() => {
+      expect(eventSpy).toHaveBeenCalledTimes(1)
+      const event = eventSpy.mock.calls[0][0] as CustomEvent
+      expect(event.detail.kind).toBe('skill')
+      expect(event.detail.name).toBe('Test Skill')
+    })
+
+    window.removeEventListener('shannon:extension-installed', eventSpy)
   })
 })
