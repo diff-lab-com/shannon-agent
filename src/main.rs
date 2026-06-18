@@ -104,6 +104,7 @@ fn main() {
             extensions_commands::list_installed_data_sources,
             extensions_commands::uninstall_data_source,
             extensions_commands::read_data_source_config,
+            extensions_commands::query_data_source,
             // Extensions hub P6 — Security hardening
             extensions_commands::scan_prompt_injection,
             extensions_commands::scan_prompt_injection_with_readme,

@@ -460,6 +460,19 @@ pub async fn read_data_source_config(
     extensions::read_data_source_config(&slug).map_err(|e| e.to_string())
 }
 
+/// Query a data source by slug. Dispatches to the appropriate HTTP fetcher
+/// based on the kind field in the installed config.
+#[tauri::command]
+pub async fn query_data_source(
+    slug: String,
+    query: String,
+) -> Result<extensions::data_source_fetchers::DataSourceResult, String> {
+    let config = extensions::read_data_source_config(&slug).map_err(|e| e.to_string())?;
+    let kind = config.get("kind").ok_or("missing kind in config")?;
+    let fetcher = extensions::data_source_fetchers::dispatch(kind).map_err(|e| e.to_string())?;
+    fetcher.fetch(&config, &query).await.map_err(|e| e.to_string())
+}
+
 // ---------------------------------------------------------------------------
 // P6: Security hardening — prompt injection, signature verify, reports
 // ---------------------------------------------------------------------------

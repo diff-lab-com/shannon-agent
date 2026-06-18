@@ -22,6 +22,7 @@ import type {
   FileNode,
   WorkingDirInfo,
   CatalogEntry,
+  DataSourceResult,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -541,6 +542,13 @@ export async function readDataSourceConfig(
   slug: string,
 ): Promise<Record<string, string>> {
   return invoke('read_data_source_config', { slug })
+}
+
+export async function queryDataSource(
+  slug: string,
+  query: string,
+): Promise<DataSourceResult> {
+  return invoke('query_data_source', { slug, query })
 }
 
 // --- Extensions Hub (P6: Security hardening) ---

@@ -16,6 +16,7 @@ pub mod agent_catalog;
 pub mod agent_installers;
 pub mod data_source_catalog;
 pub mod data_source_installers;
+pub mod data_source_fetchers;
 pub mod security;
 
 pub use types::{
