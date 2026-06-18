@@ -21,6 +21,7 @@ import { FormattedMessage, useIntl } from "react-intl";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import * as api from "@/lib/tauri-api";
+import { isValidPackageName, safeErrorMessage } from "@/lib/packageValidation";
 import type { AddonKind, CatalogEntry } from "@/types";
 import { KIND_ROUTE } from "./Plugins";
 
@@ -51,21 +52,23 @@ function readMeta(entry: CatalogEntry): MaybeMeta {
 }
 
 /// Returns { command, args } for a registry package or null when the package
-/// shape isn't one we recognise.
+/// shape isn't one we recognise. Package name is strictly validated before
+/// being placed in args so a malicious registry entry can't inject flags
+/// (e.g. `--privileged`) or shell metacharacters.
 function buildStdioSpec(
   pkgType: string | undefined,
   pkgName: string | undefined,
 ): { command: string; args: string[] } | null {
-  if (!pkgName) return null;
-  switch (pkgType) {
+  if (!pkgType || !pkgName) return null;
+  const kind = pkgType as "npm" | "pip" | "docker";
+  if (!isValidPackageName(kind, pkgName)) return null;
+  switch (kind) {
     case "npm":
       return { command: "npx", args: ["-y", pkgName] };
     case "pip":
       return { command: "pipx", args: ["run", pkgName] };
     case "docker":
       return { command: "docker", args: ["run", "-i", "--rm", pkgName] };
-    default:
-      return null;
   }
 }
 
@@ -139,7 +142,7 @@ export default function InstallDialog({
       toast.error(
         intl.formatMessage(
           { id: "extensions.plugins.installError" },
-          { error: e instanceof Error ? e.message : String(e) },
+          { error: safeErrorMessage(e, "install failed") },
         ),
       );
     } finally {
@@ -171,7 +174,7 @@ export default function InstallDialog({
       toast.error(
         intl.formatMessage(
           { id: "extensions.plugins.installError" },
-          { error: e instanceof Error ? e.message : String(e) },
+          { error: safeErrorMessage(e, "install failed") },
         ),
       );
     } finally {

@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
 import SlackWizard from './notifications/SlackWizard'
 import TelegramWizard from './notifications/TelegramWizard'
@@ -111,8 +112,18 @@ function WebhookSection() {
   }
 
   const handleSave = async () => {
-    if (!url.trim()) {
+    const trimmed = url.trim()
+    if (!trimmed) {
       toast.error(t('settings.notifications.error.urlRequired'))
+      return
+    }
+    const check = validateWebhookUrl(trimmed)
+    if (!check.ok) {
+      const key =
+        check.reason === 'scheme' ? 'settings.notifications.error.urlBadScheme'
+        : check.reason === 'private' ? 'settings.notifications.error.urlPrivate'
+        : 'settings.notifications.error.urlInvalid'
+      toast.error(t(key))
       return
     }
     setSaving(true)

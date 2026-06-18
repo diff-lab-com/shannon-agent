@@ -11,6 +11,7 @@ import {
   type InstallResult,
   type StdioMcpSpecPayload,
 } from "@/lib/tauri-api";
+import { isValidPackageName, isValidVersion, safeErrorMessage } from "@/lib/packageValidation";
 import type { McpServerInfo } from "@/types";
 
 /**
@@ -36,8 +37,10 @@ const STDIO_MANUAL_FORM_ID = "mcp-stdio-manual-form";
 
 /**
  * Build a stdio spec from registry package metadata. Returns `null` when the
- * package kind is unknown or required fields (e.g. npm/pip/docker name) are
- * missing — callers should fall back to the manual form.
+ * package kind is unknown, the name/version fails strict validation, or
+ * required fields are missing — callers should fall back to the manual form.
+ * Validation prevents a malicious registry entry from injecting flags or
+ * shell metacharacters into the spawned command.
  */
 function buildSpecFromPackage(
   serverName: string,
@@ -45,32 +48,38 @@ function buildSpecFromPackage(
 ): StdioMcpSpecPayload | null {
   if (!pkg) return null;
   const name = pkg.name?.trim();
-  const versionSuffix = pkg.version?.trim() ? `@${pkg.version.trim()}` : "";
+  const version = pkg.version?.trim();
+  const versionSuffix = version ? `@${version}` : "";
   switch (pkg.kind) {
-    case "npm":
-      if (!name) return null;
+    case "npm": {
+      if (!name || !isValidPackageName("npm", name)) return null;
+      if (version && !isValidVersion("npm", version)) return null;
       return {
         server_name: serverName,
         command: "npx",
         args: ["-y", versionSuffix ? `${name}${versionSuffix}` : name],
         env: [],
       };
-    case "pip":
-      if (!name) return null;
+    }
+    case "pip": {
+      if (!name || !isValidPackageName("pip", name)) return null;
       return {
         server_name: serverName,
         command: "uvx",
         args: [name],
         env: [],
       };
-    case "docker":
-      if (!name) return null;
+    }
+    case "docker": {
+      if (!name || !isValidPackageName("docker", name)) return null;
+      if (version && !isValidVersion("docker", version)) return null;
       return {
         server_name: serverName,
         command: "docker",
         args: ["run", "-i", "--rm", name],
         env: [],
       };
+    }
     default:
       return null;
   }
@@ -180,7 +189,7 @@ export default function McpServers() {
         id: server.id,
         msg: intl.formatMessage(
           { id: "extensions.mcp.oneClick.installFailed" },
-          { error: String(err) },
+          { error: safeErrorMessage(err, "install failed") },
         ),
         ok: false,
       });
@@ -530,15 +539,18 @@ function StdioManualForm({
   }
 
   function parseEnv(text: string): [string, string][] {
-    return text
-      .split(/\n/)
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => {
-        const eq = line.indexOf("=");
-        if (eq < 0) return [line, ""] as [string, string];
-        return [line.slice(0, eq).trim(), line.slice(eq + 1).trim()] as [string, string];
-      });
+    const out: [string, string][] = [];
+    for (const rawLine of text.split(/\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const eq = line.indexOf("=");
+      const key = (eq < 0 ? line : line.slice(0, eq)).trim();
+      const val = eq < 0 ? "" : line.slice(eq + 1).trim();
+      // POSIX env var name: letters, digits, underscore; must start with letter or _.
+      if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(key)) continue;
+      out.push([key, val]);
+    }
+    return out;
   }
 
   async function handleSubmit() {
