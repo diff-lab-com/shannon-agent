@@ -2,17 +2,29 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
-## v0.3.2 (2026-06-18) — plugin marketplace browser + 4 more data source adapters
+## v0.3.2 (2026-06-18) — plugin marketplace browser + data source fetchers + triage + branching sessions
 
 ### Features
 
-- **D1 — Plugin marketplace browser.** Replaced the placeholder Plugins tab with a real catalog browser backed by the existing `list_plugin_marketplace` command. Cards render per entry (name, author, description, trust badge, stars, license, version, source). Filter chips group by kind (MCP / Skills / Agents / Data Sources / Plugins), the kind picker narrows the list, and the layout search input drives client-side text search across name/description/tags/source. Install button routes to the specialized tab per kind (e.g. MCP entries jump to MCP Servers, skills to Skills) since per-kind installers need their own forms. Typed `CatalogEntry` / `CatalogSource` / `TrustLevel` shared between Rust and TS via the existing extensions type surface. Full `en` + `zh-CN` parity for 22 new i18n keys.
+- **D1 — Plugin marketplace browser.** Replaced the placeholder Plugins tab with a real catalog browser backed by the existing `list_plugin_marketplace` command. Cards render per entry (name, author, description, trust badge, stars, license, version, source). Filter chips group by kind (MCP / Skills / Agents / Data Sources / Plugins), the kind picker narrows the list, and the layout search input drives client-side text search across name/description/tags/source. Typed `CatalogEntry` / `CatalogSource` / `TrustLevel` shared between Rust and TS via the existing extensions type surface. Full `en` + `zh-CN` parity for 22 new i18n keys.
+- **D1.2 — Real install wiring + sort + auto-refresh.** Install button now actually calls `install_skill_from_repo` / `install_agent_from_repo` for skills/agents with `git_hub_repo` source (MCP/data_source still route to their dedicated tabs since their installers need form input). New sort dropdown: trust (default) / stars / name / recently updated — applied within each kind group. On successful install, a `shannon:extension-installed` window event fires and the Installed tab auto-refreshes.
 - **D2 — 4 more data source adapters.** Added Notion, Linear, GitHub Issues, and Jira to the native data source catalog. Each ships as a declarative `DataSourceAdapter` with install-form fields (token + optional default scope), surfaced automatically in the Extensions → Data Sources tab. Catalog now exposes 6 adapters total (Obsidian, Email IMAP, Notion, Linear, GitHub Issues, Jira).
+- **D3 — Real HTTP fetchers for the 4 new data sources.** Each adapter now has a fetcher implementation: Notion (POST `/v1/databases/{id}/query`), Linear (GraphQL `/graphql`), GitHub Issues (REST `/repos/{owner}/{repo}/issues`), Jira (REST `/rest/api/3/search`). New `query_data_source(slug, query)` Tauri command dispatches to the right fetcher based on the `kind` field stored in `~/.shannon/data-sources/<slug>.toml`. Normalized `DataSourceResult` shape shared across all sources. Per-source error mapping (AuthError / RateLimited / UpstreamError).
+- **P6 — Triage queue + branching sessions.** Sidebar Tasks entry now shows an unread triage count badge (30s polling via `list_triage_stats`). New `TriageDrawer` popover with filters (All/Unread/by kind) and per-row actions (mark read, archive, open linked). Branching sessions: new `branch_session(parent_id, branch_point)` Tauri command clones the first N messages from a parent into a new session, with `parent_id` and `branch_point` fields exposed on `SessionInfo`. Engine already supported these fields — this commit surfaces them end-to-end.
 
 ### Tests
 
-- 9 new UI tests for the marketplace browser (`Plugins.marketplace.test.tsx`): loading, empty, error, kind filtering, kind grouping, trust badges, license/version/stars rendering, homepage link, search-via-outlet-context.
-- 4 new Rust tests for the data source catalog: notion token field, jira required fields, snake_case serialization across all kinds, expanded adapter list assertion.
+- 9 UI tests for the marketplace browser (`Plugins.marketplace.test.tsx`): loading, empty, error, kind filtering, kind grouping, trust badges, license/version/stars rendering, homepage link, search-via-outlet-context.
+- 3 UI tests for sort/install/auto-refresh: sort-by-stars ordering, install function call, window event dispatch.
+- 4 Rust tests for the data source catalog: notion token field, jira required fields, snake_case serialization across all kinds, expanded adapter list assertion.
+- 16 Rust tests for D3 fetchers (4 per source: deserialization, auth requirement, mapping, edge cases).
+- 2 Rust tests for `branch_session` (basic branch with N messages, parent_id stored correctly).
+- 2 UI tests for TriageDrawer + 1 for sidebar badge.
+
+### Notes
+
+- E2E Playwright coverage for the marketplace tab is deferred — the existing smoke test suite has stale assertions from the P1 navigation restructure that need fixing first.
+- Engine pin remains at `00510a7` (already at remote latest).
 
 ## v0.3.1 (2026-06-18) — full-text session search + keyboard shortcuts + test coverage
 
