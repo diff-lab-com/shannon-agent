@@ -434,7 +434,7 @@ describe('Chat page', () => {
     ctx.currentSessionId = 's1'
     ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
     renderChat()
-    expect(screen.getByRole('button', { name: /Change working directory/i })).toHaveTextContent('Set working directory')
+    expect(screen.getByRole('button', { name: /Change working directory for this session/i })).toHaveTextContent('Set working directory')
   })
 
   it('shows working directory breadcrumb when session has working_dir', () => {
@@ -445,7 +445,7 @@ describe('Chat page', () => {
       working_dir: '/home/alice/projects/shannon',
     }]
     renderChat()
-    const chip = screen.getByRole('button', { name: /Change working directory/i })
+    const chip = screen.getByRole('button', { name: /Change working directory for this session/i })
     expect(chip).toHaveTextContent('…/projects/shannon')
   })
 
@@ -455,7 +455,7 @@ describe('Chat page', () => {
     ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
     ctx.config = { working_dir: '/tmp/foo' }
     renderChat()
-    const chip = screen.getByRole('button', { name: /Change working directory/i })
+    const chip = screen.getByRole('button', { name: /Change working directory for this session/i })
     expect(chip).toHaveTextContent('/tmp/foo')
   })
 
@@ -465,7 +465,7 @@ describe('Chat page', () => {
     ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
     vi.mocked(dialog.open).mockResolvedValueOnce('/home/alice/newdir')
     renderChat()
-    fireEvent.click(screen.getByRole('button', { name: /Change working directory/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Change working directory for this session/i }))
     await waitFor(() => {
       expect(dialog.open).toHaveBeenCalledWith(expect.objectContaining({ directory: true }))
       expect(api.setSessionWorkingDir).toHaveBeenCalledWith('s1', '/home/alice/newdir')
@@ -493,7 +493,7 @@ describe('Chat page', () => {
     ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
     vi.mocked(dialog.open).mockResolvedValueOnce(null)
     renderChat()
-    fireEvent.click(screen.getByRole('button', { name: /Change working directory/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Change working directory for this session/i }))
     await waitFor(() => {
       expect(dialog.open).toHaveBeenCalled()
     })

@@ -40,6 +40,7 @@ export default function ChatInput({
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const { config, models, refreshConfig } = useApp()
+  const modelList = models ?? []
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
 
@@ -67,7 +68,7 @@ export default function ChatInput({
 
   const handleModelChange = async (modelId: string | null) => {
     if (!modelId) return
-    const model = models.find(m => m.id === modelId)
+    const model = modelList.find(m => m.id === modelId)
     if (!model) return
     try {
       await api.configure({ key: 'model', value: model.name })
@@ -114,6 +115,10 @@ export default function ChatInput({
       e.preventDefault()
       onSend()
     }
+    if (e.key === 'Escape' && isQuerying) {
+      e.preventDefault()
+      onCancelQuery()
+    }
   }
 
   const handleAttachClick = async () => {
@@ -128,7 +133,7 @@ export default function ChatInput({
   }
 
   const currentMode = config?.approval_mode || 'suggest'
-  const currentModelId = models.find(m => m.name === config?.model && m.provider === config?.provider)?.id || ''
+  const currentModelId = modelList.find(m => m.name === config?.model && m.provider === config?.provider)?.id || ''
   const workingDirBasename = sessionWorkingDir ? sessionWorkingDir.split('/').pop() || sessionWorkingDir.split('\\').pop() || '' : ''
 
   const modeOptions = [
@@ -214,7 +219,7 @@ export default function ChatInput({
               <SelectValue placeholder={t('chat.input.model.label')} />
             </SelectTrigger>
             <SelectContent>
-              {models.map(model => (
+              {modelList.map(model => (
                 <SelectItem key={model.id} value={model.id}>
                   <div className="flex items-center gap-xs">
                     <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
