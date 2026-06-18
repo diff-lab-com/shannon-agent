@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
 import { useOutletContext } from "react-router-dom";
 import * as api from "@/lib/tauri-api";
+import type { CatalogUpstream } from "@/lib/tauri-api";
 import type { AddonKind, CatalogEntry, CatalogSource, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
 
@@ -86,6 +87,7 @@ export default function Plugins() {
   const [kindFilter, setKindFilter] = useState<AddonKind | "all">("all");
   const [sortMode, setSortMode] = useState<SortMode>("trust");
   const [installTarget, setInstallTarget] = useState<CatalogEntry | null>(null);
+  const [upstreams, setUpstreams] = useState<CatalogUpstream[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,6 +111,33 @@ export default function Plugins() {
       cancelled = true;
     };
   }, [t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listCatalogUpstreams()
+      .then((rows) => {
+        if (cancelled) return;
+        // Correlate entry_count by matching repo → entries' GitHubRepo source.
+        const repoCounts = new Map<string, number>();
+        for (const e of entries) {
+          if (e.source?.type === "git_hub_repo" && e.source.repo) {
+            repoCounts.set(e.source.repo, (repoCounts.get(e.source.repo) ?? 0) + 1);
+          }
+        }
+        setUpstreams(
+          rows.map((u) =>
+            u.repo
+              ? { ...u, entry_count: repoCounts.get(u.repo) ?? u.entry_count }
+              : u,
+          ),
+        );
+      })
+      .catch((e) => console.warn("listCatalogUpstreams error:", e));
+    return () => {
+      cancelled = true;
+    };
+  }, [entries]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -264,6 +293,43 @@ export default function Plugins() {
           <FormattedMessage id="extensions.plugins.descriptionLive" />
         </p>
       </div>
+
+      {upstreams.length > 0 && (
+        <div className="mb-lg">
+          <h3 className="text-label-sm font-bold text-outline uppercase tracking-widest mb-sm">
+            {t("extensions.plugins.source.label")}
+          </h3>
+          <div className="flex flex-wrap gap-xs">
+            {upstreams.map((u) => (
+              <a
+                key={`${u.kind}:${u.slug}`}
+                href={u.repo ? `https://github.com/${u.repo}` : undefined}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-surface-container-low text-on-surface-variant text-label-sm hover:bg-surface-container-high transition-colors"
+                title={u.repo ? `github.com/${u.repo}` : u.display_name}
+              >
+                <span className="material-symbols-outlined text-[14px] text-primary">
+                  {u.kind === "skill"
+                    ? "extension"
+                    : u.kind === "agent"
+                      ? "smart_toy"
+                      : u.kind === "mcp"
+                        ? "cloud"
+                        : u.kind === "native"
+                          ? "stars"
+                          : "database"}
+                </span>
+                <span className="font-bold text-on-surface">{u.display_name}</span>
+                <span className="text-label-xs text-on-surface-variant">
+                  · {u.trust}
+                  {u.entry_count > 0 && ` · ${u.entry_count}`}
+                </span>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-between gap-md mb-lg">
         <div className="flex items-center gap-xs flex-wrap">

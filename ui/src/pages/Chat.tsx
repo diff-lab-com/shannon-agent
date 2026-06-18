@@ -104,10 +104,7 @@ export default function Chat() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [quickFixOpen, setQuickFixOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
-  const [contextPanelOpen, setContextPanelOpen] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.matchMedia('(min-width: 1280px)').matches
-  })
+  const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -296,7 +293,7 @@ export default function Chat() {
   return (
     <div className="flex-1 flex w-full h-full relative">
       {/* Left Sidebar - Session History */}
-      <aside className="hidden md:flex w-[240px] border-r border-outline-variant/10 flex-col glass-panel shrink-0 bg-surface-container-lowest/40">
+      <aside className="hidden md:flex w-[220px] border-r border-outline-variant/10 flex-col glass-panel shrink-0 bg-surface-container-lowest/40">
         <div className="p-md border-b border-outline-variant/10">
           <Button
             className="w-full py-2 bg-primary text-on-primary rounded-lg font-bold flex items-center justify-center gap-2 hover:shadow-md active:scale-95 transition-all"
@@ -329,10 +326,10 @@ export default function Chat() {
               role="button"
               tabIndex={0}
               aria-label={intl.formatMessage({ id: 'chat.session.aria' }, { title: session.title || untitled })}
-              className={`p-sm rounded-lg cursor-pointer group ${
+              className={`p-sm rounded-lg cursor-pointer group border-l-2 ${
                 session.id === currentSessionId
-                  ? 'bg-primary-fixed/40 border-l-4 border-primary shadow-sm'
-                  : 'hover:bg-surface-container-high/50'
+                  ? 'bg-surface-container-high/60 border-primary'
+                  : 'border-transparent hover:bg-surface-container-high/40'
               }`}
               onClick={() => switchSession(session.id)}
               onKeyDown={e => { if (e.key === 'Enter') switchSession(session.id); if (e.key === 'Delete') setDeleteTarget(session.id) }}
@@ -409,26 +406,28 @@ export default function Chat() {
           <div className="flex items-center gap-sm min-w-0 flex-1">
             <span className="material-symbols-outlined text-primary text-[20px] shrink-0">forum</span>
             <div className="min-w-0 flex-1">
-              <p className="text-label-xs uppercase tracking-wider text-on-surface-variant opacity-70 leading-none">
-                {t('chat.header.sessionLabel')}
-              </p>
-              <h2 className="font-label-lg font-bold text-on-surface truncate leading-tight mt-[2px]">
+              <h2 className="font-headline-sm font-bold text-on-surface truncate leading-tight">
                 {currentSession?.title || untitled || t('chat.empty.start')}
               </h2>
+              {sessionWorkingDir && (
+                <button
+                  type="button"
+                  onClick={handleChangeWorkingDir}
+                  className="mt-[2px] flex items-center gap-xs text-label-sm text-on-surface-variant hover:text-primary transition-colors max-w-full"
+                  title={sessionWorkingDir}
+                >
+                  <span className="material-symbols-outlined text-[14px] opacity-70 shrink-0">folder</span>
+                  <span className="truncate font-mono">{formatDirBreadcrumb(sessionWorkingDir)}</span>
+                </button>
+              )}
             </div>
           </div>
-          {status && (
-            <div className="hidden md:flex items-center gap-xs px-sm py-xs rounded-full bg-surface-container-lowest/60 border border-outline-variant/20 shrink-0" title={`${status.provider} · ${status.model}`}>
-              <span className="w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse"></span>
-              <span className="text-label-sm text-on-surface-variant font-mono truncate max-w-[160px]">{status.provider}/{status.model}</span>
-            </div>
-          )}
           <button
             type="button"
             onClick={() => setContextPanelOpen(v => !v)}
             className="p-xs rounded-lg text-on-surface-variant hover:text-primary hover:bg-surface-container focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none shrink-0"
-            title="Toggle context panel"
-            aria-label={t('chat.context.aria')}
+            title={t('chat.header.contextPanel.toggle')}
+            aria-label={t('chat.header.contextPanel.toggle')}
             aria-expanded={contextPanelOpen}
             aria-pressed={contextPanelOpen}
           >
@@ -499,26 +498,50 @@ export default function Chat() {
         </ScrollArea>
 
         {/* Input Bar */}
-        <div
-          className="absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg bg-gradient-to-t from-background to-background/0 transition-colors"
-        >
-          <div className="max-w-4xl mx-auto relative group">
-            <div className="absolute inset-0 bg-primary/10 blur-xl rounded-full opacity-50 group-focus-within:opacity-100 transition-opacity duration-500"></div>
-            <ChatInput
-              value={input}
-              onChange={setInput}
-              onSend={handleSend}
-              attachedFiles={attachedFiles}
-              onAttach={handleAttach}
-              onDetachAll={handleDetachAll}
-              disabled={isQuerying}
-              isQuerying={isQuerying}
-              onCancelQuery={cancelQuery}
-              currentSessionId={currentSessionId}
-              sessionWorkingDir={sessionWorkingDir}
-              onOpenQuickFix={() => setQuickFixOpen(true)}
-              onOpenEditor={() => setEditorOpen(true)}
-            />
+        <div className="absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg transition-colors">
+          <div className="max-w-4xl mx-auto">
+            <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl shadow-sm">
+              <ChatInput
+                value={input}
+                onChange={setInput}
+                onSend={handleSend}
+                attachedFiles={attachedFiles}
+                onAttach={handleAttach}
+                onDetachAll={handleDetachAll}
+                disabled={isQuerying}
+                isQuerying={isQuerying}
+                onCancelQuery={cancelQuery}
+                currentSessionId={currentSessionId}
+                sessionWorkingDir={sessionWorkingDir}
+                onOpenQuickFix={() => setQuickFixOpen(true)}
+                onOpenEditor={() => setEditorOpen(true)}
+              />
+            </div>
+            <div className="mt-xs flex items-center justify-between gap-md px-sm text-label-sm text-on-surface-variant">
+              <button
+                type="button"
+                onClick={handleChangeWorkingDir}
+                disabled={!currentSessionId}
+                className="flex items-center gap-xs min-w-0 hover:text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title={sessionWorkingDir || t('chat.input.footer.workingDir.unset')}
+                aria-label={t('chat.input.footer.workingDir.aria')}
+              >
+                <span className="material-symbols-outlined text-[14px] shrink-0">folder</span>
+                <span className="truncate font-mono">
+                  {sessionWorkingDir ? formatDirBreadcrumb(sessionWorkingDir) : t('chat.input.footer.workingDir.unset')}
+                </span>
+              </button>
+              {status && (
+                <span
+                  className="flex items-center gap-xs shrink-0 font-mono"
+                  title={`${status.provider} · ${status.model}`}
+                  aria-label={t('chat.input.footer.model.aria')}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-tertiary animate-pulse"></span>
+                  <span className="truncate max-w-[200px]">{status.provider}/{status.model}</span>
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </section>

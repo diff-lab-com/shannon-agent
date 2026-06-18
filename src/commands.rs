@@ -2875,6 +2875,96 @@ pub async fn list_plugin_marketplace(
         .collect())
 }
 
+/// One row in the catalog upstreams summary. Surfaced in the Extensions Hub
+/// so the user can see which sources feed the marketplace and how many
+/// entries each contributed — even when an upstream's manifest fetch fails
+/// (in which case `entry_count` is 0 but the upstream is still visible).
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogUpstreamDto {
+    /// "skill" | "agent" | "mcp" | "data_source"
+    pub kind: String,
+    /// Stable identifier (e.g. `"anthropics-official"`).
+    pub slug: String,
+    /// Display name for the chip.
+    pub display_name: String,
+    /// GitHub `owner/repo` when the upstream is a git repo, else `None`.
+    pub repo: Option<String>,
+    /// "verified" | "official" | "community" | "unknown"
+    pub trust: String,
+    /// How many entries from this upstream are currently in the marketplace.
+    pub entry_count: usize,
+}
+
+/// List the federated catalog upstreams (skills, agents, MCP registry,
+/// featured vendors, native). Pure static metadata — no network fetch. The
+/// frontend correlates `entry_count` by querying the catalog commands
+/// (`list_skill_catalog`, `list_agent_catalog`, `list_mcp_registry_servers`)
+/// and matching entries back to upstreams via the `metadata.upstream` field
+/// set in `skill_catalog::manifest_to_entry` / `agent_catalog`.
+#[tauri::command]
+pub async fn list_catalog_upstreams() -> Result<Vec<CatalogUpstreamDto>, String> {
+    use crate::extensions::types::TrustLevel;
+    fn trust_str(t: TrustLevel) -> &'static str {
+        match t {
+            TrustLevel::Verified => "verified",
+            TrustLevel::Official => "official",
+            TrustLevel::Community => "community",
+            TrustLevel::Unknown => "unknown",
+        }
+    }
+
+    let mut out: Vec<CatalogUpstreamDto> = Vec::new();
+
+    for up in crate::extensions::skill_catalog::skill_upstreams() {
+        out.push(CatalogUpstreamDto {
+            kind: "skill".into(),
+            slug: up.slug,
+            display_name: up.display_name,
+            repo: Some(up.repo),
+            trust: trust_str(up.trust).into(),
+            entry_count: 0,
+        });
+    }
+
+    for up in crate::extensions::agent_catalog::agent_upstreams() {
+        out.push(CatalogUpstreamDto {
+            kind: "agent".into(),
+            slug: up.slug,
+            display_name: up.display_name,
+            repo: Some(up.repo),
+            trust: trust_str(up.trust).into(),
+            entry_count: 0,
+        });
+    }
+
+    out.push(CatalogUpstreamDto {
+        kind: "mcp".into(),
+        slug: "mcp-registry".into(),
+        display_name: "MCP Registry".into(),
+        repo: None,
+        trust: "verified".into(),
+        entry_count: 0,
+    });
+    out.push(CatalogUpstreamDto {
+        kind: "mcp".into(),
+        slug: "shannon-featured".into(),
+        display_name: "Shannon Featured".into(),
+        repo: None,
+        trust: "verified".into(),
+        entry_count: 0,
+    });
+    out.push(CatalogUpstreamDto {
+        kind: "native".into(),
+        slug: "native".into(),
+        display_name: "Built-in".into(),
+        repo: None,
+        trust: "verified".into(),
+        entry_count: 0,
+    });
+
+    Ok(out)
+}
+
 /// List all locally-installed extensions across MCP / Skills / Agents /
 /// Data Sources. P1 of the unified extensions hub — reads existing configs
 /// (`~/.shannon/settings.json`, `~/.shannon/skills/`, `~/.shannon/agents/`)

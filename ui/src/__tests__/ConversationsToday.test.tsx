@@ -4,7 +4,10 @@ import { MemoryRouter } from 'react-router-dom'
 import ConversationsToday from '@/components/conversations/ConversationsToday'
 import type { SessionInfo, TaskItem } from '@/types'
 
-const today = Date.now()
+// Pin to noon today so subtracting a few hours never crosses midnight
+// (tests are time-of-day sensitive otherwise).
+const NOW = new Date()
+const today = new Date(NOW.getFullYear(), NOW.getMonth(), NOW.getDate(), 12, 0, 0, 0).getTime()
 const yesterday = today - 86_400_000
 
 const sessions: SessionInfo[] = [

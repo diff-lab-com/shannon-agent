@@ -122,6 +122,7 @@ fn main() {
             commands::disable_plugin,
             commands::update_plugin,
             commands::list_plugin_marketplace,
+            commands::list_catalog_upstreams,
             commands::start_background_task,
             commands::get_background_tasks,
             commands::cancel_background_task,
