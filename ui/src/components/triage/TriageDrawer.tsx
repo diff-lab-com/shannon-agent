@@ -10,9 +10,10 @@ import type { TriageItem, TriageFilter } from '@/types'
 interface TriageDrawerProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  onStatsRefresh?: () => void
 }
 
-export function TriageDrawer({ open, onOpenChange }: TriageDrawerProps) {
+export function TriageDrawer({ open, onOpenChange, onStatsRefresh }: TriageDrawerProps) {
   const intl = useIntl()
   const [items, setItems] = useState<TriageItem[]>([])
   const [filter, setFilter] = useState<TriageFilter>({ unarchived_only: true })
@@ -35,22 +36,24 @@ export function TriageDrawer({ open, onOpenChange }: TriageDrawerProps) {
       await api.markTriageRead(id)
       toast.success(intl.formatMessage({ id: 'triage.markReadSuccess' }))
       await refresh()
+      onStatsRefresh?.()
     } catch (e) {
       console.error('Failed to mark item read:', e)
       toast.error(intl.formatMessage({ id: 'triage.markReadError' }))
     }
-  }, [intl, refresh])
+  }, [intl, refresh, onStatsRefresh])
 
   const archive = useCallback(async (id: string) => {
     try {
       await api.archiveTriageItem(id)
       toast.success(intl.formatMessage({ id: 'triage.archiveSuccess' }))
       await refresh()
+      onStatsRefresh?.()
     } catch (e) {
       console.error('Failed to archive item:', e)
       toast.error(intl.formatMessage({ id: 'triage.archiveError' }))
     }
-  }, [intl, refresh])
+  }, [intl, refresh, onStatsRefresh])
 
   const openLinked = useCallback((item: TriageItem) => {
     if (item.task_id) {

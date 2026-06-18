@@ -253,6 +253,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
       <TriageDrawer
         open={triageDrawerOpen}
         onOpenChange={setTriageDrawerOpen}
+        onStatsRefresh={refreshTriageStats}
       />
 
       <div className="mt-auto pt-lg border-t border-outline-variant/20 space-y-1">

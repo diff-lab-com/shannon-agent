@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
+import userEvent from '@testing-library/user-event'
 import { TriageDrawer } from '@/components/triage/TriageDrawer'
 import * as api from '@/lib/tauri-api'
-import { I18nProvider } from '@/context/I18nContext'
 
 // Mock the tauri-api module
 vi.mock('@/lib/tauri-api', () => ({
@@ -34,6 +34,8 @@ const mockTriageItems = [
 ]
 
 describe('TriageDrawer', () => {
+  const mockOnStatsRefresh = vi.fn()
+
   beforeEach(() => {
     vi.clearAllMocks()
     // Mock successful API responses
@@ -45,11 +47,7 @@ describe('TriageDrawer', () => {
   it('renders empty state when no items', async () => {
     vi.mocked(api.listTriageItems).mockResolvedValue([])
 
-    render(
-      <I18nProvider>
-        <TriageDrawer open={true} onOpenChange={() => {}} />
-      </I18nProvider>
-    )
+    render(<TriageDrawer open={true} onOpenChange={() => {}} />)
 
     await waitFor(() => {
       expect(screen.getByText(/no items need attention/i)).toBeInTheDocument()
@@ -57,11 +55,7 @@ describe('TriageDrawer', () => {
   })
 
   it('renders triage items from mock', async () => {
-    render(
-      <I18nProvider>
-        <TriageDrawer open={true} onOpenChange={() => {}} />
-      </I18nProvider>
-    )
+    render(<TriageDrawer open={true} onOpenChange={() => {}} />)
 
     await waitFor(() => {
       expect(screen.getByText('Task failed')).toBeInTheDocument()
@@ -74,12 +68,42 @@ describe('TriageDrawer', () => {
       () => new Promise(() => {}) // Never resolves
     )
 
-    render(
-      <I18nProvider>
-        <TriageDrawer open={true} onOpenChange={() => {}} />
-      </I18nProvider>
-    )
+    render(<TriageDrawer open={true} onOpenChange={() => {}} />)
 
     expect(screen.getByText(/loading/i)).toBeInTheDocument()
+  })
+
+  it('calls onStatsRefresh after successful mark-read', async () => {
+    render(<TriageDrawer open={true} onOpenChange={() => {}} onStatsRefresh={mockOnStatsRefresh} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Task failed')).toBeInTheDocument()
+    })
+
+    // Click the "Mark Read" button for the first item
+    const markReadButtons = screen.getAllByText('Mark Read')
+    await userEvent.click(markReadButtons[0])
+
+    await waitFor(() => {
+      expect(api.markTriageRead).toHaveBeenCalledWith('1')
+      expect(mockOnStatsRefresh).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('calls onStatsRefresh after successful archive', async () => {
+    render(<TriageDrawer open={true} onOpenChange={() => {}} onStatsRefresh={mockOnStatsRefresh} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('Task failed')).toBeInTheDocument()
+    })
+
+    // Click the "Archive" button for the first item
+    const archiveButtons = screen.getAllByText('Archive')
+    await userEvent.click(archiveButtons[0])
+
+    await waitFor(() => {
+      expect(api.archiveTriageItem).toHaveBeenCalledWith('1')
+      expect(mockOnStatsRefresh).toHaveBeenCalledTimes(1)
+    })
   })
 })
