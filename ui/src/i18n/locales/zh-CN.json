@@ -248,7 +248,7 @@
   "settings.notifications.wizard.telegram.captureChatId": "捕获聊天 ID",
   "settings.notifications.wizard.telegram.captureSuccess": "已从最新消息捕获聊天 ID",
   "settings.notifications.wizard.telegram.captureFailed": "捕获聊天 ID 失败",
-  "settings.notifications.wizard.telegram.step3.note": "向您的 bot 发送消息，然后点击"捕获聊天 ID"自动检测。",
+  "settings.notifications.wizard.telegram.step3.note": "向您的 bot 发送消息，然后点击\"捕获聊天 ID\"自动检测。",
   "settings.notifications.wizard.telegram.saved": "Telegram 配置已保存",
   "settings.notifications.wizard.email.title": "邮件 (IMAP)",
   "settings.notifications.wizard.email.description": "配置邮件收件箱监控（第一阶段：仅凭据）。",
