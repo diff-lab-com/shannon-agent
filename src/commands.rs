@@ -462,11 +462,9 @@ pub async fn send_message(
                         // `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`,
                         // or any other sensitive file via the attachment
                         // pipeline.
-                        let canonical = crate::resolve_path_in_working_dir(
-                            &path,
-                            &attachment_working_dir,
-                        )
-                        .ok()?;
+                        let canonical =
+                            crate::resolve_path_in_working_dir(&path, &attachment_working_dir)
+                                .ok()?;
                         let canonical_str = canonical.to_string_lossy().into_owned();
                         std::path::Path::new(&canonical)
                             .file_name()
@@ -711,10 +709,7 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
-                        let _ = fire_query_notification(
-                            &notifier_arc,
-                            NotificationKind::Completed,
-                        );
+                        let _ = fire_query_notification(&notifier_arc, NotificationKind::Completed);
                     }
                     QueryEvent::Failed { error, .. } => {
                         let _ = app.emit(
@@ -724,10 +719,8 @@ pub async fn send_message(
                                 error: error.clone(),
                             },
                         );
-                        let _ = fire_query_notification(
-                            &notifier_arc,
-                            NotificationKind::Failed(error),
-                        );
+                        let _ =
+                            fire_query_notification(&notifier_arc, NotificationKind::Failed(error));
                     }
                     // Ignore other events in MVP
                     _ => {}
@@ -1427,11 +1420,17 @@ pub async fn search_sessions(
         if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
             if let Ok(Some(data)) = state.state_manager.load_session(&uuid) {
                 let hit = data.messages.iter().any(|m| match &m.content {
-                    shannon_core::api::MessageContent::Text(t) => t.to_lowercase().contains(&query_lower),
-                    shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter().any(|b| match b {
-                        shannon_core::api::ContentBlock::Text { text } => text.to_lowercase().contains(&query_lower),
-                        _ => false,
-                    }),
+                    shannon_core::api::MessageContent::Text(t) => {
+                        t.to_lowercase().contains(&query_lower)
+                    }
+                    shannon_core::api::MessageContent::Blocks(blocks) => {
+                        blocks.iter().any(|b| match b {
+                            shannon_core::api::ContentBlock::Text { text } => {
+                                text.to_lowercase().contains(&query_lower)
+                            }
+                            _ => false,
+                        })
+                    }
                 });
                 if hit {
                     content_matches.push(info());
@@ -1743,8 +1742,8 @@ pub async fn set_session_working_dir(
     let wd = if path.trim().is_empty() {
         None
     } else {
-        let canonical = std::fs::canonicalize(&path)
-            .map_err(|e| format!("Invalid path {path}: {e}"))?;
+        let canonical =
+            std::fs::canonicalize(&path).map_err(|e| format!("Invalid path {path}: {e}"))?;
         Some(canonical.to_string_lossy().into_owned())
     };
 
@@ -1935,7 +1934,8 @@ async fn branch_session_internal(
     parent_id: String,
     branch_point: usize,
 ) -> Result<events::SessionInfo, String> {
-    let parent_uuid = uuid::Uuid::parse_str(&parent_id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let parent_uuid =
+        uuid::Uuid::parse_str(&parent_id).map_err(|e| format!("Invalid UUID: {}", e))?;
 
     // Find parent session
     let sessions = state.sessions.lock().await;
@@ -1971,7 +1971,8 @@ async fn branch_session_internal(
     }
 
     // Slice messages to include only up to branch point
-    let branch_messages: Vec<shannon_core::api::Message> = session_data.messages
+    let branch_messages: Vec<shannon_core::api::Message> = session_data
+        .messages
         .iter()
         .take(branch_point + 1)
         .cloned()
@@ -2562,7 +2563,6 @@ pub async fn update_plugin(state: tauri::State<'_, AppState>, name: String) -> R
     registry.update(&name).await.map_err(|e| e.to_string())
 }
 
-
 /// Fallback marketplace catalog for first-run experience (empty local registry).
 ///
 /// Returns 18 high-quality entries across MCP, Skills, Agents, and Data Sources.
@@ -2988,7 +2988,8 @@ pub async fn list_catalog_upstreams() -> Result<Vec<CatalogUpstreamDto>, String>
 /// (`~/.shannon/settings.json`, `~/.shannon/skills/`, `~/.shannon/agents/`)
 /// and returns a flat list for the Installed tab.
 #[tauri::command]
-pub async fn list_installed_addons() -> Result<Vec<crate::extensions::InstalledAddonSummary>, String> {
+pub async fn list_installed_addons() -> Result<Vec<crate::extensions::InstalledAddonSummary>, String>
+{
     Ok(crate::extensions::aggregate_installed())
 }
 
@@ -3705,8 +3706,8 @@ fn collect_tasks_recursive(
     root: &std::path::Path,
     out: &mut Vec<TaskInfo>,
 ) -> Result<(), String> {
-    let entries =
-        std::fs::read_dir(dir).map_err(|e| format!("Cannot read tasks dir {}: {e}", dir.display()))?;
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("Cannot read tasks dir {}: {e}", dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         let canonical = match path.canonicalize() {
@@ -3863,8 +3864,7 @@ pub async fn update_task(payload: UpdateTaskPayload) -> Result<TaskInfo, String>
         Some(p) => p,
         None => {
             let adhoc = canonical_root.join("<adhoc>");
-            std::fs::create_dir_all(&adhoc)
-                .map_err(|e| format!("Cannot create adhoc dir: {e}"))?;
+            std::fs::create_dir_all(&adhoc).map_err(|e| format!("Cannot create adhoc dir: {e}"))?;
             adhoc.join(format!("{}.json", payload.id))
         }
     };
@@ -3901,8 +3901,7 @@ pub async fn update_task(payload: UpdateTaskPayload) -> Result<TaskInfo, String>
         serde_json::to_string_pretty(&doc).map_err(|e| format!("Serialize failed: {e}"))?;
     let tmp = target_path.with_extension("json.tmp");
     std::fs::write(&tmp, serialized).map_err(|e| format!("Write failed: {e}"))?;
-    std::fs::rename(&tmp, &target_path)
-        .map_err(|e| format!("Rename failed: {e}"))?;
+    std::fs::rename(&tmp, &target_path).map_err(|e| format!("Rename failed: {e}"))?;
 
     // team is derived from path during list_tasks; not recoverable here
     // since we operate on the doc only. Pass None.
@@ -3932,7 +3931,11 @@ fn find_task_file(root: &std::path::Path, id: &str) -> Result<Option<std::path::
                 stack.push(path);
                 continue;
             }
-            if path.file_name().map(|n| n == target_name.as_str()).unwrap_or(false) {
+            if path
+                .file_name()
+                .map(|n| n == target_name.as_str())
+                .unwrap_or(false)
+            {
                 return Ok(Some(path));
             }
         }
@@ -4195,8 +4198,8 @@ fn fire_query_notification(
     notifier: &shannon_core::notifier::Notifier,
     kind: NotificationKind,
 ) -> Result<bool, shannon_core::notifier::NotifierError> {
-    use shannon_core::notifier::{Notification, NotificationLevel};
     use chrono::Utc;
+    use shannon_core::notifier::{Notification, NotificationLevel};
 
     let (title, body, level, source, window_ms) = match kind {
         NotificationKind::Completed => (
@@ -4345,13 +4348,11 @@ fn save_webhook_config_to_disk(dto: &WebhookConfigDto) -> Result<(), String> {
     })?;
 
     let template_val = match template_from_str(&dto.template) {
-        shannon_core::notifier::WebhookTemplate::Custom(s) => {
-            toml::Value::Table({
-                let mut t = toml::value::Table::new();
-                t.insert("custom".into(), toml::Value::String(s));
-                t
-            })
-        }
+        shannon_core::notifier::WebhookTemplate::Custom(s) => toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert("custom".into(), toml::Value::String(s));
+            t
+        }),
         t => toml::Value::String(template_to_str(&t)),
     };
 
@@ -4378,8 +4379,7 @@ fn save_webhook_config_to_disk(dto: &WebhookConfigDto) -> Result<(), String> {
         .ok_or_else(|| "notifications is not a table".to_string())?;
     notif_table.insert("webhook".into(), toml::Value::Table(wh));
 
-    let serialized =
-        toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "webhook config saved");
     Ok(())
@@ -4395,12 +4395,14 @@ fn clear_webhook_config_on_disk() -> Result<(), String> {
         return Ok(());
     };
     if let Some(table) = root.as_table_mut() {
-        if let Some(notif) = table.get_mut("notifications").and_then(|v| v.as_table_mut()) {
+        if let Some(notif) = table
+            .get_mut("notifications")
+            .and_then(|v| v.as_table_mut())
+        {
             notif.remove("webhook");
         }
     }
-    let serialized =
-        toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "webhook config cleared");
     Ok(())
@@ -4448,24 +4450,54 @@ pub async fn get_inbound_config() -> Result<InboundConfigDto, String> {
     let Some(inbound) = notif.get("inbound").and_then(|v| v.as_table()) else {
         return Ok(InboundConfigDto::default());
     };
-    let slack = inbound.get("slack").and_then(|v| v.as_table()).map(|t| SlackInboundDto {
-        bot_token: t.get("bot_token").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        trigger_word: t.get("trigger_word").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        allowed_channels: t
-            .get("allowed_channels")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-            .unwrap_or_default(),
-    });
-    let telegram = inbound.get("telegram").and_then(|v| v.as_table()).map(|t| TelegramInboundDto {
-        bot_token: t.get("bot_token").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        trigger_word: t.get("trigger_word").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        allowed_chats: t
-            .get("allowed_chats")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-            .unwrap_or_default(),
-    });
+    let slack = inbound
+        .get("slack")
+        .and_then(|v| v.as_table())
+        .map(|t| SlackInboundDto {
+            bot_token: t
+                .get("bot_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            trigger_word: t
+                .get("trigger_word")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            allowed_channels: t
+                .get("allowed_channels")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        });
+    let telegram = inbound
+        .get("telegram")
+        .and_then(|v| v.as_table())
+        .map(|t| TelegramInboundDto {
+            bot_token: t
+                .get("bot_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            trigger_word: t
+                .get("trigger_word")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            allowed_chats: t
+                .get("allowed_chats")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        });
     Ok(InboundConfigDto { slack, telegram })
 }
 
@@ -4479,7 +4511,9 @@ pub async fn save_inbound_config(
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut root: toml::Value =
         toml::from_str(&existing).unwrap_or(toml::Value::Table(toml::value::Table::new()));
-    let table = root.as_table_mut().ok_or_else(|| "config root is not a table".to_string())?;
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| "config root is not a table".to_string())?;
     let notifications = table
         .entry("notifications")
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
@@ -4490,20 +4524,39 @@ pub async fn save_inbound_config(
     if let Some(s) = &dto.slack {
         let mut t = toml::value::Table::new();
         t.insert("bot_token".into(), toml::Value::String(s.bot_token.clone()));
-        t.insert("trigger_word".into(), toml::Value::String(s.trigger_word.clone()));
+        t.insert(
+            "trigger_word".into(),
+            toml::Value::String(s.trigger_word.clone()),
+        );
         t.insert(
             "allowed_channels".into(),
-            toml::Value::Array(s.allowed_channels.iter().map(|c| toml::Value::String(c.clone())).collect()),
+            toml::Value::Array(
+                s.allowed_channels
+                    .iter()
+                    .map(|c| toml::Value::String(c.clone()))
+                    .collect(),
+            ),
         );
         inbound.insert("slack".into(), toml::Value::Table(t));
     }
     if let Some(tg) = &dto.telegram {
         let mut t = toml::value::Table::new();
-        t.insert("bot_token".into(), toml::Value::String(tg.bot_token.clone()));
-        t.insert("trigger_word".into(), toml::Value::String(tg.trigger_word.clone()));
+        t.insert(
+            "bot_token".into(),
+            toml::Value::String(tg.bot_token.clone()),
+        );
+        t.insert(
+            "trigger_word".into(),
+            toml::Value::String(tg.trigger_word.clone()),
+        );
         t.insert(
             "allowed_chats".into(),
-            toml::Value::Array(tg.allowed_chats.iter().map(|c| toml::Value::String(c.clone())).collect()),
+            toml::Value::Array(
+                tg.allowed_chats
+                    .iter()
+                    .map(|c| toml::Value::String(c.clone()))
+                    .collect(),
+            ),
         );
         inbound.insert("telegram".into(), toml::Value::Table(t));
     }
@@ -4516,9 +4569,7 @@ pub async fn save_inbound_config(
 }
 
 #[tauri::command]
-pub async fn clear_inbound_config(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn clear_inbound_config(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let path = resolve_webhook_config_path()?;
     if !path.exists() {
         let mut listener = state.inbound_listener.lock().await;
@@ -4533,7 +4584,10 @@ pub async fn clear_inbound_config(
         return Ok(());
     };
     if let Some(table) = root.as_table_mut() {
-        if let Some(notif) = table.get_mut("notifications").and_then(|v| v.as_table_mut()) {
+        if let Some(notif) = table
+            .get_mut("notifications")
+            .and_then(|v| v.as_table_mut())
+        {
             notif.remove("inbound");
         }
     }
@@ -4564,11 +4618,14 @@ async fn restart_inbound_listener(
         trigger_word: s.trigger_word.clone(),
         allowed_channels: s.allowed_channels.clone(),
     });
-    let telegram = dto.telegram.as_ref().map(|t| crate::inbound::TelegramConfig {
-        bot_token: t.bot_token.clone(),
-        trigger_word: t.trigger_word.clone(),
-        allowed_chats: t.allowed_chats.clone(),
-    });
+    let telegram = dto
+        .telegram
+        .as_ref()
+        .map(|t| crate::inbound::TelegramConfig {
+            bot_token: t.bot_token.clone(),
+            trigger_word: t.trigger_word.clone(),
+            allowed_chats: t.allowed_chats.clone(),
+        });
     *listener = Some(crate::inbound::InboundListener::start(
         app_handle.clone(),
         slack,
@@ -4585,9 +4642,7 @@ pub async fn get_inbound_listener_status(
 }
 
 #[tauri::command]
-pub async fn stop_inbound_listener(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn stop_inbound_listener(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut listener = state.inbound_listener.lock().await;
     if let Some(h) = listener.as_mut() {
         h.stop().await;
@@ -4598,10 +4653,7 @@ pub async fn stop_inbound_listener(
 
 /// Auto-start the listener from app setup if inbound config already exists.
 /// Called from `main.rs::setup()` after `AppState` is constructed.
-pub async fn bootstrap_inbound_listener(
-    state: &AppState,
-    app_handle: &tauri::AppHandle,
-) {
+pub async fn bootstrap_inbound_listener(state: &AppState, app_handle: &tauri::AppHandle) {
     let dto = match get_inbound_config().await {
         Ok(d) => d,
         Err(e) => {
@@ -4702,7 +4754,9 @@ pub async fn get_billing_history() -> Result<Vec<BillingHistoryDto>, String> {
 fn iso_days_ago(days: i64) -> String {
     use chrono::{DateTime, Days, Utc};
     let now: DateTime<Utc> = Utc::now();
-    let target = now.checked_sub_days(Days::new(days.max(0) as u64)).unwrap_or(now);
+    let target = now
+        .checked_sub_days(Days::new(days.max(0) as u64))
+        .unwrap_or(now);
     target.format("%Y-%m-%d").to_string()
 }
 
@@ -4741,7 +4795,10 @@ mod tests {
         let second =
             fire_query_notification(&notifier, NotificationKind::Failed("api timeout 2".into()))
                 .unwrap();
-        assert!(!second, "second failure within 5s window should be coalesced");
+        assert!(
+            !second,
+            "second failure within 5s window should be coalesced"
+        );
     }
 
     #[test]
@@ -4997,11 +5054,15 @@ mod tests {
         let tasks_dir = tmp.path().join(".claude/tasks");
 
         let rt = tokio::runtime::Runtime::new().expect("rt");
-        let first = rt.block_on(seed_sample_data_in(&tasks_dir)).expect("seed 1");
+        let first = rt
+            .block_on(seed_sample_data_in(&tasks_dir))
+            .expect("seed 1");
         assert_eq!(first.tasks_seeded, 3);
 
         // Second call should be a no-op — dir already has json files.
-        let second = rt.block_on(seed_sample_data_in(&tasks_dir)).expect("seed 2");
+        let second = rt
+            .block_on(seed_sample_data_in(&tasks_dir))
+            .expect("seed 2");
         assert_eq!(second.tasks_seeded, 0);
 
         let count = std::fs::read_dir(&tasks_dir)
@@ -5064,17 +5125,15 @@ mod tests {
         state.sessions.lock().await.push(parent_meta);
 
         // Branch at message index 1 (should include first 2 messages)
-        let branch_result = branch_session_internal(
-            &state,
-            None,
-            parent_id_str.clone(),
-            1,
-        )
-        .await
-        .expect("branch_session_internal");
+        let branch_result = branch_session_internal(&state, None, parent_id_str.clone(), 1)
+            .await
+            .expect("branch_session_internal");
 
         // Verify branch session metadata
-        assert_eq!(branch_result.message_count, 2, "branch has only first 2 messages");
+        assert_eq!(
+            branch_result.message_count, 2,
+            "branch has only first 2 messages"
+        );
         assert_eq!(branch_result.parent_id, Some(parent_id_str.clone()));
         assert_eq!(branch_result.branch_point, Some(1));
         assert!(branch_result.title.contains("Branch of"));
@@ -5126,14 +5185,9 @@ mod tests {
         state.sessions.lock().await.push(parent_meta);
 
         // Branch at message index 0
-        let branch_result = branch_session_internal(
-            &state,
-            None,
-            parent_id_str.clone(),
-            0,
-        )
-        .await
-        .expect("branch_session_internal");
+        let branch_result = branch_session_internal(&state, None, parent_id_str.clone(), 0)
+            .await
+            .expect("branch_session_internal");
 
         // Verify working_dir is inherited
         assert_eq!(branch_result.working_dir, Some("/home/user/project".into()));
@@ -5247,121 +5301,306 @@ mod tests {
     }
 }
 
-    #[test]
-    fn test_fallback_marketplace_catalog_has_entries() {
-        let catalog = fallback_marketplace_catalog();
-        assert!(!catalog.is_empty(), "fallback catalog should have entries");
-        assert!(catalog.len() >= 18, "fallback catalog should have at least 18 entries");
+#[test]
+fn test_fallback_marketplace_catalog_has_entries() {
+    let catalog = fallback_marketplace_catalog();
+    assert!(!catalog.is_empty(), "fallback catalog should have entries");
+    assert!(
+        catalog.len() >= 18,
+        "fallback catalog should have at least 18 entries"
+    );
 
-        // Verify we have entries across all expected kinds
-        use crate::extensions::types::AddonKind;
-        let kinds: std::collections::HashSet<AddonKind> =
-            catalog.iter().map(|e| e.kind).collect();
-        assert!(kinds.contains(&AddonKind::Mcp), "should have MCP entries");
-        assert!(kinds.contains(&AddonKind::Skill), "should have Skill entries");
-        assert!(kinds.contains(&AddonKind::Agent), "should have Agent entries");
-        assert!(kinds.contains(&AddonKind::DataSource), "should have DataSource entries");
+    // Verify we have entries across all expected kinds
+    use crate::extensions::types::AddonKind;
+    let kinds: std::collections::HashSet<AddonKind> = catalog.iter().map(|e| e.kind).collect();
+    assert!(kinds.contains(&AddonKind::Mcp), "should have MCP entries");
+    assert!(
+        kinds.contains(&AddonKind::Skill),
+        "should have Skill entries"
+    );
+    assert!(
+        kinds.contains(&AddonKind::Agent),
+        "should have Agent entries"
+    );
+    assert!(
+        kinds.contains(&AddonKind::DataSource),
+        "should have DataSource entries"
+    );
+}
+
+#[test]
+fn test_fallback_marketplace_catalog_metadata_valid() {
+    let catalog = fallback_marketplace_catalog();
+
+    // All entries should have required fields populated
+    for entry in catalog {
+        assert!(!entry.id.is_empty(), "entry should have non-empty id");
+        assert!(!entry.name.is_empty(), "entry should have non-empty name");
+        assert!(
+            !entry.description.is_empty(),
+            "entry should have non-empty description"
+        );
+        assert!(!entry.tags.is_empty(), "entry should have at least one tag");
+        assert!(
+            entry.stars.is_none() || entry.stars.unwrap() > 0,
+            "stars should be positive if set"
+        );
+
+        // Verify trust levels are valid
+        match entry.trust {
+            crate::extensions::types::TrustLevel::Unknown => {}
+            crate::extensions::types::TrustLevel::Community => {}
+            crate::extensions::types::TrustLevel::Official => {}
+            crate::extensions::types::TrustLevel::Verified => {}
+        }
+    }
+}
+
+// --- Security hardening tests (audit issues #1, #2, #4, #10) ---
+
+#[test]
+fn resolve_path_in_working_dir_accepts_inside_relative() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let file = sub.join("a.rs");
+    std::fs::write(&file, "x").unwrap();
+
+    let resolved = crate::resolve_path_in_working_dir("sub/a.rs", tmp.path())
+        .expect("relative path inside working dir should resolve");
+    assert_eq!(resolved, file.canonicalize().unwrap());
+}
+
+#[test]
+fn resolve_path_in_working_dir_accepts_inside_absolute() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a.rs");
+    std::fs::write(&file, "x").unwrap();
+
+    let resolved = crate::resolve_path_in_working_dir(&file.to_string_lossy(), tmp.path())
+        .expect("absolute path inside working dir should resolve");
+    assert_eq!(resolved, file.canonicalize().unwrap());
+}
+
+#[test]
+fn resolve_path_in_working_dir_rejects_dotdot_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Create a sibling directory *outside* the working dir (same parent).
+    let parent = tmp.path().parent().unwrap().to_path_buf();
+    let sibling = parent.join("shannon_test_sibling_target");
+    let _ = std::fs::create_dir(&sibling);
+    let target = sibling.join("secret.txt");
+    std::fs::write(&target, "secret").ok();
+
+    // `../shannon_test_sibling_target/secret.txt` escapes the working dir.
+    let rel = "../shannon_test_sibling_target/secret.txt";
+    let err = crate::resolve_path_in_working_dir(rel, tmp.path())
+        .expect_err("path traversal via .. must be rejected");
+    assert!(
+        err.contains("outside"),
+        "expected 'outside' in error, got: {err}"
+    );
+
+    // Cleanup the sibling we created outside the tempdir.
+    let _ = std::fs::remove_dir_all(&sibling);
+}
+
+#[test]
+fn resolve_path_in_working_dir_rejects_absolute_outside_path() {
+    // Security #10 regression: `apply_diff`'s old `contains("..")` check
+    // let `/etc/hosts` through. The new helper must reject it.
+    let tmp = tempfile::tempdir().unwrap();
+    let err = crate::resolve_path_in_working_dir("/etc/hosts", tmp.path())
+        .expect_err("absolute path outside working dir must be rejected");
+    // On Linux /etc/hosts exists, so we expect the "outside" error. On
+    // other platforms it may be "not found" — either is a valid rejection.
+    assert!(
+        err.contains("outside") || err.contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn resolve_path_in_working_dir_rejects_missing_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = crate::resolve_path_in_working_dir("does_not_exist.rs", tmp.path())
+        .expect_err("missing path should fail canonicalize");
+    assert!(err.contains("not found"));
+}
+
+// ── Top-level unit tests for high-value pure functions ───────────────
+// These complement `mod tests` above. Kept at module scope so they can
+// invoke private helpers directly without going through `super::*`.
+
+#[cfg(test)]
+mod pure_function_tests {
+    use super::*;
+
+    // ── parse_approval_mode: covers all 11 variants + fallback ───────
+
+    #[test]
+    fn parse_approval_mode_maps_every_documented_alias() {
+        use shannon_core::permissions::ApprovalMode;
+        assert_eq!(parse_approval_mode("suggest"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("default"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("plan"), ApprovalMode::Plan);
+        assert_eq!(parse_approval_mode("auto"), ApprovalMode::Auto);
+        assert_eq!(parse_approval_mode("auto_edit"), ApprovalMode::AutoEdit);
+        assert_eq!(parse_approval_mode("autoedit"), ApprovalMode::AutoEdit);
+        assert_eq!(parse_approval_mode("full_auto"), ApprovalMode::FullAuto);
+        assert_eq!(parse_approval_mode("fullauto"), ApprovalMode::FullAuto);
+        assert_eq!(parse_approval_mode("readonly"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("read-only"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("plan_ro"), ApprovalMode::PlanReadonly);
+        assert_eq!(parse_approval_mode("plan-ro"), ApprovalMode::PlanReadonly);
+        assert_eq!(
+            parse_approval_mode("planreadonly"),
+            ApprovalMode::PlanReadonly
+        );
+        assert_eq!(
+            parse_approval_mode("bypass_permissions"),
+            ApprovalMode::BypassPermissions
+        );
+        assert_eq!(
+            parse_approval_mode("bypasspermissions"),
+            ApprovalMode::BypassPermissions
+        );
+        assert_eq!(parse_approval_mode("dont_ask"), ApprovalMode::DontAsk);
+        assert_eq!(parse_approval_mode("dontask"), ApprovalMode::DontAsk);
+        assert_eq!(parse_approval_mode("confirm"), ApprovalMode::Suggest);
     }
 
     #[test]
-    fn test_fallback_marketplace_catalog_metadata_valid() {
-        let catalog = fallback_marketplace_catalog();
+    fn parse_approval_mode_is_case_insensitive() {
+        use shannon_core::permissions::ApprovalMode;
+        assert_eq!(parse_approval_mode("SUGGEST"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("Plan"), ApprovalMode::Plan);
+        assert_eq!(parse_approval_mode("FULL_AUTO"), ApprovalMode::FullAuto);
+    }
 
-        // All entries should have required fields populated
-        for entry in catalog {
-            assert!(!entry.id.is_empty(), "entry should have non-empty id");
-            assert!(!entry.name.is_empty(), "entry should have non-empty name");
-            assert!(!entry.description.is_empty(), "entry should have non-empty description");
-            assert!(!entry.tags.is_empty(), "entry should have at least one tag");
-            assert!(entry.stars.is_none() || entry.stars.unwrap() > 0, "stars should be positive if set");
+    #[test]
+    fn parse_approval_mode_unknown_falls_back_to_suggest() {
+        use shannon_core::permissions::ApprovalMode;
+        assert_eq!(parse_approval_mode(""), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("yolo"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("sudo"), ApprovalMode::Suggest);
+    }
 
-            // Verify trust levels are valid
-            match entry.trust {
-                crate::extensions::types::TrustLevel::Unknown => {}
-                crate::extensions::types::TrustLevel::Community => {}
-                crate::extensions::types::TrustLevel::Official => {}
-                crate::extensions::types::TrustLevel::Verified => {}
-            }
+    // ── detect_media_type ─────────────────────────────────────────────
+
+    #[test]
+    fn detect_media_type_returns_image_mimes() {
+        assert_eq!(detect_media_type("logo.png").as_deref(), Some("image/png"));
+        assert_eq!(
+            detect_media_type("photo.jpg").as_deref(),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            detect_media_type("photo.jpeg").as_deref(),
+            Some("image/jpeg")
+        );
+        assert_eq!(detect_media_type("anim.gif").as_deref(), Some("image/gif"));
+        assert_eq!(
+            detect_media_type("shot.webp").as_deref(),
+            Some("image/webp")
+        );
+        assert_eq!(
+            detect_media_type("icon.svg").as_deref(),
+            Some("image/svg+xml")
+        );
+    }
+
+    #[test]
+    fn detect_media_type_is_case_insensitive_on_extension() {
+        assert_eq!(detect_media_type("PHOTO.PNG").as_deref(), Some("image/png"));
+        assert_eq!(
+            detect_media_type("Photo.JPG").as_deref(),
+            Some("image/jpeg")
+        );
+    }
+
+    #[test]
+    fn detect_media_type_returns_none_for_non_image_or_missing_ext() {
+        assert!(detect_media_type("doc.pdf").is_none());
+        assert!(detect_media_type("video.mp4").is_none());
+        assert!(detect_media_type("noext").is_none());
+        assert!(detect_media_type("").is_none());
+    }
+
+    // ── provider_from_str ─────────────────────────────────────────────
+
+    #[test]
+    fn provider_from_str_maps_known_providers() {
+        use shannon_core::api::types::LlmProvider;
+        assert_eq!(provider_from_str("anthropic"), LlmProvider::Anthropic);
+        assert_eq!(provider_from_str("openai"), LlmProvider::OpenAI);
+        assert_eq!(provider_from_str("ollama"), LlmProvider::Ollama);
+        assert_eq!(provider_from_str("deepseek"), LlmProvider::DeepSeek);
+        assert_eq!(provider_from_str("gemini"), LlmProvider::Gemini);
+        assert_eq!(provider_from_str("mistral"), LlmProvider::Mistral);
+        assert_eq!(provider_from_str("groq"), LlmProvider::Groq);
+        assert_eq!(provider_from_str("openrouter"), LlmProvider::OpenRouter);
+        assert_eq!(provider_from_str("xai"), LlmProvider::Xai);
+    }
+
+    // ── iso_days_ago ──────────────────────────────────────────────────
+
+    #[test]
+    fn iso_days_ago_returns_iso_date_string() {
+        let s = iso_days_ago(7);
+        assert!(is_iso_date(&s), "expected ISO date, got {s}");
+    }
+
+    #[test]
+    fn iso_days_ago_zero_returns_today() {
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert_eq!(iso_days_ago(0), now);
+    }
+
+    #[test]
+    fn iso_days_ago_negative_clamps_to_zero() {
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert_eq!(iso_days_ago(-5), now);
+    }
+
+    // ── template_to_str / template_from_str roundtrip ─────────────────
+
+    #[test]
+    fn webhook_template_str_roundtrip_preserves_known_variants() {
+        use shannon_core::notifier::WebhookTemplate::*;
+        for t in [
+            Slack, Discord, Feishu, Wechat, Teams, Telegram, DingTalk, Raw,
+        ] {
+            let s = template_to_str(&t);
+            let back = template_from_str(&s);
+            assert_eq!(template_to_str(&back), s, "roundtrip not stable for {s}");
         }
     }
 
-    // --- Security hardening tests (audit issues #1, #2, #4, #10) ---
-
     #[test]
-    fn resolve_path_in_working_dir_accepts_inside_relative() {
-        let tmp = tempfile::tempdir().unwrap();
-        let sub = tmp.path().join("sub");
-        std::fs::create_dir(&sub).unwrap();
-        let file = sub.join("a.rs");
-        std::fs::write(&file, "x").unwrap();
-
-        let resolved = crate::resolve_path_in_working_dir(
-            "sub/a.rs",
-            tmp.path(),
-        )
-        .expect("relative path inside working dir should resolve");
-        assert_eq!(resolved, file.canonicalize().unwrap());
+    fn webhook_template_custom_roundtrip() {
+        use shannon_core::notifier::WebhookTemplate;
+        let original = WebhookTemplate::Custom("X".repeat(120));
+        let s = template_to_str(&original);
+        assert!(s.starts_with("custom:"));
+        let back = template_from_str(&s);
+        assert_eq!(template_to_str(&back), s);
     }
 
     #[test]
-    fn resolve_path_in_working_dir_accepts_inside_absolute() {
-        let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("a.rs");
-        std::fs::write(&file, "x").unwrap();
-
-        let resolved = crate::resolve_path_in_working_dir(
-            &file.to_string_lossy(),
-            tmp.path(),
-        )
-        .expect("absolute path inside working dir should resolve");
-        assert_eq!(resolved, file.canonicalize().unwrap());
+    fn webhook_template_from_str_unknown_falls_back_to_raw() {
+        use shannon_core::notifier::WebhookTemplate;
+        assert_eq!(template_from_str("unknown"), WebhookTemplate::Raw);
+        assert_eq!(template_from_str(""), WebhookTemplate::Raw);
     }
 
-    #[test]
-    fn resolve_path_in_working_dir_rejects_dotdot_traversal() {
-        let tmp = tempfile::tempdir().unwrap();
-        // Create a sibling directory *outside* the working dir (same parent).
-        let parent = tmp.path().parent().unwrap().to_path_buf();
-        let sibling = parent.join("shannon_test_sibling_target");
-        let _ = std::fs::create_dir(&sibling);
-        let target = sibling.join("secret.txt");
-        std::fs::write(&target, "secret").ok();
-
-        // `../shannon_test_sibling_target/secret.txt` escapes the working dir.
-        let rel = "../shannon_test_sibling_target/secret.txt";
-        let err = crate::resolve_path_in_working_dir(rel, tmp.path())
-            .expect_err("path traversal via .. must be rejected");
-        assert!(
-            err.contains("outside"),
-            "expected 'outside' in error, got: {err}"
-        );
-
-        // Cleanup the sibling we created outside the tempdir.
-        let _ = std::fs::remove_dir_all(&sibling);
+    fn is_iso_date(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.len() == 10
+            && b[4] == b'-'
+            && b[7] == b'-'
+            && b[..4].iter().all(|c| c.is_ascii_digit())
+            && b[5..7].iter().all(|c| c.is_ascii_digit())
+            && b[8..10].iter().all(|c| c.is_ascii_digit())
     }
-
-    #[test]
-    fn resolve_path_in_working_dir_rejects_absolute_outside_path() {
-        // Security #10 regression: `apply_diff`'s old `contains("..")` check
-        // let `/etc/hosts` through. The new helper must reject it.
-        let tmp = tempfile::tempdir().unwrap();
-        let err = crate::resolve_path_in_working_dir("/etc/hosts", tmp.path())
-            .expect_err("absolute path outside working dir must be rejected");
-        // On Linux /etc/hosts exists, so we expect the "outside" error. On
-        // other platforms it may be "not found" — either is a valid rejection.
-        assert!(
-            err.contains("outside") || err.contains("not found"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn resolve_path_in_working_dir_rejects_missing_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let err = crate::resolve_path_in_working_dir(
-            "does_not_exist.rs",
-            tmp.path(),
-        )
-        .expect_err("missing path should fail canonicalize");
-        assert!(err.contains("not found"));
-    }
+}

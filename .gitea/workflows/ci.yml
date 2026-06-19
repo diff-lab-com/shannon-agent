@@ -1,0 +1,111 @@
+name: CI
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust-test:
+    name: Rust · test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: Build
+        run: cargo build --workspace
+      - name: Compile tests
+        run: cargo test --workspace --no-run
+      - name: Test
+        run: cargo nextest run --workspace
+
+  rust-clippy:
+    name: Rust · clippy
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libssl-dev libgtk-3-dev
+      - name: Clippy
+        run: >
+          cargo clippy --workspace --
+          -D warnings
+          -A unknown-lints
+          -A clippy::collapsible_if
+          -A clippy::collapsible_match
+          -A clippy::derivable_impls
+          -A clippy::manual_is_multiple_of
+          -A clippy::manual_checked_div
+          -A clippy::unwrap_used
+          -A clippy::unnecessary_sort_by
+
+  rust-fmt:
+    name: Rust · fmt
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+          components: rustfmt
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+  audit:
+    name: cargo-deny
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Check dependencies
+        run: cargo deny check --hide-inclusion-graph
+
+  ui:
+    name: UI · lint + test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+      - name: Install UI deps
+        run: pnpm install --dir ui --frozen-lockfile
+      - name: Type check
+        run: pnpm --dir ui lint
+      - name: Unit tests
+        run: pnpm --dir ui test --run

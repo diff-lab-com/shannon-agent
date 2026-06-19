@@ -1046,8 +1046,10 @@ pub fn compute_opc_metrics(
 ) -> OpcMetrics {
     let total = tasks.len() as u32;
 
-    let mut status_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    let mut priority_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut status_counts: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    let mut priority_counts: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
     let mut assignee_map: std::collections::HashMap<String, (u32, u32, u32)> =
         std::collections::HashMap::new();
     let mut completed_total = 0u32;
@@ -1142,9 +1144,11 @@ fn collect_daily_buckets() -> Result<Vec<OpcDayBucket>, String> {
     }
     let earliest = buckets.last().map(|(d, _, _)| *d).unwrap_or(today);
 
-    let visit = |dir: &std::path::Path, buckets: &mut Vec<(chrono::NaiveDate, u32, u32)>| -> Result<(), String> {
-        let entries = std::fs::read_dir(dir)
-            .map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
+    let visit = |dir: &std::path::Path,
+                 buckets: &mut Vec<(chrono::NaiveDate, u32, u32)>|
+     -> Result<(), String> {
+        let entries =
+            std::fs::read_dir(dir).map_err(|e| format!("Cannot read {}: {e}", dir.display()))?;
         for entry in entries.flatten() {
             let path = entry.path();
             let canonical = match path.canonicalize() {
@@ -1269,8 +1273,7 @@ fn today_ymd_local() -> Result<chrono::NaiveDate, String> {
 }
 
 fn systemtime_to_local_naive(t: std::time::SystemTime) -> Result<chrono::NaiveDate, String> {
-    let dt_local: chrono::DateTime<chrono::Local> =
-        t.into();
+    let dt_local: chrono::DateTime<chrono::Local> = t.into();
     Ok(dt_local.date_naive())
 }
 
@@ -1442,7 +1445,10 @@ mod tests {
         };
         let json = serde_json::to_string(&create).unwrap();
         let back: CreateTaskPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.depends_on.as_deref(), Some(["dep1".into(), "dep2".into()].as_slice()));
+        assert_eq!(
+            back.depends_on.as_deref(),
+            Some(["dep1".into(), "dep2".into()].as_slice())
+        );
 
         let update = UpdateTaskPayload {
             id: "abc".into(),
@@ -1815,11 +1821,7 @@ mod tests {
     fn test_read_task_status_extracts_field() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("task.json");
-        std::fs::write(
-            &path,
-            r#"{"id":"abc","title":"t","status":"completed"}"#,
-        )
-        .unwrap();
+        std::fs::write(&path, r#"{"id":"abc","title":"t","status":"completed"}"#).unwrap();
         assert_eq!(read_task_status(&path).as_deref(), Some("completed"));
     }
 
@@ -1914,8 +1916,7 @@ mod tests {
         };
         append_routine_to_project_toml(&def).unwrap();
 
-        let written =
-            std::fs::read_to_string(tmp.path().join(".shannon/routines.toml")).unwrap();
+        let written = std::fs::read_to_string(tmp.path().join(".shannon/routines.toml")).unwrap();
         std::env::set_current_dir(orig).unwrap();
 
         assert!(written.contains("[[routine]]"));
@@ -1954,8 +1955,7 @@ mod tests {
         };
         append_routine_to_project_toml(&def).unwrap();
 
-        let written =
-            std::fs::read_to_string(tmp.path().join(".shannon/routines.toml")).unwrap();
+        let written = std::fs::read_to_string(tmp.path().join(".shannon/routines.toml")).unwrap();
         std::env::set_current_dir(orig).unwrap();
 
         // Both routines present.
@@ -1966,5 +1966,68 @@ mod tests {
             2,
             "two routine blocks"
         );
+    }
+
+    // ── parse_trigger_type ────────────────────────────────────────────
+
+    #[test]
+    fn parse_trigger_type_maps_known_kinds() {
+        assert_eq!(parse_trigger_type("interval"), Some(TriggerType::Interval));
+        assert_eq!(parse_trigger_type("cron"), Some(TriggerType::Cron));
+        assert_eq!(parse_trigger_type("webhook"), Some(TriggerType::Webhook));
+        assert_eq!(parse_trigger_type("event"), Some(TriggerType::Event));
+    }
+
+    #[test]
+    fn parse_trigger_type_is_case_insensitive() {
+        assert_eq!(parse_trigger_type("INTERVAL"), Some(TriggerType::Interval));
+        assert_eq!(parse_trigger_type("Cron"), Some(TriggerType::Cron));
+    }
+
+    #[test]
+    fn parse_trigger_type_rejects_unknown_kinds() {
+        assert!(parse_trigger_type("").is_none());
+        assert!(parse_trigger_type("daemon").is_none());
+        assert!(parse_trigger_type("heartbeat").is_none());
+    }
+
+    // ── is_completed_status / is_in_progress_status ───────────────────
+
+    #[test]
+    fn is_completed_status_matches_completed_and_done() {
+        assert!(is_completed_status("completed"));
+        assert!(is_completed_status("done"));
+        assert!(is_completed_status("COMPLETED"));
+        assert!(is_completed_status("Done"));
+        // NOTE: the helper lowercases but does not trim — callers must
+        // normalize whitespace before invoking.
+        assert!(!is_completed_status("  completed  "));
+    }
+
+    #[test]
+    fn is_completed_status_rejects_non_terminal_states() {
+        assert!(!is_completed_status("running"));
+        assert!(!is_completed_status("in_progress"));
+        assert!(!is_completed_status("failed"));
+        assert!(!is_completed_status("pending"));
+        assert!(!is_completed_status(""));
+    }
+
+    #[test]
+    fn is_in_progress_status_matches_active_states() {
+        assert!(is_in_progress_status("in_progress"));
+        assert!(is_in_progress_status("running"));
+        assert!(is_in_progress_status("pending"));
+        assert!(is_in_progress_status("IN_PROGRESS"));
+        assert!(is_in_progress_status("Running"));
+    }
+
+    #[test]
+    fn is_in_progress_status_rejects_terminal_and_unknown() {
+        assert!(!is_in_progress_status("completed"));
+        assert!(!is_in_progress_status("done"));
+        assert!(!is_in_progress_status("failed"));
+        assert!(!is_in_progress_status("queued"));
+        assert!(!is_in_progress_status(""));
     }
 }
