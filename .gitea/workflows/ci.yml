@@ -22,13 +22,12 @@ jobs:
     name: UI · lint + test
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: https://gitea.com/actions/checkout@v4
+      - uses: https://gitea.com/actions/setup-node@v4
         with:
           node-version: "20"
-      - uses: pnpm/action-setup@v4
-        with:
-          version: "10"
+      - name: Enable pnpm via corepack
+        run: corepack enable pnpm
       - name: Install UI deps
         run: pnpm install --dir ui --frozen-lockfile
       - name: Type check
