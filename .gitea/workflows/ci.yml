@@ -39,8 +39,8 @@ jobs:
     name: i18n · key parity
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: https://gitea.com/actions/checkout@v4
+      - uses: https://gitea.com/actions/setup-node@v4
         with:
           node-version: "20"
       - name: Check en/zh-CN key parity
