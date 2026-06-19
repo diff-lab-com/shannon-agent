@@ -166,7 +166,7 @@ describe('Featured (P2 wire-up)', () => {
     await waitFor(() => {
       expect(installMcpOAuthLoopback).toHaveBeenCalledWith('google-drive')
     })
-    expect(screen.getByText(/paste the access token/i)).toBeInTheDocument()
+    expect(await screen.findByText(/paste the access token/i)).toBeInTheDocument()
   })
 
   it('renders empty state when no vendors match search', async () => {
