@@ -33,7 +33,7 @@ function StatusPill({ status }: { status: string }) {
   )
 }
 
-export default function HistoryView({ taskId, limit = 50 }: { taskId?: string; limit?: number }) {
+export default function HistoryView({ taskId, limit = 50, onGoToActive }: { taskId?: string; limit?: number; onGoToActive?: () => void }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const [rows, setRows] = useState<TaskExecution[]>([])
@@ -86,7 +86,12 @@ export default function HistoryView({ taskId, limit = 50 }: { taskId?: string; l
   if (rows.length === 0) {
     return (
       <div className="bg-surface-container-lowest/70 border border-outline-variant/20 rounded-xl p-xl">
-        <EmptyState icon="history" title={t('tasks.historyView.emptyTitle')} description={t('tasks.historyView.emptyDesc')} />
+        <EmptyState
+          icon="history"
+          title={t('tasks.historyView.emptyTitle')}
+          description={t('tasks.historyView.emptyDesc')}
+          action={onGoToActive ? { label: t('tasks.historyView.cta'), onClick: onGoToActive } : undefined}
+        />
       </div>
     )
   }

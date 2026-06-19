@@ -138,7 +138,7 @@ export default function Triage() {
     kind: kindFilter,
     unarchived_only: showArchived ? undefined : true,
   }), [kindFilter, showArchived])
-  const { items, loading, markRead, archive } = useTriageItems(filter)
+  const { items, loading, markRead, archive, refresh } = useTriageItems(filter)
 
   const availableKinds = useMemo(() => {
     return Object.entries(stats.by_kind)
@@ -382,6 +382,7 @@ export default function Triage() {
             icon="check_circle"
             title={t('triage.empty.title')}
             description={t('triage.empty.description')}
+            action={{ label: t('triage.empty.cta'), onClick: () => void refresh() }}
           />
         ) : (
           <>

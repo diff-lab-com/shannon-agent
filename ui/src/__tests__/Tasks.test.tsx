@@ -33,6 +33,11 @@ describe('Tasks page', () => {
     await waitFor(() => expect(screen.getByText('No tasks yet.')).toBeInTheDocument())
   })
 
+  it('renders New task CTA in empty state', async () => {
+    render(wrap(<Tasks />))
+    await waitFor(() => expect(screen.getByText('New task')).toBeInTheDocument())
+  })
+
   it('renders calendar schedule widget', async () => {
     render(wrap(<Tasks />))
     await waitFor(() => expect(screen.getByText('Schedule')).toBeInTheDocument())
