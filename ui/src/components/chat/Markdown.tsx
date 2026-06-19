@@ -2,7 +2,19 @@ import { useState, useEffect, memo, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { convertFileSrc } from '@tauri-apps/api/core'
+
+const sanitizeSchema = {
+  ...defaultSchema,
+  attributes: {
+    ...defaultSchema.attributes,
+    '*': [
+      ...((defaultSchema.attributes && defaultSchema.attributes['*']) || []),
+      /^data-[a-z0-9-]+$/i,
+    ],
+  },
+}
 
 interface MarkdownProps {
   children: string
@@ -14,7 +26,10 @@ export const Markdown = memo(function Markdown({ children, className }: Markdown
     <div className={className}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        rehypePlugins={[
+          rehypeHighlight,
+          [rehypeSanitize, sanitizeSchema],
+        ]}
         components={{
           pre: CodeBlock,
           img: LocalImage,
