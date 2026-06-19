@@ -78,7 +78,7 @@ pub struct AppState {
     /// Desktop config (persisted).
     pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
     /// Pending permission requests (request_id -> sender).
-    pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
+    pub(crate) pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     /// Session metadata for session list.
     pub(crate) sessions: Arc<Mutex<Vec<SessionMeta>>>,
     /// Cancellation token for the current query.
@@ -1150,82 +1150,10 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<DesktopConf
 // set_working_dir/delete/rename/duplicate/branch_session) extracted to
 // `commands_sessions.rs`. Registered in main.rs as commands_sessions::*.
 
-/// Save a text payload (e.g. an exported session) to disk. The frontend
-/// pairs this with @tauri-apps/plugin-dialog's save() to let the user
-/// choose the destination — the backend stays out of UI concerns.
-#[tauri::command]
-pub async fn save_text_file(path: String, content: String) -> Result<(), String> {
-    let target = std::path::Path::new(&path);
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
-    }
-    std::fs::write(target, content)
-        .map_err(|e| format!("Failed to write {}: {e}", target.display()))
-}
-
-/// Request permission for a tool execution.
-#[tauri::command]
-pub async fn request_permission(
-    state: tauri::State<'_, AppState>,
-    app_handle: tauri::AppHandle,
-    tool: String,
-    input: serde_json::Value,
-    risk: String,
-) -> Result<bool, String> {
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let (tx, rx) = oneshot::channel();
-
-    // Store the sender
-    {
-        let mut pending = state.pending_permissions.lock().await;
-        pending.insert(request_id.clone(), tx);
-    }
-
-    // Emit event to frontend
-    let _ = app_handle.emit(
-        events::event_names::PERMISSION_REQUEST,
-        events::PermissionRequest {
-            tool: tool.clone(),
-            input: input.clone(),
-            risk: risk.clone(),
-            request_id: request_id.clone(),
-        },
-    );
-
-    // Wait for response with 30s timeout
-    let timeout = tokio::time::Duration::from_secs(30);
-    let result = tokio::time::timeout(timeout, rx).await;
-
-    // Clean up
-    {
-        let mut pending = state.pending_permissions.lock().await;
-        pending.remove(&request_id);
-    }
-
-    match result {
-        Ok(Ok(allowed)) => Ok(allowed),
-        Ok(Err(_)) => Ok(false), // Sender dropped
-        Err(_) => Ok(false),     // Timeout
-    }
-}
-
-/// Respond to a permission request.
-#[tauri::command]
-pub async fn respond_permission(
-    state: tauri::State<'_, AppState>,
-    request_id: String,
-    allow: bool,
-) -> Result<(), String> {
-    let mut pending = state.pending_permissions.lock().await;
-    if let Some(tx) = pending.remove(&request_id) {
-        // Send response, ignoring errors if receiver dropped
-        let _ = tx.send(allow);
-        Ok(())
-    } else {
-        Err(format!("Permission request not found: {}", request_id))
-    }
-}
+// save_text_file extracted to `commands_files.rs` (registered as
+// commands_files::save_text_file in main.rs).
+// request_permission + respond_permission extracted to `commands_permissions.rs`
+// (registered as commands_permissions::* in main.rs).
 
 /// File diff result for the diff viewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
