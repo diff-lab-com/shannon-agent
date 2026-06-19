@@ -122,7 +122,9 @@ describe('LspQuickFixPanel', () => {
   it('refresh button re-fetches actions', async () => {
     render(<LspQuickFixPanel diagnostic={diag} />)
     await waitFor(() => expect(lspCodeActions).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByLabelText('Re-fetch quick fixes'))
+    const refresh = screen.getByLabelText('Re-fetch quick fixes') as HTMLButtonElement
+    await waitFor(() => expect(refresh.disabled).toBe(false))
+    fireEvent.click(refresh)
     await waitFor(() => expect(lspCodeActions).toHaveBeenCalledTimes(2))
   })
 
