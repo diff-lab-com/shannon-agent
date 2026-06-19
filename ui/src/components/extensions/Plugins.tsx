@@ -9,6 +9,11 @@ import InstallDialog from "./InstallDialog";
 const KIND_ORDER: AddonKind[] = ["mcp", "skill", "agent", "data_source", "plugin"];
 
 type SortMode = "trust" | "stars" | "name" | "recent";
+type TrustFilter = TrustLevel | "all";
+type SourceFilter = CatalogSource["type"] | "all";
+
+const TRUST_FILTER_ORDER: TrustFilter[] = ["all", "verified", "official", "community", "unknown"];
+const SOURCE_FILTERS: SourceFilter[] = ["all", "git_hub_repo", "featured_vendor", "native", "mcp_registry", "custom"];
 
 const KIND_ICON: Record<AddonKind, string> = {
   mcp: "cloud",
@@ -85,6 +90,8 @@ export default function Plugins() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<AddonKind | "all">("all");
+  const [trustFilter, setTrustFilter] = useState<TrustFilter>("all");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("trust");
   const [installTarget, setInstallTarget] = useState<CatalogEntry | null>(null);
   const [upstreams, setUpstreams] = useState<CatalogUpstream[]>([]);
@@ -143,11 +150,25 @@ export default function Plugins() {
     const q = search.trim().toLowerCase();
     return entries.filter((e) => {
       if (kindFilter !== "all" && e.kind !== kindFilter) return false;
+      if (trustFilter !== "all" && e.trust !== trustFilter) return false;
+      if (sourceFilter !== "all" && e.source?.type !== sourceFilter) return false;
       if (!q) return true;
       const hay = [e.name, e.description, e.author ?? "", (e.tags ?? []).join(" "), sourceLabel(e.source)].join(" ").toLowerCase();
       return hay.includes(q);
     });
-  }, [entries, kindFilter, search]);
+  }, [entries, kindFilter, trustFilter, sourceFilter, search]);
+
+  const activeFilterCount =
+    (kindFilter !== "all" ? 1 : 0) +
+    (trustFilter !== "all" ? 1 : 0) +
+    (sourceFilter !== "all" ? 1 : 0) +
+    (search.trim() ? 1 : 0);
+
+  const resetFilters = () => {
+    setKindFilter("all");
+    setTrustFilter("all");
+    setSourceFilter("all");
+  };
 
   const grouped = useMemo(() => {
     const map = new Map<AddonKind, CatalogEntry[]>();
@@ -331,7 +352,7 @@ export default function Plugins() {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-md mb-lg">
+      <div className="flex items-center justify-between gap-md mb-lg flex-wrap">
         <div className="flex items-center gap-xs flex-wrap">
           <button
             onClick={() => setKindFilter("all")}
@@ -350,11 +371,34 @@ export default function Plugins() {
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-xs">
+        <div className="flex items-center gap-xs flex-wrap">
+          <select
+            value={trustFilter}
+            onChange={(e) => setTrustFilter(e.target.value as TrustFilter)}
+            aria-label={t("extensions.plugins.filter.trust.label")}
+            className="px-sm py-xs rounded-lg bg-surface-container-low text-on-surface text-label-sm font-bold cursor-pointer hover:bg-surface-container-high transition-colors"
+          >
+            <option value="all">{t("extensions.plugins.filter.trust.all")}</option>
+            {TRUST_FILTER_ORDER.filter((x) => x !== "all").map((tf) => (
+              <option key={tf} value={tf}>{t(TRUST_LABEL_KEY[tf])}</option>
+            ))}
+          </select>
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value as SourceFilter)}
+            aria-label={t("extensions.plugins.filter.source.label")}
+            className="px-sm py-xs rounded-lg bg-surface-container-low text-on-surface text-label-sm font-bold cursor-pointer hover:bg-surface-container-high transition-colors"
+          >
+            <option value="all">{t("extensions.plugins.filter.source.all")}</option>
+            {SOURCE_FILTERS.filter((x) => x !== "all").map((sf) => (
+              <option key={sf} value={sf}>{t(`extensions.plugins.filter.source.${sf === "git_hub_repo" ? "github" : sf === "featured_vendor" ? "featured" : sf}`)}</option>
+            ))}
+          </select>
           <span className="text-label-sm text-on-surface-variant">{t("extensions.plugins.sortLabel")}</span>
           <select
             value={sortMode}
             onChange={(e) => setSortMode(e.target.value as SortMode)}
+            aria-label={t("extensions.plugins.sortLabel")}
             className="px-sm py-xs rounded-lg bg-surface-container-low text-on-surface text-label-sm font-bold cursor-pointer hover:bg-surface-container-high transition-colors"
           >
             <option value="trust">{t("extensions.plugins.sortTrust")}</option>
@@ -362,11 +406,30 @@ export default function Plugins() {
             <option value="name">{t("extensions.plugins.sortName")}</option>
             <option value="recent">{t("extensions.plugins.sortRecent")}</option>
           </select>
-          <span className="text-label-sm text-on-surface-variant shrink-0">
-            <FormattedMessage id="extensions.plugins.count" values={{ count: filtered.length }} />
-          </span>
         </div>
       </div>
+
+      {(activeFilterCount > 0 || filtered.length === 0) && (
+        <div className="flex items-center justify-between gap-md mb-md flex-wrap">
+          <span className="text-label-sm text-on-surface-variant">
+            <FormattedMessage id="extensions.plugins.count" values={{ count: filtered.length }} />
+            {activeFilterCount > 0 && (
+              <span className="ml-sm text-on-surface-variant/70">
+                · <FormattedMessage id="extensions.plugins.filter.active" values={{ count: activeFilterCount }} />
+              </span>
+            )}
+          </span>
+          {activeFilterCount > 0 && (
+            <button
+              onClick={resetFilters}
+              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors text-label-sm font-bold"
+            >
+              <span className="material-symbols-outlined text-[14px]">filter_alt_off</span>
+              {t("extensions.plugins.filter.reset")}
+            </button>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-xl">
