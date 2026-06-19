@@ -10,87 +10,12 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  rust-test:
-    name: Rust · test
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check out shannon-code sibling (pinned to 00510a7)
-        uses: actions/checkout@v4
-        with:
-          repository: shannon-agent/shannon-code
-          path: ../shannon-code
-          ref: 00510a7
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libgtk-3-dev
-      - name: Install nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - name: Build
-        run: cargo build --workspace
-      - name: Compile tests
-        run: cargo test --workspace --no-run
-      - name: Test
-        run: cargo nextest run --workspace
-
-  rust-clippy:
-    name: Rust · clippy
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check out shannon-code sibling (pinned to 00510a7)
-        uses: actions/checkout@v4
-        with:
-          repository: shannon-agent/shannon-code
-          path: ../shannon-code
-          ref: 00510a7
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.88"
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Install Tauri system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libssl-dev libgtk-3-dev
-      - name: Clippy
-        run: >
-          cargo clippy --workspace --
-          -D warnings
-          -A unknown-lints
-          -A clippy::collapsible_if
-          -A clippy::collapsible_match
-          -A clippy::derivable_impls
-          -A clippy::manual_is_multiple_of
-          -A clippy::manual_checked_div
-          -A clippy::unwrap_used
-          -A clippy::unnecessary_sort_by
-
-  rust-fmt:
-    name: Rust · fmt
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.88"
-          components: rustfmt
-      - name: Format check
-        run: cargo fmt --all -- --check
-
+  # Rust build / clippy / fmt were removed from CI because the Gitea runner
+  # cannot reliably reach github.com (cloning actions/checkout and the
+  # shannon-code sibling both time out). Run them locally before merge:
+  #   cargo fmt --all -- --check
+  #   cargo clippy --workspace -- -D warnings
+  #   cargo test --workspace
   audit:
     name: cargo-deny
     runs-on: ubuntu-22.04

@@ -20,7 +20,7 @@ cargo run                      # full desktop app (runs tauri::Builder)
 cargo build                    # check compile
 cargo test                     # Rust integration/unit tests
 cargo bench --bench load_tests # criterion benches (OPC metric aggregation)
-cargo clippy                   # Rust lints (CI gate)
+cargo clippy                   # Rust lints (local gate — not in CI; runner can't reach github.com)
 
 # UI-only (run inside ui/)
 pnpm dev                       # vite dev server on :1420 (Tauri devUrl)
