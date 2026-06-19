@@ -3,7 +3,7 @@ import { useOutletContext } from "react-router-dom";
 import { useIntl } from 'react-intl'
 import {
   listFeaturedVendors,
-  installMcpOAuthAuthorizeUrl,
+  installMcpOAuthLoopback,
   installMcpOAuthComplete,
   installMcpStdio,
   type FeaturedVendor,
@@ -12,16 +12,17 @@ import {
 /**
  * Featured tab — curated list of verified MCP vendors Shannon ships with.
  *
- * P2 wire-up:
+ * Wire-up:
  * - Loads the static featured list from `list_featured_vendors` Rust command.
- * - OAuth vendors get a one-click "Connect" button → opens browser via
- *   `install_mcp_oauth_authorize_url` → user authorizes → paste the code or
- *   the loopback listener hands back the token → `install_mcp_oauth_complete`.
+ * - OAuth vendors get a one-click "Connect" button → `install_mcp_oauth_loopback`
+ *   binds an ephemeral loopback port, opens the browser, accepts the OAuth
+ *   callback, exchanges the code (PKCE), and writes the MCP server config.
+ *   The await resolves only after the whole flow finishes.
  * - stdio vendors (e.g. filesystem) install directly via `install_mcp_stdio`.
  *
- * For P2 the OAuth flow is simplified: we open the URL and show a "Paste your
- * access token" prompt. The loopback listener path is wired in the Rust layer
- * but requires a desktop process event channel to surface back to the UI.
+ * Manual token paste is kept as a fallback for headless / browser-blocked
+ * environments: if the loopback flow throws, the catch handler reveals the
+ * `TokenPasteForm` so the user can paste an access token obtained out-of-band.
  */
 export default function Featured() {
   const intl = useIntl()
@@ -61,11 +62,8 @@ export default function Featured() {
     setFeedback(null);
     try {
       if (vendor.install_kind.type === "oauth_remote") {
-        const redirectUri = "http://localhost:1738/callback";
-        const { url } = await installMcpOAuthAuthorizeUrl(vendor.slug, redirectUri);
-        // Open in default browser. In Tauri, window.open works for external URLs.
-        window.open(url, "_blank", "noopener,noreferrer");
-        setTokenPrompt(vendor.slug);
+        await installMcpOAuthLoopback(vendor.slug);
+        setFeedback({ slug: vendor.slug, msg: t('extensions.featured.connected'), ok: true });
       } else {
         // stdio featured vendor — install directly.
         const env: Record<string, string> = {};
@@ -81,6 +79,12 @@ export default function Featured() {
     } catch (err) {
       console.error('[Featured] install failed:', err);
       setFeedback({ slug: vendor.slug, msg: t('extensions.featured.error.installFailed'), ok: false });
+      if (vendor.install_kind.type === "oauth_remote") {
+        // Loopback flow failed (port bind, browser launch, callback timeout,
+        // token exchange, etc.). Reveal the manual paste form as a fallback
+        // so users on headless / browser-blocked setups can still connect.
+        setTokenPrompt(vendor.slug);
+      }
     } finally {
       setBusy(null);
     }

@@ -2,6 +2,70 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.3.5 (2026-06-19) — S2 P0–P2 landing
+
+Six PRs merged into `dev` covering the S2 P0–P2 sprint scope. CI
+slimmed to UI-only after the Gitea runner could not reliably reach
+github.com for action checkout / sibling fetch; Rust checks moved to
+`scripts/local-check.sh` as a local pre-merge gate.
+
+### Tooling
+
+- **P0.3–P0.5: Gitea CI slim-down + `rust-toolchain.toml` + ADR-0001 (PR #1 + #6).**
+  `rust-toolchain.toml` (channel `1.88`, profile `minimal`, components
+  `rustfmt`/`clippy`) is now the single source of truth for the toolchain.
+  CI workflow `.gitea/workflows/ci.yml` runs only the `ui` job (pnpm install
+  + lint + vitest) on the `ubuntu-22.04` self-hosted runner — Rust jobs
+  (`rust-test`, `rust-clippy`, `rust-fmt`, `cargo-deny`) were removed because
+  the runner cannot reliably reach github.com for `actions/checkout` and the
+  shannon-code sibling fetch. ADR-0001 lands the positioning + CI + engine
+  distribution decision record.
+- **Local cargo gate.** `scripts/local-check.sh` runs `cargo fmt --check`,
+  `cargo clippy -D warnings`, `cargo test`, `cargo deny check`, then UI
+  lint + vitest. Run before merge to `main`/`dev`.
+- **i18n key-parity CI (P1.3, PR #2).** `scripts/check-i18n-parity.mjs`
+  diffs keys between `en.json` and `zh-CN.json` and fails on mismatch. Runs
+  as a separate `i18n-parity` CI job.
+
+### Features
+
+- **Featured install flow i18n + granular progress (P1.4 phase 1, PR #4).**
+  Extensions Hub Featured surface now ships full en + zh-CN strings for
+  install progress (cloning → building → registering), error toasts, and
+  the trust-badge tooltip. Phase 2 (OAuth loopback for MCP-remote servers)
+  deferred to a follow-up session.
+
+### Security
+
+- **CSP hardening + Markdown sanitize (P2.4, PR #3).** Production CSP
+  drops `'unsafe-inline'` from `script-src`. `Markdown.tsx` now runs
+  `rehype-sanitize` on rendered LLM output, closing an XSS vector where a
+  malicious model response could inject arbitrary HTML into the chat view.
+  External links continue to use `tauri-plugin-shell` → system browser
+  (unaffected by CSP). `style-src 'unsafe-inline'` retained (Tailwind 4 +
+  pervasive inline styles — separate cleanup).
+
+### Docs
+
+- **User-facing docs (P2.3, PR #5).** `docs/user/{README,getting-started,features}.md`
+  written for a general (non-coder) audience. `README.md` gains a "For
+  users" pointer block at the top so the project's primary README opens
+  with consumer-facing context, not contributor context.
+
+### Version sync
+
+- `Cargo.toml`, `tauri.conf.json`, `ui/package.json` bumped 0.3.2 → 0.3.5
+  to match this entry (prior releases shipped 0.3.2 binaries under a 0.3.4
+  changelog header — drift now closed).
+
+### Known issues
+
+- 6 merged remote branches (`s2/p0-cleanup`, `s2/p1.3-i18n-parity`,
+  `s2/p2.4-csp-sanitize`, `s2/p1.4-mcp-1click`, `s2/p2.3-user-docs`,
+  `s2/ci-fixes`) pending deletion — `git push origin --delete` hangs on the
+  SSH path from the developer machine; clean up via Gitea web UI at
+  convenience.
+
 ## v0.3.4 (2026-06-19) — R2 scope reduction (partial)
 
 R2 of the four-sprint plan, partial delivery. The two remaining R2 items

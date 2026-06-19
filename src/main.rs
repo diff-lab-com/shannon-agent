@@ -8,6 +8,7 @@
 fn main() {
     use shannon_desktop::commands;
     use shannon_desktop::commands_chat;
+    use shannon_desktop::commands_mcp;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
@@ -70,14 +71,14 @@ fn main() {
             commands::respond_permission,
             commands::get_file_diff,
             commands::apply_diff,
-            commands::add_mcp_server,
-            commands::remove_mcp_server,
-            commands::restart_mcp_server,
-            commands::get_mcp_server_config,
-            commands::list_mcp_servers,
-            commands::list_skills,
-            commands::get_skill_detail,
-            commands::list_installed_addons,
+            commands_mcp::add_mcp_server,
+            commands_mcp::remove_mcp_server,
+            commands_mcp::restart_mcp_server,
+            commands_mcp::get_mcp_server_config,
+            commands_mcp::list_mcp_servers,
+            commands_mcp::list_skills,
+            commands_mcp::get_skill_detail,
+            commands_mcp::list_installed_addons,
             // Extensions hub P2 — MCP installers (see extensions_commands.rs)
             extensions_commands::list_featured_vendors,
             extensions_commands::list_mcp_registry_servers,

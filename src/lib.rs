@@ -98,6 +98,9 @@ pub mod commands;
 pub mod commands_chat;
 
 #[cfg(feature = "tauri")]
+pub mod commands_mcp;
+
+#[cfg(feature = "tauri")]
 pub mod scheduled_commands;
 
 #[cfg(feature = "tauri")]
