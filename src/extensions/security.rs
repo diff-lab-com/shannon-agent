@@ -320,9 +320,36 @@ fn extract_signer(body: &str) -> Option<String> {
 
 /// Where reports live.
 fn reports_path() -> PathBuf {
+    #[cfg(test)]
+    {
+        if let Some(h) = TEST_REPORTS_HOME_OVERRIDE.with(|cell| cell.borrow().clone()) {
+            return h.join(".shannon").join("reports.json");
+        }
+    }
     dirs::home_dir()
         .map(|h| h.join(".shannon").join("reports.json"))
         .unwrap_or_else(|| PathBuf::from("/tmp/shannon-reports.json"))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_REPORTS_HOME_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) struct ReportsHomeGuard;
+#[cfg(test)]
+impl Drop for ReportsHomeGuard {
+    fn drop(&mut self) {
+        TEST_REPORTS_HOME_OVERRIDE.with(|cell| *cell.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_reports_home(home: PathBuf) -> ReportsHomeGuard {
+    TEST_REPORTS_HOME_OVERRIDE.with(|cell| *cell.borrow_mut() = Some(home));
+    ReportsHomeGuard
 }
 
 /// One user-submitted report about a catalog entry.
@@ -501,22 +528,10 @@ mod tests {
 
     // --- report store ---
 
-    static REPORTS_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    fn reports_lock() -> &'static std::sync::Mutex<()> {
-        REPORTS_LOCK.get_or_init(|| std::sync::Mutex::new(()))
-    }
-
-    fn lock_home() -> std::sync::MutexGuard<'static, ()> {
-        reports_lock().lock().unwrap_or_else(|p| p.into_inner())
-    }
-
     #[test]
     fn add_report_persists_to_disk() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _g = set_test_reports_home(tmp.path().to_path_buf());
         add_report("gh:test/repo", "suspicious").expect("add");
         assert!(is_reported("gh:test/repo"));
         assert!(!is_reported("gh:other/repo"));
@@ -524,11 +539,8 @@ mod tests {
 
     #[test]
     fn remove_report_drops_matching_entries() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _g = set_test_reports_home(tmp.path().to_path_buf());
         add_report("gh:test/repo", "x").unwrap();
         add_report("gh:test/repo", "y").unwrap();
         let removed = remove_report("gh:test/repo").expect("remove");
@@ -538,11 +550,8 @@ mod tests {
 
     #[test]
     fn load_reports_handles_missing_file() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _g = set_test_reports_home(tmp.path().to_path_buf());
         let store = load_reports().expect("load");
         assert!(store.reports.is_empty());
     }
