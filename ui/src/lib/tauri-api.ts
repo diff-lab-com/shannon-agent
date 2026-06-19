@@ -351,6 +351,22 @@ export async function installMcpOAuthComplete(vendorSlug: string, accessToken: s
   return invoke('install_mcp_oauth_complete', { vendorSlug, accessToken })
 }
 
+/**
+ * One-click OAuth loopback installer (RFC 6749 §3.1.2.4 + RFC 7636 PKCE).
+ *
+ * The Rust side binds an ephemeral loopback port, opens the vendor's
+ * authorize URL in the default browser, accepts the callback, exchanges
+ * the code for a token, and writes the MCP server config. Resolves with
+ * the InstallResult; rejects on any failure (bind / browse / callback /
+ * token exchange / write).
+ *
+ * UI should show a busy state for the whole await — no manual token
+ * paste step is needed.
+ */
+export async function installMcpOAuthLoopback(vendorSlug: string): Promise<InstallResult> {
+  return invoke('install_mcp_oauth_loopback', { vendorSlug })
+}
+
 export async function uninstallMcpServer(serverName: string): Promise<void> {
   return invoke('uninstall_mcp_server', { serverName })
 }
