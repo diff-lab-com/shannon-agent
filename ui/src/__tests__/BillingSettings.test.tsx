@@ -17,6 +17,7 @@ function wrap(ui: React.ReactElement) {
 async function renderReady() {
   render(wrap(<BillingSettings />))
   await waitFor(() => expect(screen.getAllByText(/Usage & Billing/).length).toBeGreaterThanOrEqual(1))
+  await waitFor(() => expect(screen.getByText('Active Plan')).toBeInTheDocument())
 }
 
 describe('BillingSettings', () => {
