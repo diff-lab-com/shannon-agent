@@ -26,8 +26,8 @@ jobs:
       - uses: https://gitea.com/actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Enable pnpm via corepack
-        run: corepack enable pnpm
+      - name: Enable pnpm 10 via corepack
+        run: corepack prepare pnpm@10 --activate
       - name: Install UI deps
         run: pnpm install --dir ui --frozen-lockfile
       - name: Type check
