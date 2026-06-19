@@ -7,6 +7,16 @@ coders. Same Rust engine that writes code also drafts email, researches
 topics, summarizes docs, and runs on schedules. One product, many jobs to
 be done.
 
+## For users
+
+| What | Where |
+|---|---|
+| Install + first chat | [`docs/user/getting-started.md`](docs/user/getting-started.md) |
+| Feature walkthrough | [`docs/user/features.md`](docs/user/features.md) |
+| Privacy & data layout | [`docs/user/README.md`](docs/user/README.md) |
+
+No technical background assumed.
+
 ## Why Shannon
 
 The AI desktop market splits between general chat tools (ChatGPT Desktop)
