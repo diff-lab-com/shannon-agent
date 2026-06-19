@@ -8,6 +8,7 @@ function Shell() {
 }
 
 const listFeaturedVendors = vi.hoisted(() => vi.fn())
+const installMcpOAuthLoopback = vi.hoisted(() => vi.fn())
 const installMcpOAuthAuthorizeUrl = vi.hoisted(() => vi.fn())
 const installMcpOAuthComplete = vi.hoisted(() => vi.fn())
 const installMcpStdio = vi.hoisted(() => vi.fn())
@@ -15,6 +16,7 @@ const installMcpStdio = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
   listFeaturedVendors: (...a: unknown[]) => listFeaturedVendors(...a),
+  installMcpOAuthLoopback: (...a: unknown[]) => installMcpOAuthLoopback(...a),
   installMcpOAuthAuthorizeUrl: (...a: unknown[]) => installMcpOAuthAuthorizeUrl(...a),
   installMcpOAuthComplete: (...a: unknown[]) => installMcpOAuthComplete(...a),
   installMcpStdio: (...a: unknown[]) => installMcpStdio(...a),
@@ -70,6 +72,7 @@ const stdioVendor = {
 
 beforeEach(() => {
   listFeaturedVendors.mockReset()
+  installMcpOAuthLoopback.mockReset()
   installMcpOAuthAuthorizeUrl.mockReset()
   installMcpOAuthComplete.mockReset()
   installMcpStdio.mockReset()
@@ -133,12 +136,12 @@ describe('Featured (P2 wire-up)', () => {
     })
   })
 
-  it('opens OAuth flow and shows token paste form when Connect clicked', async () => {
+  it('invokes installMcpOAuthLoopback when OAuth Connect clicked (success)', async () => {
     listFeaturedVendors.mockResolvedValue([oauthVendor])
-    installMcpOAuthAuthorizeUrl.mockResolvedValue({
-      url: 'https://accounts.google.com/o/oauth2/v2/auth?scope=drive.readonly',
-      verifier: 'v-verifier',
-      state: 's-state',
+    installMcpOAuthLoopback.mockResolvedValue({
+      id: 'oauth:google-drive',
+      name: 'google-drive',
+      install_path: null,
     })
     renderWithRouter()
     await waitFor(() => {
@@ -146,7 +149,22 @@ describe('Featured (P2 wire-up)', () => {
     })
     fireEvent.click(screen.getByText('Connect'))
     await waitFor(() => {
-      expect(installMcpOAuthAuthorizeUrl).toHaveBeenCalledWith('google-drive', 'http://localhost:1738/callback')
+      expect(installMcpOAuthLoopback).toHaveBeenCalledWith('google-drive')
+    })
+    // Success path: no manual token paste form should appear.
+    expect(screen.queryByText(/paste the access token/i)).not.toBeInTheDocument()
+  })
+
+  it('falls back to manual token paste form when loopback fails', async () => {
+    listFeaturedVendors.mockResolvedValue([oauthVendor])
+    installMcpOAuthLoopback.mockRejectedValue(new Error('loopback bind failed'))
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Connect')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('Connect'))
+    await waitFor(() => {
+      expect(installMcpOAuthLoopback).toHaveBeenCalledWith('google-drive')
     })
     expect(screen.getByText(/paste the access token/i)).toBeInTheDocument()
   })
