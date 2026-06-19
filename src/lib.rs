@@ -95,6 +95,9 @@ pub(crate) fn resolve_write_target_in_working_dir(
 pub mod commands;
 
 #[cfg(feature = "tauri")]
+pub mod commands_sessions;
+
+#[cfg(feature = "tauri")]
 pub mod scheduled_commands;
 
 #[cfg(feature = "tauri")]

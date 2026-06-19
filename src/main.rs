@@ -7,6 +7,7 @@
 #[cfg(feature = "tauri")]
 fn main() {
     use shannon_desktop::commands;
+    use shannon_desktop::commands_sessions;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
@@ -53,18 +54,18 @@ fn main() {
             commands::configure,
             commands::switch_provider,
             commands::get_config,
-            commands::new_session,
-            commands::list_sessions,
-            commands::search_sessions,
-            commands::load_session,
-            commands::export_session,
+            commands_sessions::new_session,
+            commands_sessions::list_sessions,
+            commands_sessions::search_sessions,
+            commands_sessions::load_session,
+            commands_sessions::export_session,
             commands::save_text_file,
-            commands::switch_session,
-            commands::set_session_working_dir,
-            commands::delete_session,
-            commands::rename_session,
-            commands::duplicate_session,
-            commands::branch_session,
+            commands_sessions::switch_session,
+            commands_sessions::set_session_working_dir,
+            commands_sessions::delete_session,
+            commands_sessions::rename_session,
+            commands_sessions::duplicate_session,
+            commands_sessions::branch_session,
             commands::request_permission,
             commands::respond_permission,
             commands::get_file_diff,
