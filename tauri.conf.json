@@ -13,7 +13,7 @@
         "createUpdaterArtifacts": true
     },
     "app": {
-        "withGlobalTauri": true,
+        "withGlobalTauri": false,
         "windows": [
             {
                 "title": "Shannon Code",
