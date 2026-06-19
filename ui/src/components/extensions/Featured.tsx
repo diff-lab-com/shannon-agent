@@ -76,10 +76,11 @@ export default function Featured() {
           args: vendor.install_kind.args,
           env: Object.entries(env),
         });
-        setFeedback({ slug: vendor.slug, msg: "Installed", ok: true });
+        setFeedback({ slug: vendor.slug, msg: t('extensions.featured.installed'), ok: true });
       }
     } catch (err) {
-      setFeedback({ slug: vendor.slug, msg: String(err), ok: false });
+      console.error('[Featured] install failed:', err);
+      setFeedback({ slug: vendor.slug, msg: t('extensions.featured.error.installFailed'), ok: false });
     } finally {
       setBusy(null);
     }
@@ -89,10 +90,11 @@ export default function Featured() {
     setBusy(vendor.slug);
     try {
       await installMcpOAuthComplete(vendor.slug, token);
-      setFeedback({ slug: vendor.slug, msg: "Connected", ok: true });
+      setFeedback({ slug: vendor.slug, msg: t('extensions.featured.connected'), ok: true });
       setTokenPrompt(null);
     } catch (err) {
-      setFeedback({ slug: vendor.slug, msg: String(err), ok: false });
+      console.error('[Featured] oauth complete failed:', err);
+      setFeedback({ slug: vendor.slug, msg: t('extensions.featured.error.connectFailed'), ok: false });
     } finally {
       setBusy(null);
     }
@@ -185,17 +187,19 @@ export default function Featured() {
                   {isBusy ? (
                     <>
                       <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
-                      Working…
+                      {vendor.install_kind.type === "oauth_remote"
+                        ? t('extensions.featured.authorizing')
+                        : t('extensions.featured.installing')}
                     </>
                   ) : vendor.install_kind.type === "oauth_remote" ? (
                     <>
                       <span className="material-symbols-outlined text-[16px]">link</span>
-                      Connect
+                      {t('extensions.featured.connect')}
                     </>
                   ) : (
                     <>
                       <span className="material-symbols-outlined text-[16px]">download</span>
-                      Install
+                      {t('extensions.featured.install')}
                     </>
                   )}
                 </button>
