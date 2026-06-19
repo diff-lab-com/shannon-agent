@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, memo, lazy, Suspense } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
@@ -89,6 +90,7 @@ export default function Chat() {
     sendMessage, cancelQuery, createSession, switchSession, deleteSession, renameSession,
   } = useApp()
   const intl = useIntl()
+  const navigate = useNavigate()
   const t = (id: string) => intl.formatMessage({ id })
 
   const [input, setInput] = useState('')
@@ -105,6 +107,7 @@ export default function Chat() {
   const [quickFixOpen, setQuickFixOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
+  const [bannerDismissed, setBannerDismissed] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -268,9 +271,15 @@ export default function Chat() {
   const currentSession = sessions.find(s => s.id === currentSessionId)
   const sessionWorkingDir = currentSession?.working_dir ?? config?.working_dir ?? ''
 
+  const showApiKeyBanner =
+    !bannerDismissed &&
+    !!config &&
+    !config.api_key &&
+    config.provider !== 'ollama'
+
   const handleChangeWorkingDir = async () => {
     if (!currentSessionId) {
-      toast.error(t('chat.header.workingDir.changeFailed'), { description: t('chat.empty.start') })
+      toast.error(t('chat.header.workingDir.changeFailed'), { description: t('chat.header.workingDir.noSession') })
       return
     }
     try {
@@ -434,6 +443,35 @@ export default function Chat() {
             <span className="material-symbols-outlined text-[20px]">{contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}</span>
           </button>
         </header>
+
+        {showApiKeyBanner && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="shannon-apikey-banner shrink-0 flex items-start gap-md px-lg py-sm bg-secondary-container/40 border-b border-secondary/30"
+          >
+            <span className="material-symbols-outlined text-secondary text-[20px] shrink-0 mt-[2px]">key_alert</span>
+            <div className="flex-1 min-w-0">
+              <p className="font-label-md text-on-surface">{t('chat.banner.apiKeyMissing.title')}</p>
+              <p className="font-body-sm text-on-surface-variant mt-xs">{t('chat.banner.apiKeyMissing.body')}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => navigate('/settings/models')}
+              className="shannon-apikey-banner-cta shrink-0 px-md py-xs bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            >
+              {t('chat.banner.apiKeyMissing.cta')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setBannerDismissed(true)}
+              aria-label={t('chat.banner.apiKeyMissing.dismiss')}
+              className="shannon-apikey-banner-dismiss shrink-0 p-xs rounded text-on-surface-variant hover:text-on-surface hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              <span className="material-symbols-outlined text-[18px]">close</span>
+            </button>
+          </div>
+        )}
 
         {/* Message Area */}
         <ScrollArea className="flex-1 px-xl pt-lg space-y-lg pb-32">

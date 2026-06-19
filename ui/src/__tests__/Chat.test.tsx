@@ -450,4 +450,44 @@ describe('Chat page', () => {
     renderChat()
     expect(screen.getByText(/anthropic\/claude-sonnet-4-6/)).toBeInTheDocument()
   })
+
+  describe('API key missing banner', () => {
+    it('renders banner when config has no api_key and provider is not ollama', () => {
+      resetCtx()
+      ctx.config = { provider: 'anthropic' }
+      renderChat()
+      expect(screen.getByText('Add your API key to start chatting')).toBeInTheDocument()
+      expect(screen.getByText('Open Settings')).toBeInTheDocument()
+    })
+
+    it('hides banner when api_key is present', () => {
+      resetCtx()
+      ctx.config = { provider: 'anthropic', api_key: 'sk-xxx' }
+      renderChat()
+      expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
+    })
+
+    it('hides banner when provider is ollama (no key required)', () => {
+      resetCtx()
+      ctx.config = { provider: 'ollama' }
+      renderChat()
+      expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
+    })
+
+    it('hides banner when user clicks dismiss', () => {
+      resetCtx()
+      ctx.config = { provider: 'anthropic' }
+      renderChat()
+      fireEvent.click(screen.getByLabelText('Dismiss'))
+      expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
+    })
+
+    it('deep-links to /settings/models when CTA clicked', () => {
+      resetCtx()
+      ctx.config = { provider: 'anthropic' }
+      renderChat()
+      const cta = screen.getByText('Open Settings').closest('button')!
+      expect(cta).toBeInTheDocument()
+    })
+  })
 })
