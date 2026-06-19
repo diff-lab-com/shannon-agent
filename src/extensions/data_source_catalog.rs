@@ -107,9 +107,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "text".into(),
                     required: false,
                     placeholder: Some("false".into()),
-                    help: Some(
-                        "Whether to index PDF/image attachments alongside notes.".into(),
-                    ),
+                    help: Some("Whether to index PDF/image attachments alongside notes.".into()),
                 },
             ],
         },
@@ -150,9 +148,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "password".into(),
                     required: true,
                     placeholder: None,
-                    help: Some(
-                        "Use an app-specific password when 2FA is enabled.".into(),
-                    ),
+                    help: Some("Use an app-specific password when 2FA is enabled.".into()),
                 },
             ],
         },
@@ -179,9 +175,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "text".into(),
                     required: false,
                     placeholder: Some("32-char hex ID".into()),
-                    help: Some(
-                        "Optional: pre-filter searches to this database.".into(),
-                    ),
+                    help: Some("Optional: pre-filter searches to this database.".into()),
                 },
             ],
         },
@@ -198,9 +192,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "password".into(),
                     required: true,
                     placeholder: Some("lin_api_...".into()),
-                    help: Some(
-                        "Generate at linear.app/settings/api".into(),
-                    ),
+                    help: Some("Generate at linear.app/settings/api".into()),
                 },
                 DataSourceField {
                     key: "team_key".into(),
@@ -208,9 +200,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "text".into(),
                     required: false,
                     placeholder: Some("ENG".into()),
-                    help: Some(
-                        "Optional: pre-filter queries to one team.".into(),
-                    ),
+                    help: Some("Optional: pre-filter queries to one team.".into()),
                 },
             ],
         },
@@ -227,9 +217,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "password".into(),
                     required: true,
                     placeholder: Some("ghp_...".into()),
-                    help: Some(
-                        "Needs `repo` (classic) or `issues:read` (fine-grained).".into(),
-                    ),
+                    help: Some("Needs `repo` (classic) or `issues:read` (fine-grained).".into()),
                 },
                 DataSourceField {
                     key: "default_repo".into(),
@@ -237,9 +225,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "text".into(),
                     required: false,
                     placeholder: Some("shannon-agent/shannon-code".into()),
-                    help: Some(
-                        "Optional: pre-filter queries to one repository.".into(),
-                    ),
+                    help: Some("Optional: pre-filter queries to one repository.".into()),
                 },
             ],
         },
@@ -248,7 +234,9 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
             kind: DataSourceKind::Jira,
             name: "Jira".into(),
             description: "Query Jira issues via the Cloud REST API.".into(),
-            homepage_url: Some("https://developer.atlassian.com/cloud/jira/platform/rest/v3/".into()),
+            homepage_url: Some(
+                "https://developer.atlassian.com/cloud/jira/platform/rest/v3/".into(),
+            ),
             fields: vec![
                 DataSourceField {
                     key: "domain".into(),
@@ -282,9 +270,7 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     kind: "text".into(),
                     required: false,
                     placeholder: Some("SHAN".into()),
-                    help: Some(
-                        "Optional: pre-filter queries to one project.".into(),
-                    ),
+                    help: Some("Optional: pre-filter queries to one project.".into()),
                 },
             ],
         },
@@ -301,14 +287,8 @@ pub fn data_source_catalog_entries() -> Vec<CatalogEntry> {
 
 fn adapter_to_entry(adapter: &DataSourceAdapter) -> CatalogEntry {
     let mut metadata = std::collections::HashMap::new();
-    metadata.insert(
-        "kind".to_string(),
-        serde_json::json!(adapter.kind.as_str()),
-    );
-    metadata.insert(
-        "fields".to_string(),
-        serde_json::json!(adapter.fields),
-    );
+    metadata.insert("kind".to_string(), serde_json::json!(adapter.kind.as_str()));
+    metadata.insert("fields".to_string(), serde_json::json!(adapter.fields));
     CatalogEntry {
         id: format!("native:data-source-{}", adapter.slug),
         kind: AddonKind::DataSource,
@@ -410,10 +390,7 @@ mod tests {
     #[test]
     fn notion_adapter_has_integration_token_field() {
         let entries = data_source_catalog_entries();
-        let notion = entries
-            .iter()
-            .find(|e| e.name == "Notion")
-            .expect("notion");
+        let notion = entries.iter().find(|e| e.name == "Notion").expect("notion");
         let fields = notion.metadata.get("fields").expect("fields");
         let fields: Vec<DataSourceField> =
             serde_json::from_value(fields.clone()).expect("deserialize fields");

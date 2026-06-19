@@ -19,7 +19,7 @@ use tauri::AppHandle;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
 
-use super::{emit_message, matches_trigger, InboundMessage};
+use super::{InboundMessage, emit_message, matches_trigger};
 
 #[derive(Debug, Clone)]
 pub struct SlackConfig {
@@ -67,7 +67,10 @@ pub async fn run(app: AppHandle, cfg: SlackConfig, mut shutdown: watch::Receiver
         .filter(|s| !s.trim().is_empty())
         .collect();
 
-    tracing::info!("slack listener: started ({} allowed channels)", allowed.len());
+    tracing::info!(
+        "slack listener: started ({} allowed channels)",
+        allowed.len()
+    );
 
     while !*shutdown.borrow() {
         match run_once(&http, &app, &cfg, &allowed, &mut shutdown).await {
@@ -184,7 +187,9 @@ async fn open_socket_url(http: &Client, bot_token: &str) -> Result<String, Strin
     if !parsed.ok {
         return Err(parsed.error.unwrap_or_else(|| "unknown error".into()));
     }
-    parsed.url.ok_or_else(|| "missing url in OK response".into())
+    parsed
+        .url
+        .ok_or_else(|| "missing url in OK response".into())
 }
 
 async fn ack_envelope(http: &Client, bot_token: &str, envelope_id: &str) {
@@ -306,8 +311,14 @@ mod tests {
 
     #[test]
     fn strip_trigger_ascii_case_insensitive() {
-        assert_eq!(strip_trigger("Shannon do the thing", "shannon"), "do the thing");
-        assert_eq!(strip_trigger("shannon: run tests", "Shannon"), ": run tests");
+        assert_eq!(
+            strip_trigger("Shannon do the thing", "shannon"),
+            "do the thing"
+        );
+        assert_eq!(
+            strip_trigger("shannon: run tests", "Shannon"),
+            ": run tests"
+        );
         assert_eq!(strip_trigger("not prefixed", "shannon"), "not prefixed");
         assert_eq!(strip_trigger("Shannon", "shannon"), "");
     }

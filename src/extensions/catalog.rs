@@ -319,8 +319,8 @@ impl McpRegistryClient {
 
         let url = format!("{}/servers", self.base_url);
         let body = self.http.fetch_json(&url).await?;
-        let resp: RegistryResponse =
-            serde_json::from_str(&body).map_err(|e| InstallError::Format(format!("registry parse: {e}")))?;
+        let resp: RegistryResponse = serde_json::from_str(&body)
+            .map_err(|e| InstallError::Format(format!("registry parse: {e}")))?;
 
         let servers = resp.servers;
         self.write_cache(&servers);
@@ -331,7 +331,10 @@ impl McpRegistryClient {
     pub fn to_catalog_entry(server: &RegistryServer) -> CatalogEntry {
         let trust = if server.verified {
             TrustLevel::Verified
-        } else if server.repository.as_ref().is_some_and(|r| r.starts_with("makenotion/"))
+        } else if server
+            .repository
+            .as_ref()
+            .is_some_and(|r| r.starts_with("makenotion/"))
             || server
                 .repository
                 .as_ref()
@@ -351,7 +354,14 @@ impl McpRegistryClient {
         }
 
         CatalogEntry {
-            id: format!("mcp-reg:{}", if server.id.is_empty() { &server.name } else { &server.id }),
+            id: format!(
+                "mcp-reg:{}",
+                if server.id.is_empty() {
+                    &server.name
+                } else {
+                    &server.id
+                }
+            ),
             kind: AddonKind::Mcp,
             name: server.name.clone(),
             description: server.description.clone().unwrap_or_default(),
@@ -387,11 +397,15 @@ impl McpRegistryClient {
     }
 
     fn write_cache(&self, servers: &[RegistryServer]) {
-        let Some(dir) = self.cache_dir.as_ref() else { return };
+        let Some(dir) = self.cache_dir.as_ref() else {
+            return;
+        };
         if std::fs::create_dir_all(dir).is_err() {
             return;
         }
-        let body = RegistryResponse { servers: servers.to_vec() };
+        let body = RegistryResponse {
+            servers: servers.to_vec(),
+        };
         if let Ok(json) = serde_json::to_string_pretty(&body) {
             let _ = std::fs::write(dir.join("mcp-registry-servers.json"), json);
         }
@@ -480,8 +494,8 @@ where
             None => (item.clone(), None),
         };
 
-        let mut server: RegistryServer = serde_json::from_value(server_val)
-            .map_err(serde::de::Error::custom)?;
+        let mut server: RegistryServer =
+            serde_json::from_value(server_val).map_err(serde::de::Error::custom)?;
 
         if server.id.is_empty() {
             server.id = server.name.clone();
@@ -548,7 +562,10 @@ mod tests {
 
     #[test]
     fn featured_vendor_converts_to_catalog_entry_with_metadata() {
-        let vendor = featured_vendors().into_iter().find(|v| v.slug == "notion").unwrap();
+        let vendor = featured_vendors()
+            .into_iter()
+            .find(|v| v.slug == "notion")
+            .unwrap();
         let entry = vendor.to_catalog_entry();
         assert_eq!(entry.kind, AddonKind::Mcp);
         assert_eq!(entry.id, "featured:notion");
@@ -674,7 +691,8 @@ mod tests {
             ]
         }"#;
         let fetcher: Arc<dyn HttpFetch> = Arc::new(StaticFetch(body.into()));
-        let client = McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let client =
+            McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
         let servers = client.list_servers().await.expect("fetch");
         assert_eq!(servers.len(), 2);
         assert_eq!(servers[0].name, "Notion");
@@ -704,7 +722,11 @@ mod tests {
 
         let _ = client.list_servers().await.unwrap();
         let _ = client.list_servers().await.unwrap();
-        assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 1, "second call should hit cache");
+        assert_eq!(
+            call_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "second call should hit cache"
+        );
     }
 
     #[tokio::test]
@@ -717,7 +739,8 @@ mod tests {
             }
         }
         let fetcher: Arc<dyn HttpFetch> = Arc::new(ErrFetch);
-        let client = McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let client =
+            McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
         let err = client.list_servers().await.unwrap_err();
         assert!(matches!(err, InstallError::Network(_)));
     }
@@ -725,7 +748,8 @@ mod tests {
     #[tokio::test]
     async fn registry_client_returns_format_error_on_bad_json() {
         let fetcher: Arc<dyn HttpFetch> = Arc::new(StaticFetch("not json".into()));
-        let client = McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let client =
+            McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
         let err = client.list_servers().await.unwrap_err();
         assert!(matches!(err, InstallError::Format(_)));
     }
@@ -768,11 +792,15 @@ mod tests {
             "metadata": {"nextCursor": "x", "count": 1}
         }"#;
         let fetcher: Arc<dyn HttpFetch> = Arc::new(StaticFetch(body.into()));
-        let client = McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let client =
+            McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
         let servers = client.list_servers().await.expect("fetch");
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].name, "ac.inference.sh/mcp");
-        assert_eq!(servers[0].id, "ac.inference.sh/mcp", "id defaults from name");
+        assert_eq!(
+            servers[0].id, "ac.inference.sh/mcp",
+            "id defaults from name"
+        );
         assert_eq!(servers[0].version.as_deref(), Some("1.0.0"));
         assert!(servers[0].verified, "active official status marks verified");
     }

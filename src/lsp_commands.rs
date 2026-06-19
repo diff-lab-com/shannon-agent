@@ -62,9 +62,7 @@ async fn resolve_working_dir(state: &crate::commands::AppState) -> PathBuf {
     cfg.working_dir
         .clone()
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        })
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,9 +132,7 @@ async fn run_code_actions(req: CodeActionRequest) -> Result<CodeActionsResponse,
         .ok_or_else(|| "no parent dir".to_string())?
         .to_url()
         .map_err(|e| format!("root url: {e}"))?;
-    let doc_uri = abs
-        .to_url()
-        .map_err(|e| format!("doc url: {e}"))?;
+    let doc_uri = abs.to_url().map_err(|e| format!("doc url: {e}"))?;
 
     let mut client = shannon_core::lsp::LspClient::spawn(&req.server_cmd, &req.server_args)
         .await
@@ -237,8 +233,8 @@ async fn apply_code_action_inner(
         let raw_path = uri_to_path(uri)?;
         // Validate the path is inside the working directory before touching it.
         let path = resolve_path_in_working_dir(&raw_path.to_string_lossy(), working_dir)?;
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        let content =
+            std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
         // Apply edits in reverse order so offsets stay valid.
         let mut lines: Vec<String> = content.lines().map(String::from).collect();
         let mut sorted: Vec<(u32, u32, u32, u32, String)> = edits
@@ -366,20 +362,14 @@ pub async fn read_source_file(
 }
 
 /// Test-friendly inner taking an explicit working directory.
-async fn read_source_file_inner(
-    working_dir: &Path,
-    path: String,
-) -> Result<SourceFileDto, String> {
+async fn read_source_file_inner(working_dir: &Path, path: String) -> Result<SourceFileDto, String> {
     let canonical = resolve_path_in_working_dir(&path, working_dir)?;
     if !canonical.is_file() {
         return Err(format!("not a file: {}", canonical.display()));
     }
     let content = std::fs::read_to_string(&canonical)
         .map_err(|e| format!("read {}: {e}", canonical.display()))?;
-    let ext = canonical
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = canonical.extension().and_then(|e| e.to_str()).unwrap_or("");
     Ok(SourceFileDto {
         path: canonical.to_string_lossy().into_owned(),
         content,
@@ -416,9 +406,7 @@ async fn run_file_diagnostics_inner(
         .map_err(|_| format!("diagnostics timed out after {}s", LSP_TIMEOUT.as_secs()))?
 }
 
-async fn run_diagnostics(
-    req: FileDiagnosticsRequest,
-) -> Result<FileDiagnosticsResponse, String> {
+async fn run_diagnostics(req: FileDiagnosticsRequest) -> Result<FileDiagnosticsResponse, String> {
     let abs = Path::new(&req.file_path)
         .canonicalize()
         .map_err(|e| format!("canonicalize {}: {e}", req.file_path))?;
@@ -427,9 +415,7 @@ async fn run_diagnostics(
         .ok_or_else(|| "no parent dir".to_string())?
         .to_url()
         .map_err(|e| format!("root url: {e}"))?;
-    let doc_uri = abs
-        .to_url()
-        .map_err(|e| format!("doc url: {e}"))?;
+    let doc_uri = abs.to_url().map_err(|e| format!("doc url: {e}"))?;
 
     let mut client = shannon_core::lsp::LspClient::spawn(&req.server_cmd, &req.server_args)
         .await
@@ -508,10 +494,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let err = rt
-            .block_on(apply_code_action_inner(
-                tmp.path(),
-                serde_json::json!({}),
-            ))
+            .block_on(apply_code_action_inner(tmp.path(), serde_json::json!({})))
             .unwrap_err();
         assert!(err.contains("changes"));
     }
@@ -603,7 +586,8 @@ mod tests {
         });
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(apply_code_action_inner(tmp.path(), edit)).unwrap();
+        rt.block_on(apply_code_action_inner(tmp.path(), edit))
+            .unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "world\n");
     }
 

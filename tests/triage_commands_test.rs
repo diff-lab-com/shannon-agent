@@ -16,7 +16,11 @@ use tempfile::TempDir;
 fn seed_triage_items(store: &TriageStore, count: usize) -> Vec<TriageItem> {
     let mut items = Vec::new();
     for i in 0..count {
-        let kind = if i % 2 == 0 { "failed_run" } else { "needs_review" };
+        let kind = if i % 2 == 0 {
+            "failed_run"
+        } else {
+            "needs_review"
+        };
         let item = store
             .add(kind, &format!("Test triage item {}", i))
             .expect("add triage item");
@@ -116,9 +120,7 @@ async fn mark_triage_read_flips_read_flag() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let store = TriageStore::with_path(tmp.path().join("triage.jsonl"));
 
-    let item = store
-        .add("test_kind", "test message")
-        .expect("add item");
+    let item = store.add("test_kind", "test message").expect("add item");
     assert!(!item.read, "item should start unread");
 
     let updated = store.mark_read(&item.id).expect("mark as read");
@@ -136,9 +138,7 @@ async fn mark_triage_read_reflected_in_stats() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let store = TriageStore::with_path(tmp.path().join("triage.jsonl"));
 
-    let item = store
-        .add("test_kind", "test message")
-        .expect("add item");
+    let item = store.add("test_kind", "test message").expect("add item");
 
     let stats_before = store.stats().expect("get stats before");
     assert_eq!(stats_before.unread, 1, "should have 1 unread item");
@@ -155,9 +155,7 @@ async fn archive_triage_item_flips_archived_flag() {
     let tmp = tempfile::tempdir().expect("create temp dir");
     let store = TriageStore::with_path(tmp.path().join("triage.jsonl"));
 
-    let item = store
-        .add("test_kind", "test message")
-        .expect("add item");
+    let item = store.add("test_kind", "test message").expect("add item");
     assert!(!item.archived, "item should start unarchived");
 
     let archived = store.archive(&item.id).expect("archive item");
@@ -178,8 +176,12 @@ async fn triage_store_filter_by_kind() {
 
     store.add("failed_run", "fail 1").expect("add failed_run 1");
     store.add("failed_run", "fail 2").expect("add failed_run 2");
-    store.add("needs_review", "review 1").expect("add needs_review");
-    store.add("budget_exceeded", "budget 1").expect("add budget_exceeded");
+    store
+        .add("needs_review", "review 1")
+        .expect("add needs_review");
+    store
+        .add("budget_exceeded", "budget 1")
+        .expect("add budget_exceeded");
 
     let filter = TriageFilter {
         kind: Some("failed_run".into()),

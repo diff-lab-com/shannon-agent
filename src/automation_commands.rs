@@ -315,9 +315,7 @@ fn builtin_profile_infos() -> Vec<BuiltinProfileInfo> {
 /// Custom profiles are loaded fresh from disk on every call so newly created
 /// files show up immediately in the UI.
 #[tauri::command]
-pub async fn list_permission_profiles(
-    _state: State<'_, AppState>,
-) -> Result<ProfilesList, String> {
+pub async fn list_permission_profiles(_state: State<'_, AppState>) -> Result<ProfilesList, String> {
     let registry = shannon_core::custom_profiles::CustomProfileRegistry::load_from_dirs();
     let custom = registry
         .all()
@@ -375,13 +373,7 @@ pub async fn save_custom_profile(
     let path = dir.join(format!("{trimmed}.toml"));
 
     let description = description.unwrap_or_default();
-    let body = render_profile_toml(
-        &trimmed,
-        &description,
-        &auto_approve,
-        &confirm,
-        &deny,
-    );
+    let body = render_profile_toml(&trimmed, &description, &auto_approve, &confirm, &deny);
 
     std::fs::write(&path, body).map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "saved custom permission profile");
@@ -470,15 +462,18 @@ pub async fn delete_custom_profile(
     }
 
     let candidates = [
-        PathBuf::from(".shannon").join("profiles").join(format!("{trimmed}.toml")),
-        PathBuf::from(".claude").join("profiles").join(format!("{trimmed}.toml")),
+        PathBuf::from(".shannon")
+            .join("profiles")
+            .join(format!("{trimmed}.toml")),
+        PathBuf::from(".claude")
+            .join("profiles")
+            .join(format!("{trimmed}.toml")),
     ];
 
     let mut removed = Vec::new();
     for path in candidates {
         if path.is_file() {
-            std::fs::remove_file(&path)
-                .map_err(|e| format!("remove {}: {e}", path.display()))?;
+            std::fs::remove_file(&path).map_err(|e| format!("remove {}: {e}", path.display()))?;
             tracing::info!(path = %path.display(), "deleted custom permission profile");
             removed.push(path.to_string_lossy().into_owned());
         }
@@ -502,7 +497,11 @@ mod tests {
         names.sort();
         let initial = names.len();
         names.dedup();
-        assert_eq!(names.len(), initial, "duplicate hook event names in catalog");
+        assert_eq!(
+            names.len(),
+            initial,
+            "duplicate hook event names in catalog"
+        );
     }
 
     #[test]
@@ -510,8 +509,16 @@ mod tests {
         for info in hook_event_catalog() {
             assert!(!info.name.is_empty(), "missing name");
             assert!(!info.category.is_empty(), "{} missing category", info.name);
-            assert!(!info.description.is_empty(), "{} missing description", info.name);
-            assert!(!info.payload_fields.is_empty(), "{} missing payload_fields", info.name);
+            assert!(
+                !info.description.is_empty(),
+                "{} missing description",
+                info.name
+            );
+            assert!(
+                !info.payload_fields.is_empty(),
+                "{} missing payload_fields",
+                info.name
+            );
         }
     }
 

@@ -55,10 +55,12 @@ impl LinearFetcher {
 
         // Add search filter if query is non-empty
         let search_filter = if !query.is_empty() {
-            format!(r#"filter: {{ {{ {} OR title: {{ containsIgnoreCase: "{}" }} OR description: {{ containsIgnoreCase: "{}" }} }} }}"#,
+            format!(
+                r#"filter: {{ {{ {} OR title: {{ containsIgnoreCase: "{}" }} OR description: {{ containsIgnoreCase: "{}" }} }} }}"#,
                 team_filter.trim_end_matches(','),
                 query.replace('"', "\\\""),
-                query.replace('"', "\\\""))
+                query.replace('"', "\\\"")
+            )
         } else if !team_filter.is_empty() {
             format!(r#"filter: {{ {} }}"#, team_filter)
         } else {
@@ -103,7 +105,7 @@ impl LinearFetcher {
 
             Ok(DataSourceResult {
                 items,
-                total: 0, // Linear GraphQL doesn't return total count
+                total: 0,        // Linear GraphQL doesn't return total count
                 has_more: false, // Simplified — Linear uses pagination
             })
         } else {

@@ -279,10 +279,9 @@ fn main() {
                 MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
             let check_updates_item =
                 MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
-            let status_item =
-                MenuItemBuilder::with_id("status", initial_label.clone())
-                    .enabled(false)
-                    .build(app)?;
+            let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
+                .enabled(false)
+                .build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
@@ -432,7 +431,8 @@ fn rebuild_tray_menu(
 
     let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
     let new_session_item = MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
-    let check_updates_item = MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
+    let check_updates_item =
+        MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
     let status_item = MenuItemBuilder::with_id("status", label)
         .enabled(false)
         .build(app)?;

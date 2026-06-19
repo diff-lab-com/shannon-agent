@@ -66,7 +66,10 @@ impl GitHubFetcher {
                 format!(
                     "https://api.github.com/search/issues?q=repo:{}+{}&per_page=50",
                     default_repo,
-                    percent_encoding::utf8_percent_encode(query, percent_encoding::NON_ALPHANUMERIC)
+                    percent_encoding::utf8_percent_encode(
+                        query,
+                        percent_encoding::NON_ALPHANUMERIC
+                    )
                 )
             }
         } else {
@@ -76,7 +79,10 @@ impl GitHubFetcher {
             } else {
                 format!(
                     "https://api.github.com/search/issues?q={}&per_page=50",
-                    percent_encoding::utf8_percent_encode(query, percent_encoding::NON_ALPHANUMERIC)
+                    percent_encoding::utf8_percent_encode(
+                        query,
+                        percent_encoding::NON_ALPHANUMERIC
+                    )
                 )
             }
         }
@@ -108,7 +114,10 @@ impl GitHubFetcher {
                 })
             } else if let Ok(issues) = serde_json::from_str::<Vec<GitHubIssue>>(&text) {
                 // List response
-                let items: Vec<DataSourceItem> = issues.into_iter().map(|issue| self.map_issue(issue)).collect();
+                let items: Vec<DataSourceItem> = issues
+                    .into_iter()
+                    .map(|issue| self.map_issue(issue))
+                    .collect();
                 let total = items.len();
 
                 Ok(DataSourceResult {
@@ -117,7 +126,9 @@ impl GitHubFetcher {
                     has_more: false,
                 })
             } else {
-                Err(DataSourceError::UpstreamError("Failed to parse GitHub response".to_string()))
+                Err(DataSourceError::UpstreamError(
+                    "Failed to parse GitHub response".to_string(),
+                ))
             }
         } else {
             match status.as_u16() {

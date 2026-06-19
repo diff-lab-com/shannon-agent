@@ -21,11 +21,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::extensions::{
-    self, catalog::FeaturedVendor, installer::AddonInstaller, FeaturedInstallKind,
-    MarketplacePluginInstaller, McpRegistryClient, ReqwestFetch, ResolvedMcpInstaller,
-    SkillCatalogClient, SkillMarkdownInstaller, StdioMcpInstaller, StdioMcpSpec,
-    AgentCatalogClient, AgentRepoInstaller, AgentMarkdownInstaller,
-    DataSourceAdapter,
+    self, AgentCatalogClient, AgentMarkdownInstaller, AgentRepoInstaller, DataSourceAdapter,
+    FeaturedInstallKind, MarketplacePluginInstaller, McpRegistryClient, ReqwestFetch,
+    ResolvedMcpInstaller, SkillCatalogClient, SkillMarkdownInstaller, StdioMcpInstaller,
+    StdioMcpSpec, catalog::FeaturedVendor, installer::AddonInstaller,
 };
 
 /// Featured vendor list — baked into the app, no network fetch.
@@ -44,9 +43,7 @@ pub async fn list_mcp_registry_servers() -> Result<Vec<extensions::RegistryServe
 
 /// Convert a featured vendor into a catalog entry for the UI to render.
 #[tauri::command]
-pub async fn featured_vendor_to_entry(
-    slug: String,
-) -> Result<extensions::CatalogEntry, String> {
+pub async fn featured_vendor_to_entry(slug: String) -> Result<extensions::CatalogEntry, String> {
     let vendors = extensions::featured_vendors();
     let vendor = vendors
         .into_iter()
@@ -181,7 +178,8 @@ pub async fn install_mcp_oauth_complete(
     let installer = OAuthRemoteMcpInstaller { vendor };
     let config = installer.server_config(&access_token);
     let server_name = format!("{}-oauth", vendor_slug);
-    let path = extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
+    let path =
+        extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
     Ok(InstallResult {
         id: format!("oauth:{vendor_slug}"),
         name: server_name,
@@ -241,7 +239,13 @@ pub async fn install_skill_from_repo(
     };
     let sink = extensions::ProgressSink::null();
     let installed = installer
-        .install(&entry, &extensions::InstallTarget::ShannonSkillsDir { plugin: plugin_name.clone() }, &sink)
+        .install(
+            &entry,
+            &extensions::InstallTarget::ShannonSkillsDir {
+                plugin: plugin_name.clone(),
+            },
+            &sink,
+        )
         .await
         .map_err(|e| e.to_string())?;
     Ok(InstallResult {
@@ -279,7 +283,13 @@ pub async fn install_native_skill(
     };
     let sink = extensions::ProgressSink::null();
     let installed = installer
-        .install(&entry, &extensions::InstallTarget::ShannonSkillsDir { plugin: plugin_name.clone() }, &sink)
+        .install(
+            &entry,
+            &extensions::InstallTarget::ShannonSkillsDir {
+                plugin: plugin_name.clone(),
+            },
+            &sink,
+        )
         .await
         .map_err(|e| e.to_string())?;
     Ok(InstallResult {
@@ -346,7 +356,13 @@ pub async fn install_agent_from_repo(
     };
     let sink = extensions::ProgressSink::null();
     let installed = installer
-        .install(&entry, &extensions::InstallTarget::ShannonAgentsDir { plugin: plugin_name.clone() }, &sink)
+        .install(
+            &entry,
+            &extensions::InstallTarget::ShannonAgentsDir {
+                plugin: plugin_name.clone(),
+            },
+            &sink,
+        )
         .await
         .map_err(|e| e.to_string())?;
     Ok(InstallResult {
@@ -384,7 +400,13 @@ pub async fn install_native_agent(
     };
     let sink = extensions::ProgressSink::null();
     let installed = installer
-        .install(&entry, &extensions::InstallTarget::ShannonAgentsDir { plugin: plugin_name.clone() }, &sink)
+        .install(
+            &entry,
+            &extensions::InstallTarget::ShannonAgentsDir {
+                plugin: plugin_name.clone(),
+            },
+            &sink,
+        )
         .await
         .map_err(|e| e.to_string())?;
     Ok(InstallResult {
@@ -470,7 +492,10 @@ pub async fn query_data_source(
     let config = extensions::read_data_source_config(&slug).map_err(|e| e.to_string())?;
     let kind = config.get("kind").ok_or("missing kind in config")?;
     let fetcher = extensions::data_source_fetchers::dispatch(kind).map_err(|e| e.to_string())?;
-    fetcher.fetch(&config, &query).await.map_err(|e| e.to_string())
+    fetcher
+        .fetch(&config, &query)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -496,7 +521,10 @@ pub async fn scan_prompt_injection_with_readme(
         Some(url) => extensions::fetch_readme_cached(url).await,
         None => None,
     };
-    Ok(extensions::scan_with_readme(&description, readme.as_deref()))
+    Ok(extensions::scan_with_readme(
+        &description,
+        readme.as_deref(),
+    ))
 }
 
 /// Verify a signature body (typically the contents of `.mcpb/SIGNATURE.txt`).

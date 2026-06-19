@@ -112,12 +112,24 @@ mod tests {
     #[test]
     fn install_error_display_is_human_readable() {
         let cases = [
-            (InstallError::Network("timeout".into()), "network error: timeout"),
-            (InstallError::Io("permission denied".into()), "io error: permission denied"),
-            (InstallError::Format("bad zip".into()), "format error: bad zip"),
+            (
+                InstallError::Network("timeout".into()),
+                "network error: timeout",
+            ),
+            (
+                InstallError::Io("permission denied".into()),
+                "io error: permission denied",
+            ),
+            (
+                InstallError::Format("bad zip".into()),
+                "format error: bad zip",
+            ),
             (InstallError::Auth("revoked".into()), "auth error: revoked"),
             (InstallError::Cancelled, "cancelled by user"),
-            (InstallError::Unsupported("no transport".into()), "unsupported: no transport"),
+            (
+                InstallError::Unsupported("no transport".into()),
+                "unsupported: no transport",
+            ),
             (InstallError::Other("boom".into()), "boom"),
         ];
         for (err, expected) in cases {
@@ -177,7 +189,9 @@ mod tests {
             Ok(())
         }
         async fn update(&self, addon_id: &str) -> Result<InstalledAddon, InstallError> {
-            Err(InstallError::Unsupported(format!("no update for {addon_id}")))
+            Err(InstallError::Unsupported(format!(
+                "no update for {addon_id}"
+            )))
         }
         fn requires_confirmation(&self, _entry: &CatalogEntry) -> ConfirmationLevel {
             ConfirmationLevel::Review
@@ -205,7 +219,13 @@ mod tests {
         };
         assert!(installer.supports(&entry));
         let installed = installer
-            .install(&entry, &InstallTarget::ShannonSkillsDir { plugin: "test".into() }, &ProgressSink::null())
+            .install(
+                &entry,
+                &InstallTarget::ShannonSkillsDir {
+                    plugin: "test".into(),
+                },
+                &ProgressSink::null(),
+            )
             .await
             .expect("install");
         assert_eq!(installed.id, "test:1");

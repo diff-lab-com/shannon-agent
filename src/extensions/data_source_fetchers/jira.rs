@@ -39,7 +39,10 @@ impl DataSourceFetcher for JiraFetcher {
 
         let response = client
             .get(&url)
-            .header("Authorization", format!("Basic {}", self.build_basic_auth(email, api_token)))
+            .header(
+                "Authorization",
+                format!("Basic {}", self.build_basic_auth(email, api_token)),
+            )
             .header("Content-Type", "application/json")
             .send()
             .await

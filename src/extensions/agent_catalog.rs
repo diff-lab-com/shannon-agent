@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::catalog::HttpFetch;
 use super::installer::InstallError;
 use super::types::{AddonKind, CatalogEntry, CatalogSource, TrustLevel};
-use super::catalog::HttpFetch;
 
 /// Static description of an agent collection upstream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,10 +174,7 @@ fn manifest_to_entry(agent: AgentManifestEntry, upstream: &AgentUpstream) -> Cat
     if let Some(prompt) = &agent.system_prompt {
         metadata.insert("system_prompt".to_string(), serde_json::json!(prompt));
     }
-    metadata.insert(
-        "upstream".to_string(),
-        serde_json::json!(upstream.slug),
-    );
+    metadata.insert("upstream".to_string(), serde_json::json!(upstream.slug));
 
     CatalogEntry {
         id: format!("gh:{}/{}/{}", upstream.repo, upstream.ref_, agent.name),
@@ -204,30 +201,31 @@ fn manifest_to_entry(agent: AgentManifestEntry, upstream: &AgentUpstream) -> Cat
 
 /// Shannon built-in agent definitions.
 fn builtin_agents() -> Vec<CatalogEntry> {
-    let native_preamble = |name: &str, description: &str, model: &str, tools: &[&str], tags: &[&str]| {
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("model".to_string(), serde_json::json!(model));
-        metadata.insert(
-            "tools".to_string(),
-            serde_json::json!(tools.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
-        );
-        CatalogEntry {
-            id: format!("native:agent-{name}"),
-            kind: AddonKind::Agent,
-            name: name.to_string(),
-            description: description.to_string(),
-            author: Some("Shannon".into()),
-            version: Some(env!("CARGO_PKG_VERSION").into()),
-            homepage_url: None,
-            license: Some("Apache-2.0".into()),
-            stars: None,
-            last_updated: None,
-            source: CatalogSource::Native,
-            trust: TrustLevel::Verified,
-            metadata,
-            tags: tags.iter().map(|s| s.to_string()).collect(),
-        }
-    };
+    let native_preamble =
+        |name: &str, description: &str, model: &str, tools: &[&str], tags: &[&str]| {
+            let mut metadata = std::collections::HashMap::new();
+            metadata.insert("model".to_string(), serde_json::json!(model));
+            metadata.insert(
+                "tools".to_string(),
+                serde_json::json!(tools.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            );
+            CatalogEntry {
+                id: format!("native:agent-{name}"),
+                kind: AddonKind::Agent,
+                name: name.to_string(),
+                description: description.to_string(),
+                author: Some("Shannon".into()),
+                version: Some(env!("CARGO_PKG_VERSION").into()),
+                homepage_url: None,
+                license: Some("Apache-2.0".into()),
+                stars: None,
+                last_updated: None,
+                source: CatalogSource::Native,
+                trust: TrustLevel::Verified,
+                metadata,
+                tags: tags.iter().map(|s| s.to_string()).collect(),
+            }
+        };
 
     vec![
         native_preamble(
@@ -258,11 +256,7 @@ fn default_agent_cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("shannon").join("agents"))
 }
 
-fn read_cache(
-    cache_dir: &Option<PathBuf>,
-    key: &str,
-    ttl: Duration,
-) -> Option<Vec<CatalogEntry>> {
+fn read_cache(cache_dir: &Option<PathBuf>, key: &str, ttl: Duration) -> Option<Vec<CatalogEntry>> {
     let path = cache_dir.as_ref()?.join(key);
     let metadata = std::fs::metadata(&path).ok()?;
     let modified = metadata.modified().ok()?;
@@ -307,7 +301,8 @@ mod tests {
                     "tags": ["testing"]
                 }
             ]
-        }"#.to_string()
+        }"#
+        .to_string()
     }
 
     #[tokio::test]
@@ -318,7 +313,10 @@ mod tests {
             .iter()
             .filter(|e| e.source == CatalogSource::Native)
             .count();
-        assert!(native_count >= 3, "expected at least 3 native entries, got {native_count}");
+        assert!(
+            native_count >= 3,
+            "expected at least 3 native entries, got {native_count}"
+        );
     }
 
     #[tokio::test]

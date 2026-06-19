@@ -14,7 +14,7 @@ use serde::Deserialize;
 use tauri::AppHandle;
 use tokio::sync::watch;
 
-use super::{emit_message, matches_trigger, InboundMessage};
+use super::{InboundMessage, emit_message, matches_trigger};
 
 #[derive(Debug, Clone)]
 pub struct TelegramConfig {
@@ -67,11 +67,7 @@ pub(crate) fn api_url(bot_token: &str, method: &str) -> String {
     format!("https://api.telegram.org/bot{}/{}", bot_token, method)
 }
 
-pub async fn run(
-    app: AppHandle,
-    cfg: TelegramConfig,
-    shutdown: watch::Receiver<bool>,
-) {
+pub async fn run(app: AppHandle, cfg: TelegramConfig, shutdown: watch::Receiver<bool>) {
     if cfg.bot_token.trim().is_empty() {
         tracing::warn!("telegram listener: empty bot token, not starting");
         return;
@@ -91,7 +87,10 @@ pub async fn run(
         .filter_map(|s| s.trim().parse::<i64>().ok())
         .collect();
 
-    tracing::info!("telegram listener: started ({} allowed chats)", allowed.len());
+    tracing::info!(
+        "telegram listener: started ({} allowed chats)",
+        allowed.len()
+    );
 
     loop {
         if *shutdown.borrow() {
@@ -253,8 +252,14 @@ mod tests {
 
     #[test]
     fn strip_trigger_removes_only_prefix() {
-        assert_eq!(strip_trigger("Shannon do the thing", "shannon"), "do the thing");
-        assert_eq!(strip_trigger("shannon: run tests", "Shannon"), ": run tests");
+        assert_eq!(
+            strip_trigger("Shannon do the thing", "shannon"),
+            "do the thing"
+        );
+        assert_eq!(
+            strip_trigger("shannon: run tests", "Shannon"),
+            ": run tests"
+        );
         assert_eq!(strip_trigger("not prefixed", "shannon"), "not prefixed");
         assert_eq!(strip_trigger("Shannon", "shannon"), "");
     }

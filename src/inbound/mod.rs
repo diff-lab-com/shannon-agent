@@ -25,19 +25,19 @@
 //! first so the supervisor suppresses the "unexpected" event during graceful
 //! shutdown.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-mod telegram;
 mod slack;
+mod telegram;
 
-pub use telegram::TelegramConfig;
 pub use slack::SlackConfig;
+pub use telegram::TelegramConfig;
 
 /// Tauri event emitted when an inbound worker task exits outside of an
 /// explicit `stop()` call. Payload is [`WorkerExitedPayload`].
@@ -58,8 +58,8 @@ pub struct WorkerExitedPayload {
 /// Normalized inbound message — emitted to the frontend via `inbound-message`.
 #[derive(Debug, Clone, Serialize)]
 pub struct InboundMessage {
-    pub provider: String,   // "slack" | "telegram"
-    pub source_id: String,  // channel id (Slack) or chat id (Telegram)
+    pub provider: String,  // "slack" | "telegram"
+    pub source_id: String, // channel id (Slack) or chat id (Telegram)
     pub source_name: String,
     pub sender_id: String,
     pub sender_name: String,

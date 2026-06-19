@@ -31,7 +31,8 @@ impl DataSourceFetcher for NotionFetcher {
 
         // If database_id is configured, query the database; otherwise search all pages
         if let Some(database_id) = config.get("database_id") {
-            self.query_database(&client, token, database_id, query).await
+            self.query_database(&client, token, database_id, query)
+                .await
         } else {
             self.search_pages(&client, token, query).await
         }

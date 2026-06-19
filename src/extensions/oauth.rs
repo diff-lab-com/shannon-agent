@@ -69,7 +69,7 @@ pub fn build_authorize_url(
     state: &str,
     scopes: &[String],
 ) -> Result<String, url::ParseError> {
-    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     use url::Url;
 
     let mut url = Url::parse(authorize_endpoint)?;
@@ -107,7 +107,11 @@ impl PkceContext {
         let verifier = generate_code_verifier();
         let challenge = code_challenge_s256(&verifier);
         let state = generate_state();
-        Self { verifier, challenge, state }
+        Self {
+            verifier,
+            challenge,
+            state,
+        }
     }
 }
 
@@ -123,8 +127,14 @@ impl Default for PkceContext {
 /// returned an `error=...` parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthCallback {
-    Success { code: String, state: String },
-    Error { error: String, description: Option<String> },
+    Success {
+        code: String,
+        state: String,
+    },
+    Error {
+        error: String,
+        description: Option<String>,
+    },
 }
 
 pub fn parse_callback_query(query: &str, expected_state: &str) -> Result<String, OAuthError> {
@@ -133,13 +143,22 @@ pub fn parse_callback_query(query: &str, expected_state: &str) -> Result<String,
     // Check for OAuth error response first.
     for (k, v) in &parsed {
         if k == "error" {
-            let desc = parsed.iter().find(|(k2, _)| k2 == "error_description").map(|(_, v)| v.clone());
+            let desc = parsed
+                .iter()
+                .find(|(k2, _)| k2 == "error_description")
+                .map(|(_, v)| v.clone());
             return Err(OAuthError::VendorError(v.clone(), desc));
         }
     }
 
-    let code = parsed.iter().find(|(k, _)| k == "code").map(|(_, v)| v.clone());
-    let state = parsed.iter().find(|(k, _)| k == "state").map(|(_, v)| v.clone());
+    let code = parsed
+        .iter()
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.clone());
+    let state = parsed
+        .iter()
+        .find(|(k, _)| k == "state")
+        .map(|(_, v)| v.clone());
 
     let code = code.ok_or(OAuthError::MissingCode)?;
     let state = state.ok_or(OAuthError::MissingState)?;
@@ -209,7 +228,11 @@ mod tests {
     #[test]
     fn code_verifier_is_correct_length() {
         let v = generate_code_verifier();
-        assert!((43..=128).contains(&v.len()), "len {} not in [43,128]", v.len());
+        assert!(
+            (43..=128).contains(&v.len()),
+            "len {} not in [43,128]",
+            v.len()
+        );
     }
 
     #[test]
@@ -315,7 +338,11 @@ mod tests {
 
     #[test]
     fn parse_callback_vendor_error_surfaces_description() {
-        let err = parse_callback_query("error=access_denied&error_description=user+cancelled", "any").unwrap_err();
+        let err = parse_callback_query(
+            "error=access_denied&error_description=user+cancelled",
+            "any",
+        )
+        .unwrap_err();
         match err {
             OAuthError::VendorError(code, desc) => {
                 assert_eq!(code, "access_denied");

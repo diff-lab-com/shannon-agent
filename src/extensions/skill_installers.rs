@@ -39,10 +39,7 @@ impl AddonInstaller for MarketplacePluginInstaller {
     }
 
     fn supports(&self, entry: &CatalogEntry) -> bool {
-        matches!(
-            entry.source,
-            CatalogSource::GitHubRepo { .. }
-        ) && entry.kind == AddonKind::Skill
+        matches!(entry.source, CatalogSource::GitHubRepo { .. }) && entry.kind == AddonKind::Skill
     }
 
     async fn install(
@@ -52,7 +49,9 @@ impl AddonInstaller for MarketplacePluginInstaller {
         progress: &ProgressSink,
     ) -> Result<InstalledAddon, InstallError> {
         progress
-            .emit(super::types::ProgressEvent::Started { total_steps: Some(3) })
+            .emit(super::types::ProgressEvent::Started {
+                total_steps: Some(3),
+            })
             .await;
         progress
             .emit(super::types::ProgressEvent::Step {
@@ -89,9 +88,7 @@ impl AddonInstaller for MarketplacePluginInstaller {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(InstallError::Io(format!(
-                "git clone failed: {stderr}"
-            )));
+            return Err(InstallError::Io(format!("git clone failed: {stderr}")));
         }
 
         progress
@@ -113,9 +110,7 @@ impl AddonInstaller for MarketplacePluginInstaller {
             )));
         }
 
-        progress
-            .emit(super::types::ProgressEvent::Finished)
-            .await;
+        progress.emit(super::types::ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
             id: entry.id.clone(),
@@ -207,7 +202,9 @@ impl AddonInstaller for SkillMarkdownInstaller {
         progress: &ProgressSink,
     ) -> Result<InstalledAddon, InstallError> {
         progress
-            .emit(super::types::ProgressEvent::Started { total_steps: Some(2) })
+            .emit(super::types::ProgressEvent::Started {
+                total_steps: Some(2),
+            })
             .await;
 
         let dir = shannon_skills_root().join(&self.plugin_name);
@@ -215,9 +212,7 @@ impl AddonInstaller for SkillMarkdownInstaller {
         let skill_md = dir.join("SKILL.md");
         std::fs::write(&skill_md, &self.body)?;
 
-        progress
-            .emit(super::types::ProgressEvent::Finished)
-            .await;
+        progress.emit(super::types::ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
             id: entry.id.clone(),
@@ -362,10 +357,22 @@ mod tests {
         };
         let entry = fixture_entry();
         let installed = installer
-            .install(&entry, &InstallTarget::ShannonSkillsDir { plugin: "test".into() }, &ProgressSink::null())
+            .install(
+                &entry,
+                &InstallTarget::ShannonSkillsDir {
+                    plugin: "test".into(),
+                },
+                &ProgressSink::null(),
+            )
             .await
             .expect("install");
-        assert!(installed.install_path.as_deref().unwrap().ends_with("test-skill/SKILL.md"));
+        assert!(
+            installed
+                .install_path
+                .as_deref()
+                .unwrap()
+                .ends_with("test-skill/SKILL.md")
+        );
         assert!(is_skill_installed("test-skill"));
 
         installer.uninstall("test-skill").await.expect("uninstall");

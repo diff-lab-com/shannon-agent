@@ -61,7 +61,9 @@ fn mcp_servers() -> Vec<InstalledAddonSummary> {
     let mut out = Vec::new();
 
     for (path, scope) in candidate_mcp_config_paths() {
-        let Some(content) = read_text(&path) else { continue };
+        let Some(content) = read_text(&path) else {
+            continue;
+        };
         let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) else {
             continue;
         };
@@ -77,7 +79,12 @@ fn mcp_servers() -> Vec<InstalledAddonSummary> {
                 id: format!("mcp:{name}"),
                 kind: AddonKind::Mcp,
                 name: name.clone(),
-                install_path: Some(format!("{}#mcpServers.{} ({})", path.display(), name, scope)),
+                install_path: Some(format!(
+                    "{}#mcpServers.{} ({})",
+                    path.display(),
+                    name,
+                    scope
+                )),
                 installed_at: file_mtime(&path),
                 version: None,
                 enabled,
@@ -195,7 +202,13 @@ fn read_text(path: &Path) -> Option<String> {
 fn file_mtime(path: &Path) -> Option<DateTime<Utc>> {
     let meta = std::fs::metadata(path).ok()?;
     let modified = meta.modified().ok()?;
-    DateTime::<Utc>::from_timestamp(modified.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs() as i64, 0)
+    DateTime::<Utc>::from_timestamp(
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs() as i64,
+        0,
+    )
 }
 
 #[cfg(test)]
@@ -211,7 +224,11 @@ mod tests {
         // whatever it finds.
         let result = aggregate_installed();
         // result may be empty or contain entries from the test env's home.
-        assert!(result.iter().all(|r| matches!(r.kind, AddonKind::Mcp | AddonKind::Skill | AddonKind::Agent)));
+        assert!(
+            result
+                .iter()
+                .all(|r| matches!(r.kind, AddonKind::Mcp | AddonKind::Skill | AddonKind::Agent))
+        );
     }
 
     #[test]
@@ -275,7 +292,10 @@ mod tests {
     #[test]
     fn candidate_skill_dirs_include_shannon_and_claude() {
         let dirs = candidate_skill_dirs();
-        let names: Vec<String> = dirs.iter().filter_map(|d| d.to_str().map(String::from)).collect();
+        let names: Vec<String> = dirs
+            .iter()
+            .filter_map(|d| d.to_str().map(String::from))
+            .collect();
         assert!(names.iter().any(|n| n.contains(".shannon/skills")));
         assert!(names.iter().any(|n| n.contains(".claude/commands")));
     }
@@ -283,7 +303,10 @@ mod tests {
     #[test]
     fn candidate_agent_dirs_include_shannon_and_claude() {
         let dirs = candidate_agent_dirs();
-        let names: Vec<String> = dirs.iter().filter_map(|d| d.to_str().map(String::from)).collect();
+        let names: Vec<String> = dirs
+            .iter()
+            .filter_map(|d| d.to_str().map(String::from))
+            .collect();
         assert!(names.iter().any(|n| n.contains(".shannon/agents")));
         assert!(names.iter().any(|n| n.contains(".claude/agents")));
     }
