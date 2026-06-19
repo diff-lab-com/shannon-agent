@@ -22,12 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Check out shannon-code sibling (pinned to 00510a7)
-        uses: actions/checkout@v4
-        with:
-          repository: shannon-agent/shannon-code
-          path: ../shannon-code
-          ref: 00510a7
-          persist-credentials: false
+        run: |
+          mkdir -p ../shannon-code
+          curl -sL --retry 3 https://github.com/shannon-agent/shannon-code/archive/00510a7.tar.gz \
+            | tar xz --strip-components=1 -C ../shannon-code
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.88"
