@@ -8,6 +8,7 @@
 fn main() {
     use shannon_desktop::commands;
     use shannon_desktop::commands_agents;
+    use shannon_desktop::commands_billing;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_plugins;
@@ -191,9 +192,9 @@ fn main() {
             commands::get_inbound_listener_status,
             commands::stop_inbound_listener,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
-            commands::get_billing_plan,
-            commands::get_cost_history,
-            commands::get_billing_history,
+            commands_billing::get_billing_plan,
+            commands_billing::get_cost_history,
+            commands_billing::get_billing_history,
         ])
         .setup(|app| {
             let mut state = commands::AppState::new();
