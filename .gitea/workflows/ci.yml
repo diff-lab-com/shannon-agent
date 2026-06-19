@@ -10,32 +10,14 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Rust build / clippy / fmt were removed from CI because the Gitea runner
-  # cannot reliably reach github.com (cloning actions/checkout and the
-  # shannon-code sibling both time out). Run them locally before merge:
+  # Rust build / clippy / fmt / cargo-deny were removed from CI because the
+  # Gitea runner cannot reliably reach github.com — both cloning
+  # actions/checkout and fetching the shannon-code sibling time out.
+  # Run them locally before merge:
   #   cargo fmt --all -- --check
   #   cargo clippy --workspace -- -D warnings
   #   cargo test --workspace
-  audit:
-    name: cargo-deny
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check out shannon-code sibling (pinned to 00510a7)
-        run: |
-          mkdir -p ../shannon-code
-          curl -sL --retry 3 https://github.com/shannon-agent/shannon-code/archive/00510a7.tar.gz \
-            | tar xz --strip-components=1 -C ../shannon-code
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.88"
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-      - name: Check dependencies
-        run: cargo deny check --hide-inclusion-graph
-
+  #   cargo deny check --hide-inclusion-graph
   ui:
     name: UI · lint + test
     runs-on: ubuntu-22.04
