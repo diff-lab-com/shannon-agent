@@ -2,6 +2,25 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.3.4 (2026-06-19) — R2 scope reduction (partial)
+
+R2 of the four-sprint plan, partial delivery. The two remaining R2 items
+(commands.rs split, full unwrap cleanup) deferred to follow-up sessions
+because each is a multi-hour focused refactor with regression risk.
+
+### Tests
+
+- **R2-A1: Flaky HOME-env tests fixed.** `extensions::security::tests::remove_report_drops_matching_entries` and `extensions::skill_installers::tests::list_installed_skills_returns_plugin_subdirs` (plus 6 sibling tests in the same files) no longer mutate `std::env::HOME` via `unsafe`. New pattern: thread-local override + RAII guard (`set_test_reports_home` / `set_test_skills_root`). `reports_path()` and `shannon_skills_root()` check the thread-local first, fall back to `dirs::home_dir()` in production. Eliminates the cross-file race that forced `--test-threads=1`. Verified stable across 3 consecutive `cargo test --lib` runs at default parallelism (296/296 each).
+
+### Security
+
+- **R2-A2: `withGlobalTauri: false`.** Tauri v2 exposes `window.__TAURI__` to all JS (including any XSS payload) when this flag is `true`. With CSP also tightened in R1, this closes another vector. Audit: grep across `ui/src/` found only a TS declaration in `vite-env.d.ts` (no runtime usage). All actual IPC already goes through typed `@tauri-apps/api` imports. UI tests: 884/884 still pass.
+
+### Deferred to follow-up sessions
+
+- **R2-A3 commands.rs split** — 5527-line god-file needs per-domain extraction (chat / sessions / config / mcp / agents / files). Multi-hour focused work; start with one cohesive domain as template.
+- **R2-A4 unwrap cleanup** — 317 `.unwrap()` calls across the tree, concentrated in `mcpb.rs` (41), `lsp_commands.rs` (47), `mcp_installers.rs` (37), `commands.rs` (32). Priority: unwraps on user-input paths in Tauri command handlers (can panic in production).
+
 ## v0.3.3 (2026-06-19) — R1 industrialization baseline (CI-only scope)
 
 Sprint R1 scoped down to CI-only after the Gitea pivot and "先解决自动化CI"
