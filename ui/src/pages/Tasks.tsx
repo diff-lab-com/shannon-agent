@@ -196,7 +196,7 @@ export default function Tasks() {
         </div>
 
         {tab === 'history' ? (
-          <HistoryView />
+          <HistoryView onGoToActive={() => setTab('active')} />
         ) : tab === 'worktrees' ? (
           <WorktreePanel />
         ) : (
@@ -259,6 +259,7 @@ export default function Tasks() {
               onSelectTask={setSelectedTaskId}
               onRunNow={handleRunNow}
               onCancelTask={setCancelTarget}
+              onCreateTask={() => setShowNewTask(true)}
             />
             <div className="col-span-12 lg:col-span-4 space-y-gutter">
               <CalendarSidebarWidget

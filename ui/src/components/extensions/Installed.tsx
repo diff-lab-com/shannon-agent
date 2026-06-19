@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { useIntl } from "react-intl";
 import { listInstalledAddons } from "@/lib/tauri-api";
 import type { InstalledAddonSummary, AddonKind } from "@/types";
+import EmptyState from "@/components/ui/empty-state";
 
 /**
  * Installed tab — P1's only fully-wired view.
@@ -18,6 +19,7 @@ import type { InstalledAddonSummary, AddonKind } from "@/types";
 export default function Installed() {
   const intl = useIntl();
   const t = (id: string) => intl.formatMessage({ id });
+  const navigate = useNavigate();
   const { search } = useOutletContext<{ search: string }>();
   const [addons, setAddons] = useState<InstalledAddonSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -103,17 +105,12 @@ export default function Installed() {
   if (filtered.length === 0) {
     return (
       <div className="p-lg max-w-4xl mx-auto">
-        <div className="text-center py-3xl">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-surface-container-low mb-md">
-            <span className="material-symbols-outlined text-on-surface-variant text-[32px]">download</span>
-          </div>
-          <h2 className="text-headline-md font-bold text-on-surface mb-sm">
-            {t('extensions.installed.nothingInstalled')}
-          </h2>
-          <p className="text-body-md text-on-surface-variant max-w-md mx-auto">
-            {t('extensions.installed.nothingDesc')}
-          </p>
-        </div>
+        <EmptyState
+          icon="download"
+          title={t('extensions.installed.nothingInstalled')}
+          description={t('extensions.installed.nothingDesc')}
+          action={{ label: t('extensions.installed.cta'), onClick: () => navigate('/extensions/skills') }}
+        />
       </div>
     );
   }

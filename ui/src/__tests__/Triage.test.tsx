@@ -12,6 +12,7 @@ const testMessages: Record<string, string> = {
   'triage.subtitle': 'Failed runs and errors',
   'triage.empty.title': 'All clear.',
   'triage.empty.description': 'No items to triage.',
+  'triage.empty.cta': 'Refresh',
   'triage.kind.label': 'Kind',
   'triage.filter.all': 'All',
   'triage.filter.unread': 'unread',
@@ -111,6 +112,18 @@ describe('Triage page', () => {
     setItems([])
     renderWithIntl(<Triage />)
     expect(screen.getByText('All clear.')).toBeInTheDocument()
+  })
+
+  it('renders Refresh CTA in empty state that calls hook refresh', () => {
+    const refresh = vi.fn()
+    itemsSpy.mockReturnValue({
+      items: [], loading: false, error: null, filter: undefined, setFilter: vi.fn(),
+      refresh, markRead: vi.fn(), archive: vi.fn(),
+    })
+    statsSpy.mockReturnValue({ stats: baseStats, loading: false, error: null, refresh: vi.fn() })
+    renderWithIntl(<Triage />)
+    fireEvent.click(screen.getByText('Refresh'))
+    expect(refresh).toHaveBeenCalled()
   })
 
   it('renders one card per triage item and shows the message', () => {
