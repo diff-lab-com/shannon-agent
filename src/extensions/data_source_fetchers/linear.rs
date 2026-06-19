@@ -6,7 +6,7 @@
 
 use super::{DataSourceError, DataSourceFetcher, DataSourceItem, DataSourceResult};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// Linear API fetcher.
@@ -55,10 +55,12 @@ impl LinearFetcher {
 
         // Add search filter if query is non-empty
         let search_filter = if !query.is_empty() {
-            format!(r#"filter: {{ {{ {} OR title: {{ containsIgnoreCase: "{}" }} OR description: {{ containsIgnoreCase: "{}" }} }} }}"#,
+            format!(
+                r#"filter: {{ {{ {} OR title: {{ containsIgnoreCase: "{}" }} OR description: {{ containsIgnoreCase: "{}" }} }} }}"#,
                 team_filter.trim_end_matches(','),
                 query.replace('"', "\\\""),
-                query.replace('"', "\\\""))
+                query.replace('"', "\\\"")
+            )
         } else if !team_filter.is_empty() {
             format!(r#"filter: {{ {} }}"#, team_filter)
         } else {
@@ -103,7 +105,7 @@ impl LinearFetcher {
 
             Ok(DataSourceResult {
                 items,
-                total: 0, // Linear GraphQL doesn't return total count
+                total: 0,        // Linear GraphQL doesn't return total count
                 has_more: false, // Simplified — Linear uses pagination
             })
         } else {
@@ -163,14 +165,6 @@ struct LinearIssue {
     url: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
-    #[serde(default)]
-    state: Option<LinearState>,
-}
-
-/// Linear issue state.
-#[derive(Debug, Deserialize)]
-struct LinearState {
-    name: String,
 }
 
 #[cfg(test)]
@@ -205,8 +199,7 @@ mod tests {
                             "title": "Test Issue",
                             "description": "Test description",
                             "url": "https://linear.app/issue/LIN-1",
-                            "updatedAt": "2024-01-01T00:00:00.000Z",
-                            "state": {"name": "Backlog"}
+                            "updatedAt": "2024-01-01T00:00:00.000Z"
                         }
                     ]
                 }
@@ -228,9 +221,6 @@ mod tests {
             description: Some("Test description".into()),
             url: "https://linear.app/issue/LIN-1".into(),
             updated_at: "2024-01-01T00:00:00.000Z".into(),
-            state: Some(LinearState {
-                name: "Backlog".into(),
-            }),
         };
 
         let item = fetcher.map_issue(issue);

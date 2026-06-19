@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::catalog::HttpFetch;
 use super::installer::InstallError;
 use super::types::{AddonKind, CatalogEntry, CatalogSource, TrustLevel};
-use super::catalog::HttpFetch;
 
 /// Static description of a skill collection upstream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,10 +177,7 @@ fn manifest_to_entry(skill: SkillManifestEntry, upstream: &SkillUpstream) -> Cat
             )),
         );
     }
-    metadata.insert(
-        "upstream".to_string(),
-        serde_json::json!(upstream.slug),
-    );
+    metadata.insert("upstream".to_string(), serde_json::json!(upstream.slug));
 
     CatalogEntry {
         id: format!("gh:{}/{}/{}", upstream.repo, upstream.ref_, skill.name),
@@ -247,11 +244,7 @@ fn default_skill_cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("shannon").join("skills"))
 }
 
-fn read_cache(
-    cache_dir: &Option<PathBuf>,
-    key: &str,
-    ttl: Duration,
-) -> Option<Vec<CatalogEntry>> {
+fn read_cache(cache_dir: &Option<PathBuf>, key: &str, ttl: Duration) -> Option<Vec<CatalogEntry>> {
     let path = cache_dir.as_ref()?.join(key);
     let metadata = std::fs::metadata(&path).ok()?;
     let modified = metadata.modified().ok()?;
@@ -294,7 +287,8 @@ mod tests {
                     "tags": ["testing"]
                 }
             ]
-        }"#.to_string()
+        }"#
+        .to_string()
     }
 
     #[tokio::test]
@@ -305,7 +299,10 @@ mod tests {
             .iter()
             .filter(|e| e.source == CatalogSource::Native)
             .count();
-        assert!(native_count >= 2, "expected at least 2 native entries, got {native_count}");
+        assert!(
+            native_count >= 2,
+            "expected at least 2 native entries, got {native_count}"
+        );
     }
 
     #[tokio::test]
@@ -323,7 +320,10 @@ mod tests {
         assert_eq!(brainstorming.kind, AddonKind::Skill);
         assert!(brainstorming.id.starts_with("gh:"));
         assert_eq!(brainstorming.trust, TrustLevel::Verified);
-        let trigger = brainstorming.metadata.get("trigger").and_then(|v| v.as_str());
+        let trigger = brainstorming
+            .metadata
+            .get("trigger")
+            .and_then(|v| v.as_str());
         assert_eq!(trigger, Some("/brainstorm"));
     }
 

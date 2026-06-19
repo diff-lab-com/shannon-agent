@@ -6,7 +6,7 @@ import { Outlet } from 'react-router-dom';
 export default function Settings() {
   return (
     <div className="flex-1 overflow-y-auto h-full w-full bg-background pb-8">
-      <div className="max-w-[800px] mx-auto px-lg py-xl animate-in fade-in duration-700">
+      <div className="max-w-[1000px] mx-auto px-lg py-xl animate-in fade-in duration-700">
         <Outlet />
       </div>
     </div>

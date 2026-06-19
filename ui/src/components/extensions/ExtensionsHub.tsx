@@ -110,7 +110,7 @@ export default function ExtensionsHub() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-label-md text-label-md font-bold">{skill.name}</p>
-                      <p className="text-label-sm font-label-sm text-on-surface-variant truncate">{skill.description || `Trigger: ${skill.trigger}`}</p>
+                      <p className="text-label-sm font-label-sm text-on-surface-variant truncate">{skill.description || intl.formatMessage({ id: 'extensions.hub.triggerFallback' }, { trigger: skill.trigger })}</p>
                     </div>
                     <span className="px-sm py-xs bg-surface-container-low rounded-full text-label-sm font-label-sm text-on-surface-variant">{skill.source}</span>
                     <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{selectedSkill?.name === skill.name ? 'expand_less' : 'expand_more'}</span>

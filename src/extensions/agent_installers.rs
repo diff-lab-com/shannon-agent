@@ -38,8 +38,7 @@ impl AddonInstaller for AgentRepoInstaller {
     }
 
     fn supports(&self, entry: &CatalogEntry) -> bool {
-        matches!(entry.source, CatalogSource::GitHubRepo { .. })
-            && entry.kind == AddonKind::Agent
+        matches!(entry.source, CatalogSource::GitHubRepo { .. }) && entry.kind == AddonKind::Agent
     }
 
     async fn install(
@@ -49,7 +48,9 @@ impl AddonInstaller for AgentRepoInstaller {
         progress: &ProgressSink,
     ) -> Result<InstalledAddon, InstallError> {
         progress
-            .emit(super::types::ProgressEvent::Started { total_steps: Some(3) })
+            .emit(super::types::ProgressEvent::Started {
+                total_steps: Some(3),
+            })
             .await;
         progress
             .emit(super::types::ProgressEvent::Step {
@@ -114,9 +115,7 @@ impl AddonInstaller for AgentRepoInstaller {
             )));
         }
 
-        progress
-            .emit(super::types::ProgressEvent::Finished)
-            .await;
+        progress.emit(super::types::ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
             id: entry.id.clone(),
@@ -204,7 +203,9 @@ impl AddonInstaller for AgentMarkdownInstaller {
         progress: &ProgressSink,
     ) -> Result<InstalledAddon, InstallError> {
         progress
-            .emit(super::types::ProgressEvent::Started { total_steps: Some(2) })
+            .emit(super::types::ProgressEvent::Started {
+                total_steps: Some(2),
+            })
             .await;
 
         let dir = shannon_agents_root().join(&self.plugin_name);
@@ -212,9 +213,7 @@ impl AddonInstaller for AgentMarkdownInstaller {
         let agent_md = dir.join("agent.md");
         std::fs::write(&agent_md, &self.body)?;
 
-        progress
-            .emit(super::types::ProgressEvent::Finished)
-            .await;
+        progress.emit(super::types::ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
             id: entry.id.clone(),
@@ -358,10 +357,22 @@ mod tests {
         };
         let entry = fixture_entry();
         let installed = installer
-            .install(&entry, &InstallTarget::ShannonAgentsDir { plugin: "test".into() }, &ProgressSink::null())
+            .install(
+                &entry,
+                &InstallTarget::ShannonAgentsDir {
+                    plugin: "test".into(),
+                },
+                &ProgressSink::null(),
+            )
             .await
             .expect("install");
-        assert!(installed.install_path.as_deref().unwrap().ends_with("test-agent/agent.md"));
+        assert!(
+            installed
+                .install_path
+                .as_deref()
+                .unwrap()
+                .ends_with("test-agent/agent.md")
+        );
         assert!(is_agent_installed("test-agent"));
 
         installer.uninstall("test-agent").await.expect("uninstall");

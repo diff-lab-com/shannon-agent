@@ -15,14 +15,14 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   return (
-    <div className="flex items-center justify-center h-full">
-      <div className="text-center max-w-[520px] mx-auto px-lg">
-        <div className="w-16 h-16 rounded-full bg-primary-container/30 flex items-center justify-center mx-auto mb-lg">
-          <span className="material-symbols-outlined text-[32px] text-primary">auto_awesome</span>
+    <div className="flex items-center justify-center h-full min-h-full">
+      <div className="text-center max-w-[560px] w-full mx-auto px-lg">
+        <div className="w-9 h-9 rounded-full bg-primary-container/40 flex items-center justify-center mx-auto mb-md">
+          <span className="material-symbols-outlined text-[20px] text-primary">auto_awesome</span>
         </div>
-        <h2 className="font-headline-lg text-headline-lg text-on-surface mb-sm">{t('welcomeState.title')}</h2>
+        <h2 className="font-headline-md text-headline-md text-on-surface mb-xs">{t('welcomeState.title')}</h2>
         <p className="font-body-md text-on-surface-variant mb-xl">{t('welcomeState.subtitle')}</p>
-        <div className="grid grid-cols-2 gap-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-sm">
           {EXAMPLES.map(ex => (
             <button
               key={ex.icon}
@@ -30,7 +30,7 @@ export default function WelcomeState({ onSelectPrompt }: WelcomeStateProps) {
               onClick={() => onSelectPrompt(ex.prompt)}
             >
               <span className="material-symbols-outlined text-[20px] text-on-surface-variant mt-0.5 group-hover:text-primary transition-colors">{ex.icon}</span>
-              <div>
+              <div className="min-w-0">
                 <p className="font-label-md text-on-surface font-bold">{t(ex.title)}</p>
                 <p className="font-body-sm text-on-surface-variant line-clamp-2">{ex.prompt}</p>
               </div>

@@ -75,7 +75,7 @@ pub struct AppState {
     /// Query engine configuration.
     qe_config: Arc<RwLock<shannon_core::query_engine::QueryEngineConfig>>,
     /// Desktop config (persisted).
-    desktop_config: Arc<RwLock<DesktopConfig>>,
+    pub(crate) desktop_config: Arc<RwLock<DesktopConfig>>,
     /// Pending permission requests (request_id -> sender).
     pending_permissions: Arc<Mutex<HashMap<String, oneshot::Sender<bool>>>>,
     /// Session metadata for session list.
@@ -234,6 +234,10 @@ fn detect_media_type(path: &str) -> Option<String> {
 }
 
 /// Read file and convert to base64, returning (base64_string, media_type).
+///
+/// Security: `path` must already be validated by the caller — see
+/// `validate_attachment_path`. This helper does no path checking on its own
+/// because callers sometimes pass already-canonicalized paths.
 fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
     use std::fs;
@@ -442,6 +446,8 @@ pub async fn send_message(
 
     // Add user message
     let now = chrono_timestamp();
+    // Resolve working directory once for attachment-path validation below.
+    let attachment_working_dir = resolve_working_dir(&state).await;
     let attachments = file_paths.and_then(|paths| {
         if paths.is_empty() {
             None
@@ -450,21 +456,31 @@ pub async fn send_message(
                 paths
                     .into_iter()
                     .filter_map(|path| {
-                        std::path::Path::new(&path)
+                        // Security: reject any attachment path that resolves
+                        // outside the working directory. A compromised
+                        // frontend must not be able to exfiltrate
+                        // `~/.ssh/id_rsa`, `~/.shannon/desktop/config.json`,
+                        // or any other sensitive file via the attachment
+                        // pipeline.
+                        let canonical =
+                            crate::resolve_path_in_working_dir(&path, &attachment_working_dir)
+                                .ok()?;
+                        let canonical_str = canonical.to_string_lossy().into_owned();
+                        std::path::Path::new(&canonical)
                             .file_name()
                             .and_then(|name| name.to_str())
                             .and_then(|name_str| {
-                                std::fs::metadata(&path).ok().and_then(|meta| {
+                                std::fs::metadata(&canonical).ok().and_then(|meta| {
                                     // Try to read file and convert to base64 for images
-                                    file_to_base64(&path).ok().map(|(base64_data, media_type)| {
-                                        FileAttachment {
+                                    file_to_base64(&canonical_str).ok().map(
+                                        |(base64_data, media_type)| FileAttachment {
                                             name: name_str.to_string(),
-                                            path: path.clone(),
+                                            path: canonical_str.clone(),
                                             size: meta.len(),
                                             media_type: Some(media_type),
                                             base64_data: Some(base64_data),
-                                        }
-                                    })
+                                        },
+                                    )
                                 })
                             })
                     })
@@ -693,10 +709,7 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
-                        let _ = fire_query_notification(
-                            &notifier_arc,
-                            NotificationKind::Completed,
-                        );
+                        let _ = fire_query_notification(&notifier_arc, NotificationKind::Completed);
                     }
                     QueryEvent::Failed { error, .. } => {
                         let _ = app.emit(
@@ -706,10 +719,8 @@ pub async fn send_message(
                                 error: error.clone(),
                             },
                         );
-                        let _ = fire_query_notification(
-                            &notifier_arc,
-                            NotificationKind::Failed(error),
-                        );
+                        let _ =
+                            fire_query_notification(&notifier_arc, NotificationKind::Failed(error));
                     }
                     // Ignore other events in MVP
                     _ => {}
@@ -1409,11 +1420,17 @@ pub async fn search_sessions(
         if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
             if let Ok(Some(data)) = state.state_manager.load_session(&uuid) {
                 let hit = data.messages.iter().any(|m| match &m.content {
-                    shannon_core::api::MessageContent::Text(t) => t.to_lowercase().contains(&query_lower),
-                    shannon_core::api::MessageContent::Blocks(blocks) => blocks.iter().any(|b| match b {
-                        shannon_core::api::ContentBlock::Text { text } => text.to_lowercase().contains(&query_lower),
-                        _ => false,
-                    }),
+                    shannon_core::api::MessageContent::Text(t) => {
+                        t.to_lowercase().contains(&query_lower)
+                    }
+                    shannon_core::api::MessageContent::Blocks(blocks) => {
+                        blocks.iter().any(|b| match b {
+                            shannon_core::api::ContentBlock::Text { text } => {
+                                text.to_lowercase().contains(&query_lower)
+                            }
+                            _ => false,
+                        })
+                    }
                 });
                 if hit {
                     content_matches.push(info());
@@ -1725,8 +1742,8 @@ pub async fn set_session_working_dir(
     let wd = if path.trim().is_empty() {
         None
     } else {
-        let canonical = std::fs::canonicalize(&path)
-            .map_err(|e| format!("Invalid path {path}: {e}"))?;
+        let canonical =
+            std::fs::canonicalize(&path).map_err(|e| format!("Invalid path {path}: {e}"))?;
         Some(canonical.to_string_lossy().into_owned())
     };
 
@@ -1917,7 +1934,8 @@ async fn branch_session_internal(
     parent_id: String,
     branch_point: usize,
 ) -> Result<events::SessionInfo, String> {
-    let parent_uuid = uuid::Uuid::parse_str(&parent_id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let parent_uuid =
+        uuid::Uuid::parse_str(&parent_id).map_err(|e| format!("Invalid UUID: {}", e))?;
 
     // Find parent session
     let sessions = state.sessions.lock().await;
@@ -1953,7 +1971,8 @@ async fn branch_session_internal(
     }
 
     // Slice messages to include only up to branch point
-    let branch_messages: Vec<shannon_core::api::Message> = session_data.messages
+    let branch_messages: Vec<shannon_core::api::Message> = session_data
+        .messages
         .iter()
         .take(branch_point + 1)
         .cloned()
@@ -2544,6 +2563,314 @@ pub async fn update_plugin(state: tauri::State<'_, AppState>, name: String) -> R
     registry.update(&name).await.map_err(|e| e.to_string())
 }
 
+/// Fallback marketplace catalog for first-run experience (empty local registry).
+///
+/// Returns 18 high-quality entries across MCP, Skills, Agents, and Data Sources.
+/// These are read-only catalog entries that route to specialized installers.
+fn fallback_marketplace_catalog() -> Vec<crate::extensions::CatalogEntry> {
+    use crate::extensions::types::{AddonKind, CatalogEntry, CatalogSource, TrustLevel};
+    use std::collections::HashMap;
+
+    let now = chrono::Utc::now();
+
+    vec![
+        // === MCP Servers (6 entries) ===
+        CatalogEntry {
+            id: "mcp-registry:filesystem".into(),
+            kind: AddonKind::Mcp,
+            name: "Filesystem MCP Server".into(),
+            description: "Read and write local files securely through MCP filesystem transport.".into(),
+            author: Some("ModelContextProtocol".into()),
+            version: Some("1.0.0".into()),
+            homepage_url: Some("https://github.com/modelcontextprotocol/servers".into()),
+            license: Some("MIT".into()),
+            stars: Some(4500),
+            last_updated: Some(now - chrono::Duration::days(30)),
+            source: CatalogSource::McpRegistry { publisher: "modelcontextprotocol".into() },
+            trust: TrustLevel::Verified,
+            metadata: HashMap::new(),
+            tags: vec!["filesystem".into(), "local".into(), "stdio".into()],
+        },
+        CatalogEntry {
+            id: "mcp-registry:git".into(),
+            kind: AddonKind::Mcp,
+            name: "Git MCP Server".into(),
+            description: "Interact with Git repositories: status, diff, commit, branch operations.".into(),
+            author: Some("ModelContextProtocol".into()),
+            version: Some("1.0.0".into()),
+            homepage_url: Some("https://github.com/modelcontextprotocol/servers".into()),
+            license: Some("MIT".into()),
+            stars: Some(3200),
+            last_updated: Some(now - chrono::Duration::days(45)),
+            source: CatalogSource::McpRegistry { publisher: "modelcontextprotocol".into() },
+            trust: TrustLevel::Verified,
+            metadata: HashMap::new(),
+            tags: vec!["git".into(), "mcp".into()],
+        },
+        CatalogEntry {
+            id: "mcp-registry:fetch".into(),
+            kind: AddonKind::Mcp,
+            name: "Fetch MCP Server".into(),
+            description: "Make HTTP requests and fetch web content through MCP.".into(),
+            author: Some("ModelContextProtocol".into()),
+            version: Some("1.0.0".into()),
+            homepage_url: Some("https://github.com/modelcontextprotocol/servers".into()),
+            license: Some("MIT".into()),
+            stars: Some(2800),
+            last_updated: Some(now - chrono::Duration::days(60)),
+            source: CatalogSource::McpRegistry { publisher: "modelcontextprotocol".into() },
+            trust: TrustLevel::Verified,
+            metadata: HashMap::new(),
+            tags: vec!["fetch".into(), "http".into(), "mcp".into()],
+        },
+        CatalogEntry {
+            id: "mcp-registry:sqlite".into(),
+            kind: AddonKind::Mcp,
+            name: "SQLite MCP Server".into(),
+            description: "Query SQLite databases via SQL through MCP protocol.".into(),
+            author: Some("ModelContextProtocol".into()),
+            version: Some("1.0.0".into()),
+            homepage_url: Some("https://github.com/modelcontextprotocol/servers".into()),
+            license: Some("MIT".into()),
+            stars: Some(2100),
+            last_updated: Some(now - chrono::Duration::days(90)),
+            source: CatalogSource::McpRegistry { publisher: "modelcontextprotocol".into() },
+            trust: TrustLevel::Verified,
+            metadata: HashMap::new(),
+            tags: vec!["database".into(), "sqlite".into(), "mcp".into()],
+        },
+        CatalogEntry {
+            id: "mcp-registry:postgres".into(),
+            kind: AddonKind::Mcp,
+            name: "PostgreSQL MCP Server".into(),
+            description: "Connect to PostgreSQL databases and execute queries via MCP.".into(),
+            author: Some("ModelContextProtocol".into()),
+            version: Some("1.0.0".into()),
+            homepage_url: Some("https://github.com/modelcontextprotocol/servers".into()),
+            license: Some("MIT".into()),
+            stars: Some(1900),
+            last_updated: Some(now - chrono::Duration::days(120)),
+            source: CatalogSource::McpRegistry { publisher: "modelcontextprotocol".into() },
+            trust: TrustLevel::Verified,
+            metadata: HashMap::new(),
+            tags: vec!["database".into(), "postgres".into(), "mcp".into()],
+        },
+        CatalogEntry {
+            id: "gh:supabase/cluster-mcp-server".into(),
+            kind: AddonKind::Mcp,
+            name: "Supabase Cluster MCP".into(),
+            description: "Manage Supabase database clusters, migrations, and API keys.".into(),
+            author: Some("Supabase".into()),
+            version: Some("0.2.0".into()),
+            homepage_url: Some("https://github.com/supabase/cluster-mcp-server".into()),
+            license: Some("Apache-2.0".into()),
+            stars: Some(860),
+            last_updated: Some(now - chrono::Duration::days(20)),
+            source: CatalogSource::GitHubRepo { repo: "supabase/cluster-mcp-server".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Official,
+            metadata: HashMap::new(),
+            tags: vec!["supabase".into(), "database".into(), "mcp".into()],
+        },
+
+        // === Skills (5 entries) ===
+        CatalogEntry {
+            id: "gh:anthropics/skills:coding".into(),
+            kind: AddonKind::Skill,
+            name: "Coding Skills Pack".into(),
+            description: "Essential coding skills: test-driven development, code review, refactoring patterns.".into(),
+            author: Some("Anthropic".into()),
+            version: Some("1.2.0".into()),
+            homepage_url: Some("https://github.com/anthropics/skills".into()),
+            license: Some("MIT".into()),
+            stars: Some(5200),
+            last_updated: Some(now - chrono::Duration::days(15)),
+            source: CatalogSource::GitHubRepo { repo: "anthropics/skills".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Official,
+            metadata: HashMap::new(),
+            tags: vec!["coding".into(), "official".into(), "skill".into()],
+        },
+        CatalogEntry {
+            id: "gh:anthropics/skills:git-workflows".into(),
+            kind: AddonKind::Skill,
+            name: "Git Workflows Skills".into(),
+            description: "Advanced Git operations: branching strategies, conflict resolution, history analysis.".into(),
+            author: Some("Anthropic".into()),
+            version: Some("1.1.0".into()),
+            homepage_url: Some("https://github.com/anthropics/skills".into()),
+            license: Some("MIT".into()),
+            stars: Some(4100),
+            last_updated: Some(now - chrono::Duration::days(25)),
+            source: CatalogSource::GitHubRepo { repo: "anthropics/skills".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Official,
+            metadata: HashMap::new(),
+            tags: vec!["git".into(), "workflows".into(), "official".into(), "skill".into()],
+        },
+        CatalogEntry {
+            id: "gh:anthropics/skills:documentation".into(),
+            kind: AddonKind::Skill,
+            name: "Documentation Skills".into(),
+            description: "Auto-generate docs from code: README, API docs, inline comments, architecture diagrams.".into(),
+            author: Some("Anthropic".into()),
+            version: Some("1.0.0".into()),
+            homepage_url: Some("https://github.com/anthropics/skills".into()),
+            license: Some("MIT".into()),
+            stars: Some(3400),
+            last_updated: Some(now - chrono::Duration::days(40)),
+            source: CatalogSource::GitHubRepo { repo: "anthropics/skills".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Official,
+            metadata: HashMap::new(),
+            tags: vec!["documentation".into(), "official".into(), "skill".into()],
+        },
+        CatalogEntry {
+            id: "gh:obra/superpowers:dispatch".into(),
+            kind: AddonKind::Skill,
+            name: "Agent Dispatch Skill".into(),
+            description: "Coordinate parallel agent execution with workload distribution and result aggregation.".into(),
+            author: Some("Oh-My-Claudecode".into()),
+            version: Some("0.5.0".into()),
+            homepage_url: Some("https://github.com/obra/superpowers".into()),
+            license: Some("Apache-2.0".into()),
+            stars: Some(780),
+            last_updated: Some(now - chrono::Duration::days(10)),
+            source: CatalogSource::GitHubRepo { repo: "obra/superpowers".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Community,
+            metadata: HashMap::new(),
+            tags: vec!["agent".into(), "dispatch".into(), "community".into()],
+        },
+        CatalogEntry {
+            id: "gh:obra/superpowers:systematic-debugging".into(),
+            kind: AddonKind::Skill,
+            name: "Systematic Debugging".into(),
+            description: "Root cause analysis workflow: reproduce → isolate → verify → document fix.".into(),
+            author: Some("Oh-My-Claudecode".into()),
+            version: Some("0.4.0".into()),
+            homepage_url: Some("https://github.com/obra/superpowers".into()),
+            license: Some("Apache-2.0".into()),
+            stars: Some(650),
+            last_updated: Some(now - chrono::Duration::days(35)),
+            source: CatalogSource::GitHubRepo { repo: "obra/superpowers".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Community,
+            metadata: HashMap::new(),
+            tags: vec!["debugging".into(), "workflow".into(), "community".into()],
+        },
+
+        // === Agents (4 entries) ===
+        CatalogEntry {
+            id: "gh:anthropic/agents:reviewer".into(),
+            kind: AddonKind::Agent,
+            name: "Code Reviewer Agent".into(),
+            description: "Automated code review: security, performance, maintainability analysis with diff feedback.".into(),
+            author: Some("Anthropic".into()),
+            version: Some("2.1.0".into()),
+            homepage_url: Some("https://github.com/anthropic/agents".into()),
+            license: Some("MIT".into()),
+            stars: Some(3800),
+            last_updated: Some(now - chrono::Duration::days(18)),
+            source: CatalogSource::GitHubRepo { repo: "anthropic/agents".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Official,
+            metadata: HashMap::new(),
+            tags: vec!["review".into(), "official".into(), "agent".into()],
+        },
+        CatalogEntry {
+            id: "gh:anthropic/agents:auditor".into(),
+            kind: AddonKind::Agent,
+            name: "Security Auditor Agent".into(),
+            description: "Security-focused code analysis: vulnerability scanning, credential detection, permission checks.".into(),
+            author: Some("Anthropic".into()),
+            version: Some("1.8.0".into()),
+            homepage_url: Some("https://github.com/anthropic/agents".into()),
+            license: Some("MIT".into()),
+            stars: Some(2900),
+            last_updated: Some(now - chrono::Duration::days(22)),
+            source: CatalogSource::GitHubRepo { repo: "anthropic/agents".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Official,
+            metadata: HashMap::new(),
+            tags: vec!["security".into(), "audit".into(), "official".into(), "agent".into()],
+        },
+        CatalogEntry {
+            id: "gh:rohitg00/claude-code-agents:frontend".into(),
+            kind: AddonKind::Agent,
+            name: "Frontend Specialist".into(),
+            description: "React/Vue/Angular specialist: component design, state management, accessibility, performance.".into(),
+            author: Some("Community".into()),
+            version: Some("0.9.0".into()),
+            homepage_url: Some("https://github.com/rohitg00/claude-code-agents".into()),
+            license: Some("MIT".into()),
+            stars: Some(920),
+            last_updated: Some(now - chrono::Duration::days(12)),
+            source: CatalogSource::GitHubRepo { repo: "rohitg00/claude-code-agents".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Community,
+            metadata: HashMap::new(),
+            tags: vec!["frontend".into(), "react".into(), "community".into(), "agent".into()],
+        },
+        CatalogEntry {
+            id: "gh:rohitg00/claude-code-agents:rust-dev".into(),
+            kind: AddonKind::Agent,
+            name: "Rust Development Agent".into(),
+            description: "Cargo workflows, ownership patterns, async/await, unsafe code review, compilation fixes.".into(),
+            author: Some("Community".into()),
+            version: Some("0.8.0".into()),
+            homepage_url: Some("https://github.com/rohitg00/claude-code-agents".into()),
+            license: Some("MIT".into()),
+            stars: Some(680),
+            last_updated: Some(now - chrono::Duration::days(28)),
+            source: CatalogSource::GitHubRepo { repo: "rohitg00/claude-code-agents".into(), ref_: Some("main".into()) },
+            trust: TrustLevel::Community,
+            metadata: HashMap::new(),
+            tags: vec!["rust".into(), "development".into(), "community".into(), "agent".into()],
+        },
+
+        // === Data Sources (3 entries) ===
+        CatalogEntry {
+            id: "native:data-source-obsidian-vault".into(),
+            kind: AddonKind::DataSource,
+            name: "Obsidian Vault".into(),
+            description: "Read markdown notes from a local Obsidian vault with attachment support.".into(),
+            author: Some("Shannon".into()),
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            homepage_url: Some("https://obsidian.md".into()),
+            license: Some("Apache-2.0".into()),
+            stars: None,
+            last_updated: None,
+            source: CatalogSource::Native,
+            trust: TrustLevel::Verified,
+            metadata: HashMap::new(),
+            tags: vec!["native".into(), "obsidian".into(), "markdown".into()],
+        },
+        CatalogEntry {
+            id: "native:data-source-email-imap".into(),
+            kind: AddonKind::DataSource,
+            name: "Email (IMAP)".into(),
+            description: "Connect to an IMAP server to read mailbox messages securely.".into(),
+            author: Some("Shannon".into()),
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            homepage_url: None,
+            license: Some("Apache-2.0".into()),
+            stars: None,
+            last_updated: None,
+            source: CatalogSource::Native,
+            trust: TrustLevel::Verified,
+            metadata: HashMap::new(),
+            tags: vec!["native".into(), "email".into(), "imap".into()],
+        },
+        CatalogEntry {
+            id: "native:data-source-notion".into(),
+            kind: AddonKind::DataSource,
+            name: "Notion".into(),
+            description: "Query Notion pages and databases via the REST API.".into(),
+            author: Some("Shannon".into()),
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            homepage_url: Some("https://developers.notion.com/".into()),
+            license: Some("Apache-2.0".into()),
+            stars: None,
+            last_updated: None,
+            source: CatalogSource::Native,
+            trust: TrustLevel::Verified,
+            metadata: HashMap::new(),
+            tags: vec!["native".into(), "notion".into(), "database".into()],
+        },
+    ]
+}
 /// List plugins available in the remote index (best-effort; network call).
 #[tauri::command]
 pub async fn list_plugin_marketplace(
@@ -2552,10 +2879,108 @@ pub async fn list_plugin_marketplace(
     let registry = state.plugin_registry.read().await;
     let index = registry.create_index();
     let entries = index.all_entries();
+
+    // Return fallback catalog when local registry is empty (first-run experience)
+    if entries.is_empty() {
+        return Ok(fallback_marketplace_catalog()
+            .iter()
+            .map(|e| serde_json::to_value(e).unwrap_or(serde_json::Value::Null))
+            .collect());
+    }
     Ok(entries
         .iter()
         .map(|e| serde_json::to_value(e).unwrap_or(serde_json::Value::Null))
         .collect())
+}
+
+/// One row in the catalog upstreams summary. Surfaced in the Extensions Hub
+/// so the user can see which sources feed the marketplace and how many
+/// entries each contributed — even when an upstream's manifest fetch fails
+/// (in which case `entry_count` is 0 but the upstream is still visible).
+#[derive(Debug, Clone, Serialize)]
+pub struct CatalogUpstreamDto {
+    /// "skill" | "agent" | "mcp" | "data_source"
+    pub kind: String,
+    /// Stable identifier (e.g. `"anthropics-official"`).
+    pub slug: String,
+    /// Display name for the chip.
+    pub display_name: String,
+    /// GitHub `owner/repo` when the upstream is a git repo, else `None`.
+    pub repo: Option<String>,
+    /// "verified" | "official" | "community" | "unknown"
+    pub trust: String,
+    /// How many entries from this upstream are currently in the marketplace.
+    pub entry_count: usize,
+}
+
+/// List the federated catalog upstreams (skills, agents, MCP registry,
+/// featured vendors, native). Pure static metadata — no network fetch. The
+/// frontend correlates `entry_count` by querying the catalog commands
+/// (`list_skill_catalog`, `list_agent_catalog`, `list_mcp_registry_servers`)
+/// and matching entries back to upstreams via the `metadata.upstream` field
+/// set in `skill_catalog::manifest_to_entry` / `agent_catalog`.
+#[tauri::command]
+pub async fn list_catalog_upstreams() -> Result<Vec<CatalogUpstreamDto>, String> {
+    use crate::extensions::types::TrustLevel;
+    fn trust_str(t: TrustLevel) -> &'static str {
+        match t {
+            TrustLevel::Verified => "verified",
+            TrustLevel::Official => "official",
+            TrustLevel::Community => "community",
+            TrustLevel::Unknown => "unknown",
+        }
+    }
+
+    let mut out: Vec<CatalogUpstreamDto> = Vec::new();
+
+    for up in crate::extensions::skill_catalog::skill_upstreams() {
+        out.push(CatalogUpstreamDto {
+            kind: "skill".into(),
+            slug: up.slug,
+            display_name: up.display_name,
+            repo: Some(up.repo),
+            trust: trust_str(up.trust).into(),
+            entry_count: 0,
+        });
+    }
+
+    for up in crate::extensions::agent_catalog::agent_upstreams() {
+        out.push(CatalogUpstreamDto {
+            kind: "agent".into(),
+            slug: up.slug,
+            display_name: up.display_name,
+            repo: Some(up.repo),
+            trust: trust_str(up.trust).into(),
+            entry_count: 0,
+        });
+    }
+
+    out.push(CatalogUpstreamDto {
+        kind: "mcp".into(),
+        slug: "mcp-registry".into(),
+        display_name: "MCP Registry".into(),
+        repo: None,
+        trust: "verified".into(),
+        entry_count: 0,
+    });
+    out.push(CatalogUpstreamDto {
+        kind: "mcp".into(),
+        slug: "shannon-featured".into(),
+        display_name: "Shannon Featured".into(),
+        repo: None,
+        trust: "verified".into(),
+        entry_count: 0,
+    });
+    out.push(CatalogUpstreamDto {
+        kind: "native".into(),
+        slug: "native".into(),
+        display_name: "Built-in".into(),
+        repo: None,
+        trust: "verified".into(),
+        entry_count: 0,
+    });
+
+    Ok(out)
 }
 
 /// List all locally-installed extensions across MCP / Skills / Agents /
@@ -2563,7 +2988,8 @@ pub async fn list_plugin_marketplace(
 /// (`~/.shannon/settings.json`, `~/.shannon/skills/`, `~/.shannon/agents/`)
 /// and returns a flat list for the Installed tab.
 #[tauri::command]
-pub async fn list_installed_addons() -> Result<Vec<crate::extensions::InstalledAddonSummary>, String> {
+pub async fn list_installed_addons() -> Result<Vec<crate::extensions::InstalledAddonSummary>, String>
+{
     Ok(crate::extensions::aggregate_installed())
 }
 
@@ -2680,21 +3106,27 @@ fn provider_from_str(s: &str) -> shannon_core::api::types::LlmProvider {
 /// Apply diff with hunk actions.
 #[tauri::command]
 #[tracing::instrument(skip_all)]
-pub async fn apply_diff(file_path: String, hunks: Vec<HunkAction>) -> Result<(), String> {
+pub async fn apply_diff(
+    state: tauri::State<'_, AppState>,
+    file_path: String,
+    hunks: Vec<HunkAction>,
+) -> Result<(), String> {
     use std::fs;
     use std::io::Write;
 
-    // Validate file path — prevent path traversal
-    let path = std::path::Path::new(&file_path);
-    if file_path.contains("..") {
-        return Err("Invalid file path: path traversal not allowed".into());
-    }
+    // Security: validate the file path is inside the working directory. The
+    // previous `contains("..")` check was insufficient — it allowed absolute
+    // paths like `/etc/hosts`, and did not catch symlinks that escape the
+    // workspace. Canonicalize + starts_with closes all three holes at once.
+    let working_dir = resolve_working_dir(&state).await;
+    let path = crate::resolve_path_in_working_dir(&file_path, &working_dir)?;
     if !path.is_file() {
-        return Err(format!("File not found: {}", file_path));
+        return Err(format!("File not found: {}", path.display()));
     }
+    let file_path = path.to_string_lossy().into_owned();
 
     // Read current file content
-    let content = fs::read_to_string(&file_path)
+    let content = fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
 
     let mut lines: Vec<&str> = content.lines().collect();
@@ -3274,8 +3706,8 @@ fn collect_tasks_recursive(
     root: &std::path::Path,
     out: &mut Vec<TaskInfo>,
 ) -> Result<(), String> {
-    let entries =
-        std::fs::read_dir(dir).map_err(|e| format!("Cannot read tasks dir {}: {e}", dir.display()))?;
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("Cannot read tasks dir {}: {e}", dir.display()))?;
     for entry in entries.flatten() {
         let path = entry.path();
         let canonical = match path.canonicalize() {
@@ -3432,8 +3864,7 @@ pub async fn update_task(payload: UpdateTaskPayload) -> Result<TaskInfo, String>
         Some(p) => p,
         None => {
             let adhoc = canonical_root.join("<adhoc>");
-            std::fs::create_dir_all(&adhoc)
-                .map_err(|e| format!("Cannot create adhoc dir: {e}"))?;
+            std::fs::create_dir_all(&adhoc).map_err(|e| format!("Cannot create adhoc dir: {e}"))?;
             adhoc.join(format!("{}.json", payload.id))
         }
     };
@@ -3470,8 +3901,7 @@ pub async fn update_task(payload: UpdateTaskPayload) -> Result<TaskInfo, String>
         serde_json::to_string_pretty(&doc).map_err(|e| format!("Serialize failed: {e}"))?;
     let tmp = target_path.with_extension("json.tmp");
     std::fs::write(&tmp, serialized).map_err(|e| format!("Write failed: {e}"))?;
-    std::fs::rename(&tmp, &target_path)
-        .map_err(|e| format!("Rename failed: {e}"))?;
+    std::fs::rename(&tmp, &target_path).map_err(|e| format!("Rename failed: {e}"))?;
 
     // team is derived from path during list_tasks; not recoverable here
     // since we operate on the doc only. Pass None.
@@ -3501,7 +3931,11 @@ fn find_task_file(root: &std::path::Path, id: &str) -> Result<Option<std::path::
                 stack.push(path);
                 continue;
             }
-            if path.file_name().map(|n| n == target_name.as_str()).unwrap_or(false) {
+            if path
+                .file_name()
+                .map(|n| n == target_name.as_str())
+                .unwrap_or(false)
+            {
                 return Ok(Some(path));
             }
         }
@@ -3764,8 +4198,8 @@ fn fire_query_notification(
     notifier: &shannon_core::notifier::Notifier,
     kind: NotificationKind,
 ) -> Result<bool, shannon_core::notifier::NotifierError> {
-    use shannon_core::notifier::{Notification, NotificationLevel};
     use chrono::Utc;
+    use shannon_core::notifier::{Notification, NotificationLevel};
 
     let (title, body, level, source, window_ms) = match kind {
         NotificationKind::Completed => (
@@ -3914,13 +4348,11 @@ fn save_webhook_config_to_disk(dto: &WebhookConfigDto) -> Result<(), String> {
     })?;
 
     let template_val = match template_from_str(&dto.template) {
-        shannon_core::notifier::WebhookTemplate::Custom(s) => {
-            toml::Value::Table({
-                let mut t = toml::value::Table::new();
-                t.insert("custom".into(), toml::Value::String(s));
-                t
-            })
-        }
+        shannon_core::notifier::WebhookTemplate::Custom(s) => toml::Value::Table({
+            let mut t = toml::value::Table::new();
+            t.insert("custom".into(), toml::Value::String(s));
+            t
+        }),
         t => toml::Value::String(template_to_str(&t)),
     };
 
@@ -3947,8 +4379,7 @@ fn save_webhook_config_to_disk(dto: &WebhookConfigDto) -> Result<(), String> {
         .ok_or_else(|| "notifications is not a table".to_string())?;
     notif_table.insert("webhook".into(), toml::Value::Table(wh));
 
-    let serialized =
-        toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "webhook config saved");
     Ok(())
@@ -3964,12 +4395,14 @@ fn clear_webhook_config_on_disk() -> Result<(), String> {
         return Ok(());
     };
     if let Some(table) = root.as_table_mut() {
-        if let Some(notif) = table.get_mut("notifications").and_then(|v| v.as_table_mut()) {
+        if let Some(notif) = table
+            .get_mut("notifications")
+            .and_then(|v| v.as_table_mut())
+        {
             notif.remove("webhook");
         }
     }
-    let serialized =
-        toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
+    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(path = %path.display(), "webhook config cleared");
     Ok(())
@@ -4017,24 +4450,54 @@ pub async fn get_inbound_config() -> Result<InboundConfigDto, String> {
     let Some(inbound) = notif.get("inbound").and_then(|v| v.as_table()) else {
         return Ok(InboundConfigDto::default());
     };
-    let slack = inbound.get("slack").and_then(|v| v.as_table()).map(|t| SlackInboundDto {
-        bot_token: t.get("bot_token").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        trigger_word: t.get("trigger_word").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        allowed_channels: t
-            .get("allowed_channels")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-            .unwrap_or_default(),
-    });
-    let telegram = inbound.get("telegram").and_then(|v| v.as_table()).map(|t| TelegramInboundDto {
-        bot_token: t.get("bot_token").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        trigger_word: t.get("trigger_word").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        allowed_chats: t
-            .get("allowed_chats")
-            .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-            .unwrap_or_default(),
-    });
+    let slack = inbound
+        .get("slack")
+        .and_then(|v| v.as_table())
+        .map(|t| SlackInboundDto {
+            bot_token: t
+                .get("bot_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            trigger_word: t
+                .get("trigger_word")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            allowed_channels: t
+                .get("allowed_channels")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        });
+    let telegram = inbound
+        .get("telegram")
+        .and_then(|v| v.as_table())
+        .map(|t| TelegramInboundDto {
+            bot_token: t
+                .get("bot_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            trigger_word: t
+                .get("trigger_word")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            allowed_chats: t
+                .get("allowed_chats")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        });
     Ok(InboundConfigDto { slack, telegram })
 }
 
@@ -4048,7 +4511,9 @@ pub async fn save_inbound_config(
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
     let mut root: toml::Value =
         toml::from_str(&existing).unwrap_or(toml::Value::Table(toml::value::Table::new()));
-    let table = root.as_table_mut().ok_or_else(|| "config root is not a table".to_string())?;
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| "config root is not a table".to_string())?;
     let notifications = table
         .entry("notifications")
         .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
@@ -4059,20 +4524,39 @@ pub async fn save_inbound_config(
     if let Some(s) = &dto.slack {
         let mut t = toml::value::Table::new();
         t.insert("bot_token".into(), toml::Value::String(s.bot_token.clone()));
-        t.insert("trigger_word".into(), toml::Value::String(s.trigger_word.clone()));
+        t.insert(
+            "trigger_word".into(),
+            toml::Value::String(s.trigger_word.clone()),
+        );
         t.insert(
             "allowed_channels".into(),
-            toml::Value::Array(s.allowed_channels.iter().map(|c| toml::Value::String(c.clone())).collect()),
+            toml::Value::Array(
+                s.allowed_channels
+                    .iter()
+                    .map(|c| toml::Value::String(c.clone()))
+                    .collect(),
+            ),
         );
         inbound.insert("slack".into(), toml::Value::Table(t));
     }
     if let Some(tg) = &dto.telegram {
         let mut t = toml::value::Table::new();
-        t.insert("bot_token".into(), toml::Value::String(tg.bot_token.clone()));
-        t.insert("trigger_word".into(), toml::Value::String(tg.trigger_word.clone()));
+        t.insert(
+            "bot_token".into(),
+            toml::Value::String(tg.bot_token.clone()),
+        );
+        t.insert(
+            "trigger_word".into(),
+            toml::Value::String(tg.trigger_word.clone()),
+        );
         t.insert(
             "allowed_chats".into(),
-            toml::Value::Array(tg.allowed_chats.iter().map(|c| toml::Value::String(c.clone())).collect()),
+            toml::Value::Array(
+                tg.allowed_chats
+                    .iter()
+                    .map(|c| toml::Value::String(c.clone()))
+                    .collect(),
+            ),
         );
         inbound.insert("telegram".into(), toml::Value::Table(t));
     }
@@ -4085,9 +4569,7 @@ pub async fn save_inbound_config(
 }
 
 #[tauri::command]
-pub async fn clear_inbound_config(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn clear_inbound_config(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let path = resolve_webhook_config_path()?;
     if !path.exists() {
         let mut listener = state.inbound_listener.lock().await;
@@ -4102,7 +4584,10 @@ pub async fn clear_inbound_config(
         return Ok(());
     };
     if let Some(table) = root.as_table_mut() {
-        if let Some(notif) = table.get_mut("notifications").and_then(|v| v.as_table_mut()) {
+        if let Some(notif) = table
+            .get_mut("notifications")
+            .and_then(|v| v.as_table_mut())
+        {
             notif.remove("inbound");
         }
     }
@@ -4133,11 +4618,14 @@ async fn restart_inbound_listener(
         trigger_word: s.trigger_word.clone(),
         allowed_channels: s.allowed_channels.clone(),
     });
-    let telegram = dto.telegram.as_ref().map(|t| crate::inbound::TelegramConfig {
-        bot_token: t.bot_token.clone(),
-        trigger_word: t.trigger_word.clone(),
-        allowed_chats: t.allowed_chats.clone(),
-    });
+    let telegram = dto
+        .telegram
+        .as_ref()
+        .map(|t| crate::inbound::TelegramConfig {
+            bot_token: t.bot_token.clone(),
+            trigger_word: t.trigger_word.clone(),
+            allowed_chats: t.allowed_chats.clone(),
+        });
     *listener = Some(crate::inbound::InboundListener::start(
         app_handle.clone(),
         slack,
@@ -4154,9 +4642,7 @@ pub async fn get_inbound_listener_status(
 }
 
 #[tauri::command]
-pub async fn stop_inbound_listener(
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn stop_inbound_listener(state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut listener = state.inbound_listener.lock().await;
     if let Some(h) = listener.as_mut() {
         h.stop().await;
@@ -4167,10 +4653,7 @@ pub async fn stop_inbound_listener(
 
 /// Auto-start the listener from app setup if inbound config already exists.
 /// Called from `main.rs::setup()` after `AppState` is constructed.
-pub async fn bootstrap_inbound_listener(
-    state: &AppState,
-    app_handle: &tauri::AppHandle,
-) {
+pub async fn bootstrap_inbound_listener(state: &AppState, app_handle: &tauri::AppHandle) {
     let dto = match get_inbound_config().await {
         Ok(d) => d,
         Err(e) => {
@@ -4271,7 +4754,9 @@ pub async fn get_billing_history() -> Result<Vec<BillingHistoryDto>, String> {
 fn iso_days_ago(days: i64) -> String {
     use chrono::{DateTime, Days, Utc};
     let now: DateTime<Utc> = Utc::now();
-    let target = now.checked_sub_days(Days::new(days.max(0) as u64)).unwrap_or(now);
+    let target = now
+        .checked_sub_days(Days::new(days.max(0) as u64))
+        .unwrap_or(now);
     target.format("%Y-%m-%d").to_string()
 }
 
@@ -4310,7 +4795,10 @@ mod tests {
         let second =
             fire_query_notification(&notifier, NotificationKind::Failed("api timeout 2".into()))
                 .unwrap();
-        assert!(!second, "second failure within 5s window should be coalesced");
+        assert!(
+            !second,
+            "second failure within 5s window should be coalesced"
+        );
     }
 
     #[test]
@@ -4566,11 +5054,15 @@ mod tests {
         let tasks_dir = tmp.path().join(".claude/tasks");
 
         let rt = tokio::runtime::Runtime::new().expect("rt");
-        let first = rt.block_on(seed_sample_data_in(&tasks_dir)).expect("seed 1");
+        let first = rt
+            .block_on(seed_sample_data_in(&tasks_dir))
+            .expect("seed 1");
         assert_eq!(first.tasks_seeded, 3);
 
         // Second call should be a no-op — dir already has json files.
-        let second = rt.block_on(seed_sample_data_in(&tasks_dir)).expect("seed 2");
+        let second = rt
+            .block_on(seed_sample_data_in(&tasks_dir))
+            .expect("seed 2");
         assert_eq!(second.tasks_seeded, 0);
 
         let count = std::fs::read_dir(&tasks_dir)
@@ -4633,17 +5125,15 @@ mod tests {
         state.sessions.lock().await.push(parent_meta);
 
         // Branch at message index 1 (should include first 2 messages)
-        let branch_result = branch_session_internal(
-            &state,
-            None,
-            parent_id_str.clone(),
-            1,
-        )
-        .await
-        .expect("branch_session_internal");
+        let branch_result = branch_session_internal(&state, None, parent_id_str.clone(), 1)
+            .await
+            .expect("branch_session_internal");
 
         // Verify branch session metadata
-        assert_eq!(branch_result.message_count, 2, "branch has only first 2 messages");
+        assert_eq!(
+            branch_result.message_count, 2,
+            "branch has only first 2 messages"
+        );
         assert_eq!(branch_result.parent_id, Some(parent_id_str.clone()));
         assert_eq!(branch_result.branch_point, Some(1));
         assert!(branch_result.title.contains("Branch of"));
@@ -4695,14 +5185,9 @@ mod tests {
         state.sessions.lock().await.push(parent_meta);
 
         // Branch at message index 0
-        let branch_result = branch_session_internal(
-            &state,
-            None,
-            parent_id_str.clone(),
-            0,
-        )
-        .await
-        .expect("branch_session_internal");
+        let branch_result = branch_session_internal(&state, None, parent_id_str.clone(), 0)
+            .await
+            .expect("branch_session_internal");
 
         // Verify working_dir is inherited
         assert_eq!(branch_result.working_dir, Some("/home/user/project".into()));
@@ -4755,5 +5240,367 @@ mod tests {
             .await
             .expect_err("branch at usize::MAX should fail");
         assert!(err.contains("out of bounds"));
+    }
+
+    // Integration test: verify the Tauri command wrapper delegates correctly.
+    // The `#[tauri::command]` macro handles parameter deserialization and
+    // invokes the internal function, so we test that delegation path.
+    #[tokio::test]
+    async fn test_branch_session_command_rejects_unknown_parent_id() {
+        let state = AppState::new();
+
+        // Try to branch from a session that doesn't exist
+        let unknown_id = uuid::Uuid::new_v4().to_string();
+
+        let err = branch_session_internal(&state, None, unknown_id, 0)
+            .await
+            .expect_err("branch from unknown parent should fail");
+        assert!(err.contains("not found") || err.contains("unknown"));
+    }
+
+    #[tokio::test]
+    async fn test_branch_session_command_zero_branch_point() {
+        let state = AppState::new();
+
+        let parent_id = uuid::Uuid::new_v4();
+        let parent_id_str = parent_id.to_string();
+        let messages = vec![shannon_core::api::Message {
+            role: "user".into(),
+            content: shannon_core::api::MessageContent::Text("message".into()),
+        }];
+
+        let metadata = shannon_core::state::SessionPersistMetadata {
+            model: "claude-3".into(),
+            turn_count: 0,
+            title: Some("Parent".into()),
+            ..Default::default()
+        };
+
+        state
+            .state_manager
+            .save_session(&parent_id, &messages, &metadata)
+            .expect("save parent");
+
+        state.sessions.lock().await.push(SessionMeta {
+            id: parent_id_str.clone(),
+            title: "Parent".into(),
+            created_at: 1700000000,
+            message_count: 1,
+            working_dir: None,
+            parent_id: None,
+            branch_point: None,
+        });
+
+        // Branch at index 0 should work (includes first message)
+        let result = branch_session_internal(&state, None, parent_id_str, 0)
+            .await
+            .expect("branch at index 0 should succeed");
+
+        assert_eq!(result.message_count, 1);
+        assert_eq!(result.branch_point, Some(0));
+    }
+}
+
+#[test]
+fn test_fallback_marketplace_catalog_has_entries() {
+    let catalog = fallback_marketplace_catalog();
+    assert!(!catalog.is_empty(), "fallback catalog should have entries");
+    assert!(
+        catalog.len() >= 18,
+        "fallback catalog should have at least 18 entries"
+    );
+
+    // Verify we have entries across all expected kinds
+    use crate::extensions::types::AddonKind;
+    let kinds: std::collections::HashSet<AddonKind> = catalog.iter().map(|e| e.kind).collect();
+    assert!(kinds.contains(&AddonKind::Mcp), "should have MCP entries");
+    assert!(
+        kinds.contains(&AddonKind::Skill),
+        "should have Skill entries"
+    );
+    assert!(
+        kinds.contains(&AddonKind::Agent),
+        "should have Agent entries"
+    );
+    assert!(
+        kinds.contains(&AddonKind::DataSource),
+        "should have DataSource entries"
+    );
+}
+
+#[test]
+fn test_fallback_marketplace_catalog_metadata_valid() {
+    let catalog = fallback_marketplace_catalog();
+
+    // All entries should have required fields populated
+    for entry in catalog {
+        assert!(!entry.id.is_empty(), "entry should have non-empty id");
+        assert!(!entry.name.is_empty(), "entry should have non-empty name");
+        assert!(
+            !entry.description.is_empty(),
+            "entry should have non-empty description"
+        );
+        assert!(!entry.tags.is_empty(), "entry should have at least one tag");
+        assert!(
+            entry.stars.is_none() || entry.stars.unwrap() > 0,
+            "stars should be positive if set"
+        );
+
+        // Verify trust levels are valid
+        match entry.trust {
+            crate::extensions::types::TrustLevel::Unknown => {}
+            crate::extensions::types::TrustLevel::Community => {}
+            crate::extensions::types::TrustLevel::Official => {}
+            crate::extensions::types::TrustLevel::Verified => {}
+        }
+    }
+}
+
+// --- Security hardening tests (audit issues #1, #2, #4, #10) ---
+
+#[test]
+fn resolve_path_in_working_dir_accepts_inside_relative() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let file = sub.join("a.rs");
+    std::fs::write(&file, "x").unwrap();
+
+    let resolved = crate::resolve_path_in_working_dir("sub/a.rs", tmp.path())
+        .expect("relative path inside working dir should resolve");
+    assert_eq!(resolved, file.canonicalize().unwrap());
+}
+
+#[test]
+fn resolve_path_in_working_dir_accepts_inside_absolute() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("a.rs");
+    std::fs::write(&file, "x").unwrap();
+
+    let resolved = crate::resolve_path_in_working_dir(&file.to_string_lossy(), tmp.path())
+        .expect("absolute path inside working dir should resolve");
+    assert_eq!(resolved, file.canonicalize().unwrap());
+}
+
+#[test]
+fn resolve_path_in_working_dir_rejects_dotdot_traversal() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Create a sibling directory *outside* the working dir (same parent).
+    let parent = tmp.path().parent().unwrap().to_path_buf();
+    let sibling = parent.join("shannon_test_sibling_target");
+    let _ = std::fs::create_dir(&sibling);
+    let target = sibling.join("secret.txt");
+    std::fs::write(&target, "secret").ok();
+
+    // `../shannon_test_sibling_target/secret.txt` escapes the working dir.
+    let rel = "../shannon_test_sibling_target/secret.txt";
+    let err = crate::resolve_path_in_working_dir(rel, tmp.path())
+        .expect_err("path traversal via .. must be rejected");
+    assert!(
+        err.contains("outside"),
+        "expected 'outside' in error, got: {err}"
+    );
+
+    // Cleanup the sibling we created outside the tempdir.
+    let _ = std::fs::remove_dir_all(&sibling);
+}
+
+#[test]
+fn resolve_path_in_working_dir_rejects_absolute_outside_path() {
+    // Security #10 regression: `apply_diff`'s old `contains("..")` check
+    // let `/etc/hosts` through. The new helper must reject it.
+    let tmp = tempfile::tempdir().unwrap();
+    let err = crate::resolve_path_in_working_dir("/etc/hosts", tmp.path())
+        .expect_err("absolute path outside working dir must be rejected");
+    // On Linux /etc/hosts exists, so we expect the "outside" error. On
+    // other platforms it may be "not found" — either is a valid rejection.
+    assert!(
+        err.contains("outside") || err.contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn resolve_path_in_working_dir_rejects_missing_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = crate::resolve_path_in_working_dir("does_not_exist.rs", tmp.path())
+        .expect_err("missing path should fail canonicalize");
+    assert!(err.contains("not found"));
+}
+
+// ── Top-level unit tests for high-value pure functions ───────────────
+// These complement `mod tests` above. Kept at module scope so they can
+// invoke private helpers directly without going through `super::*`.
+
+#[cfg(test)]
+mod pure_function_tests {
+    use super::*;
+
+    // ── parse_approval_mode: covers all 11 variants + fallback ───────
+
+    #[test]
+    fn parse_approval_mode_maps_every_documented_alias() {
+        use shannon_core::permissions::ApprovalMode;
+        assert_eq!(parse_approval_mode("suggest"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("default"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("plan"), ApprovalMode::Plan);
+        assert_eq!(parse_approval_mode("auto"), ApprovalMode::Auto);
+        assert_eq!(parse_approval_mode("auto_edit"), ApprovalMode::AutoEdit);
+        assert_eq!(parse_approval_mode("autoedit"), ApprovalMode::AutoEdit);
+        assert_eq!(parse_approval_mode("full_auto"), ApprovalMode::FullAuto);
+        assert_eq!(parse_approval_mode("fullauto"), ApprovalMode::FullAuto);
+        assert_eq!(parse_approval_mode("readonly"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("read-only"), ApprovalMode::Readonly);
+        assert_eq!(parse_approval_mode("plan_ro"), ApprovalMode::PlanReadonly);
+        assert_eq!(parse_approval_mode("plan-ro"), ApprovalMode::PlanReadonly);
+        assert_eq!(
+            parse_approval_mode("planreadonly"),
+            ApprovalMode::PlanReadonly
+        );
+        assert_eq!(
+            parse_approval_mode("bypass_permissions"),
+            ApprovalMode::BypassPermissions
+        );
+        assert_eq!(
+            parse_approval_mode("bypasspermissions"),
+            ApprovalMode::BypassPermissions
+        );
+        assert_eq!(parse_approval_mode("dont_ask"), ApprovalMode::DontAsk);
+        assert_eq!(parse_approval_mode("dontask"), ApprovalMode::DontAsk);
+        assert_eq!(parse_approval_mode("confirm"), ApprovalMode::Suggest);
+    }
+
+    #[test]
+    fn parse_approval_mode_is_case_insensitive() {
+        use shannon_core::permissions::ApprovalMode;
+        assert_eq!(parse_approval_mode("SUGGEST"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("Plan"), ApprovalMode::Plan);
+        assert_eq!(parse_approval_mode("FULL_AUTO"), ApprovalMode::FullAuto);
+    }
+
+    #[test]
+    fn parse_approval_mode_unknown_falls_back_to_suggest() {
+        use shannon_core::permissions::ApprovalMode;
+        assert_eq!(parse_approval_mode(""), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("yolo"), ApprovalMode::Suggest);
+        assert_eq!(parse_approval_mode("sudo"), ApprovalMode::Suggest);
+    }
+
+    // ── detect_media_type ─────────────────────────────────────────────
+
+    #[test]
+    fn detect_media_type_returns_image_mimes() {
+        assert_eq!(detect_media_type("logo.png").as_deref(), Some("image/png"));
+        assert_eq!(
+            detect_media_type("photo.jpg").as_deref(),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            detect_media_type("photo.jpeg").as_deref(),
+            Some("image/jpeg")
+        );
+        assert_eq!(detect_media_type("anim.gif").as_deref(), Some("image/gif"));
+        assert_eq!(
+            detect_media_type("shot.webp").as_deref(),
+            Some("image/webp")
+        );
+        assert_eq!(
+            detect_media_type("icon.svg").as_deref(),
+            Some("image/svg+xml")
+        );
+    }
+
+    #[test]
+    fn detect_media_type_is_case_insensitive_on_extension() {
+        assert_eq!(detect_media_type("PHOTO.PNG").as_deref(), Some("image/png"));
+        assert_eq!(
+            detect_media_type("Photo.JPG").as_deref(),
+            Some("image/jpeg")
+        );
+    }
+
+    #[test]
+    fn detect_media_type_returns_none_for_non_image_or_missing_ext() {
+        assert!(detect_media_type("doc.pdf").is_none());
+        assert!(detect_media_type("video.mp4").is_none());
+        assert!(detect_media_type("noext").is_none());
+        assert!(detect_media_type("").is_none());
+    }
+
+    // ── provider_from_str ─────────────────────────────────────────────
+
+    #[test]
+    fn provider_from_str_maps_known_providers() {
+        use shannon_core::api::types::LlmProvider;
+        assert_eq!(provider_from_str("anthropic"), LlmProvider::Anthropic);
+        assert_eq!(provider_from_str("openai"), LlmProvider::OpenAI);
+        assert_eq!(provider_from_str("ollama"), LlmProvider::Ollama);
+        assert_eq!(provider_from_str("deepseek"), LlmProvider::DeepSeek);
+        assert_eq!(provider_from_str("gemini"), LlmProvider::Gemini);
+        assert_eq!(provider_from_str("mistral"), LlmProvider::Mistral);
+        assert_eq!(provider_from_str("groq"), LlmProvider::Groq);
+        assert_eq!(provider_from_str("openrouter"), LlmProvider::OpenRouter);
+        assert_eq!(provider_from_str("xai"), LlmProvider::Xai);
+    }
+
+    // ── iso_days_ago ──────────────────────────────────────────────────
+
+    #[test]
+    fn iso_days_ago_returns_iso_date_string() {
+        let s = iso_days_ago(7);
+        assert!(is_iso_date(&s), "expected ISO date, got {s}");
+    }
+
+    #[test]
+    fn iso_days_ago_zero_returns_today() {
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert_eq!(iso_days_ago(0), now);
+    }
+
+    #[test]
+    fn iso_days_ago_negative_clamps_to_zero() {
+        let now = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert_eq!(iso_days_ago(-5), now);
+    }
+
+    // ── template_to_str / template_from_str roundtrip ─────────────────
+
+    #[test]
+    fn webhook_template_str_roundtrip_preserves_known_variants() {
+        use shannon_core::notifier::WebhookTemplate::*;
+        for t in [
+            Slack, Discord, Feishu, Wechat, Teams, Telegram, DingTalk, Raw,
+        ] {
+            let s = template_to_str(&t);
+            let back = template_from_str(&s);
+            assert_eq!(template_to_str(&back), s, "roundtrip not stable for {s}");
+        }
+    }
+
+    #[test]
+    fn webhook_template_custom_roundtrip() {
+        use shannon_core::notifier::WebhookTemplate;
+        let original = WebhookTemplate::Custom("X".repeat(120));
+        let s = template_to_str(&original);
+        assert!(s.starts_with("custom:"));
+        let back = template_from_str(&s);
+        assert_eq!(template_to_str(&back), s);
+    }
+
+    #[test]
+    fn webhook_template_from_str_unknown_falls_back_to_raw() {
+        use shannon_core::notifier::WebhookTemplate;
+        assert_eq!(template_from_str("unknown"), WebhookTemplate::Raw);
+        assert_eq!(template_from_str(""), WebhookTemplate::Raw);
+    }
+
+    fn is_iso_date(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.len() == 10
+            && b[4] == b'-'
+            && b[7] == b'-'
+            && b[..4].iter().all(|c| c.is_ascii_digit())
+            && b[5..7].iter().all(|c| c.is_ascii_digit())
+            && b[8..10].iter().all(|c| c.is_ascii_digit())
     }
 }

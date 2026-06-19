@@ -2,6 +2,67 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.3.4 (2026-06-19) — R2 scope reduction (partial)
+
+R2 of the four-sprint plan, partial delivery. The two remaining R2 items
+(commands.rs split, full unwrap cleanup) deferred to follow-up sessions
+because each is a multi-hour focused refactor with regression risk.
+
+### Tests
+
+- **R2-A1: Flaky HOME-env tests fixed.** `extensions::security::tests::remove_report_drops_matching_entries` and `extensions::skill_installers::tests::list_installed_skills_returns_plugin_subdirs` (plus 6 sibling tests in the same files) no longer mutate `std::env::HOME` via `unsafe`. New pattern: thread-local override + RAII guard (`set_test_reports_home` / `set_test_skills_root`). `reports_path()` and `shannon_skills_root()` check the thread-local first, fall back to `dirs::home_dir()` in production. Eliminates the cross-file race that forced `--test-threads=1`. Verified stable across 3 consecutive `cargo test --lib` runs at default parallelism (296/296 each).
+
+### Security
+
+- **R2-A2: `withGlobalTauri: false`.** Tauri v2 exposes `window.__TAURI__` to all JS (including any XSS payload) when this flag is `true`. With CSP also tightened in R1, this closes another vector. Audit: grep across `ui/src/` found only a TS declaration in `vite-env.d.ts` (no runtime usage). All actual IPC already goes through typed `@tauri-apps/api` imports. UI tests: 884/884 still pass.
+
+### Deferred to follow-up sessions
+
+- **R2-A3 commands.rs split** — 5527-line god-file needs per-domain extraction (chat / sessions / config / mcp / agents / files). Multi-hour focused work; start with one cohesive domain as template.
+- **R2-A4 unwrap cleanup** — 317 `.unwrap()` calls across the tree, concentrated in `mcpb.rs` (41), `lsp_commands.rs` (47), `mcp_installers.rs` (37), `commands.rs` (32). Priority: unwraps on user-input paths in Tauri command handlers (can panic in production).
+
+## v0.3.3 (2026-06-19) — R1 industrialization baseline (CI-only scope)
+
+Sprint R1 scoped down to CI-only after the Gitea pivot and "先解决自动化CI"
+decision. Updater wiring, release pipeline, and Dependabot were drafted and
+then reverted — see "Deferred" below.
+
+### Tooling
+
+- **R1-A1: CI workflow (Gitea Actions).** Added `.gitea/workflows/ci.yml` gating push/PR on `main` and `dev`. Jobs: `rust-test` (cargo nextest), `rust-clippy` (`-D warnings` with shannon-code's allow list), `rust-fmt` (`cargo fmt --check`), `cargo-deny` (advisories + licenses + bans), and `ui` (pnpm install + lint + vitest). Runs on the `ubuntu-22.04` self-hosted runner label. CI failure blocks merge. Migrated off GitHub Actions syntax (original `.github/workflows/` draft) after the project standardized on `gitea.diff-lab.com`.
+- **R1-A2: cargo-deny policy.** Added `deny.toml` mirroring `shannon-code/deny.toml`: same advisory ignore list, same license allowlist (MIT/Apache/BSD/ISC/MPL/Unicode-3.0/CDLA-Permissive-2.0), same source allowlist plus `ssh://git@github.com/shannon-agent/shannon-code.git` for the engine subpath dep.
+- **R1-A3: Version sync.** Bumped `Cargo.toml`, `ui/package.json`, `tauri.conf.json` from 0.3.1 → 0.3.2 to match the v0.3.2 changelog entry. Previous releases shipped a 0.3.1 binary labeled "v0.3.2" in notes.
+- **R1-A8: CODEOWNERS.** Added `.gitea/CODEOWNERS` marking `.gitea/workflows/`, `tauri.conf.json`, `Cargo.toml`, and `docs/RELEASING.md` as `@ericdong`-owned. First line of defense against workflow tampering once signer secrets land. Wire up via Gitea branch protection → "Require code owner review" on `main` and `dev`.
+
+### Deferred to a future sprint
+
+The following R1 candidates were drafted then scoped out — preserved in
+`docs/RELEASING.md` as the agreed design:
+
+- **R1-A4 (Tauri updater wiring) — deferred.** `endpoints: []` and `pubkey: ""` stay empty. Plan: wire to an S3 + CDN distribution channel (token-free public read for the updater manifest, preferred over Gitea Releases for a private repo) once the signing keypair + bucket exist.
+- **R1-A5 (Release pipeline) — deferred.** Drafted `.github/workflows/release.yml` using `tauri-apps/tauri-action@v0`, then removed it along with the rest of `.github/`. Release remains a manual `cargo tauri build`.
+- **R1-A7 (Dependabot) — deferred.** Removed `.github/dependabot.yml`. Renovate (Gitea-compatible) is the planned replacement for cargo/npm/action-version drift PRs.
+
+### Tests
+
+- **R1-A6: Pure-function coverage gaps closed.** Added targeted unit tests for seven high-value helpers that previously lacked direct coverage:
+  - `parse_approval_mode` (11 documented aliases + case-insensitivity + safe fallback)
+  - `detect_media_type` (5 image MIMEs + case-insensitivity + non-image rejection)
+  - `provider_from_str` (9 LLM providers)
+  - `iso_days_ago` (format check + zero/negative edge cases)
+  - `template_to_str` / `template_from_str` (8 known variants + custom roundtrip + unknown fallback)
+  - `parse_trigger_type` (4 trigger kinds + case-insensitivity + rejection)
+  - `is_completed_status` / `is_in_progress_status` (positive/negative matrices, with documented whitespace non-handling)
+- 22 new test fns. Total Rust lib tests: **296** (295 passing in parallel; 1 pre-existing HOME-env-race flake in `skill_installers::list_installed_skills_returns_plugin_subdirs` passes under `--test-threads=1`).
+
+### Docs
+
+- **`docs/RELEASING.md`.** Prefixed with a "Deferred" status banner. The signing-keypair, secret-configuration, S3+CDN distribution, tag-push trigger, rollback, and troubleshooting sections are preserved as the design reference for when release automation is prioritized.
+
+### Known issues (pre-existing, surfaced by R1)
+
+- Two unit tests (`extensions::security::tests::remove_report_drops_matching_entries`, `extensions::skill_installers::tests::list_installed_skills_returns_plugin_subdirs`) flake under parallel test execution because they mutate `std::env::HOME` via `unsafe`. They pass under `--test-threads=1`. Fixing requires moving the helpers off `HOME` env var to an explicit path parameter — tracked as Sprint R2 followup.
+
 ## v0.3.2 (2026-06-18) — plugin marketplace browser + data source fetchers + triage + branching sessions
 
 ### Features

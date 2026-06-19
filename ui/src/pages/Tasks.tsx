@@ -43,9 +43,8 @@ import HistoryView from '@/components/tasks/HistoryView'
 import WorktreePanel from '@/components/tasks/WorktreePanel'
 import ScheduleDAGView from '@/components/tasks/ScheduleDAGView'
 import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
-import Triage from '@/pages/Triage'
 
-type Tab = 'active' | 'history' | 'worktrees' | 'triage'
+type Tab = 'active' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
@@ -197,11 +196,9 @@ export default function Tasks() {
         </div>
 
         {tab === 'history' ? (
-          <HistoryView />
+          <HistoryView onGoToActive={() => setTab('active')} />
         ) : tab === 'worktrees' ? (
           <WorktreePanel />
-        ) : tab === 'triage' ? (
-          <Triage />
         ) : (
           <>
         {errorMsg && (
@@ -262,6 +259,7 @@ export default function Tasks() {
               onSelectTask={setSelectedTaskId}
               onRunNow={handleRunNow}
               onCancelTask={setCancelTarget}
+              onCreateTask={() => setShowNewTask(true)}
             />
             <div className="col-span-12 lg:col-span-4 space-y-gutter">
               <CalendarSidebarWidget

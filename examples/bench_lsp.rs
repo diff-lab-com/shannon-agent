@@ -28,8 +28,9 @@ async fn main() {
         diagnostic_messages: vec![],
     };
 
+    let working_dir = abs.parent().unwrap_or_else(|| std::path::Path::new("."));
     let start = Instant::now();
-    let result = shannon_desktop::lsp_commands::lsp_code_actions(req).await;
+    let result = shannon_desktop::lsp_commands::lsp_code_actions_inner(working_dir, req).await;
     let elapsed = start.elapsed();
 
     match result {

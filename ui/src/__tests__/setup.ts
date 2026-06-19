@@ -16,6 +16,7 @@ vi.mock('@testing-library/react', async () => {
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
+  convertFileSrc: (path: string) => `asset://localhost/${path.replace(/^\//, '')}`,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
@@ -97,6 +98,7 @@ vi.mock('@/lib/tauri-api', () => ({
   renameSession: vi.fn().mockResolvedValue(true),
   duplicateSession: vi.fn().mockResolvedValue({ id: 'dup-1', title: 'Copy', created_at: 0 }),
   exportSession: vi.fn().mockResolvedValue(''),
+  branchSession: vi.fn().mockResolvedValue({ id: 'branch-1', title: 'Branch', created_at: 0, message_count: 0 }),
   saveTextFile: vi.fn().mockResolvedValue(undefined),
   respondPermission: vi.fn().mockResolvedValue(undefined),
   getFileDiff: vi.fn().mockResolvedValue({ path: '', hunks: [] }),
@@ -126,7 +128,10 @@ vi.mock('@/lib/tauri-api', () => ({
   getInboundListenerStatus: vi.fn().mockResolvedValue({ slack_running: false, telegram_running: false }),
   stopInboundListener: vi.fn().mockResolvedValue(undefined),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
+  listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
   installAgentFromRepo: vi.fn().mockResolvedValue({ id: 'agent-1', name: 'Test Agent', install_path: '/path/to/agent' }),
+  listDataSourceCatalog: vi.fn().mockResolvedValue([]),
+  listInstalledDataSources: vi.fn().mockResolvedValue([]),
   queryDataSource: vi.fn().mockResolvedValue({ items: [], total: 0, has_more: false }),
 }))

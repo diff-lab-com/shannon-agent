@@ -14,7 +14,3 @@ declare module '@fontsource-variable/material-symbols-outlined/full.css' {
   const css: string
   export default css
 }
-
-interface Window {
-  __TAURI__?: unknown
-}

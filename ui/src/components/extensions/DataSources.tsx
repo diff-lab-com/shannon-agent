@@ -10,6 +10,7 @@ import {
   type DataSourceField,
   type InstalledDataSource,
 } from "@/lib/tauri-api";
+import DataSourcesQuery from "./DataSourcesQuery";
 
 /**
  * P5 Data Sources tab — Tier-1 native Rust adapters.
@@ -26,6 +27,8 @@ export default function DataSources() {
   const t = (id: string) => intl.formatMessage({ id })
 
   const { search } = useOutletContext<{ search: string }>();
+
+  const [activeTab, setActiveTab] = useState<'adapters' | 'query'>('adapters');
 
   const [catalog, setCatalog] = useState<DataSourceCatalogEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -142,7 +145,34 @@ export default function DataSources() {
         </p>
       </header>
 
-      {catalogLoading ? (
+      <div className="flex gap-md border-b border-outline-variant/30">
+        <button
+          type="button"
+          onClick={() => setActiveTab('adapters')}
+          className={`px-md py-sm font-bold text-label-md transition-colors ${
+            activeTab === 'adapters'
+              ? 'text-primary border-b-2 border-primary'
+              : 'text-on-surface-variant hover:text-on-surface'
+          }`}
+        >
+          {t('extensions.datasources.tab.adapters')}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('query')}
+          className={`px-md py-sm font-bold text-label-md transition-colors ${
+            activeTab === 'query'
+              ? 'text-primary border-b-2 border-primary'
+              : 'text-on-surface-variant hover:text-on-surface'
+          }`}
+        >
+          {t('extensions.datasources.tab.query')}
+        </button>
+      </div>
+
+      {activeTab === 'query' ? (
+        <DataSourcesQuery />
+      ) : catalogLoading ? (
         <div className="text-center py-lg text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
           {t('extensions.datasources.loading')}

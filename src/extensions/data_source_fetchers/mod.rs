@@ -6,7 +6,7 @@
 //! `dispatch` function routes based on the `kind` field from the TOML's
 //! [data_source] section.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

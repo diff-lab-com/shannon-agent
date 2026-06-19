@@ -10,6 +10,8 @@ interface ThemeContextValue {
   setTheme: (theme: ThemeName) => void
   resolvedTheme: ResolvedTheme
   themes: { id: ThemeName; label: string }[]
+  fontScale: number
+  setFontScale: (scale: number) => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
@@ -49,6 +51,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return 'material'
   })
 
+  const [fontScale, setFontScaleState] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('shannon.fontScale')
+      return stored ? parseFloat(stored) : 1.0
+    }
+    return 1.0
+  })
+
   const resolvedTheme: ResolvedTheme = theme === 'system' ? getSystemTheme() : theme
 
   useEffect(() => {
@@ -57,6 +67,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       localStorage.setItem('shannon-theme', theme)
     }
   }, [theme, resolvedTheme])
+
+  useEffect(() => {
+    const baseFontSize = 16 * fontScale
+    document.documentElement.style.fontSize = `${baseFontSize}px`
+    localStorage.setItem('shannon.fontScale', fontScale.toString())
+  }, [fontScale])
 
   useEffect(() => {
     if (theme !== 'system') return
@@ -72,8 +88,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     api.configure({ key: 'theme', value: newTheme }).catch(e => console.warn('Failed to save theme:', e))
   }, [])
 
+  const setFontScale = useCallback((scale: number) => {
+    const clamped = Math.max(0.85, Math.min(1.3, scale))
+    setFontScaleState(clamped)
+  }, [])
+
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, resolvedTheme, themes: THEMES }}>
+    <ThemeContext.Provider value={{ theme, setTheme, resolvedTheme, themes: THEMES, fontScale, setFontScale }}>
       {children}
     </ThemeContext.Provider>
   )

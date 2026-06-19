@@ -267,6 +267,19 @@ export async function listInstalledAddons(): Promise<InstalledAddonSummary[]> {
   return invoke('list_installed_addons')
 }
 
+export interface CatalogUpstream {
+  kind: 'skill' | 'agent' | 'mcp' | 'data_source' | 'native'
+  slug: string
+  display_name: string
+  repo: string | null
+  trust: 'verified' | 'official' | 'community' | 'unknown'
+  entry_count: number
+}
+
+export async function listCatalogUpstreams(): Promise<CatalogUpstream[]> {
+  return invoke('list_catalog_upstreams')
+}
+
 // --- Extensions Hub (P2: MCP installers) ---
 
 export interface FeaturedVendor {

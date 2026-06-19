@@ -66,6 +66,14 @@ describe('Installed extensions tab', () => {
     })
   })
 
+  it('shows Browse catalog CTA in empty state', async () => {
+    vi.mocked(api.listInstalledAddons).mockResolvedValueOnce([])
+    renderInstalled()
+    await waitFor(() => {
+      expect(screen.getByText('Browse catalog')).toBeInTheDocument()
+    })
+  })
+
   it('groups addons by kind with correct category labels', async () => {
     vi.mocked(api.listInstalledAddons).mockResolvedValueOnce(sampleRows)
     renderInstalled()

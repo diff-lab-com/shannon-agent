@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { FormattedMessage, useIntl } from "react-intl";
-import { useOutletContext, useNavigate } from "react-router-dom";
-import { toast } from "sonner";
+import { useOutletContext } from "react-router-dom";
 import * as api from "@/lib/tauri-api";
+import type { CatalogUpstream } from "@/lib/tauri-api";
 import type { AddonKind, CatalogEntry, CatalogSource, TrustLevel } from "@/types";
+import InstallDialog from "./InstallDialog";
 
 const KIND_ORDER: AddonKind[] = ["mcp", "skill", "agent", "data_source", "plugin"];
 
@@ -25,7 +26,7 @@ const KIND_LABEL_KEY: Record<AddonKind, string> = {
   plugin: "extensions.plugins.kindPlugin",
 };
 
-const KIND_ROUTE: Partial<Record<AddonKind, string>> = {
+export const KIND_ROUTE: Partial<Record<AddonKind, string>> = {
   mcp: "/extensions/mcp-servers",
   skill: "/extensions/skills",
   agent: "/extensions/agents",
@@ -77,7 +78,6 @@ function sourceLabel(src: CatalogSource): string {
 
 export default function Plugins() {
   const intl = useIntl();
-  const navigate = useNavigate();
   const t = (id: string) => intl.formatMessage({ id });
   const { search } = useOutletContext<{ search: string }>();
 
@@ -86,7 +86,8 @@ export default function Plugins() {
   const [error, setError] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<AddonKind | "all">("all");
   const [sortMode, setSortMode] = useState<SortMode>("trust");
-  const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installTarget, setInstallTarget] = useState<CatalogEntry | null>(null);
+  const [upstreams, setUpstreams] = useState<CatalogUpstream[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,6 +111,33 @@ export default function Plugins() {
       cancelled = true;
     };
   }, [t]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listCatalogUpstreams()
+      .then((rows) => {
+        if (cancelled) return;
+        // Correlate entry_count by matching repo → entries' GitHubRepo source.
+        const repoCounts = new Map<string, number>();
+        for (const e of entries) {
+          if (e.source?.type === "git_hub_repo" && e.source.repo) {
+            repoCounts.set(e.source.repo, (repoCounts.get(e.source.repo) ?? 0) + 1);
+          }
+        }
+        setUpstreams(
+          rows.map((u) =>
+            u.repo
+              ? { ...u, entry_count: repoCounts.get(u.repo) ?? u.entry_count }
+              : u,
+          ),
+        );
+      })
+      .catch((e) => console.warn("listCatalogUpstreams error:", e));
+    return () => {
+      cancelled = true;
+    };
+  }, [entries]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -163,75 +191,10 @@ export default function Plugins() {
     }));
   }, [filtered, sortMode]);
 
-  const handleInstall = async (entry: CatalogEntry) => {
-    // For skills/agents with git_hub_repo source, call the real installer
-    if (entry.source.type === "git_hub_repo") {
-      if (entry.kind === "skill") {
-        setInstallingId(entry.id);
-        try {
-          const result = await api.installSkillFromRepo(entry.name, entry.source.repo, entry.source.ref_ || "main");
-          toast.success(intl.formatMessage({ id: "extensions.plugins.installSuccess" }, { name: result.name }));
-          // Emit event for auto-refresh
-          window.dispatchEvent(new CustomEvent("shannon:extension-installed", {
-            detail: { kind: entry.kind, name: result.name }
-          }));
-        } catch (e) {
-          console.error("Skill install error:", e);
-          toast.error(intl.formatMessage({ id: "extensions.plugins.installError" }, {
-            error: e instanceof Error ? e.message : String(e)
-          }));
-        } finally {
-          setInstallingId(null);
-        }
-        return;
-      }
-      if (entry.kind === "agent") {
-        setInstallingId(entry.id);
-        try {
-          const result = await api.installAgentFromRepo(entry.name, entry.source.repo, entry.source.ref_ || "main");
-          toast.success(intl.formatMessage({ id: "extensions.plugins.installSuccess" }, { name: result.name }));
-          // Emit event for auto-refresh
-          window.dispatchEvent(new CustomEvent("shannon:extension-installed", {
-            detail: { kind: entry.kind, name: result.name }
-          }));
-        } catch (e) {
-          console.error("Agent install error:", e);
-          toast.error(intl.formatMessage({ id: "extensions.plugins.installError" }, {
-            error: e instanceof Error ? e.message : String(e)
-          }));
-        } finally {
-          setInstallingId(null);
-        }
-        return;
-      }
-    }
-
-    // For MCP and data_source, still route to the specialized tab (installers need UI/forms)
-    const route = KIND_ROUTE[entry.kind];
-    if (route) {
-      navigate(route);
-      toast.info(
-        intl.formatMessage(
-          { id: "extensions.plugins.installRouted" },
-          { kind: t(KIND_LABEL_KEY[entry.kind]) },
-        ),
-      );
-      return;
-    }
-
-    // Plugin bundles: no dedicated installer yet — prompt user to follow homepage.
-    setInstallingId(entry.id);
-    try {
-      if (entry.homepage_url) {
-        await api.saveTextFile(`${entry.name}.url.txt`, `InternetShortcut\nURL=${entry.homepage_url}\n`);
-      }
-      toast.success(t("extensions.plugins.installHint"));
-    } catch (e) {
-      console.warn("plugin install hint error:", e);
-      toast.error(t("extensions.plugins.installFailed"));
-    } finally {
-      setInstallingId(null);
-    }
+  const handleInstall = (entry: CatalogEntry) => {
+    // All install flows route through the InstallDialog so the user can see
+    // the source-provided config before committing.
+    setInstallTarget(entry);
   };
 
   const renderCard = (entry: CatalogEntry) => {
@@ -262,7 +225,7 @@ export default function Plugins() {
           </span>
         </div>
 
-        <p className="text-label-sm text-on-surface-variant line-clamp-2 min-h-[32px]">
+        <p className="text-label-sm text-on-surface-variant line-clamp-3 min-h-[40px]">
           {entry.description || t("extensions.plugins.noDescription")}
         </p>
 
@@ -307,13 +270,10 @@ export default function Plugins() {
           )}
           <button
             onClick={() => handleInstall(entry)}
-            disabled={installingId === entry.id}
-            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 disabled:opacity-60 inline-flex items-center gap-xs cursor-pointer"
+            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 inline-flex items-center gap-xs cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[14px]">
-              {installingId === entry.id ? "progress_activity" : "download"}
-            </span>
-            {installingId === entry.id ? t("extensions.plugins.installing") : t("extensions.plugins.install")}
+            <span className="material-symbols-outlined text-[14px]">download</span>
+            {t("extensions.plugins.install")}
           </button>
         </div>
       </div>
@@ -321,7 +281,7 @@ export default function Plugins() {
   };
 
   return (
-    <div className="p-lg max-w-6xl mx-auto">
+    <div className="p-lg max-w-7xl mx-auto">
       <div className="text-center py-xl">
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-md">
           <span className="material-symbols-outlined text-primary text-[32px]">workspaces</span>
@@ -333,6 +293,43 @@ export default function Plugins() {
           <FormattedMessage id="extensions.plugins.descriptionLive" />
         </p>
       </div>
+
+      {upstreams.length > 0 && (
+        <div className="mb-lg">
+          <h3 className="text-label-sm font-bold text-outline uppercase tracking-widest mb-sm">
+            {t("extensions.plugins.source.label")}
+          </h3>
+          <div className="flex flex-wrap gap-xs">
+            {upstreams.map((u) => (
+              <a
+                key={`${u.kind}:${u.slug}`}
+                href={u.repo ? `https://github.com/${u.repo}` : undefined}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-full bg-surface-container-low text-on-surface-variant text-label-sm hover:bg-surface-container-high transition-colors"
+                title={u.repo ? `github.com/${u.repo}` : u.display_name}
+              >
+                <span className="material-symbols-outlined text-[14px] text-primary">
+                  {u.kind === "skill"
+                    ? "extension"
+                    : u.kind === "agent"
+                      ? "smart_toy"
+                      : u.kind === "mcp"
+                        ? "cloud"
+                        : u.kind === "native"
+                          ? "stars"
+                          : "database"}
+                </span>
+                <span className="font-bold text-on-surface">{u.display_name}</span>
+                <span className="text-label-xs text-on-surface-variant">
+                  · {u.trust}
+                  {u.entry_count > 0 && ` · ${u.entry_count}`}
+                </span>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-between gap-md mb-lg">
         <div className="flex items-center gap-xs flex-wrap">
@@ -396,13 +393,23 @@ export default function Plugins() {
                 {t(KIND_LABEL_KEY[kind])}
                 <span className="text-on-surface-variant font-normal">· {rows.length}</span>
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-md">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-md">
                 {rows.map(renderCard)}
               </div>
             </section>
           ))}
         </div>
       )}
+
+      <InstallDialog
+        entry={installTarget}
+        open={!!installTarget}
+        onClose={() => setInstallTarget(null)}
+        onInstalled={() => {
+          // The dialog already emits `shannon:extension-installed`; this
+          // callback is a hook for future parent-side refresh logic.
+        }}
+      />
     </div>
   );
 }

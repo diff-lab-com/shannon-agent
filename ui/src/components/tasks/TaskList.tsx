@@ -21,6 +21,7 @@ interface TaskListProps {
   onSelectTask: (id: string) => void
   onRunNow: (id: string) => void
   onCancelTask: (id: string) => void
+  onCreateTask?: () => void
 }
 
 export default function TaskList({
@@ -33,6 +34,7 @@ export default function TaskList({
   onSelectTask,
   onRunNow,
   onCancelTask,
+  onCreateTask,
 }: TaskListProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -42,7 +44,12 @@ export default function TaskList({
       {loading ? (
         Array.from({ length: 3 }).map((_, i) => <CardSkeleton key={i} />)
       ) : tasks.length === 0 ? (
-        <EmptyState icon="task_alt" title={t('tasks.taskList.empty')} />
+        <EmptyState
+          icon="task_alt"
+          title={t('tasks.taskList.empty')}
+          description={t('tasks.taskList.emptyDesc')}
+          action={onCreateTask ? { label: t('tasks.taskList.cta'), onClick: onCreateTask } : undefined}
+        />
       ) : null}
 
       {tasks.map(task => (

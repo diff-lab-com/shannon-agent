@@ -19,9 +19,36 @@ use super::types::{
 
 /// Where skills live on disk. Today: `~/.shannon/skills/<plugin>/<skill>/`.
 fn shannon_skills_root() -> PathBuf {
+    #[cfg(test)]
+    {
+        if let Some(p) = TEST_SKILLS_ROOT_OVERRIDE.with(|cell| cell.borrow().clone()) {
+            return p;
+        }
+    }
     dirs::home_dir()
         .map(|h| h.join(".shannon").join("skills"))
         .unwrap_or_else(|| PathBuf::from("/tmp/shannon-skills"))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SKILLS_ROOT_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) struct SkillsRootGuard;
+#[cfg(test)]
+impl Drop for SkillsRootGuard {
+    fn drop(&mut self) {
+        TEST_SKILLS_ROOT_OVERRIDE.with(|cell| *cell.borrow_mut() = None);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_test_skills_root(root: PathBuf) -> SkillsRootGuard {
+    TEST_SKILLS_ROOT_OVERRIDE.with(|cell| *cell.borrow_mut() = Some(root));
+    SkillsRootGuard
 }
 
 /// Marketplace plugin installer — fetches a repo, drops it under
@@ -39,10 +66,7 @@ impl AddonInstaller for MarketplacePluginInstaller {
     }
 
     fn supports(&self, entry: &CatalogEntry) -> bool {
-        matches!(
-            entry.source,
-            CatalogSource::GitHubRepo { .. }
-        ) && entry.kind == AddonKind::Skill
+        matches!(entry.source, CatalogSource::GitHubRepo { .. }) && entry.kind == AddonKind::Skill
     }
 
     async fn install(
@@ -52,7 +76,9 @@ impl AddonInstaller for MarketplacePluginInstaller {
         progress: &ProgressSink,
     ) -> Result<InstalledAddon, InstallError> {
         progress
-            .emit(super::types::ProgressEvent::Started { total_steps: Some(3) })
+            .emit(super::types::ProgressEvent::Started {
+                total_steps: Some(3),
+            })
             .await;
         progress
             .emit(super::types::ProgressEvent::Step {
@@ -89,9 +115,7 @@ impl AddonInstaller for MarketplacePluginInstaller {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(InstallError::Io(format!(
-                "git clone failed: {stderr}"
-            )));
+            return Err(InstallError::Io(format!("git clone failed: {stderr}")));
         }
 
         progress
@@ -113,9 +137,7 @@ impl AddonInstaller for MarketplacePluginInstaller {
             )));
         }
 
-        progress
-            .emit(super::types::ProgressEvent::Finished)
-            .await;
+        progress.emit(super::types::ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
             id: entry.id.clone(),
@@ -207,7 +229,9 @@ impl AddonInstaller for SkillMarkdownInstaller {
         progress: &ProgressSink,
     ) -> Result<InstalledAddon, InstallError> {
         progress
-            .emit(super::types::ProgressEvent::Started { total_steps: Some(2) })
+            .emit(super::types::ProgressEvent::Started {
+                total_steps: Some(2),
+            })
             .await;
 
         let dir = shannon_skills_root().join(&self.plugin_name);
@@ -215,9 +239,7 @@ impl AddonInstaller for SkillMarkdownInstaller {
         let skill_md = dir.join("SKILL.md");
         std::fs::write(&skill_md, &self.body)?;
 
-        progress
-            .emit(super::types::ProgressEvent::Finished)
-            .await;
+        progress.emit(super::types::ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
             id: entry.id.clone(),
@@ -318,12 +340,6 @@ pub fn remove_installed_skill(name: &str) -> Result<(), InstallError> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-
-    static HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    fn home_lock() -> &'static Mutex<()> {
-        HOME_LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     fn fixture_entry() -> CatalogEntry {
         CatalogEntry {
@@ -344,17 +360,10 @@ mod tests {
         }
     }
 
-    fn lock_home() -> std::sync::MutexGuard<'static, ()> {
-        home_lock().lock().unwrap_or_else(|p| p.into_inner())
-    }
-
     #[tokio::test]
     async fn markdown_installer_writes_skill_file() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _g = set_test_skills_root(tmp.path().join(".shannon").join("skills"));
 
         let installer = SkillMarkdownInstaller {
             plugin_name: "test-skill".into(),
@@ -362,10 +371,22 @@ mod tests {
         };
         let entry = fixture_entry();
         let installed = installer
-            .install(&entry, &InstallTarget::ShannonSkillsDir { plugin: "test".into() }, &ProgressSink::null())
+            .install(
+                &entry,
+                &InstallTarget::ShannonSkillsDir {
+                    plugin: "test".into(),
+                },
+                &ProgressSink::null(),
+            )
             .await
             .expect("install");
-        assert!(installed.install_path.as_deref().unwrap().ends_with("test-skill/SKILL.md"));
+        assert!(
+            installed
+                .install_path
+                .as_deref()
+                .unwrap()
+                .ends_with("test-skill/SKILL.md")
+        );
         assert!(is_skill_installed("test-skill"));
 
         installer.uninstall("test-skill").await.expect("uninstall");
@@ -374,23 +395,18 @@ mod tests {
 
     #[test]
     fn list_installed_skills_handles_missing_dir() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _g = set_test_skills_root(tmp.path().join(".shannon").join("skills"));
         let rows = list_installed_skills();
         assert!(rows.is_empty());
     }
 
     #[test]
     fn list_installed_skills_returns_plugin_subdirs() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let skill_dir = tmp.path().join(".shannon").join("skills").join("alpha");
+        let root = tmp.path().join(".shannon").join("skills");
+        let _g = set_test_skills_root(root.clone());
+        let skill_dir = root.join("alpha");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join("SKILL.md"), "body").unwrap();
         let rows = list_installed_skills();
@@ -400,23 +416,18 @@ mod tests {
 
     #[test]
     fn remove_installed_skill_rejects_missing_name() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _g = set_test_skills_root(tmp.path().join(".shannon").join("skills"));
         let result = remove_installed_skill("nope");
         assert!(result.is_err());
     }
 
     #[test]
     fn remove_installed_skill_succeeds_for_existing() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let skill_dir = tmp.path().join(".shannon").join("skills").join("beta");
+        let root = tmp.path().join(".shannon").join("skills");
+        let _g = set_test_skills_root(root.clone());
+        let skill_dir = root.join("beta");
         std::fs::create_dir_all(&skill_dir).unwrap();
         remove_installed_skill("beta").expect("remove");
         assert!(!skill_dir.exists());

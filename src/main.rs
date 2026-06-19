@@ -122,6 +122,7 @@ fn main() {
             commands::disable_plugin,
             commands::update_plugin,
             commands::list_plugin_marketplace,
+            commands::list_catalog_upstreams,
             commands::start_background_task,
             commands::get_background_tasks,
             commands::cancel_background_task,
@@ -265,16 +266,22 @@ fn main() {
                 });
             });
 
-            // System tray configuration
+            // System tray configuration.
+            //
+            // Audit #25: the status line and tooltip previously hardcoded
+            // `anthropic / claude-sonnet-4-6`. They are now built from the
+            // current desktop config, and a background task refreshes the tray
+            // whenever the provider/model changes (covers both `configure` and
+            // `switch_provider`).
+            let initial_label = tray_status_label(&shannon_desktop::config::load_config());
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
                 MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
             let check_updates_item =
                 MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
-            let status_item =
-                MenuItemBuilder::with_id("status", "Status: anthropic / claude-sonnet-4-6")
-                    .enabled(false)
-                    .build(app)?;
+            let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
+                .enabled(false)
+                .build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
@@ -287,8 +294,8 @@ fn main() {
                 ])
                 .build()?;
 
-            let _tray = TrayIconBuilder::new()
-                .tooltip("Shannon AI Assistant — anthropic / claude-sonnet-4-6")
+            let _tray = TrayIconBuilder::with_id(TRAY_ID)
+                .tooltip(format!("Shannon AI Assistant — {initial_label}"))
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show" => {
@@ -328,6 +335,33 @@ fn main() {
                 })
                 .build(app)?;
 
+            // Audit #25: refresh the tray menu + tooltip when the provider or
+            // model changes. We poll the persisted config every 2s (cheap:
+            // a small JSON read from `~/.shannon/desktop/config.json`)
+            // because `switch_provider` does not emit a `config-updated`
+            // event we could listen for. Listening to `config-updated`
+            // (which `configure(...)` emits) would miss the `switch_provider`
+            // path, so polling the persisted file is the single reliable seam
+            // that covers both code paths.
+            let refresh_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut last_label = initial_label;
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    let label = tray_status_label(&shannon_desktop::config::load_config());
+                    if label == last_label {
+                        continue;
+                    }
+                    last_label = label.clone();
+                    // Rebuild the menu with the new status line and update the
+                    // tooltip. If the tray lookup or build fails we log and
+                    // try again on the next tick.
+                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
+                        tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
+                    }
+                }
+            });
+
             // Auto-update check on startup
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -356,4 +390,65 @@ fn main() {
     eprintln!("Shannon Desktop requires the `tauri` feature.");
     eprintln!("Build with: cargo build -p shannon-desktop --features tauri");
     std::process::exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// System-tray helpers (audit #25)
+// ---------------------------------------------------------------------------
+
+/// Stable identifier for the Shannon tray icon so we can look it up with
+/// `app.tray_by_id(TRAY_ID)` when refreshing its menu/tooltip.
+#[cfg(feature = "tauri")]
+const TRAY_ID: &str = "main";
+
+/// Build the human-readable status label shown in the tray menu and tooltip.
+/// Falls back to sane defaults when the config is missing fields.
+///
+/// Format: `Status: <provider> / <model>`. Provider defaults to `anthropic`,
+/// model to `claude-sonnet-4-6` (the prior hardcoded value) — only used if the
+/// config genuinely has no value yet.
+#[cfg(feature = "tauri")]
+fn tray_status_label(cfg: &shannon_desktop::config::DesktopConfig) -> String {
+    let provider = cfg.provider.as_deref().unwrap_or("anthropic");
+    let model = cfg.model.as_deref().unwrap_or("claude-sonnet-4-6");
+    format!("Status: {provider} / {model}")
+}
+
+/// Rebuild the tray's menu and tooltip with an updated status label. Looks up
+/// the tray by [`TRAY_ID`]; returns an error if the tray is gone (e.g. the app
+/// is shutting down).
+#[cfg(feature = "tauri")]
+fn rebuild_tray_menu(
+    app: &tauri::AppHandle,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+    use tauri::tray::TrayIcon;
+
+    let tray: TrayIcon = app
+        .tray_by_id(TRAY_ID)
+        .ok_or_else(|| "tray icon not found".to_string())?;
+
+    let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
+    let new_session_item = MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
+    let check_updates_item =
+        MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
+    let status_item = MenuItemBuilder::with_id("status", label)
+        .enabled(false)
+        .build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+
+    let menu = MenuBuilder::new(app)
+        .items(&[
+            &status_item,
+            &show_item,
+            &new_session_item,
+            &check_updates_item,
+            &quit_item,
+        ])
+        .build()?;
+
+    tray.set_menu(Some(menu))?;
+    tray.set_tooltip(Some(format!("Shannon AI Assistant — {label}")))?;
+    Ok(())
 }

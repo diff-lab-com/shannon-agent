@@ -7,7 +7,7 @@
 
 use super::{DataSourceError, DataSourceFetcher, DataSourceItem, DataSourceResult};
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::BTreeMap;
 
 /// Jira API fetcher.
@@ -39,7 +39,10 @@ impl DataSourceFetcher for JiraFetcher {
 
         let response = client
             .get(&url)
-            .header("Authorization", format!("Basic {}", self.build_basic_auth(email, api_token)))
+            .header(
+                "Authorization",
+                format!("Basic {}", self.build_basic_auth(email, api_token)),
+            )
             .header("Content-Type", "application/json")
             .send()
             .await
@@ -149,8 +152,6 @@ impl JiraFetcher {
 struct JiraResponse {
     #[serde(rename = "startAt")]
     start_at: usize,
-    #[serde(rename = "maxResults")]
-    max_results: usize,
     total: usize,
     issues: Vec<JiraIssue>,
 }

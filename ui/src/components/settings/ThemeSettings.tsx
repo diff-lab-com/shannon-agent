@@ -4,7 +4,14 @@ import { useTheme } from '@/context/ThemeContext'
 export default function ThemeSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { theme, setTheme, themes } = useTheme()
+  const { theme, setTheme, themes, fontScale, setFontScale } = useTheme()
+
+  const fontSizes = [
+    { value: 0.85, label: t('settings.theme.fontSize.small') },
+    { value: 1.0, label: t('settings.theme.fontSize.medium') },
+    { value: 1.15, label: t('settings.theme.fontSize.large') },
+    { value: 1.3, label: t('settings.theme.fontSize.xlarge') },
+  ]
 
   return (
     <div className="max-w-3xl">
@@ -56,6 +63,33 @@ export default function ThemeSettings() {
                 </p>
               </button>
             ))}
+          </div>
+        </section>
+
+        {/* Font Size Selection */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+          <h3 className="font-headline-md text-headline-md mb-md">{t('settings.theme.fontSize.title')}</h3>
+          <p className="font-body-sm text-on-surface-variant mb-lg">{t('settings.theme.fontSize.subtitle')}</p>
+
+          <div className="flex gap-md mb-lg">
+            {fontSizes.map(size => (
+              <button
+                key={size.value}
+                onClick={() => setFontScale(size.value)}
+                className={`flex-1 py-md px-sm rounded-lg border-2 transition-all font-label-md ${
+                  Math.abs(fontScale - size.value) < 0.01
+                    ? 'border-primary bg-primary-fixed/30 shadow-sm'
+                    : 'border-outline-variant/30 hover:border-primary/50'
+                }`}
+              >
+                {size.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Live Preview */}
+          <div className="bg-surface-container-low rounded-lg p-md border border-outline-variant/20">
+            <p className="font-body-md text-on-surface">{t('settings.theme.fontSize.preview')}</p>
           </div>
         </section>
 
