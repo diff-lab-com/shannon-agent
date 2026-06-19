@@ -19,12 +19,13 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tauri_plugin_shell::ShellExt;
 
 use crate::extensions::{
     self, AgentCatalogClient, AgentMarkdownInstaller, AgentRepoInstaller, DataSourceAdapter,
     FeaturedInstallKind, MarketplacePluginInstaller, McpRegistryClient, ReqwestFetch,
     ResolvedMcpInstaller, SkillCatalogClient, SkillMarkdownInstaller, StdioMcpInstaller,
-    StdioMcpSpec, catalog::FeaturedVendor, installer::AddonInstaller,
+    StdioMcpSpec, catalog::FeaturedVendor, installer::AddonInstaller, oauth,
 };
 
 /// Featured vendor list — baked into the app, no network fetch.
@@ -178,6 +179,145 @@ pub async fn install_mcp_oauth_complete(
     let installer = OAuthRemoteMcpInstaller { vendor };
     let config = installer.server_config(&access_token);
     let server_name = format!("{}-oauth", vendor_slug);
+    let path =
+        extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
+    Ok(InstallResult {
+        id: format!("oauth:{vendor_slug}"),
+        name: server_name,
+        install_path: Some(format!("{}#mcpServers.{}", path.display(), vendor_slug)),
+    })
+}
+
+/// Drive the full OAuth 2.1 PKCE loopback flow from the desktop binary.
+///
+/// Binds an ephemeral loopback listener on 127.0.0.1, opens the system
+/// browser via `tauri-plugin-shell`, captures the `?code=...&state=...`
+/// callback, exchanges the code for an access token, and writes the MCP
+/// server entry. The UI just calls this and awaits the `InstallResult`.
+#[tauri::command]
+pub async fn install_mcp_oauth_loopback(
+    app_handle: tauri::AppHandle,
+    vendor_slug: String,
+) -> Result<InstallResult, String> {
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    let vendor = extensions::featured_vendors()
+        .into_iter()
+        .find(|v| v.slug == vendor_slug)
+        .ok_or_else(|| format!("unknown vendor {vendor_slug}"))?;
+    let FeaturedInstallKind::OAuthRemote {
+        token_url,
+        client_id_env,
+        ..
+    } = vendor.install_kind.clone()
+    else {
+        return Err(format!("vendor {vendor_slug} is not OAuth-capable"));
+    };
+    use crate::extensions::OAuthRemoteMcpInstaller;
+    let installer = OAuthRemoteMcpInstaller {
+        vendor: vendor.clone(),
+    };
+    let pkce = installer.pkce_context();
+
+    // Bind ephemeral loopback port. RFC 6749 §3.1.2.4 requires 127.0.0.1
+    // (loopback) for native-app redirects; the OS assigns a free port.
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| format!("loopback bind failed: {e}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| format!("loopback addr: {e}"))?
+        .port();
+    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+
+    // Build the authorize URL with the loopback redirect.
+    let auth_url = installer
+        .authorize_url(&pkce, &redirect_uri)
+        .map_err(|e| e.to_string())?;
+
+    // Open system browser. Tauri's shell plugin gates this behind its
+    // allow-list (scope = https://* in tauri.conf.json).
+    app_handle
+        .shell()
+        .open(auth_url.clone(), None)
+        .map_err(|e| format!("failed to open browser: {e}"))?;
+
+    // Wait for the callback (5 min ceiling — vendor consent pages can be slow).
+    let accept = tokio::time::timeout(Duration::from_secs(300), listener.accept());
+    let (mut sock, _) = accept
+        .await
+        .map_err(|_| -> String { "timeout waiting for OAuth callback".into() })?
+        .map_err(|e| format!("accept failed: {e}"))?;
+
+    // Read enough of the request line to get the query string. Browsers send
+    // GETs with a few hundred bytes of headers; an 8 KB buffer is plenty.
+    let mut buf = vec![0u8; 8192];
+    let n = sock
+        .read(&mut buf)
+        .await
+        .map_err(|e| format!("read callback failed: {e}"))?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+
+    // Send a minimal HTML response so the user sees a "you may close this
+    // tab" page rather than a connection-reset error.
+    let body = "<!doctype html><meta charset=utf-8>\
+                <title>Shannon</title>\
+                <body style=font-family:sans-serif;padding:2rem>\
+                <h2>Authorization received</h2>\
+                <p>You can close this tab and return to Shannon.</p>";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    use tokio::io::AsyncWriteExt;
+    let _ = sock.write_all(response.as_bytes()).await;
+    let _ = sock.flush().await;
+    let _ = sock.shutdown().await;
+
+    // Extract the path's query string from the request line.
+    let request_line = request.lines().next().unwrap_or("");
+    // "GET /callback?code=...&state=... HTTP/1.1"
+    let path_query = request_line.split_whitespace().nth(1).unwrap_or("");
+    let query = path_query.split_once('?').map(|(_, q)| q).unwrap_or("");
+
+    let code = oauth::parse_callback_query(query, &pkce.state).map_err(|e| e.to_string())?;
+
+    // Exchange code for token via PKCE-verified POST.
+    let client_id = std::env::var(&client_id_env).unwrap_or_else(|_| "shannon-desktop".into());
+    let token_client = reqwest::Client::new();
+    let token_resp = token_client
+        .post(&token_url)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", &code),
+            ("redirect_uri", &redirect_uri),
+            ("client_id", &client_id),
+            ("code_verifier", &pkce.verifier),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("token exchange request failed: {e}"))?;
+    if !token_resp.status().is_success() {
+        let status = token_resp.status();
+        let body = token_resp.text().await.unwrap_or_default();
+        return Err(format!("token exchange failed ({status}): {body}"));
+    }
+    #[derive(serde::Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+    }
+    let token_json: TokenResponse = token_resp
+        .json()
+        .await
+        .map_err(|e| format!("token response parse failed: {e}"))?;
+
+    // Persist and return. Same write path as install_mcp_oauth_complete.
+    let server_name = format!("{}-oauth", vendor_slug);
+    let config = installer.server_config(&token_json.access_token);
     let path =
         extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
     Ok(InstallResult {
