@@ -101,6 +101,9 @@ pub mod commands_chat;
 pub mod commands_mcp;
 
 #[cfg(feature = "tauri")]
+pub mod commands_plugins;
+
+#[cfg(feature = "tauri")]
 pub mod commands_sessions;
 
 #[cfg(feature = "tauri")]
