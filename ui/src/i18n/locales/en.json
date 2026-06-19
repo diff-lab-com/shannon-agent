@@ -192,6 +192,7 @@
   "settings.notifications.webhook.subtitle": "Configure outbound webhook delivery for desktop notifications.",
   "settings.notifications.wizard.channel.status.connected": "Connected",
   "settings.notifications.wizard.channel.status.configured": "Configured",
+  "settings.notifications.wizard.channel.status.inactive": "Inactive",
   "settings.notifications.wizard.channel.status.setup": "Setup",
   "settings.notifications.wizard.channel.status.error": "Error",
   "settings.notifications.wizard.actions.back": "← Back",
