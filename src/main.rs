@@ -12,6 +12,7 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
+    use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_sessions;
@@ -180,7 +181,7 @@ fn main() {
             shannon_desktop::scheduled_commands::remove_task_worktree,
             shannon_desktop::scheduled_commands::prune_task_worktrees,
             // Onboarding seed (#75) — first-run sample tasks
-            commands::seed_sample_data,
+            commands_onboarding::seed_sample_data,
             // P3 notifications — native OS notification bridge
             commands::send_notification,
             commands::get_webhook_config,

@@ -110,6 +110,9 @@ pub mod commands_mcp;
 pub mod commands_files;
 
 #[cfg(feature = "tauri")]
+pub mod commands_onboarding;
+
+#[cfg(feature = "tauri")]
 pub mod commands_permissions;
 
 #[cfg(feature = "tauri")]
