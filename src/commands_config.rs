@@ -234,7 +234,9 @@ pub async fn configure(
                 "telemetry" => desktop_cfg.telemetry_enabled = Some(enabled),
                 "encryption" => desktop_cfg.encryption_enabled = Some(enabled),
                 "debug_console" => desktop_cfg.debug_console = Some(enabled),
-                _ => unreachable!(),
+                other => {
+                    return Err(format!("Unrecognized boolean key: {other}"));
+                }
             }
 
             drop(desktop_cfg);
