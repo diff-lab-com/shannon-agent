@@ -1628,7 +1628,7 @@
   "routines.create.aria": "Create new hook routine",
   "tasks.scheduleForm.targetPlaceholder": "{kind} target",
   "extensions.mcpServers": "MCP Servers",
-  "extensions.myAgents": "My Agents",
+  "extensions.myAgents": "Agents",
   "extensions.dataSources": "Data Sources",
   "extensions.plugins": "Plugins",
   "extensions.installed.tab": "Installed",

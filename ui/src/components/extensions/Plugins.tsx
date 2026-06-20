@@ -96,6 +96,10 @@ export default function Plugins() {
   const [installTarget, setInstallTarget] = useState<CatalogEntry | null>(null);
   const [upstreams, setUpstreams] = useState<CatalogUpstream[]>([]);
 
+  // NOTE: deps intentionally empty — this fetches once on mount. `t` is
+  // recreated every render (intl.formatMessage closure), so including it
+  // causes an infinite re-fetch loop: setEntries → re-render → new `t` →
+  // effect re-fires → setEntries → ... (the original flicker bug).
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -109,7 +113,7 @@ export default function Plugins() {
       .catch((e) => {
         if (cancelled) return;
         console.warn("listPluginMarketplace error:", e);
-        setError(t("extensions.plugins.loadError"));
+        setError(intl.formatMessage({ id: "extensions.plugins.loadError" }));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -117,7 +121,8 @@ export default function Plugins() {
     return () => {
       cancelled = true;
     };
-  }, [t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
