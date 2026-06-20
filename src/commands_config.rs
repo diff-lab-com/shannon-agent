@@ -352,6 +352,7 @@ pub async fn configure(
 #[tauri::command]
 pub async fn switch_provider(
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
     request: ProviderSwitchRequest,
 ) -> Result<(), String> {
     let existing = state.desktop_config.read().await;
@@ -399,6 +400,14 @@ pub async fn switch_provider(
     }
 
     config::save_config(&new_config)?;
+
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "provider".into(),
+            value: new_config.provider.clone().unwrap_or_default(),
+        },
+    );
 
     Ok(())
 }
