@@ -13,6 +13,7 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
+    use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
@@ -184,17 +185,17 @@ fn main() {
             // Onboarding seed (#75) — first-run sample tasks
             commands_onboarding::seed_sample_data,
             // P3 notifications — native OS notification bridge
-            commands::send_notification,
-            commands::get_webhook_config,
-            commands::save_webhook_config,
-            commands::clear_webhook_config,
+            commands_notifications::send_notification,
+            commands_notifications::get_webhook_config,
+            commands_notifications::save_webhook_config,
+            commands_notifications::clear_webhook_config,
             // P5 Phase 1 — inbound notifications (Slack + Telegram) config storage
-            commands::get_inbound_config,
-            commands::save_inbound_config,
-            commands::clear_inbound_config,
+            commands_notifications::get_inbound_config,
+            commands_notifications::save_inbound_config,
+            commands_notifications::clear_inbound_config,
             // P5 Phase 2 — inbound listener supervisor
-            commands::get_inbound_listener_status,
-            commands::stop_inbound_listener,
+            commands_notifications::get_inbound_listener_status,
+            commands_notifications::stop_inbound_listener,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
             commands_billing::get_billing_plan,
             commands_billing::get_cost_history,
@@ -209,7 +210,7 @@ fn main() {
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
             tauri::async_runtime::block_on(async move {
-                commands::bootstrap_inbound_listener(&*state_ref, &app_handle).await;
+                crate::commands_notifications::bootstrap_inbound_listener(&*state_ref, &app_handle).await;
             });
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
