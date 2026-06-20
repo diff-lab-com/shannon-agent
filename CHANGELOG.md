@@ -2,6 +2,27 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased] — S2 P1.1 commands.rs split + follow-ups
+
+Multiple extraction PRs to shrink `commands.rs` (~140KB → target ~40KB), plus UI cleanup and CI/docs improvements. All based on `dev` @ `87e854b`.
+
+### Refactors (commands.rs split — S2 P1.1)
+
+- **Extracted `commands_chat.rs`** (PR #9) — `get_conversation`, `list_models`, `get_status`, `cancel_query`, `list_tools`.
+- **Extracted `commands_sessions.rs`** (PR #10) — `new_session`, `list_sessions`, `search_sessions`, `load_session`, `export_session`, `switch_session`, `set_session_working_dir`, `delete_session`, `rename_session`, `duplicate_session`, `branch_session`.
+- **Extracted `commands_plugins.rs`** (PR #12) — `list_plugins`, `install_plugin`, `install_plugin_from_git`, `uninstall_plugin`, `enable_plugin`, `disable_plugin`, `update_plugin`, `list_plugin_marketplace`, `list_catalog_upstreams`.
+- **Extracted `commands_agents.rs`** (PR #13) — `list_agents`, `list_agent_definitions`, `create_agent_definition`, `delete_agent_definition`, `list_agent_messages`, `list_agent_message_teams`, `record_agent_message`. Fixed missing `#[tauri::command]` on `list_agents`.
+- **Extracted `commands_billing.rs`** (PR #14) — `get_billing_plan`, `get_cost_history`, `get_billing_history`.
+- **Extracted `commands_permissions.rs` + `commands_files.rs`** (PR #18) — `request_permission`, `respond_permission`, `save_text_file`.
+
+### Fixes
+
+- Removed stray `.vite/vitest/results.json` artifact and broadened `.gitignore` to cover `.vite` everywhere (was only `/ui/.vite`).
+- Fixed i18n-parity CI workflow to use `https://gitea.com/actions/checkout@v4` mirror (runner can't reach github.com).
+- Fixed flaky `LspQuickFixPanel` refresh-button test — waited for `disabled === false` before clicking.
+- Fixed flaky `Featured` loopback-fallback test — switched from `getByText` to `await findByText`.
+- Suppressed `tauri_plugin_shell::Shell::open` deprecation at call site with TODO for `tauri-plugin-opener` migration.
+
 ## v0.3.5 (2026-06-19) — S2 P0–P2 landing
 
 Six PRs merged into `dev` covering the S2 P0–P2 sprint scope. CI
