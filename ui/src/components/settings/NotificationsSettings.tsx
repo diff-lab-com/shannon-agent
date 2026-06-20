@@ -275,8 +275,17 @@ export default function NotificationsSettings() {
         if (!cancelled) setStatus(s)
       })
       .catch((e) => console.warn('getInboundListenerStatus error:', e))
+    const pollId = window.setInterval(() => {
+      api
+        .getInboundListenerStatus()
+        .then((s) => {
+          if (!cancelled) setStatus(s)
+        })
+        .catch((e) => console.warn('getInboundListenerStatus poll error:', e))
+    }, 30000)
     return () => {
       cancelled = true
+      window.clearInterval(pollId)
     }
   }, [])
 
@@ -325,6 +334,12 @@ export default function NotificationsSettings() {
     },
   ]
 
+  type HealthState = 'connected' | 'inactive' | 'setup'
+  const healthFor = (c: (typeof channels)[number]): HealthState => {
+    if (!c.configured) return 'setup'
+    return c.active ? 'connected' : 'inactive'
+  }
+
   return (
     <div className="pb-xl">
       <div className="mb-xl">
@@ -354,15 +369,29 @@ export default function NotificationsSettings() {
               >
                 <div className="flex items-center justify-between mb-sm">
                   <div className="flex items-center gap-sm">
-                    <span className="material-symbols-outlined text-primary">tag</span>
+                    <span className="material-symbols-outlined text-primary">{channel.icon}</span>
                     <span className="font-label-md font-bold text-on-surface">{channel.name}</span>
                   </div>
-                  {channel.configured && channel.active && (
-                    <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-tertiary/20 text-tertiary font-label-sm">
-                      <span className="w-1 h-1 rounded-full bg-tertiary animate-pulse" />
-                      {t('settings.notifications.wizard.channel.status.connected')}
-                    </span>
-                  )}
+                  {(() => {
+                    const health = healthFor(channel)
+                    if (health === 'connected') {
+                      return (
+                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-tertiary/20 text-tertiary font-label-sm" role="status">
+                          <span className="w-1 h-1 rounded-full bg-tertiary animate-pulse" aria-hidden="true" />
+                          {t('settings.notifications.wizard.channel.status.connected')}
+                        </span>
+                      )
+                    }
+                    if (health === 'inactive') {
+                      return (
+                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-error/15 text-error font-label-sm" role="status" title={t('settings.notifications.wizard.channel.status.inactive')}>
+                          <span className="material-symbols-outlined text-[12px]" aria-hidden="true">warning</span>
+                          {t('settings.notifications.wizard.channel.status.inactive')}
+                        </span>
+                      )
+                    }
+                    return null
+                  })()}
                 </div>
                 {channel.configured ? (
                   <p className="text-on-surface-variant text-sm">

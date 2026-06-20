@@ -72,6 +72,17 @@ describe('NotificationsSettings - Wizard Layout', () => {
     await waitFor(() => expect(screen.getByText('Connected')).toBeInTheDocument())
   })
 
+  it('shows inactive badge when configured but listener not running', async () => {
+    getInboundConfig.mockResolvedValue({
+      slack: { bot_token: 'xoxb-test', trigger_word: 'shannon', allowed_channels: ['C123'] },
+      telegram: null,
+    })
+    getInboundListenerStatus.mockResolvedValue({ slack_running: false, telegram_running: false })
+    render(wrap(<NotificationsSettings />))
+    await waitFor(() => expect(screen.getByText('Inactive')).toBeInTheDocument())
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument()
+  })
+
   it('opens Slack wizard when Slack card is clicked', async () => {
     render(wrap(<NotificationsSettings />))
     await waitFor(() => expect(screen.getByText('Slack')).toBeInTheDocument())

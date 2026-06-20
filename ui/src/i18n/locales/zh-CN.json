@@ -192,6 +192,7 @@
   "settings.notifications.webhook.subtitle": "配置用于桌面通知的出站 webhook 传递。",
   "settings.notifications.wizard.channel.status.connected": "已连接",
   "settings.notifications.wizard.channel.status.configured": "已配置",
+  "settings.notifications.wizard.channel.status.inactive": "未运行",
   "settings.notifications.wizard.channel.status.setup": "设置",
   "settings.notifications.wizard.channel.status.error": "错误",
   "settings.notifications.wizard.actions.back": "← 后退",
