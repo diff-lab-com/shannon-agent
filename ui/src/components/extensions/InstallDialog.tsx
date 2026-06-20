@@ -23,8 +23,15 @@ import { toast } from "sonner";
 import * as api from "@/lib/tauri-api";
 import { isValidPackageName, safeErrorMessage } from "@/lib/packageValidation";
 import type { AddonKind, CatalogEntry } from "@/types";
-import { KIND_ROUTE } from "./Plugins";
 import { useModalFocus } from "@/hooks/useModalFocus";
+
+const KIND_ROUTE: Record<AddonKind, string> = {
+  skill: "/extensions/skills",
+  agent: "/extensions/agents",
+  mcp: "/extensions/mcp-servers",
+  plugin: "/extensions/plugins",
+  data_source: "/extensions/data-sources",
+};
 
 export interface InstallDialogProps {
   entry: CatalogEntry | null;

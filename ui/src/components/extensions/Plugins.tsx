@@ -3,10 +3,8 @@ import { FormattedMessage, useIntl } from "react-intl";
 import { useOutletContext } from "react-router-dom";
 import * as api from "@/lib/tauri-api";
 import type { CatalogUpstream } from "@/lib/tauri-api";
-import type { AddonKind, CatalogEntry, CatalogSource, TrustLevel } from "@/types";
+import type { CatalogEntry, CatalogSource, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
-
-const KIND_ORDER: AddonKind[] = ["mcp", "skill", "agent", "data_source", "plugin"];
 
 type SortMode = "trust" | "stars" | "name" | "recent";
 type TrustFilter = TrustLevel | "all";
@@ -14,29 +12,6 @@ type SourceFilter = CatalogSource["type"] | "all";
 
 const TRUST_FILTER_ORDER: TrustFilter[] = ["all", "verified", "official", "community", "unknown"];
 const SOURCE_FILTERS: SourceFilter[] = ["all", "git_hub_repo", "featured_vendor", "native", "mcp_registry", "custom"];
-
-const KIND_ICON: Record<AddonKind, string> = {
-  mcp: "cloud",
-  skill: "extension",
-  agent: "smart_toy",
-  data_source: "database",
-  plugin: "workspaces",
-};
-
-const KIND_LABEL_KEY: Record<AddonKind, string> = {
-  mcp: "extensions.plugins.kindMcp",
-  skill: "extensions.plugins.kindSkill",
-  agent: "extensions.plugins.kindAgent",
-  data_source: "extensions.plugins.kindDataSource",
-  plugin: "extensions.plugins.kindPlugin",
-};
-
-export const KIND_ROUTE: Partial<Record<AddonKind, string>> = {
-  mcp: "/extensions/mcp-servers",
-  skill: "/extensions/skills",
-  agent: "/extensions/agents",
-  data_source: "/extensions/datasources",
-};
 
 const TRUST_ICON: Record<TrustLevel, string> = {
   unknown: "help",
@@ -89,7 +64,6 @@ export default function Plugins() {
   const [entries, setEntries] = useState<CatalogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [kindFilter, setKindFilter] = useState<AddonKind | "all">("all");
   const [trustFilter, setTrustFilter] = useState<TrustFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("trust");
@@ -154,67 +128,51 @@ export default function Plugins() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return entries.filter((e) => {
-      if (kindFilter !== "all" && e.kind !== kindFilter) return false;
       if (trustFilter !== "all" && e.trust !== trustFilter) return false;
       if (sourceFilter !== "all" && e.source?.type !== sourceFilter) return false;
       if (!q) return true;
       const hay = [e.name, e.description, e.author ?? "", (e.tags ?? []).join(" "), sourceLabel(e.source)].join(" ").toLowerCase();
       return hay.includes(q);
     });
-  }, [entries, kindFilter, trustFilter, sourceFilter, search]);
+  }, [entries, trustFilter, sourceFilter, search]);
 
   const activeFilterCount =
-    (kindFilter !== "all" ? 1 : 0) +
     (trustFilter !== "all" ? 1 : 0) +
     (sourceFilter !== "all" ? 1 : 0) +
     (search.trim() ? 1 : 0);
 
   const resetFilters = () => {
-    setKindFilter("all");
     setTrustFilter("all");
     setSourceFilter("all");
   };
 
-  const grouped = useMemo(() => {
-    const map = new Map<AddonKind, CatalogEntry[]>();
-    for (const e of filtered) {
-      const list = map.get(e.kind) ?? [];
-      list.push(e);
-      map.set(e.kind, list);
-    }
-
-    // Sort within each kind group based on sortMode
-    const sortFn = (a: CatalogEntry, b: CatalogEntry) => {
+  const sorted = useMemo(() => {
+    const sortFn = (a: CatalogEntry, b: CatalogEntry): number => {
       switch (sortMode) {
-        case "trust":
-          // Lower trust order number = higher trust (verified=0, official=1, etc.)
+        case "trust": {
           const trustDiff = TRUST_ORDER[a.trust] - TRUST_ORDER[b.trust];
           if (trustDiff !== 0) return trustDiff;
-          // Tie-break by name
           return a.name.localeCompare(b.name);
-        case "stars":
-          // More stars first, nulls last
+        }
+        case "stars": {
           const aStars = a.stars ?? -1;
           const bStars = b.stars ?? -1;
           if (aStars !== bStars) return bStars - aStars;
           return a.name.localeCompare(b.name);
+        }
         case "name":
           return a.name.localeCompare(b.name);
-        case "recent":
-          // More recent first, nulls last
+        case "recent": {
           const aDate = a.last_updated ? new Date(a.last_updated).getTime() : 0;
           const bDate = b.last_updated ? new Date(b.last_updated).getTime() : 0;
           if (aDate !== bDate) return bDate - aDate;
           return a.name.localeCompare(b.name);
+        }
         default:
           return 0;
       }
     };
-
-    return KIND_ORDER.filter((k) => map.has(k)).map((k) => ({
-      kind: k,
-      rows: map.get(k)!.sort(sortFn)
-    }));
+    return [...filtered].sort(sortFn);
   }, [filtered, sortMode]);
 
   const handleInstall = (entry: CatalogEntry) => {
@@ -235,7 +193,7 @@ export default function Plugins() {
         <div className="flex items-start justify-between gap-sm">
           <div className="flex items-start gap-sm min-w-0">
             <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-[20px]">{KIND_ICON[entry.kind]}</span>
+              <span className="material-symbols-outlined text-[20px]">workspaces</span>
             </div>
             <div className="min-w-0">
               <h4 className="font-bold text-label-md text-on-surface truncate">{entry.name}</h4>
@@ -359,24 +317,6 @@ export default function Plugins() {
 
       <div className="flex items-center justify-between gap-md mb-lg flex-wrap">
         <div className="flex items-center gap-xs flex-wrap">
-          <button
-            onClick={() => setKindFilter("all")}
-            className={`px-sm py-xs rounded-full text-label-sm font-bold cursor-pointer transition-colors ${kindFilter === "all" ? "bg-primary text-on-primary" : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high"}`}
-          >
-            {t("extensions.plugins.filterAll")}
-          </button>
-          {KIND_ORDER.map((k) => (
-            <button
-              key={k}
-              onClick={() => setKindFilter(k)}
-              className={`px-sm py-xs rounded-full text-label-sm font-bold cursor-pointer transition-colors inline-flex items-center gap-xs ${kindFilter === k ? "bg-primary text-on-primary" : "bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high"}`}
-            >
-              <span className="material-symbols-outlined text-[14px]">{KIND_ICON[k]}</span>
-              {t(KIND_LABEL_KEY[k])}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-xs flex-wrap">
           <select
             value={trustFilter}
             onChange={(e) => setTrustFilter(e.target.value as TrustFilter)}
@@ -453,19 +393,8 @@ export default function Plugins() {
           </p>
         </div>
       ) : (
-        <div className="space-y-xl">
-          {grouped.map(({ kind, rows }) => (
-            <section key={kind}>
-              <h3 className="text-label-sm font-bold text-outline uppercase tracking-widest mb-md inline-flex items-center gap-xs">
-                <span className="material-symbols-outlined text-[14px]">{KIND_ICON[kind]}</span>
-                {t(KIND_LABEL_KEY[kind])}
-                <span className="text-on-surface-variant font-normal">· {rows.length}</span>
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-md">
-                {rows.map(renderCard)}
-              </div>
-            </section>
-          ))}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-md">
+          {sorted.map(renderCard)}
         </div>
       )}
 
