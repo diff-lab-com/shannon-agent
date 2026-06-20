@@ -211,7 +211,7 @@ fn main() {
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
             tauri::async_runtime::block_on(async move {
-                crate::commands_notifications::bootstrap_inbound_listener(&*state_ref, &app_handle).await;
+                commands_notifications::bootstrap_inbound_listener(&*state_ref, &app_handle).await;
             });
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
