@@ -9,6 +9,7 @@ fn main() {
     use shannon_desktop::commands;
     use shannon_desktop::commands_agents;
     use shannon_desktop::commands_billing;
+    use shannon_desktop::commands_config;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
@@ -58,9 +59,9 @@ fn main() {
             commands_chat::get_status,
             commands_chat::cancel_query,
             commands_chat::list_tools,
-            commands::configure,
-            commands::switch_provider,
-            commands::get_config,
+            commands_config::configure,
+            commands_config::switch_provider,
+            commands_config::get_config,
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,

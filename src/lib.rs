@@ -99,6 +99,9 @@ pub mod commands_agents;
 
 #[cfg(feature = "tauri")]
 pub mod commands_billing;
+#[cfg(feature = "tauri")]
+pub mod commands_config;
+
 
 #[cfg(feature = "tauri")]
 pub mod commands_chat;
