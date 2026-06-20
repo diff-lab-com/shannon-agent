@@ -107,6 +107,9 @@ pub mod commands_chat;
 pub mod commands_mcp;
 
 #[cfg(feature = "tauri")]
+pub mod commands_notifications;
+
+#[cfg(feature = "tauri")]
 pub mod commands_files;
 
 #[cfg(feature = "tauri")]
