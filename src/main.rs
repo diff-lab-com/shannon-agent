@@ -7,6 +7,7 @@
 #[cfg(feature = "tauri")]
 fn main() {
     use shannon_desktop::commands;
+    use shannon_desktop::commands_agents;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_plugins;
@@ -131,14 +132,14 @@ fn main() {
             commands::start_background_task,
             commands::get_background_tasks,
             commands::cancel_background_task,
-            commands::list_agents,
-            commands::list_agent_definitions,
-            commands::create_agent_definition,
-            commands::delete_agent_definition,
+            commands_agents::list_agents,
+            commands_agents::list_agent_definitions,
+            commands_agents::create_agent_definition,
+            commands_agents::delete_agent_definition,
             // Inter-agent message history (Phase D C3)
-            commands::list_agent_messages,
-            commands::list_agent_message_teams,
-            commands::record_agent_message,
+            commands_agents::list_agent_messages,
+            commands_agents::list_agent_message_teams,
+            commands_agents::record_agent_message,
             commands::list_tasks,
             commands::update_task,
             commands::get_file_tree,
