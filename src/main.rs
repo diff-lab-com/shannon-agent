@@ -15,6 +15,7 @@ fn main() {
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_sessions;
+    use shannon_desktop::commands_tasks;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
@@ -143,8 +144,8 @@ fn main() {
             commands_agents::list_agent_messages,
             commands_agents::list_agent_message_teams,
             commands_agents::record_agent_message,
-            commands::list_tasks,
-            commands::update_task,
+            commands_tasks::list_tasks,
+            commands_tasks::update_task,
             commands::get_file_tree,
             commands::get_working_dir_info,
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)

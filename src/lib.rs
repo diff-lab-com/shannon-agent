@@ -119,6 +119,9 @@ pub mod commands_plugins;
 pub mod commands_sessions;
 
 #[cfg(feature = "tauri")]
+pub mod commands_tasks;
+
+#[cfg(feature = "tauri")]
 pub mod scheduled_commands;
 
 #[cfg(feature = "tauri")]
