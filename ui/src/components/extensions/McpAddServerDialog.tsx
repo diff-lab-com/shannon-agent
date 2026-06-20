@@ -249,7 +249,7 @@ export default function McpAddServerDialog({
       <div
         ref={modalRef}
         onClick={(e) => e.stopPropagation()}
-        className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 w-full max-w-2xl max-h-[90vh] overflow-y-auto p-lg flex flex-col gap-md"
+        className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/40 w-full max-w-3xl max-h-[90vh] overflow-y-auto p-lg flex flex-col gap-md"
       >
         <div className="flex items-center justify-between">
           <h2

@@ -22,6 +22,12 @@ Multiple extraction PRs to shrink `commands.rs` (~140KB → target ~40KB), plus 
 - Fixed flaky `LspQuickFixPanel` refresh-button test — waited for `disabled === false` before clicking.
 - Fixed flaky `Featured` loopback-fallback test — switched from `getByText` to `await findByText`.
 - Suppressed `tauri_plugin_shell::Shell::open` deprecation at call site with TODO for `tauri-plugin-opener` migration.
+- Added `bundle.icon` array to `tauri.conf.json` — fixes AppImage bundler failure ("couldn't find a square icon").
+- Set `bundle.createUpdaterArtifacts` to `false` — updater plugin has empty pubkey/endpoints, so the signing requirement was failing release builds.
+
+### CI/CD
+
+- **Multi-platform release workflow** (`.gitea/workflows/release.yml`). Matrix builds `.deb`/`.rpm`/`.AppImage` (Linux), `.msi`/`.exe` (Windows), `.dmg` (macOS arm64 + x86_64). GitHub HTTPS traffic routed through `gh-proxy.com` via `git config url.insteadOf`; `shannon-code` sibling cloned at pinned rev `00510a7`. Branch guard rejects non-`main`/non-`v*` tag triggers.
 
 ## v0.3.5 (2026-06-19) — S2 P0–P2 landing
 

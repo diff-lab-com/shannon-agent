@@ -1628,7 +1628,7 @@
   "routines.create.aria": "创建新挂钩例程",
   "tasks.scheduleForm.targetPlaceholder": "{kind} target",
   "extensions.mcpServers": "MCP 服务器",
-  "extensions.myAgents": "我的智能体",
+  "extensions.myAgents": "智能体",
   "extensions.dataSources": "数据源",
   "extensions.plugins": "插件",
   "extensions.installed.tab": "已安装",

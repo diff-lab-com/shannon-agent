@@ -22,7 +22,7 @@ describe('Extensions hub sub-tabs (P1)', () => {
     expect(screen.getByText('Featured')).toBeInTheDocument()
     expect(screen.getByText('MCP Servers')).toBeInTheDocument()
     expect(screen.getByText('Skills')).toBeInTheDocument()
-    expect(screen.getByText('My Agents')).toBeInTheDocument()
+    expect(screen.getByText('Agents')).toBeInTheDocument()
     expect(screen.getByText('Data Sources')).toBeInTheDocument()
     expect(screen.getByText('Plugins')).toBeInTheDocument()
     expect(screen.getByText('Installed')).toBeInTheDocument()

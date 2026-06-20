@@ -5,13 +5,19 @@
 //! adapter-specific config (vault path, IMAP credentials) and writes the
 //! config to `~/.shannon/data-sources/<slug>.toml`.
 //!
-//! Six adapters ship today:
+//! Eleven adapters ship today:
 //! 1. **Obsidian Vault** — reads markdown notes from a local vault directory.
 //! 2. **Email (IMAP)** — connects to an IMAP server to read mailbox messages.
 //! 3. **Notion** — queries pages/databases via the Notion REST API.
 //! 4. **Linear** — queries issues via the Linear GraphQL API.
 //! 5. **GitHub Issues** — queries issues/PRs via the GitHub REST API.
 //! 6. **Jira** — queries issues via the Jira Cloud REST API.
+//! 7. **Slack** — queries Slack channels via the Web API (config-only; query
+//!       lands in a follow-up).
+//! 8. **Discord** — queries Discord channel history via the REST API (config-only).
+//! 9. **Telegram** — queries Telegram bot chats via the Bot API (config-only).
+//! 10. **RSS Feed** — fetches and parses any RSS/Atom feed.
+//! 11. **Web Calendar (iCal)** — fetches and parses any .ics feed.
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +34,11 @@ pub enum DataSourceKind {
     #[serde(rename = "github_issues")]
     GitHubIssues,
     Jira,
+    Slack,
+    Discord,
+    Telegram,
+    Rss,
+    Ical,
 }
 
 impl DataSourceKind {
@@ -39,6 +50,11 @@ impl DataSourceKind {
             DataSourceKind::Linear => "linear",
             DataSourceKind::GitHubIssues => "github_issues",
             DataSourceKind::Jira => "jira",
+            DataSourceKind::Slack => "slack",
+            DataSourceKind::Discord => "discord",
+            DataSourceKind::Telegram => "telegram",
+            DataSourceKind::Rss => "rss",
+            DataSourceKind::Ical => "ical",
         }
     }
 }
@@ -274,6 +290,120 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                 },
             ],
         },
+        DataSourceAdapter {
+            slug: "slack".into(),
+            kind: DataSourceKind::Slack,
+            name: "Slack".into(),
+            description: "Search Slack messages via the Web API (config-only; query coming soon)."
+                .into(),
+            homepage_url: Some("https://api.slack.com/methods".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "token".into(),
+                    label: "Bot / user OAuth token".into(),
+                    kind: "password".into(),
+                    required: true,
+                    placeholder: Some("xoxb-... or xoxp-...".into()),
+                    help: Some("Needs search:read (and channels:read for listing).".into()),
+                },
+                DataSourceField {
+                    key: "default_channel".into(),
+                    label: "Default channel".into(),
+                    kind: "text".into(),
+                    required: false,
+                    placeholder: Some("#general".into()),
+                    help: Some("Optional: pre-filter queries to one channel.".into()),
+                },
+            ],
+        },
+        DataSourceAdapter {
+            slug: "discord".into(),
+            kind: DataSourceKind::Discord,
+            name: "Discord".into(),
+            description: "Read Discord channel history via the REST API (config-only; query coming soon)."
+                .into(),
+            homepage_url: Some("https://discord.com/developers/docs/intro".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "bot_token".into(),
+                    label: "Bot token".into(),
+                    kind: "password".into(),
+                    required: true,
+                    placeholder: None,
+                    help: Some("Create at discord.com/developers/applications.".into()),
+                },
+                DataSourceField {
+                    key: "default_channel_id".into(),
+                    label: "Default channel id".into(),
+                    kind: "text".into(),
+                    required: false,
+                    placeholder: Some("123456789012345678".into()),
+                    help: Some(
+                        "Optional: pre-filter queries to one channel (right-click → Copy ID).".into(),
+                    ),
+                },
+            ],
+        },
+        DataSourceAdapter {
+            slug: "telegram".into(),
+            kind: DataSourceKind::Telegram,
+            name: "Telegram".into(),
+            description: "Read Telegram bot chats via the Bot API (config-only; query coming soon)."
+                .into(),
+            homepage_url: Some("https://core.telegram.org/bots/api".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "bot_token".into(),
+                    label: "Bot token".into(),
+                    kind: "password".into(),
+                    required: true,
+                    placeholder: Some("123456:ABC-DEF...".into()),
+                    help: Some("Create via @BotFather.".into()),
+                },
+            ],
+        },
+        DataSourceAdapter {
+            slug: "rss".into(),
+            kind: DataSourceKind::Rss,
+            name: "RSS / Atom Feed".into(),
+            description: "Fetch and search any RSS or Atom feed.".into(),
+            homepage_url: Some("https://www.rssboard.org/rss-specification".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "feed_url".into(),
+                    label: "Feed URL".into(),
+                    kind: "text".into(),
+                    required: true,
+                    placeholder: Some("https://example.com/feed.xml".into()),
+                    help: None,
+                },
+                DataSourceField {
+                    key: "limit".into(),
+                    label: "Max items to fetch".into(),
+                    kind: "number".into(),
+                    required: false,
+                    placeholder: Some("50".into()),
+                    help: Some("Optional: cap items returned per query.".into()),
+                },
+            ],
+        },
+        DataSourceAdapter {
+            slug: "ical".into(),
+            kind: DataSourceKind::Ical,
+            name: "Web Calendar (iCal)".into(),
+            description: "Fetch and search events from any .ics feed.".into(),
+            homepage_url: Some("https://datatracker.ietf.org/doc/html/rfc5545".into()),
+            fields: vec![
+                DataSourceField {
+                    key: "feed_url".into(),
+                    label: "iCal feed URL".into(),
+                    kind: "text".into(),
+                    required: true,
+                    placeholder: Some("https://calendar.google.com/calendar/ical/.../basic.ics".into()),
+                    help: Some("Most calendar apps expose an iCal subscription URL.".into()),
+                },
+            ],
+        },
     ]
 }
 
@@ -321,12 +451,17 @@ mod tests {
         assert!(slugs.contains(&"linear"));
         assert!(slugs.contains(&"github-issues"));
         assert!(slugs.contains(&"jira"));
+        assert!(slugs.contains(&"slack"));
+        assert!(slugs.contains(&"discord"));
+        assert!(slugs.contains(&"telegram"));
+        assert!(slugs.contains(&"rss"));
+        assert!(slugs.contains(&"ical"));
     }
 
     #[test]
     fn catalog_entries_have_native_source_and_verified_trust() {
         let entries = data_source_catalog_entries();
-        assert_eq!(entries.len(), 6);
+        assert_eq!(entries.len(), 11);
         for entry in &entries {
             assert_eq!(entry.kind, AddonKind::DataSource);
             assert_eq!(entry.source, CatalogSource::Native);
