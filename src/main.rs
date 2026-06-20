@@ -10,7 +10,9 @@ fn main() {
     use shannon_desktop::commands_agents;
     use shannon_desktop::commands_billing;
     use shannon_desktop::commands_chat;
+    use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
+    use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_sessions;
     use shannon_desktop::extensions_commands;
@@ -64,17 +66,17 @@ fn main() {
             commands_sessions::search_sessions,
             commands_sessions::load_session,
             commands_sessions::export_session,
-            commands::save_text_file,
             commands_sessions::switch_session,
             commands_sessions::set_session_working_dir,
             commands_sessions::delete_session,
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
             commands_sessions::branch_session,
-            commands::request_permission,
-            commands::respond_permission,
+            commands_permissions::request_permission,
+            commands_permissions::respond_permission,
             commands::get_file_diff,
             commands::apply_diff,
+            commands_files::save_text_file,
             commands_mcp::add_mcp_server,
             commands_mcp::remove_mcp_server,
             commands_mcp::restart_mcp_server,
