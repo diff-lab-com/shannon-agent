@@ -9,6 +9,7 @@ fn main() {
     use shannon_desktop::commands;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_mcp;
+    use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_sessions;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
@@ -118,15 +119,15 @@ fn main() {
             extensions_commands::list_catalog_reports,
             extensions_commands::clear_catalog_report,
             // Plugin management (A.3)
-            commands::list_plugins,
-            commands::install_plugin,
-            commands::install_plugin_from_git,
-            commands::uninstall_plugin,
-            commands::enable_plugin,
-            commands::disable_plugin,
-            commands::update_plugin,
-            commands::list_plugin_marketplace,
-            commands::list_catalog_upstreams,
+            commands_plugins::list_plugins,
+            commands_plugins::install_plugin,
+            commands_plugins::install_plugin_from_git,
+            commands_plugins::uninstall_plugin,
+            commands_plugins::enable_plugin,
+            commands_plugins::disable_plugin,
+            commands_plugins::update_plugin,
+            commands_plugins::list_plugin_marketplace,
+            commands_plugins::list_catalog_upstreams,
             commands::start_background_task,
             commands::get_background_tasks,
             commands::cancel_background_task,
