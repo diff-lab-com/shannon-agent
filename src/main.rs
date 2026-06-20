@@ -348,30 +348,15 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Audit #25: refresh the tray menu + tooltip when the provider or
-            // model changes. We poll the persisted config every 2s (cheap:
-            // a small JSON read from `~/.shannon/desktop/config.json`)
-            // because `switch_provider` does not emit a `config-updated`
-            // event we could listen for. Listening to `config-updated`
-            // (which `configure(...)` emits) would miss the `switch_provider`
-            // path, so polling the persisted file is the single reliable seam
-            // that covers both code paths.
+            // Audit #25 / F3: refresh the tray menu + tooltip when the
+            // provider or model changes. Both `configure` and `switch_provider`
+            // emit `config-updated`, so we listen for that event and rebuild
+            // the menu on change. Replaces the prior 2-second polling loop.
             let refresh_handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let mut last_label = initial_label;
-                loop {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                    let label = tray_status_label(&shannon_desktop::config::load_config());
-                    if label == last_label {
-                        continue;
-                    }
-                    last_label = label.clone();
-                    // Rebuild the menu with the new status line and update the
-                    // tooltip. If the tray lookup or build fails we log and
-                    // try again on the next tick.
-                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
-                        tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
-                    }
+            let _ = app.listen(shannon_desktop::events::event_names::CONFIG_UPDATED, move |_| {
+                let label = tray_status_label(&shannon_desktop::config::load_config());
+                if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
+                    tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
                 }
             });
 
