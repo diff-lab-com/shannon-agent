@@ -48,10 +48,12 @@ intentional — see the comment in `Cargo.toml`. The pinned rev in the git deps
 ### Tauri feature gate
 
 Everything Tauri-related lives behind the `tauri` feature (default-on).
-`src/lib.rs` only declares `commands`, `scheduled_commands`, `lsp_commands`,
-`automation_commands`, `extensions_commands`, `notifications` under
-`#[cfg(feature = "tauri")]`. `build.rs` is a no-op stub because Tauri's own
-build script replaces it when the feature is enabled.
+`src/lib.rs` declares `commands` plus twelve domain-specific
+`commands_*` modules, `scheduled_commands`, `lsp_commands`,
+`automation_commands`, `extensions_commands`, `notifications`, and
+`inbound` under `#[cfg(feature = "tauri")]`. `build.rs` is a no-op
+stub because Tauri's own build script replaces it when the feature
+is enabled.
 
 ## Architecture
 
@@ -68,15 +70,40 @@ The app follows the standard Tauri v2 split:
    starts the auto-updater, and emits `update-available` events to the
    frontend.
 
-2. **`src/commands.rs`** (~140KB, central command surface) — defines
-   `AppState` (shared mutex-guarded state for the whole app) plus the bulk of
-   Tauri commands: chat (`send_message`, `cancel_query`), sessions, config,
-   MCP server management, plugins, background tasks, agents, file diff/apply.
+2. **`src/commands.rs`** — defines `AppState` (shared mutex-guarded state
+   for the whole app) plus the remaining core commands that have not been
+   extracted to a domain module: `send_message`, background-task management
+   (`start_background_task`, `get_background_tasks`, `cancel_background_task`).
    `AppState` is constructed in `main.rs::setup()` and held via
    `app.manage()`.
 
 3. **Domain-specific command modules** — each is registered alongside
-   `commands::*` in `main.rs`:
+   `commands::*` in `main.rs`. Extraction tracked in `CHANGELOG.md`
+   (S2 P1.1). Sort order in `main.rs::invoke_handler!` matches `lib.rs`.
+   - `commands_chat.rs` — `get_conversation`, `list_models`, `get_status`,
+     `cancel_query`, `list_tools`.
+   - `commands_sessions.rs` — 11 session-management commands (new/list/
+     search/load/export/switch/set_working_dir/delete/rename/duplicate/
+     branch_session) plus session helpers.
+   - `commands_mcp.rs` — MCP server lifecycle, skills, addons.
+   - `commands_plugins.rs` — plugin marketplace + catalog upstreams.
+   - `commands_agents.rs` — agent definitions + inter-agent message history.
+   - `commands_billing.rs` — billing demo data (plan, cost history,
+     invoices) plus `iso_days_ago` helper.
+   - `commands_permissions.rs` — permission request/respond commands.
+   - `commands_files.rs` — text save, file diff/apply, file tree,
+     working-dir info.
+   - `commands_onboarding.rs` — `seed_sample_data` + sample task fixtures.
+   - `commands_config.rs` — `configure`, `switch_provider`, `get_config`.
+     Both mutation commands emit `CONFIG_UPDATED`, which the tray menu
+     listener uses to rebuild the status label (no polling).
+   - `commands_tasks.rs` — task board (`list_tasks`, `update_task`) plus
+     `.claude/tasks/` walker helpers.
+   - `commands_notifications.rs` — native OS notifications + webhook/inbound
+     notification config + inbound listener supervisor. Owns
+     `fire_query_notification`, `NotificationKind`, and
+     `load_desktop_webhook_config` (all `pub(crate)`) used by
+     `commands.rs::send_message` and `AppState::new`.
    - `scheduled_commands.rs` — Tasks board, Triage, History, Triggered
      Routines, worktree management, OPC metric aggregation. Backed by
      `~/.shannon/scheduled-tasks/`, `~/.shannon/scheduled-runs/`,
@@ -91,6 +118,10 @@ The app follows the standard Tauri v2 split:
    - `lsp_commands.rs` — code actions, diagnostics, source-file reads.
    - `automation_commands.rs` — hook event catalog and custom permission
      profiles.
+   - `notifications.rs` — `TauriNotificationHandler` implementation of the
+     engine's `NotificationHandler` trait; wired into `AppState.notifier`.
+   - `inbound.rs` — Slack + Telegram inbound listener used by
+     `commands_notifications::restart_inbound_listener`.
 
 4. **`src/events.rs`** — typed payloads for every frontend-bound Tauri event
    (`QueryTextPayload`, `ToolStartPayload`, `UsagePayload`, etc.) plus
