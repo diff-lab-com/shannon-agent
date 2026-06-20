@@ -7,6 +7,7 @@
 #[cfg(feature = "tauri")]
 fn main() {
     use shannon_desktop::commands;
+    use shannon_desktop::commands_chat;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
@@ -46,11 +47,11 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::send_message,
-            commands::get_conversation,
-            commands::list_models,
-            commands::get_status,
-            commands::cancel_query,
-            commands::list_tools,
+            commands_chat::get_conversation,
+            commands_chat::list_models,
+            commands_chat::get_status,
+            commands_chat::cancel_query,
+            commands_chat::list_tools,
             commands::configure,
             commands::switch_provider,
             commands::get_config,
