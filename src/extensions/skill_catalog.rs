@@ -204,39 +204,91 @@ fn manifest_to_entry(skill: SkillManifestEntry, upstream: &SkillUpstream) -> Cat
 
 /// Shannon built-in skills — always available, no upstream fetch needed.
 fn builtin_skills() -> Vec<CatalogEntry> {
+    let native = |name: &str,
+                 description: &str,
+                 trigger: &str,
+                 tags: &[&str]| {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("trigger".to_string(), serde_json::json!(trigger));
+        CatalogEntry {
+            id: format!("native:skill-{name}"),
+            kind: AddonKind::Skill,
+            name: name.to_string(),
+            description: description.to_string(),
+            author: Some("Shannon".into()),
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            homepage_url: None,
+            license: Some("Apache-2.0".into()),
+            stars: None,
+            last_updated: None,
+            source: CatalogSource::Native,
+            trust: TrustLevel::Verified,
+            metadata,
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+        }
+    };
+
     vec![
-        CatalogEntry {
-            id: "native:pdf".into(),
-            kind: AddonKind::Skill,
-            name: "PDF Toolkit".into(),
-            description: "Read, search, and extract content from PDF documents.".into(),
-            author: Some("Shannon".into()),
-            version: Some(env!("CARGO_PKG_VERSION").into()),
-            homepage_url: None,
-            license: Some("Apache-2.0".into()),
-            stars: None,
-            last_updated: None,
-            source: CatalogSource::Native,
-            trust: TrustLevel::Verified,
-            metadata: std::collections::HashMap::new(),
-            tags: vec!["pdf".into(), "native".into()],
-        },
-        CatalogEntry {
-            id: "native:git-workflow".into(),
-            kind: AddonKind::Skill,
-            name: "Git Workflow".into(),
-            description: "Branch, commit, and PR automation helpers.".into(),
-            author: Some("Shannon".into()),
-            version: Some(env!("CARGO_PKG_VERSION").into()),
-            homepage_url: None,
-            license: Some("Apache-2.0".into()),
-            stars: None,
-            last_updated: None,
-            source: CatalogSource::Native,
-            trust: TrustLevel::Verified,
-            metadata: std::collections::HashMap::new(),
-            tags: vec!["git".into(), "native".into()],
-        },
+        native(
+            "pdf",
+            "Read, search, and extract content from PDF documents.",
+            "/pdf",
+            &["pdf", "native", "documents"],
+        ),
+        native(
+            "git-workflow",
+            "Branch, commit, and PR automation helpers.",
+            "/git",
+            &["git", "native", "vcs"],
+        ),
+        native(
+            "doc-builder",
+            "Generate architecture docs, API references, and ADRs from code scans.",
+            "/doc",
+            &["docs", "native", "automation"],
+        ),
+        native(
+            "test-scaffolder",
+            "Scaffold unit/integration tests following the project's existing patterns.",
+            "/test",
+            &["testing", "native", "automation"],
+        ),
+        native(
+            "refactor",
+            "Scope-safe refactors: extract function, inline variable, rename symbol across module.",
+            "/refactor",
+            &["refactor", "native", "code"],
+        ),
+        native(
+            "debugger",
+            "Systematic debugging: bisect, capture state, isolate root cause.",
+            "/debug",
+            &["debug", "native", "diagnostics"],
+        ),
+        native(
+            "security-review",
+            "Audit code for OWASP top 10, credential leaks, injection, and unsafe patterns.",
+            "/sec",
+            &["security", "native", "audit"],
+        ),
+        native(
+            "perf-profiler",
+            "Profile hot paths, suggest algorithmic improvements, benchmark before/after.",
+            "/perf",
+            &["performance", "native", "profiling"],
+        ),
+        native(
+            "i18n-helper",
+            "Extract user-visible strings, enforce locale-file conventions, machine-translate drafts.",
+            "/i18n",
+            &["i18n", "native", "localization"],
+        ),
+        native(
+            "sql-builder",
+            "Build and explain SQL queries with parameter binding and schema-aware completion.",
+            "/sql",
+            &["sql", "native", "database"],
+        ),
     ]
 }
 
@@ -300,8 +352,8 @@ mod tests {
             .filter(|e| e.source == CatalogSource::Native)
             .count();
         assert!(
-            native_count >= 2,
-            "expected at least 2 native entries, got {native_count}"
+            native_count >= 10,
+            "expected at least 10 native entries, got {native_count}"
         );
     }
 
@@ -311,8 +363,8 @@ mod tests {
         let client = SkillCatalogClient::new(Arc::new(StaticFetch(manifest_json())))
             .with_cache_dir(tmp.path());
         let entries = client.list_skills().await.expect("list");
-        // 2 native + 2 skills × 2 upstreams = 6
-        assert_eq!(entries.len(), 6);
+        // 10 native + 2 skills × 2 upstreams = 14
+        assert_eq!(entries.len(), 14);
         let brainstorming = entries
             .iter()
             .find(|e| e.name == "brainstorming")
@@ -339,8 +391,8 @@ mod tests {
         let client2 = SkillCatalogClient::new(http_bad).with_cache_dir(tmp.path());
         let second = client2.list_skills().await.expect("list");
         assert_eq!(first.len(), second.len());
-        // 2 native + 2 × 2 upstream = 6
-        assert_eq!(first.len(), 6);
+        // 10 native + 2 × 2 upstream = 14
+        assert_eq!(first.len(), 14);
     }
 
     #[tokio::test]

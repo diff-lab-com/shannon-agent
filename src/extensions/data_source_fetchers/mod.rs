@@ -80,12 +80,22 @@ pub trait DataSourceFetcher: Send + Sync {
 }
 
 /// Dispatch to the right fetcher based on `kind`.
+///
+/// Adapters marked "config-only" (Slack, Discord, Telegram, RSS, iCal)
+/// install and persist configuration today; their query path is stubbed
+/// and returns a "coming soon" error. This lets the catalog surface them
+/// without degrading the install/configure UX.
 pub fn dispatch(kind: &str) -> Result<Arc<dyn DataSourceFetcher>, DataSourceError> {
     match kind {
         "notion" => Ok(Arc::new(notion::NotionFetcher)),
         "linear" => Ok(Arc::new(linear::LinearFetcher)),
         "github_issues" => Ok(Arc::new(github::GitHubFetcher)),
         "jira" => Ok(Arc::new(jira::JiraFetcher)),
+        "slack" | "discord" | "telegram" | "rss" | "ical" => Err(
+            DataSourceError::UpstreamError(format!(
+                "Query for '{kind}' is coming soon; configuration has been saved and will be used once the fetcher ships."
+            )),
+        ),
         _ => Err(DataSourceError::UnknownKind(kind.to_string())),
     }
 }
