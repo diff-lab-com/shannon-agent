@@ -239,6 +239,8 @@ pub async fn install_mcp_oauth_loopback(
 
     // Open system browser. Tauri's shell plugin gates this behind its
     // allow-list (scope = https://* in tauri.conf.json).
+    // TODO: migrate to tauri-plugin-opener (supersedes shell().open).
+    #[allow(deprecated)]
     app_handle
         .shell()
         .open(auth_url.clone(), None)
