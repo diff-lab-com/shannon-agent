@@ -1031,7 +1031,7 @@ const OPC_WINDOW_DAYS: usize = 7;
 #[tauri::command]
 #[tracing::instrument(skip_all)]
 pub async fn get_opc_metrics() -> Result<OpcMetrics, String> {
-    let tasks = crate::commands::list_tasks().await?;
+    let tasks = crate::commands_tasks::list_tasks().await?;
     let daily = collect_daily_buckets()?;
     Ok(compute_opc_metrics(&tasks, daily))
 }
@@ -1041,7 +1041,7 @@ pub async fn get_opc_metrics() -> Result<OpcMetrics, String> {
 /// Extracted so load benchmarks can exercise it without Tauri state or a
 /// filesystem walk for daily buckets — `daily` is passed in.
 pub fn compute_opc_metrics(
-    tasks: &[crate::commands::TaskInfo],
+    tasks: &[crate::commands_tasks::TaskInfo],
     daily: Vec<OpcDayBucket>,
 ) -> OpcMetrics {
     let total = tasks.len() as u32;
