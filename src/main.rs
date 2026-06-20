@@ -86,6 +86,7 @@ fn main() {
             extensions_commands::install_mcp_mcpb,
             extensions_commands::install_mcp_oauth_authorize_url,
             extensions_commands::install_mcp_oauth_complete,
+            extensions_commands::install_mcp_oauth_loopback,
             extensions_commands::uninstall_mcp_server,
             // Extensions hub P3 — Skills catalog + installer
             extensions_commands::list_skill_catalog,
