@@ -14,7 +14,7 @@ import { Markdown } from '@/components/chat/Markdown'
 import { MessageBubble, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
-import type { FileContext, SessionInfo } from '@/types'
+import type { SessionInfo } from '@/types'
 
 // QuickFix and Editor are no longer top-level routes — they are inline
 // tools launched from the chat input toolbar. Lazy-loaded so the main
@@ -99,7 +99,6 @@ export default function Chat() {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [diffPath, setDiffPath] = useState<string | null>(null)
-  const [fileContext, setFileContext] = useState<FileContext[]>([])
   const [attachedFiles, setAttachedFiles] = useState<string[]>([])
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set())
   const [sessionPage, setSessionPage] = useState(1)
@@ -113,10 +112,6 @@ export default function Chat() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingText])
-
-  useEffect(() => {
-    api.getFileContext().then(setFileContext).catch(e => console.warn('Failed to load file context:', e))
-  }, [messages])
 
   // C2: Cmd/Ctrl+D triggers the WD picker from anywhere. The handler is
   // defined later in the component but stable per-render — we always
@@ -722,30 +717,6 @@ export default function Chat() {
                   <div key={tc.tool_use_id} className="p-sm bg-surface-container rounded-xl flex items-center gap-sm border border-outline-variant/10">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${tc.status === 'running' ? 'bg-secondary animate-pulse' : tc.status === 'error' ? 'bg-error' : 'bg-tertiary'}`}></span>
                     <p className="text-label-md truncate">{tc.tool_name}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* File Context */}
-          {fileContext.length > 0 && (
-            <section>
-              <h3 className="font-label-md text-on-surface uppercase tracking-wider opacity-60 mb-md">
-                {t('chat.context.files')}
-                <span className="ml-xs px-xs py-[2px] bg-secondary/10 text-secondary text-[10px] font-bold rounded">{fileContext.length}</span>
-              </h3>
-              <div className="space-y-sm">
-                {fileContext.map(fc => (
-                  <div key={fc.path} className="p-sm bg-surface-container rounded-xl border border-outline-variant/10">
-                    <div className="flex items-center gap-sm mb-xs">
-                      <span className="material-symbols-outlined text-[16px] text-primary" aria-hidden="true">description</span>
-                      <p className="text-label-md text-on-surface truncate flex-1" title={fc.path}>{fc.name}</p>
-                    </div>
-                    <div className="flex items-center gap-md text-label-sm text-on-surface-variant">
-                      <span>{fc.language}</span>
-                      <span>{intl.formatMessage({ id: 'chat.context.lines' }, { count: fc.lines })}</span>
-                    </div>
                   </div>
                 ))}
               </div>

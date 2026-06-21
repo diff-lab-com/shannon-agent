@@ -815,18 +815,6 @@ export async function getBillingHistory(): Promise<import('@/types').BillingHist
   return invoke('get_billing_history')
 }
 
-// --- File Context ---
-
-export async function getFileContext(): Promise<import('@/types').FileContext[]> {
-  return invoke('get_file_context')
-}
-
-// --- Task Detail ---
-
-export async function getTaskDetail(id: string): Promise<TaskItem> {
-  return invoke('get_task_detail', { id })
-}
-
 // --- Scheduled Tasks (Sprint 2) ---
 //
 // Thin invoke() wrappers over the 19 Tauri commands in
