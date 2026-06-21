@@ -1777,5 +1777,8 @@
   "settings.notifications.preset.urlHint.slack": "粘贴 Slack incoming webhook URL",
   "sidebar.sessions.title": "最近会话",
   "sidebar.sessions.list.aria": "最近的聊天会话",
-  "sidebar.sessions.untitled": "无标题会话"
+  "sidebar.sessions.untitled": "无标题会话",
+  "sidebar.sessions.search.placeholder": "搜索会话…",
+  "sidebar.sessions.search.aria": "搜索会话",
+  "sidebar.sessions.noResults": "没有匹配的会话"
 }

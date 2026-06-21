@@ -1777,5 +1777,8 @@
   "settings.notifications.preset.urlHint.slack": "Paste your Slack incoming webhook URL",
   "sidebar.sessions.title": "Recent Sessions",
   "sidebar.sessions.list.aria": "Recent chat sessions",
-  "sidebar.sessions.untitled": "Untitled session"
+  "sidebar.sessions.untitled": "Untitled session",
+  "sidebar.sessions.search.placeholder": "Search sessions…",
+  "sidebar.sessions.search.aria": "Search sessions",
+  "sidebar.sessions.noResults": "No matching sessions"
 }
