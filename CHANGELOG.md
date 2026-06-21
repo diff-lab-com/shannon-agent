@@ -25,6 +25,24 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
   the primary "New chat" button.
 - `sidebar.worktree.new*` i18n keys (en + zh-CN).
 
+## [Unreleased — P0.3] — Auto-updater config
+
+### Features
+
+- **Tauri auto-updater configured.** `plugins.updater` in `tauri.conf.json`
+  now has an endpoint (`https://gitea.diff-lab.com/.../latest/latest.json`)
+  and a pubkey placeholder. `bundle.createUpdaterArtifacts` stays **false**
+  until an operator generates a real Ed25519 keypair and replaces the
+  placeholder — shipping with the placeholder would let the updater accept
+  any signature.
+
+### Docs
+
+- **`docs/updater-setup.md`** walks through the 5-step activation
+  (keypair generation, CI secret configuration, pubkey replacement,
+  flag flip, `latest.json` publishing). Without this, every Shannon
+  Desktop release required users to manually download + reinstall.
+
 ## [Unreleased] — S2 P1.1 commands.rs split + follow-ups
 
 ### CI/CD (release pipeline — v0.3.6 betas)
