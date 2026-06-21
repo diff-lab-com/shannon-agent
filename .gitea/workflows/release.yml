@@ -14,6 +14,12 @@ env:
   # abbreviated SHAs as ref names. GitHub's upload-pack resolves full SHAs
   # via allowReachableSHA1InWant.
   SHANNON_CODE_REV: "00510a72eda7ea7b64f4b5ef6eec85a0514e0aa7"
+  # linuxdeploy + plugins are themselves AppImages. In rootless DinD the
+  # runner has no /dev/fuse, so the AppImage runtime cannot self-mount.
+  # APPIMAGE_EXTRACT_AND_RUN=1 tells them to extract to a temp dir and
+  # run from there — pure userspace, no capabilities or device access
+  # required. Costs ~5s per build.
+  APPIMAGE_EXTRACT_AND_RUN: "1"
 
 jobs:
   build:
