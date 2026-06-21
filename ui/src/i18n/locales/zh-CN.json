@@ -1372,7 +1372,7 @@
   "triage.delete.aria": "删除项目",
   "triage.delete.title": "删除",
   "triage.toast.deleted": "已删除 {count} 项",
-  "triage.title": "收件箱",
+  "triage.title": "分流队列",
   "triage.subtitle": "需要关注的项目。",
   "triage.sort.aria": "切换排序顺序",
   "triage.bulk.title": "批量操作",
@@ -1744,7 +1744,6 @@
   "extensions.hub.noDescription": "暂无描述。",
   "extensions.hub.triggerLabel": "触发词：{trigger}",
   "extensions.hub.triggerFallback": "触发命令：{trigger}",
-  "triage.title": "分流队列",
   "triage.filterAll": "全部",
   "triage.filterUnread": "未读",
   "triage.markRead": "标记为已读",
@@ -1775,5 +1774,8 @@
   "settings.notifications.preset.urlHint.feishu": "粘贴飞书机器人 webhook URL",
   "settings.notifications.preset.urlHint.dingtalk": "粘贴钉钉机器人 webhook URL",
   "settings.notifications.preset.urlHint.wechat": "粘贴企业微信机器人 webhook key",
-  "settings.notifications.preset.urlHint.slack": "粘贴 Slack incoming webhook URL"
+  "settings.notifications.preset.urlHint.slack": "粘贴 Slack incoming webhook URL",
+  "sidebar.sessions.title": "最近会话",
+  "sidebar.sessions.list.aria": "最近的聊天会话",
+  "sidebar.sessions.untitled": "无标题会话"
 }

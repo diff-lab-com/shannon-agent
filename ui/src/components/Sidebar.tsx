@@ -42,7 +42,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   });
   const dragging = useRef(false);
   const location = useLocation();
-  const { status, createSession } = useApp();
+  const { status, createSession, sessions, currentSessionId, switchSession } = useApp();
   const intl = useIntl();
   const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
 
@@ -141,6 +141,51 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <span className="material-symbols-outlined text-[20px]">add</span>
         <span>{intl.formatMessage({ id: 'nav.newChat' })}</span>
       </Button>
+
+      {sessions.length > 0 && (
+        <div className="mb-lg">
+          <div className="flex items-center justify-between px-2 mb-xs">
+            <span className="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">
+              {intl.formatMessage({ id: 'sidebar.sessions.title' })}
+            </span>
+            <span className="font-label-sm text-label-sm text-outline-variant">
+              {sessions.length}
+            </span>
+          </div>
+          <div className="space-y-0.5" role="list" aria-label={intl.formatMessage({ id: 'sidebar.sessions.list.aria' })}>
+            {sessions.slice(0, 5).map((session) => {
+              const isActive = session.id === currentSessionId
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  role="listitem"
+                  onClick={() => {
+                    switchSession(session.id)
+                    if (mobile) closeMobile()
+                  }}
+                  className={cn(
+                    'w-full text-left px-3 py-2 rounded-lg font-label-md text-label-md transition-all duration-200 flex items-center gap-2',
+                    isActive
+                      ? 'bg-primary/10 text-primary font-bold'
+                      : 'text-on-surface-variant hover:bg-surface-container-low hover:text-primary'
+                  )}
+                  title={session.title}
+                >
+                  <span
+                    className={cn(
+                      'w-1.5 h-1.5 rounded-full shrink-0',
+                      isActive ? 'bg-primary' : 'bg-outline-variant'
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="flex-1 truncate">{session.title || intl.formatMessage({ id: 'sidebar.sessions.untitled' })}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <nav aria-label={intl.formatMessage({ id: 'nav.mainNav.aria' })} className="flex-1 space-y-1">
         <ScrollArea className="h-full">
