@@ -542,7 +542,9 @@ pub async fn create_session_worktree(
     Ok(wt.into())
 }
 
-/// Delete a session by ID.
+/// Delete a session by ID. If the session had a bound worktree (working_dir
+/// pointing inside the default worktree base), the worktree is removed too —
+/// best-effort, logs failures but does not block session deletion.
 #[tauri::command]
 pub async fn delete_session(
     state: tauri::State<'_, AppState>,
@@ -550,6 +552,15 @@ pub async fn delete_session(
     id: String,
 ) -> Result<bool, String> {
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+
+    // Capture working_dir before deleting so we can clean up worktree
+    let working_dir = {
+        let sessions = state.sessions.lock().await;
+        sessions
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.working_dir.clone())
+    };
 
     // Delete from StateManager
     let deleted = state
@@ -559,8 +570,28 @@ pub async fn delete_session(
 
     if deleted {
         // Remove from sessions list
-        let mut sessions = state.sessions.lock().await;
-        sessions.retain(|s| s.id != id);
+        {
+            let mut sessions = state.sessions.lock().await;
+            sessions.retain(|s| s.id != id);
+        }
+
+        // Best-effort worktree cleanup: if working_dir lives under the
+        // default worktree base dir, remove the worktree. Failures are
+        // logged but do not block session deletion — orphan worktrees can
+        // be cleaned up later via prune_task_worktrees.
+        if let Some(wd) = working_dir {
+            let base = shannon_core::scheduled_worktree::default_base_dir();
+            let wd_path = std::path::Path::new(&wd);
+            if wd_path.starts_with(&base) {
+                if let Err(e) = shannon_core::scheduled_worktree::remove(wd_path) {
+                    tracing::warn!(
+                        worktree = %wd,
+                        error = %e,
+                        "failed to remove worktree during session deletion;                          use prune_task_worktrees to clean up later"
+                    );
+                }
+            }
+        }
 
         // Emit sessions updated event
         let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
