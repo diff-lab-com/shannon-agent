@@ -72,6 +72,7 @@ fn main() {
             commands_sessions::export_session,
             commands_sessions::switch_session,
             commands_sessions::set_session_working_dir,
+            commands_sessions::create_session_worktree,
             commands_sessions::delete_session,
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,

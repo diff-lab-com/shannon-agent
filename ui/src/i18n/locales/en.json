@@ -1780,5 +1780,8 @@
   "sidebar.sessions.untitled": "Untitled session",
   "sidebar.sessions.search.placeholder": "Search sessions…",
   "sidebar.sessions.search.aria": "Search sessions",
-  "sidebar.sessions.noResults": "No matching sessions"
+  "sidebar.sessions.noResults": "No matching sessions",
+  "sidebar.worktree.new": "New in worktree",
+  "sidebar.worktree.new.title": "Create a new session isolated in its own git worktree",
+  "sidebar.worktree.new.aria": "Create new session in worktree"
 }

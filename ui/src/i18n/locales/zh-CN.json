@@ -1780,5 +1780,8 @@
   "sidebar.sessions.untitled": "无标题会话",
   "sidebar.sessions.search.placeholder": "搜索会话…",
   "sidebar.sessions.search.aria": "搜索会话",
-  "sidebar.sessions.noResults": "没有匹配的会话"
+  "sidebar.sessions.noResults": "没有匹配的会话",
+  "sidebar.worktree.new": "在 worktree 中新建",
+  "sidebar.worktree.new.title": "在独立 git worktree 中创建新会话",
+  "sidebar.worktree.new.aria": "在 worktree 中新建会话"
 }

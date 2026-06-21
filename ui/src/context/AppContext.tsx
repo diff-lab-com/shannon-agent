@@ -42,6 +42,7 @@ interface AppActions {
   sendMessage: (message: string, filePaths?: string[]) => Promise<void>
   cancelQuery: () => Promise<void>
   createSession: () => Promise<void>
+  createSessionInWorktree: () => Promise<void>
   switchSession: (id: string) => Promise<void>
   deleteSession: (id: string) => Promise<void>
   renameSession: (id: string, title: string) => Promise<void>
@@ -147,6 +148,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setActiveToolCalls([])
       await refreshSessions()
     } catch (e) { setError(String(e)) }
+  }, [refreshSessions])
+
+  const createSessionInWorktree = useCallback(async () => {
+    let id: string | null = null
+    try {
+      id = await api.newSession()
+      const title = `Session ${id.slice(0, 8)}`
+      await api.createSessionWorktree(id, title)
+      const msgs = await api.switchSession(id)
+      setCurrentSessionId(id)
+      setMessages(msgs)
+      setStreamingText('')
+      setThinkingText('')
+      setActiveToolCalls([])
+      await refreshSessions()
+    } catch (e) {
+      setError(String(e))
+      if (id) {
+        // Worktree creation failed after session was created — clear
+        // current session to avoid UI showing a session whose working_dir
+        // was never bound to a worktree.
+        setCurrentSessionId(null)
+        setMessages([])
+      }
+    }
   }, [refreshSessions])
 
   const switchToSession = useCallback(async (id: string) => {
@@ -292,7 +318,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
     sessions, currentSessionId, status, config, models, permissionRequest,
     backgroundTasks, tasks, agents, mcpServers, error, loading,
-    sendMessage, cancelQuery, createSession, switchSession: switchToSession,
+    sendMessage, cancelQuery, createSession, createSessionInWorktree, switchSession: switchToSession,
     deleteSession: deleteSessionAction, renameSession: renameSessionAction,
     respondPermission: respondPermissionAction, refreshSessions, refreshStatus,
     refreshConfig, refreshModels, refreshTasks, refreshAgents, refreshMcpServers,
