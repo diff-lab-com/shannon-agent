@@ -9,7 +9,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  SHANNON_CODE_REV: "00510a7"
+  # Full 40-char SHA is required: git fetch by short SHA fails with
+  # "couldn't find remote ref <short>" because the refspec parser treats
+  # abbreviated SHAs as ref names. GitHub's upload-pack resolves full SHAs
+  # via allowReachableSHA1InWant.
+  SHANNON_CODE_REV: "00510a72eda7ea7b64f4b5ef6eec85a0514e0aa7"
 
 jobs:
   build:
