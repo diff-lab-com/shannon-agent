@@ -320,8 +320,9 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
             slug: "discord".into(),
             kind: DataSourceKind::Discord,
             name: "Discord".into(),
-            description: "Read Discord channel history via the REST API (config-only; query coming soon)."
-                .into(),
+            description:
+                "Read Discord channel history via the REST API (config-only; query coming soon)."
+                    .into(),
             homepage_url: Some("https://discord.com/developers/docs/intro".into()),
             fields: vec![
                 DataSourceField {
@@ -339,7 +340,8 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
                     required: false,
                     placeholder: Some("123456789012345678".into()),
                     help: Some(
-                        "Optional: pre-filter queries to one channel (right-click → Copy ID).".into(),
+                        "Optional: pre-filter queries to one channel (right-click → Copy ID)."
+                            .into(),
                     ),
                 },
             ],
@@ -348,19 +350,17 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
             slug: "telegram".into(),
             kind: DataSourceKind::Telegram,
             name: "Telegram".into(),
-            description: "Read Telegram bot chats via the Bot API (config-only; query coming soon)."
-                .into(),
+            description:
+                "Read Telegram bot chats via the Bot API (config-only; query coming soon).".into(),
             homepage_url: Some("https://core.telegram.org/bots/api".into()),
-            fields: vec![
-                DataSourceField {
-                    key: "bot_token".into(),
-                    label: "Bot token".into(),
-                    kind: "password".into(),
-                    required: true,
-                    placeholder: Some("123456:ABC-DEF...".into()),
-                    help: Some("Create via @BotFather.".into()),
-                },
-            ],
+            fields: vec![DataSourceField {
+                key: "bot_token".into(),
+                label: "Bot token".into(),
+                kind: "password".into(),
+                required: true,
+                placeholder: Some("123456:ABC-DEF...".into()),
+                help: Some("Create via @BotFather.".into()),
+            }],
         },
         DataSourceAdapter {
             slug: "rss".into(),
@@ -393,16 +393,14 @@ pub fn data_source_adapters() -> Vec<DataSourceAdapter> {
             name: "Web Calendar (iCal)".into(),
             description: "Fetch and search events from any .ics feed.".into(),
             homepage_url: Some("https://datatracker.ietf.org/doc/html/rfc5545".into()),
-            fields: vec![
-                DataSourceField {
-                    key: "feed_url".into(),
-                    label: "iCal feed URL".into(),
-                    kind: "text".into(),
-                    required: true,
-                    placeholder: Some("https://calendar.google.com/calendar/ical/.../basic.ics".into()),
-                    help: Some("Most calendar apps expose an iCal subscription URL.".into()),
-                },
-            ],
+            fields: vec![DataSourceField {
+                key: "feed_url".into(),
+                label: "iCal feed URL".into(),
+                kind: "text".into(),
+                required: true,
+                placeholder: Some("https://calendar.google.com/calendar/ical/.../basic.ics".into()),
+                help: Some("Most calendar apps expose an iCal subscription URL.".into()),
+            }],
         },
     ]
 }

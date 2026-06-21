@@ -10,7 +10,6 @@ use crate::commands_agents::resolve_working_dir;
 use crate::events::HunkAction;
 use crate::resolve_path_in_working_dir;
 
-
 /// Write text content to a file, creating parent directories as needed.
 #[tauri::command]
 pub async fn save_text_file(path: String, content: String) -> Result<(), String> {
@@ -22,7 +21,6 @@ pub async fn save_text_file(path: String, content: String) -> Result<(), String>
     std::fs::write(target, content)
         .map_err(|e| format!("Failed to write {}: {e}", target.display()))
 }
-
 
 /// File diff result for the diff viewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::commands::{chrono_timestamp, AppState, ToolInfo};
+use crate::commands::{AppState, ToolInfo, chrono_timestamp};
 
 /// MCP server info for UI display.
 #[derive(Debug, Clone, Serialize, Deserialize)]

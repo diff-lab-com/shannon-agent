@@ -91,11 +91,11 @@ pub fn dispatch(kind: &str) -> Result<Arc<dyn DataSourceFetcher>, DataSourceErro
         "linear" => Ok(Arc::new(linear::LinearFetcher)),
         "github_issues" => Ok(Arc::new(github::GitHubFetcher)),
         "jira" => Ok(Arc::new(jira::JiraFetcher)),
-        "slack" | "discord" | "telegram" | "rss" | "ical" => Err(
-            DataSourceError::UpstreamError(format!(
+        "slack" | "discord" | "telegram" | "rss" | "ical" => {
+            Err(DataSourceError::UpstreamError(format!(
                 "Query for '{kind}' is coming soon; configuration has been saved and will be used once the fetcher ships."
-            )),
-        ),
+            )))
+        }
         _ => Err(DataSourceError::UnknownKind(kind.to_string())),
     }
 }

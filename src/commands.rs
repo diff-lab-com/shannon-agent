@@ -18,12 +18,12 @@ use std::sync::Arc;
 use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock, oneshot};
 
-use crate::config::{self, DesktopConfig};
-use crate::events::event_names;
-use crate::events::{self};
 use crate::commands_agents::resolve_working_dir;
 #[cfg(test)]
 use crate::commands_billing::iso_days_ago;
+use crate::config::{self, DesktopConfig};
+use crate::events::event_names;
+use crate::events::{self};
 use tokio_util::sync::CancellationToken;
 
 /// Parse approval mode string into ApprovalMode enum
@@ -638,7 +638,10 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
-                        let _ = crate::commands_notifications::fire_query_notification(&notifier_arc, crate::commands_notifications::NotificationKind::Completed);
+                        let _ = crate::commands_notifications::fire_query_notification(
+                            &notifier_arc,
+                            crate::commands_notifications::NotificationKind::Completed,
+                        );
                     }
                     QueryEvent::Failed { error, .. } => {
                         let _ = app.emit(
@@ -648,8 +651,10 @@ pub async fn send_message(
                                 error: error.clone(),
                             },
                         );
-                        let _ =
-                            crate::commands_notifications::fire_query_notification(&notifier_arc, crate::commands_notifications::NotificationKind::Failed(error));
+                        let _ = crate::commands_notifications::fire_query_notification(
+                            &notifier_arc,
+                            crate::commands_notifications::NotificationKind::Failed(error),
+                        );
                     }
                     // Ignore other events in MVP
                     _ => {}
@@ -699,10 +704,6 @@ pub async fn send_message(
 // request_permission + respond_permission extracted to `commands_permissions.rs`
 // (registered as commands_permissions::* in main.rs).
 
-
-
-
-
 pub(crate) fn chrono_timestamp() -> i64 {
     // Milliseconds since UNIX_EPOCH. All UI consumers construct
     // `new Date(ts)` which interprets the argument as milliseconds.
@@ -727,7 +728,6 @@ fn provider_from_str(s: &str) -> shannon_core::api::types::LlmProvider {
         _ => LlmProvider::Custom,
     }
 }
-
 
 /// Start a new background task.
 #[tauri::command]
@@ -914,10 +914,6 @@ pub async fn cancel_background_task(
         Err("Task not found".into())
     }
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {

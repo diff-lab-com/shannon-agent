@@ -204,10 +204,7 @@ fn manifest_to_entry(skill: SkillManifestEntry, upstream: &SkillUpstream) -> Cat
 
 /// Shannon built-in skills — always available, no upstream fetch needed.
 fn builtin_skills() -> Vec<CatalogEntry> {
-    let native = |name: &str,
-                 description: &str,
-                 trigger: &str,
-                 tags: &[&str]| {
+    let native = |name: &str, description: &str, trigger: &str, tags: &[&str]| {
         let mut metadata = std::collections::HashMap::new();
         metadata.insert("trigger".to_string(), serde_json::json!(trigger));
         CatalogEntry {
