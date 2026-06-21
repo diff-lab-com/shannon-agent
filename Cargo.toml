@@ -95,4 +95,5 @@ shannon-types = { path = "../shannon-code/crates/shannon-types" }
 shannon-tools = { path = "../shannon-code/crates/shannon-tools" }
 shannon-mcp = { path = "../shannon-code/crates/shannon-mcp" }
 shannon-skills = { path = "../shannon-code/crates/shannon-skills" }
+shannon-agents = { path = "../shannon-code/crates/shannon-agents" }
 
