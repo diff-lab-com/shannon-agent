@@ -4,6 +4,31 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
 
 ## [Unreleased] — S2 P1.1 commands.rs split + follow-ups
 
+### CI/CD (release pipeline — v0.3.6 betas)
+
+- **AppImage bundling fixed in rootless DinD (beta7).** `APPIMAGE_EXTRACT_AND_RUN=1`
+  env var tells `linuxdeploy` + plugins to extract their own AppImage to a
+  temp dir and run from there — pure userspace, no `/dev/fuse` required.
+  Costs ~5s per build. Without this, rootless DinD runners cannot
+  self-mount AppImages.
+- **China mirrors for Linux + macOS release builds (beta8 → beta11).** Cut
+  Linux build time from ~95 min to ~48 min by mirroring rustup artifacts,
+  crates.io index, and npm registry:
+  - **rustup**: `RUSTUP_DIST_SERVER=https://rsproxy.cn` +
+    `RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup` (no `/dist` suffix — the
+    shell script appends it).
+  - **crates.io**: sparse protocol at `sparse+https://rsproxy.cn/index/`.
+  - **npm**: `https://registry.npmmirror.com`.
+  - Selected rsproxy.cn over tuna/bfsu/USTC because those prune old
+    toolchain versions (`rust-1.88.0` returns 404); rsproxy keeps the full
+    archive. Three corrections to `RUSTUP_UPDATE_ROOT` were needed (beta9
+    `/rustup/rustup` → beta10 `/rustup/dist` → beta11 `/rustup`); the
+    rustup-init shell script was the source of truth for the path shape.
+  - Mirrors scoped to `runner.os != 'Windows'` (Windows runner not yet
+    verified for mirror connectivity).
+
+## [Unreleased — superseded by v0.3.6 betas] — S2 P1.1 commands.rs split + follow-ups
+
 Multiple extraction PRs to shrink `commands.rs` (~140KB → target ~40KB), plus UI cleanup and CI/docs improvements. All based on `dev` @ `87e854b`.
 
 ### Refactors (commands.rs split — S2 P1.1)

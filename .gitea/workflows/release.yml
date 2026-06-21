@@ -13,7 +13,7 @@ env:
   # "couldn't find remote ref <short>" because the refspec parser treats
   # abbreviated SHAs as ref names. GitHub's upload-pack resolves full SHAs
   # via allowReachableSHA1InWant.
-  SHANNON_CODE_REV: "00510a72eda7ea7b64f4b5ef6eec85a0514e0aa7"
+  SHANNON_CODE_REV: "26343ba15737ac9b4da5c59aa6ceb139a443564d"
   # linuxdeploy + plugins are themselves AppImages. In rootless DinD the
   # runner has no /dev/fuse, so the AppImage runtime cannot self-mount.
   # APPIMAGE_EXTRACT_AND_RUN=1 tells them to extract to a temp dir and
