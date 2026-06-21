@@ -76,6 +76,37 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libsoup-3.0-dev libssl-dev
 
+      - name: Configure China mirrors (Linux only)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # rustup dist server (rsproxy.cn does not mirror rustup artifacts;
+          # Tsinghua tuna does. This env var is read by the rustup-init script
+          # in the next step, so must be exported to $GITHUB_ENV.)
+          echo "RUSTUP_DIST_SERVER=https://mirrors.tuna.tsinghua.edu.cn/rustup" >> $GITHUB_ENV
+          echo "RUSTUP_UPDATE_ROOT=https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup" >> $GITHUB_ENV
+
+          # crates.io registry mirror (rsproxy.cn, ByteDance-operated, sparse protocol).
+          # sparse+ is mandatory for the index URL — rsproxy's sparse index is
+          # ~10x faster than the git index for first-time fetches.
+          mkdir -p "$HOME/.cargo"
+          cat > "$HOME/.cargo/config.toml" <<'EOF'
+          [source.crates-io]
+          replace-with = "rsproxy-sparse"
+
+          [source.rsproxy-sparse]
+          registry = "sparse+https://rsproxy.cn/index/"
+
+          [registries.rsproxy]
+          index = "https://rsproxy.cn/crates.io-index"
+
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+          # pnpm/npm — use npmmirror.com (Alibaba) for UI deps install.
+          npm config set registry https://registry.npmmirror.com
+
       - name: Install Rust (stable + targets)
         shell: bash
         run: |
