@@ -85,7 +85,7 @@ jobs:
           # causing 404 on rustup-init. Verified rsproxy has the full archive.
           # These env vars are read by the rustup-init script in the next step.
           echo "RUSTUP_DIST_SERVER=https://rsproxy.cn" >> $GITHUB_ENV
-          echo "RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup/dist" >> $GITHUB_ENV
+          echo "RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup" >> $GITHUB_ENV
 
           # crates.io registry mirror (same provider, sparse protocol).
           # sparse+ is mandatory for the index URL — rsproxy's sparse index is
