@@ -194,6 +194,10 @@ pub async fn install_mcp_oauth_complete(
 /// browser via `tauri-plugin-shell`, captures the `?code=...&state=...`
 /// callback, exchanges the code for an access token, and writes the MCP
 /// server entry. The UI just calls this and awaits the `InstallResult`.
+///
+/// Architecture, RFC compliance, vendor setup, and the manual test plan
+/// live in `docs/extensions/oauth-loopback.md`. Read that before changing
+/// the flow or adding a vendor.
 #[tauri::command]
 pub async fn install_mcp_oauth_loopback(
     app_handle: tauri::AppHandle,
