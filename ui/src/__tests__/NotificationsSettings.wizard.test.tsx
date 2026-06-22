@@ -11,6 +11,10 @@ const getInboundConfig = vi.hoisted(() => vi.fn())
 const saveInboundConfig = vi.hoisted(() => vi.fn())
 const clearInboundConfig = vi.hoisted(() => vi.fn())
 const getInboundListenerStatus = vi.hoisted(() => vi.fn())
+const getOutboundConfig = vi.hoisted(() => vi.fn())
+const saveOutboundConfig = vi.hoisted(() => vi.fn())
+const clearOutboundConfig = vi.hoisted(() => vi.fn())
+const sendOutboundTest = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -21,6 +25,10 @@ vi.mock('@/lib/tauri-api', () => ({
   saveInboundConfig: (...args: unknown[]) => saveInboundConfig(...args),
   clearInboundConfig: (...args: unknown[]) => clearInboundConfig(...args),
   getInboundListenerStatus: (...args: unknown[]) => getInboundListenerStatus(...args),
+  getOutboundConfig: (...args: unknown[]) => getOutboundConfig(...args),
+  saveOutboundConfig: (...args: unknown[]) => saveOutboundConfig(...args),
+  clearOutboundConfig: (...args: unknown[]) => clearOutboundConfig(...args),
+  sendOutboundTest: (...args: unknown[]) => sendOutboundTest(...args),
 }))
 
 function wrap(ui: React.ReactElement) {
@@ -39,9 +47,14 @@ beforeEach(() => {
   saveInboundConfig.mockReset()
   clearInboundConfig.mockReset()
   getInboundListenerStatus.mockReset()
+  getOutboundConfig.mockReset()
+  saveOutboundConfig.mockReset()
+  clearOutboundConfig.mockReset()
+  sendOutboundTest.mockReset()
   getWebhookConfig.mockResolvedValue(null)
   getInboundConfig.mockResolvedValue({})
   getInboundListenerStatus.mockResolvedValue({ slack_running: false, telegram_running: false })
+  getOutboundConfig.mockResolvedValue({ slack: null, telegram: null })
 })
 
 describe('NotificationsSettings - Wizard Layout', () => {

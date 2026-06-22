@@ -112,6 +112,9 @@ pub mod commands_mcp;
 pub mod commands_notifications;
 
 #[cfg(feature = "tauri")]
+pub mod commands_outbound;
+
+#[cfg(feature = "tauri")]
 pub mod commands_files;
 
 #[cfg(feature = "tauri")]
@@ -146,3 +149,6 @@ pub mod notifications;
 
 #[cfg(feature = "tauri")]
 pub mod inbound;
+
+#[cfg(feature = "tauri")]
+pub mod outbound;
