@@ -68,6 +68,6 @@ pub async fn respond_permission(
         let _ = tx.send(allow);
         Ok(())
     } else {
-        Err(format!("Permission request not found: {}", request_id))
+        Err(format!("Permission request not found: {request_id}"))
     }
 }

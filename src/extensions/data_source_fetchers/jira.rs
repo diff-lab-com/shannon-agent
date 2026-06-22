@@ -67,7 +67,7 @@ impl JiraFetcher {
 
         // Add project filter if configured
         if let Some(project_key) = config.get("project_key") {
-            jql_parts.push(format!("project = {}", project_key));
+            jql_parts.push(format!("project = {project_key}"));
         }
 
         // Add text search if query provided
@@ -85,13 +85,13 @@ impl JiraFetcher {
         if jql_filter.is_empty() {
             "ORDER BY updated DESC".to_string()
         } else {
-            format!("{} ORDER BY updated DESC", jql_filter)
+            format!("{jql_filter} ORDER BY updated DESC")
         }
     }
 
     fn build_basic_auth(&self, email: &str, api_token: &str) -> String {
         use base64::Engine;
-        let credentials = format!("{}:{}", email, api_token);
+        let credentials = format!("{email}:{api_token}");
         base64::engine::general_purpose::STANDARD.encode(&credentials)
     }
 
@@ -123,12 +123,10 @@ impl JiraFetcher {
                 401 | 403 => Err(DataSourceError::AuthError),
                 429 => Err(DataSourceError::RateLimited),
                 _ if status.is_server_error() => Err(DataSourceError::UpstreamError(format!(
-                    "Jira returned {}",
-                    status
+                    "Jira returned {status}"
                 ))),
                 _ => Err(DataSourceError::UpstreamError(format!(
-                    "Jira returned {}",
-                    status
+                    "Jira returned {status}"
                 ))),
             }
         }

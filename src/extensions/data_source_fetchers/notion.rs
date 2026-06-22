@@ -3,6 +3,7 @@
 //! Queries Notion pages/databases via the REST API:
 //! - POST https://api.notion.com/v1/databases/{database_id}/query
 //! - GET https://api.notion.com/v1/pages/{id} (fallback if no database configured)
+//!
 //! Auth: Bearer <integration_token> + Notion-Version: 2022-06-28
 
 use super::{DataSourceError, DataSourceFetcher, DataSourceItem, DataSourceResult};
@@ -47,7 +48,7 @@ impl NotionFetcher {
         database_id: &str,
         query: &str,
     ) -> Result<DataSourceResult, DataSourceError> {
-        let url = format!("https://api.notion.com/v1/databases/{}/query", database_id);
+        let url = format!("https://api.notion.com/v1/databases/{database_id}/query");
 
         let mut request_body = serde_json::json!({
             "page_size": 50
@@ -65,7 +66,7 @@ impl NotionFetcher {
 
         let response = client
             .post(&*url)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .header("Notion-Version", "2022-06-28")
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -97,8 +98,8 @@ impl NotionFetcher {
         }
 
         let response = client
-            .post(&*url)
-            .header("Authorization", format!("Bearer {}", token))
+            .post(url)
+            .header("Authorization", format!("Bearer {token}"))
             .header("Notion-Version", "2022-06-28")
             .header("Content-Type", "application/json")
             .json(&request_body)
@@ -133,12 +134,10 @@ impl NotionFetcher {
                 401 | 403 => Err(DataSourceError::AuthError),
                 429 => Err(DataSourceError::RateLimited),
                 _ if status.is_server_error() => Err(DataSourceError::UpstreamError(format!(
-                    "Notion returned {}",
-                    status
+                    "Notion returned {status}"
                 ))),
                 _ => Err(DataSourceError::UpstreamError(format!(
-                    "Notion returned {}",
-                    status
+                    "Notion returned {status}"
                 ))),
             }
         }
@@ -160,7 +159,7 @@ impl NotionFetcher {
 
     fn extract_title(&self, page: &NotionPage) -> Option<String> {
         // Try title property first
-        for (_key, prop) in &page.properties {
+        for prop in page.properties.values() {
             if let Some(prop_obj) = prop.as_object() {
                 if prop_obj.get("type")?.as_str()? == "title" {
                     if let Some(title_array) = prop_obj.get("title")?.as_array() {
@@ -179,7 +178,7 @@ impl NotionFetcher {
         }
 
         // Fallback to first plain_text property
-        for (_key, prop) in &page.properties {
+        for prop in page.properties.values() {
             if let Some(value) = self.extract_plain_text(prop) {
                 if !value.is_empty() {
                     return Some(value);
@@ -194,7 +193,7 @@ impl NotionFetcher {
         // Collect all text content from properties
         let mut body_parts = Vec::new();
 
-        for (_key, prop) in &page.properties {
+        for prop in page.properties.values() {
             if let Some(text) = self.extract_plain_text(prop) {
                 if !text.is_empty() {
                     body_parts.push(text);

@@ -15,7 +15,7 @@ async fn main() {
         .await
         .expect("get_opc_metrics");
     let elapsed = start.elapsed();
-    println!("get_opc_metrics: {:?}", elapsed);
+    println!("get_opc_metrics: {elapsed:?}");
     println!(
         "  total={}, completion_rate={:.3}, by_status={}, by_assignee={}, daily={}",
         metrics.total,
@@ -25,5 +25,5 @@ async fn main() {
         metrics.daily.len(),
     );
     let total_daily: u32 = metrics.daily.iter().map(|b| b.created).sum();
-    println!("  daily created (last 7d): {}", total_daily);
+    println!("  daily created (last 7d): {total_daily}");
 }

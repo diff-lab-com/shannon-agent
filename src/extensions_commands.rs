@@ -150,7 +150,7 @@ pub async fn install_mcp_oauth_authorize_url(
         .find(|v| v.slug == vendor_slug)
         .ok_or_else(|| format!("unknown vendor {vendor_slug}"))?;
     if !matches!(vendor.install_kind, FeaturedInstallKind::OAuthRemote { .. }) {
-        return Err(format!("vendor {} is not OAuth-capable", vendor_slug));
+        return Err(format!("vendor {vendor_slug} is not OAuth-capable"));
     }
     use crate::extensions::OAuthRemoteMcpInstaller;
     let installer = OAuthRemoteMcpInstaller { vendor };
@@ -178,7 +178,7 @@ pub async fn install_mcp_oauth_complete(
     use crate::extensions::OAuthRemoteMcpInstaller;
     let installer = OAuthRemoteMcpInstaller { vendor };
     let config = installer.server_config(&access_token);
-    let server_name = format!("{}-oauth", vendor_slug);
+    let server_name = format!("{vendor_slug}-oauth");
     let path =
         extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
     Ok(InstallResult {
@@ -318,7 +318,7 @@ pub async fn install_mcp_oauth_loopback(
         .map_err(|e| format!("token response parse failed: {e}"))?;
 
     // Persist and return. Same write path as install_mcp_oauth_complete.
-    let server_name = format!("{}-oauth", vendor_slug);
+    let server_name = format!("{vendor_slug}-oauth");
     let config = installer.server_config(&token_json.access_token);
     let path =
         extensions::write_mcp_server_config(&server_name, config).map_err(|e| e.to_string())?;
@@ -361,7 +361,7 @@ pub async fn install_skill_from_repo(
     };
     // Synthetic catalog entry so the installer's bookkeeping works.
     let entry = extensions::CatalogEntry {
-        id: format!("marketplace:{}", plugin_name),
+        id: format!("marketplace:{plugin_name}"),
         kind: extensions::AddonKind::Skill,
         name: plugin_name.clone(),
         description: String::new(),
@@ -408,7 +408,7 @@ pub async fn install_native_skill(
         body,
     };
     let entry = extensions::CatalogEntry {
-        id: format!("native:{}", plugin_name),
+        id: format!("native:{plugin_name}"),
         kind: extensions::AddonKind::Skill,
         name: plugin_name.clone(),
         description: String::new(),
@@ -478,7 +478,7 @@ pub async fn install_agent_from_repo(
         ref_,
     };
     let entry = extensions::CatalogEntry {
-        id: format!("agent-repo:{}", plugin_name),
+        id: format!("agent-repo:{plugin_name}"),
         kind: extensions::AddonKind::Agent,
         name: plugin_name.clone(),
         description: String::new(),
@@ -525,7 +525,7 @@ pub async fn install_native_agent(
         body,
     };
     let entry = extensions::CatalogEntry {
-        id: format!("native:agent-{}", plugin_name),
+        id: format!("native:agent-{plugin_name}"),
         kind: extensions::AddonKind::Agent,
         name: plugin_name.clone(),
         description: String::new(),

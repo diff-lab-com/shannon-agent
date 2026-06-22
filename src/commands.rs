@@ -187,7 +187,7 @@ fn file_to_base64(path: &str) -> Result<(String, String), String> {
     use base64::Engine;
     use std::fs;
 
-    let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let bytes = fs::read(path).map_err(|e| format!("Failed to read file: {e}"))?;
     let media_type =
         detect_media_type(path).unwrap_or_else(|| "application/octet-stream".to_string());
     let base64_string = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -226,6 +226,12 @@ pub struct ToolInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendMessageResponse {
     pub query_id: String,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AppState {
@@ -694,7 +700,7 @@ pub async fn send_message(
 // that must be referenced from the module they were defined in, so a
 // re-export here would not work.
 
-/// Update configuration.
+// Update configuration.
 // Session lifecycle commands (new/list/search/load/export/switch/
 // set_working_dir/delete/rename/duplicate/branch_session) extracted to
 // `commands_sessions.rs`. Registered in main.rs as commands_sessions::*.
@@ -820,13 +826,13 @@ pub async fn start_background_task(
                     }
                     QueryEvent::Completed { .. } => break,
                     QueryEvent::Failed { error, .. } => {
-                        final_output = format!("Task failed: {}", error);
+                        final_output = format!("Task failed: {error}");
                         break;
                     }
                     _ => {}
                 },
                 Err(e) => {
-                    final_output = format!("Task error: {}", e);
+                    final_output = format!("Task error: {e}");
                     break;
                 }
             }

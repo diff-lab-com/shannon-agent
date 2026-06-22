@@ -334,7 +334,7 @@ fn reports_path() -> PathBuf {
 #[cfg(test)]
 thread_local! {
     static TEST_REPORTS_HOME_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -428,6 +428,12 @@ pub fn is_reported(entry_id: &str) -> bool {
     load_reports()
         .map(|s| s.reports.iter().any(|r| r.entry_id == entry_id))
         .unwrap_or(false)
+}
+
+// Silence unused warning for DateTime import (kept for future use).
+#[allow(dead_code)]
+fn _datetime_marker() -> Option<DateTime<Utc>> {
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -605,10 +611,4 @@ mod tests {
         let report = scan_with_readme("Harmless.", Some(&long_body));
         assert_eq!(report.risk, InjectionRisk::Dangerous);
     }
-}
-
-// Silence unused warning for DateTime import (kept for future use).
-#[allow(dead_code)]
-fn _datetime_marker() -> Option<DateTime<Utc>> {
-    None
 }

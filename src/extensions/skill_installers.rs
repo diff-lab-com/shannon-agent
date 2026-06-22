@@ -33,7 +33,7 @@ fn shannon_skills_root() -> PathBuf {
 #[cfg(test)]
 thread_local! {
     static TEST_SKILLS_ROOT_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
-        std::cell::RefCell::new(None);
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]

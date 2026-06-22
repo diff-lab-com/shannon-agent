@@ -344,6 +344,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn markdown_installer_writes_agent_file() {
         let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");

@@ -239,8 +239,7 @@ mod tests {
 
     #[test]
     fn test_event_names_are_valid() {
-        // Ensure event names are non-empty and follow the namespaced format
-        assert!(!event_names::QUERY_TEXT.is_empty());
+        // Ensure event names follow the namespaced format
         assert!(event_names::QUERY_TEXT.contains(':'));
         assert!(event_names::QUERY_TOOL_START.contains(':'));
         assert!(event_names::QUERY_COMPLETED.contains(':'));

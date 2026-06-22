@@ -63,8 +63,8 @@ pub async fn run(app: AppHandle, cfg: SlackConfig, mut shutdown: watch::Receiver
     let allowed: std::collections::HashSet<String> = cfg
         .allowed_channels
         .iter()
+        .filter(|&s| !s.trim().is_empty())
         .cloned()
-        .filter(|s| !s.trim().is_empty())
         .collect();
 
     tracing::info!(

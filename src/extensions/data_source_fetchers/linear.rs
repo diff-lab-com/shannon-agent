@@ -48,7 +48,7 @@ impl LinearFetcher {
     fn build_query(&self, config: &BTreeMap<String, String>, query: &str) -> serde_json::Value {
         // Filter by team if configured
         let team_filter = if let Some(team_key) = config.get("team_key") {
-            format!(r#"team: {{ key: {{ eq: "{}" }} }},"#, team_key)
+            format!(r#"team: {{ key: {{ eq: "{team_key}" }} }},"#)
         } else {
             String::new()
         };
@@ -62,7 +62,7 @@ impl LinearFetcher {
                 query.replace('"', "\\\"")
             )
         } else if !team_filter.is_empty() {
-            format!(r#"filter: {{ {} }}"#, team_filter)
+            format!(r#"filter: {{ {team_filter} }}"#)
         } else {
             String::new()
         };
@@ -113,12 +113,10 @@ impl LinearFetcher {
                 401 | 403 => Err(DataSourceError::AuthError),
                 429 => Err(DataSourceError::RateLimited),
                 _ if status.is_server_error() => Err(DataSourceError::UpstreamError(format!(
-                    "Linear returned {}",
-                    status
+                    "Linear returned {status}"
                 ))),
                 _ => Err(DataSourceError::UpstreamError(format!(
-                    "Linear returned {}",
-                    status
+                    "Linear returned {status}"
                 ))),
             }
         }

@@ -118,7 +118,7 @@ pub async fn remove_mcp_server(
         config::save_mcp_servers(&servers).map_err(|e| e.to_string())?;
         Ok(true)
     } else {
-        Err(format!("Server not found: {}", name))
+        Err(format!("Server not found: {name}"))
     }
 }
 
@@ -134,7 +134,7 @@ pub async fn restart_mcp_server(
     let server = servers
         .iter()
         .find(|s| s.name == name)
-        .ok_or_else(|| format!("Server not found: {}", name))?;
+        .ok_or_else(|| format!("Server not found: {name}"))?;
 
     let command = server.command.clone();
     let args = server.args.clone();
@@ -173,7 +173,7 @@ pub async fn get_mcp_server_config(name: String) -> Result<crate::config::McpSer
     servers
         .into_iter()
         .find(|s| s.name == name)
-        .ok_or_else(|| format!("Server not found: {}", name))
+        .ok_or_else(|| format!("Server not found: {name}"))
 }
 
 /// List all configured MCP servers with their status.

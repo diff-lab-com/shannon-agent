@@ -4,8 +4,8 @@
 //! cluster is the largest cohesive domain — new/list/search/load/export/
 //! switch/delete/rename/duplicate/branch + working_dir. StateManager-backed.
 
-use crate::scheduled_commands::TaskWorktreeDto;
 use crate::commands::{AppState, ChatMessage, SessionMeta, chrono_timestamp};
+use crate::scheduled_commands::TaskWorktreeDto;
 use crate::{config, events, events::event_names};
 use tauri::Emitter;
 
@@ -164,14 +164,14 @@ pub async fn load_session(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     // Load from StateManager
     let session_data = state
         .state_manager
         .load_session(&session_uuid)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Session not found: {}", id))?;
+        .ok_or_else(|| format!("Session not found: {id}"))?;
 
     // Convert shannon_core Messages to ChatMessages
     let messages: Vec<ChatMessage> = session_data
@@ -236,13 +236,13 @@ pub async fn export_session(
     id: String,
     format: String,
 ) -> Result<String, String> {
-    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     let session_data = state
         .state_manager
         .load_session(&session_uuid)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Session not found: {}", id))?;
+        .ok_or_else(|| format!("Session not found: {id}"))?;
 
     let title = session_data
         .metadata
@@ -252,7 +252,7 @@ pub async fn export_session(
 
     match format.as_str() {
         "markdown" | "md" => {
-            let mut md = format!("# {}\n\n", title);
+            let mut md = format!("# {title}\n\n");
             md.push_str(&format!(
                 "Exported: {}\n\n---\n\n",
                 chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
@@ -262,7 +262,7 @@ pub async fn export_session(
                     "user" => "**You**",
                     "assistant" => "**Assistant**",
                     "system" => "**System**",
-                    other => &format!("**{}**", other),
+                    other => &format!("**{other}**"),
                 };
                 let content = match &msg.content {
                     shannon_core::api::MessageContent::Text(t) => t.clone(),
@@ -275,7 +275,7 @@ pub async fn export_session(
                         .collect::<Vec<_>>()
                         .join("\n"),
                 };
-                md.push_str(&format!("### {}\n\n{}\n\n---\n\n", role_label, content));
+                md.push_str(&format!("### {role_label}\n\n{content}\n\n---\n\n"));
             }
             Ok(md)
         }
@@ -313,8 +313,7 @@ pub async fn export_session(
             serde_json::to_string_pretty(&export).map_err(|e| e.to_string())
         }
         _ => Err(format!(
-            "Unsupported format: {}. Use 'markdown' or 'json'.",
-            format
+            "Unsupported format: {format}. Use 'markdown' or 'json'."
         )),
     }
 }
@@ -326,7 +325,7 @@ pub async fn switch_session(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<Vec<ChatMessage>, String> {
-    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     // Save current session before switching
     {
@@ -480,7 +479,6 @@ pub async fn set_session_working_dir(
     Ok(())
 }
 
-
 /// Create an isolated git worktree for a session and bind it as the session's
 /// working directory. Delegates to [`shannon_core::scheduled_worktree::create_for_task`]
 /// — the same helper used by scheduled tasks — so session and task worktrees
@@ -495,14 +493,14 @@ pub async fn create_session_worktree(
     id: String,
     title: String,
 ) -> Result<TaskWorktreeDto, String> {
-    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     // Verify session exists before creating worktree (avoid orphan worktrees)
     {
         let sessions = state.sessions.lock().await;
         let exists = sessions.iter().any(|s| s.id == id);
         if !exists {
-            return Err(format!("Session not found: {}", id));
+            return Err(format!("Session not found: {id}"));
         }
     }
 
@@ -551,7 +549,7 @@ pub async fn delete_session(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<bool, String> {
-    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     // Capture working_dir before deleting so we can clean up worktree
     let working_dir = {
@@ -610,7 +608,7 @@ pub async fn rename_session(
     id: String,
     title: String,
 ) -> Result<bool, String> {
-    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     // Update session metadata in sessions list
     let mut sessions = state.sessions.lock().await;
@@ -655,21 +653,21 @@ pub async fn duplicate_session(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<events::SessionInfo, String> {
-    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     // Find original session
     let sessions = state.sessions.lock().await;
     let original_session = sessions
         .iter()
         .find(|s| s.id == id)
-        .ok_or_else(|| format!("Session not found: {}", id))?;
+        .ok_or_else(|| format!("Session not found: {id}"))?;
 
     // Load original session data
     let session_data = state
         .state_manager
         .load_session(&session_uuid)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Session data not found: {}", id))?;
+        .ok_or_else(|| format!("Session data not found: {id}"))?;
 
     // Create new session with copied messages
     let new_id = uuid::Uuid::new_v4();
@@ -728,14 +726,14 @@ pub(crate) async fn branch_session_internal(
     branch_point: usize,
 ) -> Result<events::SessionInfo, String> {
     let parent_uuid =
-        uuid::Uuid::parse_str(&parent_id).map_err(|e| format!("Invalid UUID: {}", e))?;
+        uuid::Uuid::parse_str(&parent_id).map_err(|e| format!("Invalid UUID: {e}"))?;
 
     // Find parent session
     let sessions = state.sessions.lock().await;
     let parent_session = sessions
         .iter()
         .find(|s| s.id == parent_id)
-        .ok_or_else(|| format!("Session not found: {}", parent_id))?;
+        .ok_or_else(|| format!("Session not found: {parent_id}"))?;
 
     // Clone parent session data before dropping sessions
     let parent_title = parent_session.title.clone();
@@ -746,12 +744,12 @@ pub(crate) async fn branch_session_internal(
         .state_manager
         .load_session(&parent_uuid)
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Session data not found: {}", parent_id))?;
+        .ok_or_else(|| format!("Session data not found: {parent_id}"))?;
 
     // Create new session with messages up to branch point
     let new_id = uuid::Uuid::new_v4();
     let new_id_str = new_id.to_string();
-    let new_title = format!("Branch of {}", parent_title);
+    let new_title = format!("Branch of {parent_title}");
     let now = chrono_timestamp();
 
     if branch_point >= session_data.messages.len() {

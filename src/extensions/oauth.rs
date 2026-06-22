@@ -77,7 +77,7 @@ pub fn build_authorize_url(
     q.append_pair("response_type", "code");
     q.append_pair("client_id", client_id);
     q.append_pair("redirect_uri", redirect_uri);
-    q.append_pair("code_challenge", &code_challenge);
+    q.append_pair("code_challenge", code_challenge);
     q.append_pair("code_challenge_method", "S256");
     q.append_pair("state", state);
     if !scopes.is_empty() {
@@ -89,7 +89,7 @@ pub fn build_authorize_url(
     // the safe path is to leave the URL untouched by append_pair (already
     // percent-encoded by url crate). The utf8_percent_encode call is for safety
     // when re-rendering the final URL string for logging.
-    let _ = utf8_percent_encode(&url.to_string(), NON_ALPHANUMERIC);
+    let _ = utf8_percent_encode(url.as_ref(), NON_ALPHANUMERIC);
     Ok(url.to_string())
 }
 

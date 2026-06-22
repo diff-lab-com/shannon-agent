@@ -97,7 +97,7 @@ pub async fn get_file_diff(path: String) -> Result<FileDiff, String> {
             // and reconstruct old from git show
             let new = std::fs::read_to_string(&path).unwrap_or_default();
             let old_output = Command::new("git")
-                .args(["show", &format!("HEAD:{}", path)])
+                .args(["show", &format!("HEAD:{path}")])
                 .current_dir(dir)
                 .output();
             let old = match old_output {
@@ -144,8 +144,8 @@ pub async fn apply_diff(
     let file_path = path.to_string_lossy().into_owned();
 
     // Read current file content
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read file {}: {}", file_path, e))?;
+    let content =
+        fs::read_to_string(&path).map_err(|e| format!("Failed to read file {file_path}: {e}"))?;
 
     let mut lines: Vec<&str> = content.lines().collect();
 
@@ -162,7 +162,7 @@ pub async fn apply_diff(
         let end_idx = hunk.line_end as usize;
 
         if start_idx >= lines.len() || end_idx > lines.len() {
-            return Err(format!("Hunk {} out of bounds for file {}", idx, file_path));
+            return Err(format!("Hunk {idx} out of bounds for file {file_path}"));
         }
 
         match hunk.action.as_str() {
@@ -170,10 +170,7 @@ pub async fn apply_diff(
                 // Keep the lines (do nothing)
             }
             "reject" => {
-                // Remove the lines by replacing with empty strings
-                for i in start_idx..end_idx {
-                    lines[i] = "";
-                }
+                lines[start_idx..end_idx].fill("");
             }
             _ => {
                 return Err(format!("Unknown action {} in hunk {}", hunk.action, idx));
@@ -184,9 +181,9 @@ pub async fn apply_diff(
     // Write back the modified content
     let modified_content = lines.join("\n") + "\n";
     let mut file = fs::File::create(&file_path)
-        .map_err(|e| format!("Failed to create file {}: {}", file_path, e))?;
+        .map_err(|e| format!("Failed to create file {file_path}: {e}"))?;
     file.write_all(modified_content.as_bytes())
-        .map_err(|e| format!("Failed to write file {}: {}", file_path, e))?;
+        .map_err(|e| format!("Failed to write file {file_path}: {e}"))?;
 
     Ok(())
 }
