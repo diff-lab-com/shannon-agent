@@ -1,0 +1,13 @@
+id = "weekly-security-review"
+name = "Weekly dependency security review"
+description = "Audit dependencies for advisories every Monday morning."
+category = "security"
+trigger_type = "cron"
+cron_expr = "0 8 * * 1"
+timezone = ""
+prompt = """
+Run a security review of the project's dependencies:
+- read the lockfile(s)
+- query GitHub advisories / RustSec / npm audit
+- summarise high+ severity findings as a checklist
+"""

@@ -26,6 +26,7 @@ import { useScheduledTasks } from '@/hooks/scheduled-tasks'
 import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
 import TasksHeader from '@/components/tasks/TasksHeader'
+import RoutineTemplatesBrowser from '@/components/routines/RoutineTemplatesBrowser'
 import TasksFilters from '@/components/tasks/TasksFilters'
 import NewTaskForm from '@/components/tasks/NewTaskForm'
 import ScheduleForm from '@/components/tasks/ScheduleForm'
@@ -48,7 +49,7 @@ type Tab = 'active' | 'history' | 'worktrees'
 
 export default function Tasks() {
   const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
-  const { tasks: scheduledTasks, create: createScheduled } = useScheduledTasks()
+  const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -286,6 +287,10 @@ export default function Tasks() {
         )}
           </>
         )}
+      </div>
+
+      <div className="mt-xl">
+        <RoutineTemplatesBrowser onInstantiated={() => void refreshScheduled()} />
       </div>
 
       <TaskDetailDrawer
