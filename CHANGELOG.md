@@ -61,6 +61,28 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
   orphan worktrees can be cleaned up via `prune_task_worktrees`.
   (`s2/p0-2-worktree-session`)
 
+## [Unreleased — supply-chain-hardening]
+
+### Security
+
+- **Rustup install hardened.** `release.yml::Install Rust` step in the
+  build job no longer pipes `sh.rustup.rs` directly to `sh`. Instead it
+  downloads the pinned `rustup-init` binary from
+  `static.rust-lang.org/rustup/archive/{RUSTUP_VERSION}/{TARGET}/` along
+  with the official `.sha256` file, verifies the checksum with
+  `sha256sum -c`, then executes. Version is controlled by the
+  `RUSTUP_VERSION` env var (currently `1.28.2`) for explicit bump cadence.
+
+- **Supply chain trust model documented.** New `docs/supply-chain.md`
+  explains what each dependency source is, what trust basis it relies on,
+  and how the hardening measures mitigate supply chain attacks. Includes
+  incident response playbook.
+
+### CI/CD
+
+- **`workflow_dispatch` branch filter.** Manual workflow triggers
+  restricted to `branches: [main, dev]` — protected branches only.
+
 ## [Unreleased] — S2 P1.1 commands.rs split + follow-ups
 
 ### CI/CD (release pipeline — v0.3.6 betas)
