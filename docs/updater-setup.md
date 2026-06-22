@@ -44,6 +44,24 @@ in `tauri.conf.json` with the actual public key string.
 Until this is done, **the updater will reject every manifest** as
 signature-mismatched.
 
+## 3a. Flip `createUpdaterArtifacts` to true
+
+`tauri.conf.json::bundle.createUpdaterArtifacts` is intentionally `false`
+until the pubkey is real. CI will **not** emit `.sig` files or `latest.json`
+with this flag false, so updater artifacts won't be published.
+
+Once step 3 is complete, change:
+```json
+"createUpdaterArtifacts": false
+```
+to:
+```json
+"createUpdaterArtifacts": true
+```
+in the same commit that replaces the pubkey. Verify with a test build
+locally (`cargo tauri build`) that `.sig` files appear next to installers
+before pushing.
+
 ## 4. Publish a release
 
 After `release.yml` finishes:
