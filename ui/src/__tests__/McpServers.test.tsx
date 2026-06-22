@@ -50,10 +50,12 @@ const sampleServer = {
 const sampleInstalled = {
   name: 'filesystem',
   command: 'npx',
-  args: ['-y', '@modelcontextprotocol/server-filesystem'],
-  env: {},
-  status: 'running',
-} as const
+  enabled: true,
+  connected: true,
+  tool_count: 5,
+  tools: [],
+  last_connected: null,
+}
 
 beforeEach(() => {
   listMcpRegistryServers.mockReset()
@@ -61,65 +63,34 @@ beforeEach(() => {
   installMcpStdio.mockReset()
   installMcpMcpb.mockReset()
   uninstallMcpServer.mockReset()
+  // Default: registry returns empty so any test opening the modal won't crash.
+  listMcpRegistryServers.mockResolvedValue([])
 })
 
-describe('McpServers (P2 wire-up)', () => {
-  it('renders three section headers', async () => {
-    listMcpRegistryServers.mockResolvedValue([])
+describe('McpServers (Cursor-style UX)', () => {
+  it('renders page header and empty state when nothing installed', async () => {
     listMcpServers.mockResolvedValue([])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText(/Registry · 0/)).toBeInTheDocument()
+      expect(screen.getByText('MCP Servers')).toBeInTheDocument()
     })
-    expect(screen.getByText('Upload .mcpb bundle')).toBeInTheDocument()
-    expect(screen.getByText('Add stdio server manually')).toBeInTheDocument()
+    // Installed section header with 0 count
+    expect(screen.getByText(/Installed · 0/)).toBeInTheDocument()
+    // Empty state body
+    expect(
+      screen.getByText(/Click 'Add Server' to install your first MCP server\./),
+    ).toBeInTheDocument()
   })
 
-  it('shows loading state for registry', () => {
-    listMcpRegistryServers.mockReturnValue(new Promise(() => {}))
-    listMcpServers.mockResolvedValue([])
-    renderWithRouter()
-    expect(screen.getByText('Fetching registry…')).toBeInTheDocument()
-  })
-
-  it('shows error state when registry fetch fails', async () => {
-    listMcpRegistryServers.mockRejectedValue(new Error('Network down'))
+  it('renders Add Server CTA button', async () => {
     listMcpServers.mockResolvedValue([])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText(/Registry unavailable:/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
     })
-    expect(screen.getByText(/Network down/)).toBeInTheDocument()
   })
 
-  it('renders registry rows with Install button', async () => {
-    listMcpRegistryServers.mockResolvedValue([sampleServer])
-    listMcpServers.mockResolvedValue([])
-    renderWithRouter()
-    await waitFor(() => {
-      expect(screen.getByText('filesystem')).toBeInTheDocument()
-    })
-    expect(screen.getByText('Repo')).toBeInTheDocument()
-    // Registry install button + stdio form Install button — registry has "Install" and "Repo"
-    expect(screen.getByText('Repo')).toBeInTheDocument()
-    expect(screen.getByText('123')).toBeInTheDocument()
-    expect(screen.getByText('Verified')).toBeInTheDocument()
-  })
-
-  it('shows Installed badge when server already installed', async () => {
-    listMcpRegistryServers.mockResolvedValue([sampleServer])
-    listMcpServers.mockResolvedValue([sampleInstalled])
-    renderWithRouter()
-    await waitFor(() => {
-      expect(screen.getAllByText('Installed').length).toBeGreaterThanOrEqual(2)
-    })
-    // Section header + registry badge
-    const installedMatches = screen.getAllByText('Installed')
-    expect(installedMatches.length).toBe(2)
-  })
-
-  it('renders installed section with server name', async () => {
-    listMcpRegistryServers.mockResolvedValue([])
+  it('renders installed servers with name, status, and Remove button', async () => {
     listMcpServers.mockResolvedValue([sampleInstalled])
     renderWithRouter()
     await waitFor(() => {
@@ -127,24 +98,174 @@ describe('McpServers (P2 wire-up)', () => {
     })
     expect(screen.getByText('filesystem')).toBeInTheDocument()
     expect(screen.getByText('Remove')).toBeInTheDocument()
+    // Command preview (mono)
+    expect(screen.getByText('npx')).toBeInTheDocument()
   })
 
-  it('requires name + command for stdio install', async () => {
-    listMcpRegistryServers.mockResolvedValue([])
+  it('shows empty state title when no servers installed', async () => {
     listMcpServers.mockResolvedValue([])
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText('Install').closest('button')).not.toBeDisabled()
+      expect(screen.getByText('No MCP servers installed')).toBeInTheDocument()
     })
-    fireEvent.click(screen.getAllByText('Install')[screen.getAllByText('Install').length - 1])
+  })
+
+  it('opens the modal with three tabs when Add Server is clicked', async () => {
+    listMcpServers.mockResolvedValue([])
+    renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByText(/Server name and command are required/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
     })
-    expect(installMcpStdio).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: /Add Server/ }))
+    await waitFor(() => {
+      expect(screen.getByText('Add MCP Server')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Paste JSON' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Manual' })).toBeInTheDocument()
+  })
+
+  it('search tab lists registry rows after loading', async () => {
+    listMcpServers.mockResolvedValue([])
+    listMcpRegistryServers.mockResolvedValue([sampleServer])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Add Server/ }))
+    await waitFor(() => {
+      expect(screen.getByText('filesystem')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Verified')).toBeInTheDocument()
+  })
+
+  it('search tab shows empty message when query matches nothing', async () => {
+    listMcpServers.mockResolvedValue([])
+    listMcpRegistryServers.mockResolvedValue([sampleServer])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Add Server/ }))
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search registry…')).toBeInTheDocument()
+    })
+    fireEvent.change(screen.getByPlaceholderText('Search registry…'), {
+      target: { value: 'zzzznotfound' },
+    })
+    await waitFor(() => {
+      expect(screen.getByText('No servers match your query.')).toBeInTheDocument()
+    })
+  })
+
+  it('manual tab requires name + command and shows error via toast', async () => {
+    listMcpServers.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Add Server/ }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Manual' }))
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('filesystem')).toBeInTheDocument()
+    })
+    // Click install without filling required fields
+    const manualInstallButtons = screen.getAllByRole('button', { name: /Install/ })
+    fireEvent.click(manualInstallButtons[manualInstallButtons.length - 1])
+    await waitFor(() => {
+      expect(installMcpStdio).not.toHaveBeenCalled()
+    })
+  })
+
+  it('manual tab submits full stdio spec', async () => {
+    listMcpServers.mockResolvedValue([])
+    installMcpStdio.mockResolvedValue({
+      id: 'stdio:myserver',
+      name: 'myserver',
+      install_path: null,
+    })
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Add Server/ }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Manual' }))
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('filesystem')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText('filesystem'), { target: { value: 'myserver' } })
+    fireEvent.change(screen.getByPlaceholderText('npx'), { target: { value: 'npx' } })
+    fireEvent.change(screen.getByPlaceholderText(/-y @modelcontextprotocol/), {
+      target: { value: '-y @modelcontextprotocol/server-filesystem /tmp' },
+    })
+
+    const installButton = screen.getAllByRole('button', { name: /Install/ }).pop()!
+    fireEvent.click(installButton)
+
+    await waitFor(() => {
+      expect(installMcpStdio).toHaveBeenCalledWith({
+        server_name: 'myserver',
+        command: 'npx',
+        args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
+        env: [],
+      })
+    })
+  })
+
+  it('paste tab parses Cursor-format JSON', async () => {
+    listMcpServers.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Add Server/ }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Paste JSON' }))
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Paste your MCP server JSON here')).toBeInTheDocument()
+    })
+
+    const json = JSON.stringify({
+      mcpServers: {
+        'my-server': {
+          command: 'npx',
+          args: ['-y', 'foo'],
+          env: { KEY: 'val' },
+        },
+      },
+    })
+    fireEvent.change(screen.getByPlaceholderText('Paste your MCP server JSON here'), {
+      target: { value: json },
+    })
+    // Parsed server appears in the preview list and the Install button shows count
+    await waitFor(() => {
+      expect(screen.getByText('Install 1 server(s)')).toBeInTheDocument()
+    })
+    // The parsed server name renders in the preview list
+    expect(screen.getAllByText('my-server').length).toBeGreaterThan(0)
+  })
+
+  it('paste tab shows parse error for malformed JSON', async () => {
+    listMcpServers.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Add Server/ }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Paste JSON' }))
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Paste your MCP server JSON here')).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByPlaceholderText('Paste your MCP server JSON here'), {
+      target: { value: '{not valid json' },
+    })
+    await waitFor(() => {
+      expect(screen.getByText(/Could not parse JSON/)).toBeInTheDocument()
+    })
   })
 
   it('uninstalls server on Remove click', async () => {
-    listMcpRegistryServers.mockResolvedValue([])
     listMcpServers.mockResolvedValue([sampleInstalled])
     uninstallMcpServer.mockResolvedValue(undefined)
     renderWithRouter()
@@ -157,35 +278,19 @@ describe('McpServers (P2 wire-up)', () => {
     })
   })
 
-  it('validates stdio form submission with full spec', async () => {
-    listMcpRegistryServers.mockResolvedValue([])
+  it('closes modal on Escape key', async () => {
     listMcpServers.mockResolvedValue([])
-    installMcpStdio.mockResolvedValue({
-      id: 'stdio:myserver',
-      name: 'myserver',
-      install_path: null,
-    })
     renderWithRouter()
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('filesystem')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Add Server/ })).toBeInTheDocument()
     })
-
-    fireEvent.change(screen.getByPlaceholderText('filesystem'), { target: { value: 'myserver' } })
-    fireEvent.change(screen.getByPlaceholderText('npx'), { target: { value: 'npx' } })
-    fireEvent.change(screen.getByPlaceholderText(/-y @modelcontextprotocol/), {
-      target: { value: '-y @modelcontextprotocol/server-filesystem /tmp' },
-    })
-
-    const installButton = screen.getAllByText('Install').pop()!.closest('button')!
-    fireEvent.click(installButton)
-
+    fireEvent.click(screen.getByRole('button', { name: /Add Server/ }))
     await waitFor(() => {
-      expect(installMcpStdio).toHaveBeenCalledWith({
-        server_name: 'myserver',
-        command: 'npx',
-        args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp'],
-        env: [],
-      })
+      expect(screen.getByText('Add MCP Server')).toBeInTheDocument()
+    })
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByText('Add MCP Server')).not.toBeInTheDocument()
     })
   })
 })

@@ -89,12 +89,7 @@ pub fn install_data_source(
 /// [config]
 /// vault_path = "/home/user/MyVault"
 /// ```
-fn render_toml(
-    slug: &str,
-    kind: &str,
-    name: &str,
-    config: &BTreeMap<String, String>,
-) -> String {
+fn render_toml(slug: &str, kind: &str, name: &str, config: &BTreeMap<String, String>) -> String {
     let now = Utc::now().to_rfc3339();
     let mut out = String::new();
     out.push_str("[data_source]\n");
@@ -219,8 +214,7 @@ fn file_metadata_rfc3339(path: &Path) -> Option<String> {
     let metadata = std::fs::metadata(path).ok()?;
     let modified = metadata.modified().ok()?;
     let dur = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
-    DateTime::<Utc>::from_timestamp(dur.as_secs() as i64, 0)
-        .map(|dt| dt.to_rfc3339())
+    DateTime::<Utc>::from_timestamp(dur.as_secs() as i64, 0).map(|dt| dt.to_rfc3339())
 }
 
 /// Remove a data source config file by slug. Refuses paths outside the
@@ -268,9 +262,8 @@ pub fn is_data_source_installed(slug: &str) -> bool {
 pub fn read_data_source_config(slug: &str) -> Result<BTreeMap<String, String>, InstallError> {
     let root = shannon_data_sources_root();
     let file = root.join(format!("{slug}.toml"));
-    let body = std::fs::read_to_string(&file).map_err(|e| {
-        InstallError::Io(format!("read {}: {e}", file.display()))
-    })?;
+    let body = std::fs::read_to_string(&file)
+        .map_err(|e| InstallError::Io(format!("read {}: {e}", file.display())))?;
     Ok(parse_config_section(&body))
 }
 
@@ -320,13 +313,9 @@ mod tests {
         }
         let mut config = BTreeMap::new();
         config.insert("vault_path".into(), "/home/user/MyVault".into());
-        let installed = install_data_source(
-            "obsidian-vault",
-            "obsidian",
-            "Obsidian Vault",
-            &config,
-        )
-        .expect("install");
+        let installed =
+            install_data_source("obsidian-vault", "obsidian", "Obsidian Vault", &config)
+                .expect("install");
         assert_eq!(installed.slug, "obsidian-vault");
         assert_eq!(installed.kind, "obsidian");
         assert!(installed.path.ends_with("obsidian-vault.toml"));

@@ -98,6 +98,12 @@ export interface SessionInfo {
   is_scheduled?: boolean
   /** True if the user has pinned this conversation. */
   is_pinned?: boolean
+  /** Per-session working directory override (absolute path). */
+  working_dir?: string
+  /** Parent session ID if this is a branch */
+  parent_id?: string | null
+  /** Message index in parent where this branch diverged */
+  branch_point?: number | null
 }
 
 export interface StatusResponse {
@@ -243,6 +249,49 @@ export interface InstalledAddonSummary {
   enabled: boolean
 }
 
+/// Tagged union mirroring Rust `CatalogSource`. Discriminated via `type`.
+export type CatalogSource =
+  | { type: 'mcp_registry'; publisher: string }
+  | { type: 'featured_vendor' }
+  | { type: 'git_hub_repo'; repo: string; ref_?: string | null }
+  | { type: 'custom'; url: string }
+  | { type: 'native' }
+
+/// One row in the marketplace catalog. Mirrors Rust `CatalogEntry`.
+export interface CatalogEntry {
+  id: string
+  kind: AddonKind
+  name: string
+  description: string
+  author?: string | null
+  version?: string | null
+  homepage_url?: string | null
+  license?: string | null
+  stars?: number | null
+  last_updated?: string | null
+  source: CatalogSource
+  trust: TrustLevel
+  metadata?: Record<string, unknown>
+  tags?: string[]
+}
+
+/// Data source fetcher result — normalized shape across all sources.
+export interface DataSourceResult {
+  items: DataSourceItem[]
+  total: number
+  has_more: boolean
+}
+
+/// Single item from a data source query.
+export interface DataSourceItem {
+  id: string
+  title: string
+  body?: string | null
+  url?: string | null
+  kind: string
+  updated_at?: string | null
+}
+
 // --- Task Types ---
 
 export interface TaskItem {
@@ -382,16 +431,6 @@ export interface BillingHistory {
   description: string
   amount: number
   status: 'paid' | 'pending' | 'failed'
-}
-
-// --- Context Types ---
-
-export interface FileContext {
-  path: string
-  name: string
-  language: string
-  lines: number
-  relevant_lines?: { start: number; end: number }[]
 }
 
 // --- Scheduled Tasks (Sprint 2) ---

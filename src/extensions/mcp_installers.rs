@@ -29,15 +29,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::catalog::{FeaturedInstallKind, FeaturedVendor, McpRegistryClient};
 use super::installer::{AddonInstaller, InstallError};
 use super::mcpb::extract_mcpb;
 use super::oauth::PkceContext;
 use super::types::{
-    AddonKind, CatalogEntry, ConfirmationLevel, InstallTarget, InstalledAddon,
-    ProgressEvent, ProgressSink, TrustLevel,
+    AddonKind, CatalogEntry, ConfirmationLevel, InstallTarget, InstalledAddon, ProgressEvent,
+    ProgressSink, TrustLevel,
 };
 
 #[cfg(test)]
@@ -94,8 +94,7 @@ pub fn remove_mcp_server_config(name: &str) -> Result<(), InstallError> {
 }
 
 fn user_settings_path() -> Result<PathBuf, InstallError> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| InstallError::Io("cannot resolve $HOME".into()))?;
+    let home = dirs::home_dir().ok_or_else(|| InstallError::Io("cannot resolve $HOME".into()))?;
     Ok(home.join(".shannon/settings.json"))
 }
 
@@ -145,7 +144,11 @@ impl AddonInstaller for StdioMcpInstaller {
         _target: &InstallTarget,
         progress: &ProgressSink,
     ) -> Result<InstalledAddon, InstallError> {
-        progress.emit(ProgressEvent::Started { total_steps: Some(2) }).await;
+        progress
+            .emit(ProgressEvent::Started {
+                total_steps: Some(2),
+            })
+            .await;
         progress
             .emit(ProgressEvent::Step {
                 description: format!("Writing stdio MCP server {}", self.spec.server_name),
@@ -169,7 +172,11 @@ impl AddonInstaller for StdioMcpInstaller {
             id: entry.id.clone(),
             kind: AddonKind::Mcp,
             name: self.spec.server_name.clone(),
-            install_path: Some(format!("{}#mcpServers.{}", path.display(), self.spec.server_name)),
+            install_path: Some(format!(
+                "{}#mcpServers.{}",
+                path.display(),
+                self.spec.server_name
+            )),
             installed_at: Some(chrono::Utc::now()),
             version: entry.version.clone(),
             enabled: true,
@@ -209,7 +216,11 @@ impl OAuthRemoteMcpInstaller {
     }
 
     /// Render the authorize URL the user's browser should visit.
-    pub fn authorize_url(&self, pkce: &PkceContext, redirect_uri: &str) -> Result<String, InstallError> {
+    pub fn authorize_url(
+        &self,
+        pkce: &PkceContext,
+        redirect_uri: &str,
+    ) -> Result<String, InstallError> {
         let FeaturedInstallKind::OAuthRemote {
             authorize_url,
             client_id_env,
@@ -236,7 +247,8 @@ impl OAuthRemoteMcpInstaller {
 
     /// Render the final `mcpServers` config entry from a successful token.
     pub fn server_config(&self, access_token: &str) -> Value {
-        let FeaturedInstallKind::OAuthRemote { mcp_endpoint, .. } = &self.vendor.install_kind else {
+        let FeaturedInstallKind::OAuthRemote { mcp_endpoint, .. } = &self.vendor.install_kind
+        else {
             return json!({});
         };
         annotate_config(
@@ -268,7 +280,11 @@ impl AddonInstaller for OAuthRemoteMcpInstaller {
         // exchange) is wired at the Tauri command layer — it needs the
         // desktop process. Here we just record progress steps so the UI
         // shows them.
-        progress.emit(ProgressEvent::Started { total_steps: Some(4) }).await;
+        progress
+            .emit(ProgressEvent::Started {
+                total_steps: Some(4),
+            })
+            .await;
         progress
             .emit(ProgressEvent::Step {
                 description: "Opening browser for OAuth consent".into(),
@@ -333,7 +349,11 @@ impl AddonInstaller for McpbInstaller {
         _target: &InstallTarget,
         progress: &ProgressSink,
     ) -> Result<InstalledAddon, InstallError> {
-        progress.emit(ProgressEvent::Started { total_steps: Some(3) }).await;
+        progress
+            .emit(ProgressEvent::Started {
+                total_steps: Some(3),
+            })
+            .await;
         progress
             .emit(ProgressEvent::Step {
                 description: "Verifying archive".into(),
@@ -490,13 +510,16 @@ pub fn resolve_registry_installer(
         "oauth_remote" => {
             // Match the registry entry to a featured vendor by slug/id.
             let vendor = featured.iter().find(|v| {
-                entry.id.ends_with(&v.slug) || entry.metadata.get("vendor").and_then(|v| v.as_str()) == Some(&v.slug)
+                entry.id.ends_with(&v.slug)
+                    || entry.metadata.get("vendor").and_then(|v| v.as_str()) == Some(&v.slug)
             })?;
             // Note: `registry` is currently unused for resolution — the
             // transport metadata is on the entry itself. The param is kept
             // so future versions can re-fetch richer server metadata.
             let _ = registry;
-            Some(ResolvedMcpInstaller::Oauth(OAuthRemoteMcpInstaller { vendor: vendor.clone() }))
+            Some(ResolvedMcpInstaller::Oauth(OAuthRemoteMcpInstaller {
+                vendor: vendor.clone(),
+            }))
         }
         "mcpb" => {
             // The actual archive download happens in the Tauri command layer;
@@ -550,7 +573,9 @@ mod tests {
         // Redirect $HOME via env var so dirs::home_dir uses it.
         let dir = tempdir().unwrap();
         let _home_guard = home_lock().lock().unwrap();
-        unsafe { std::env::set_var("HOME", dir.path()); }
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
         // dirs::home_dir on Linux reads $HOME.
         let path = user_settings_path().unwrap();
         assert!(!path.exists());
@@ -571,7 +596,9 @@ mod tests {
     fn write_mcp_server_preserves_other_keys() {
         let dir = tempdir().unwrap();
         let _home_guard = home_lock().lock().unwrap();
-        unsafe { std::env::set_var("HOME", dir.path()); }
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
         let path = user_settings_path().unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -593,7 +620,9 @@ mod tests {
     fn remove_mcp_server_drops_only_target() {
         let dir = tempdir().unwrap();
         let _home_guard = home_lock().lock().unwrap();
-        unsafe { std::env::set_var("HOME", dir.path()); }
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
         let path = user_settings_path().unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
@@ -614,7 +643,9 @@ mod tests {
     fn remove_mcp_server_handles_missing_file() {
         let dir = tempdir().unwrap();
         let _home_guard = home_lock().lock().unwrap();
-        unsafe { std::env::set_var("HOME", dir.path()); }
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
         // No file exists.
         assert!(remove_mcp_server_config("anything").is_ok());
     }
@@ -648,7 +679,9 @@ mod tests {
     async fn stdio_installer_writes_settings() {
         let dir = tempdir().unwrap();
         let _home_guard = home_lock().lock().unwrap();
-        unsafe { std::env::set_var("HOME", dir.path()); }
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
 
         let installer = StdioMcpInstaller {
             spec: StdioMcpSpec {
@@ -660,7 +693,11 @@ mod tests {
         };
         let entry = stdio_entry();
         let installed = installer
-            .install(&entry, &InstallTarget::ShannonMcpConfig, &ProgressSink::null())
+            .install(
+                &entry,
+                &InstallTarget::ShannonMcpConfig,
+                &ProgressSink::null(),
+            )
             .await
             .expect("install");
         assert_eq!(installed.name, "my-stdio");
@@ -715,7 +752,9 @@ mod tests {
         let vendor = oauth_vendor();
         let installer = OAuthRemoteMcpInstaller { vendor };
         let pkce = installer.pkce_context();
-        let url = installer.authorize_url(&pkce, "http://localhost:1738/callback").unwrap();
+        let url = installer
+            .authorize_url(&pkce, "http://localhost:1738/callback")
+            .unwrap();
         assert!(url.contains("response_type=code"));
         assert!(url.contains("code_challenge="));
         assert!(url.contains("code_challenge_method=S256"));
@@ -729,10 +768,7 @@ mod tests {
         let cfg = installer.server_config("abc123");
         assert_eq!(cfg["type"], json!("http"));
         assert_eq!(cfg["url"], json!("https://mcp.example.com/mcp"));
-        assert_eq!(
-            cfg["headers"]["Authorization"],
-            json!("Bearer abc123")
-        );
+        assert_eq!(cfg["headers"]["Authorization"], json!("Bearer abc123"));
         assert_eq!(cfg["shannon:transport"], json!("oauth_remote"));
     }
 
@@ -764,8 +800,8 @@ mod tests {
 
     fn make_minimal_mcpb(name: &str) -> Vec<u8> {
         use std::io::Write;
-        use zip::write::SimpleFileOptions;
         use zip::ZipWriter;
+        use zip::write::SimpleFileOptions;
         let buf = std::io::Cursor::new(Vec::new());
         let mut zw = ZipWriter::new(buf);
         let opts = SimpleFileOptions::default();
@@ -782,7 +818,9 @@ mod tests {
     async fn mcpb_installer_extracts_and_registers() {
         let dir = tempdir().unwrap();
         let _home_guard = home_lock().lock().unwrap();
-        unsafe { std::env::set_var("HOME", dir.path()); }
+        unsafe {
+            std::env::set_var("HOME", dir.path());
+        }
 
         let bytes = make_minimal_mcpb("bundled-server");
         let installer = McpbInstaller {
@@ -810,13 +848,21 @@ mod tests {
             tags: vec![],
         };
         let installed = installer
-            .install(&entry, &InstallTarget::ShannonMcpConfig, &ProgressSink::null())
+            .install(
+                &entry,
+                &InstallTarget::ShannonMcpConfig,
+                &ProgressSink::null(),
+            )
             .await
             .expect("install");
         assert_eq!(installed.name, "bundled-server");
 
         // Extracted bundle exists.
-        assert!(dir.path().join("mcp-servers/bundled-server/manifest.json").exists());
+        assert!(
+            dir.path()
+                .join("mcp-servers/bundled-server/manifest.json")
+                .exists()
+        );
 
         // settings.json has the entry.
         let path = user_settings_path().unwrap();
@@ -830,7 +876,9 @@ mod tests {
     #[test]
     fn resolve_registry_installer_routes_stdio() {
         let entry = stdio_entry();
-        let registry = McpRegistryClient::new(std::sync::Arc::new(super::super::catalog::StaticFetch("{}".to_string())));
+        let registry = McpRegistryClient::new(std::sync::Arc::new(
+            super::super::catalog::StaticFetch("{}".to_string()),
+        ));
         let resolved = resolve_registry_installer(&entry, &registry, &[]);
         assert!(matches!(resolved, Some(ResolvedMcpInstaller::Stdio(_))));
     }
@@ -838,11 +886,12 @@ mod tests {
     #[test]
     fn resolve_registry_installer_returns_none_for_unknown_transport() {
         let mut entry = stdio_entry();
-        entry.metadata.insert(
-            "transport".to_string(),
-            json!("telepathy"),
-        );
-        let registry = McpRegistryClient::new(std::sync::Arc::new(super::super::catalog::StaticFetch("{}".to_string())));
+        entry
+            .metadata
+            .insert("transport".to_string(), json!("telepathy"));
+        let registry = McpRegistryClient::new(std::sync::Arc::new(
+            super::super::catalog::StaticFetch("{}".to_string()),
+        ));
         let resolved = resolve_registry_installer(&entry, &registry, &[]);
         assert!(resolved.is_none());
     }
@@ -850,8 +899,12 @@ mod tests {
     #[test]
     fn resolve_registry_installer_routes_mcpb() {
         let mut entry = stdio_entry();
-        entry.metadata.insert("transport".to_string(), json!("mcpb"));
-        let registry = McpRegistryClient::new(std::sync::Arc::new(super::super::catalog::StaticFetch("{}".to_string())));
+        entry
+            .metadata
+            .insert("transport".to_string(), json!("mcpb"));
+        let registry = McpRegistryClient::new(std::sync::Arc::new(
+            super::super::catalog::StaticFetch("{}".to_string()),
+        ));
         let resolved = resolve_registry_installer(&entry, &registry, &[]);
         assert!(matches!(resolved, Some(ResolvedMcpInstaller::Mcpb(_))));
     }

@@ -15,9 +15,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use super::catalog::HttpFetch;
 use super::installer::InstallError;
 use super::types::{AddonKind, CatalogEntry, CatalogSource, TrustLevel};
-use super::catalog::HttpFetch;
 
 /// Static description of an agent collection upstream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,10 +174,7 @@ fn manifest_to_entry(agent: AgentManifestEntry, upstream: &AgentUpstream) -> Cat
     if let Some(prompt) = &agent.system_prompt {
         metadata.insert("system_prompt".to_string(), serde_json::json!(prompt));
     }
-    metadata.insert(
-        "upstream".to_string(),
-        serde_json::json!(upstream.slug),
-    );
+    metadata.insert("upstream".to_string(), serde_json::json!(upstream.slug));
 
     CatalogEntry {
         id: format!("gh:{}/{}/{}", upstream.repo, upstream.ref_, agent.name),
@@ -204,30 +201,31 @@ fn manifest_to_entry(agent: AgentManifestEntry, upstream: &AgentUpstream) -> Cat
 
 /// Shannon built-in agent definitions.
 fn builtin_agents() -> Vec<CatalogEntry> {
-    let native_preamble = |name: &str, description: &str, model: &str, tools: &[&str], tags: &[&str]| {
-        let mut metadata = std::collections::HashMap::new();
-        metadata.insert("model".to_string(), serde_json::json!(model));
-        metadata.insert(
-            "tools".to_string(),
-            serde_json::json!(tools.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
-        );
-        CatalogEntry {
-            id: format!("native:agent-{name}"),
-            kind: AddonKind::Agent,
-            name: name.to_string(),
-            description: description.to_string(),
-            author: Some("Shannon".into()),
-            version: Some(env!("CARGO_PKG_VERSION").into()),
-            homepage_url: None,
-            license: Some("Apache-2.0".into()),
-            stars: None,
-            last_updated: None,
-            source: CatalogSource::Native,
-            trust: TrustLevel::Verified,
-            metadata,
-            tags: tags.iter().map(|s| s.to_string()).collect(),
-        }
-    };
+    let native_preamble =
+        |name: &str, description: &str, model: &str, tools: &[&str], tags: &[&str]| {
+            let mut metadata = std::collections::HashMap::new();
+            metadata.insert("model".to_string(), serde_json::json!(model));
+            metadata.insert(
+                "tools".to_string(),
+                serde_json::json!(tools.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            );
+            CatalogEntry {
+                id: format!("native:agent-{name}"),
+                kind: AddonKind::Agent,
+                name: name.to_string(),
+                description: description.to_string(),
+                author: Some("Shannon".into()),
+                version: Some(env!("CARGO_PKG_VERSION").into()),
+                homepage_url: None,
+                license: Some("Apache-2.0".into()),
+                stars: None,
+                last_updated: None,
+                source: CatalogSource::Native,
+                trust: TrustLevel::Verified,
+                metadata,
+                tags: tags.iter().map(|s| s.to_string()).collect(),
+            }
+        };
 
     vec![
         native_preamble(
@@ -251,6 +249,55 @@ fn builtin_agents() -> Vec<CatalogEntry> {
             &["read", "glob", "grep"],
             &["planning", "native"],
         ),
+        native_preamble(
+            "implementer",
+            "Translates a plan into code changes: edit files, run tests, iterate to green.",
+            "claude-sonnet-4-6",
+            &["read", "write", "edit", "bash"],
+            &["code", "implementation", "native"],
+        ),
+        native_preamble(
+            "tester",
+            "Writes and runs tests; tracks coverage and flags regressions on refactor.",
+            "claude-sonnet-4-6",
+            &["read", "write", "bash", "grep"],
+            &["testing", "native"],
+        ),
+        native_preamble(
+            "debugger",
+            "Root-causes failures via bisect, stack traces, and state inspection.",
+            "claude-sonnet-4-6",
+            &["read", "bash", "grep", "glob"],
+            &["debug", "native"],
+        ),
+        native_preamble(
+            "refactorer",
+            "Applies scope-safe refactors: extract, inline, rename, dead-code removal.",
+            "claude-sonnet-4-6",
+            &["read", "edit", "grep", "glob"],
+            &["refactor", "native"],
+        ),
+        native_preamble(
+            "doc-writer",
+            "Drafts READMEs, ADRs, API docs, and CHANGELOG entries from code scans.",
+            "claude-haiku-4-5-20251001",
+            &["read", "write", "glob"],
+            &["docs", "native"],
+        ),
+        native_preamble(
+            "data-analyst",
+            "Explores datasets, runs statistical summaries, and visualizes distributions.",
+            "claude-sonnet-4-6",
+            &["read", "bash", "write"],
+            &["data", "analysis", "native"],
+        ),
+        native_preamble(
+            "architect",
+            "Proposes system designs with trade-off matrices and sequence diagrams.",
+            "claude-opus-4-7",
+            &["read", "glob", "grep"],
+            &["architecture", "design", "native"],
+        ),
     ]
 }
 
@@ -258,11 +305,7 @@ fn default_agent_cache_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|d| d.join("shannon").join("agents"))
 }
 
-fn read_cache(
-    cache_dir: &Option<PathBuf>,
-    key: &str,
-    ttl: Duration,
-) -> Option<Vec<CatalogEntry>> {
+fn read_cache(cache_dir: &Option<PathBuf>, key: &str, ttl: Duration) -> Option<Vec<CatalogEntry>> {
     let path = cache_dir.as_ref()?.join(key);
     let metadata = std::fs::metadata(&path).ok()?;
     let modified = metadata.modified().ok()?;
@@ -292,7 +335,7 @@ mod tests {
         r#"{
             "agents": [
                 {
-                    "name": "doc-writer",
+                    "name": "upstream-doc-writer",
                     "description": "Technical doc writer.",
                     "version": "1.0.0",
                     "trigger": "/doc",
@@ -302,12 +345,13 @@ mod tests {
                     "tags": ["docs"]
                 },
                 {
-                    "name": "tester",
+                    "name": "upstream-tester",
                     "description": "Writes tests.",
                     "tags": ["testing"]
                 }
             ]
-        }"#.to_string()
+        }"#
+        .to_string()
     }
 
     #[tokio::test]
@@ -318,7 +362,10 @@ mod tests {
             .iter()
             .filter(|e| e.source == CatalogSource::Native)
             .count();
-        assert!(native_count >= 3, "expected at least 3 native entries, got {native_count}");
+        assert!(
+            native_count >= 10,
+            "expected at least 10 native entries, got {native_count}"
+        );
     }
 
     #[tokio::test]
@@ -327,12 +374,12 @@ mod tests {
         let client = AgentCatalogClient::new(Arc::new(StaticFetch(manifest_json())))
             .with_cache_dir(tmp.path());
         let entries = client.list_agents().await.expect("list");
-        // 3 native + 2 agents × 2 upstreams = 7
-        assert_eq!(entries.len(), 7);
+        // 10 native + 2 agents × 2 upstreams = 14
+        assert_eq!(entries.len(), 14);
         let doc = entries
             .iter()
-            .find(|e| e.name == "doc-writer")
-            .expect("doc-writer");
+            .find(|e| e.name == "upstream-doc-writer")
+            .expect("upstream-doc-writer");
         assert_eq!(doc.kind, AddonKind::Agent);
         assert!(doc.id.starts_with("gh:"));
         let trigger = doc.metadata.get("trigger").and_then(|v| v.as_str());
@@ -351,7 +398,7 @@ mod tests {
         let client2 = AgentCatalogClient::new(http_bad).with_cache_dir(tmp.path());
         let second = client2.list_agents().await.expect("list");
         assert_eq!(first.len(), second.len());
-        assert_eq!(first.len(), 7);
+        assert_eq!(first.len(), 14);
     }
 
     #[tokio::test]

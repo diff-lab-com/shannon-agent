@@ -319,8 +319,8 @@ impl McpRegistryClient {
 
         let url = format!("{}/servers", self.base_url);
         let body = self.http.fetch_json(&url).await?;
-        let resp: RegistryResponse =
-            serde_json::from_str(&body).map_err(|e| InstallError::Format(format!("registry parse: {e}")))?;
+        let resp: RegistryResponse = serde_json::from_str(&body)
+            .map_err(|e| InstallError::Format(format!("registry parse: {e}")))?;
 
         let servers = resp.servers;
         self.write_cache(&servers);
@@ -331,7 +331,10 @@ impl McpRegistryClient {
     pub fn to_catalog_entry(server: &RegistryServer) -> CatalogEntry {
         let trust = if server.verified {
             TrustLevel::Verified
-        } else if server.repository.as_ref().is_some_and(|r| r.starts_with("makenotion/"))
+        } else if server
+            .repository
+            .as_ref()
+            .is_some_and(|r| r.starts_with("makenotion/"))
             || server
                 .repository
                 .as_ref()
@@ -351,7 +354,14 @@ impl McpRegistryClient {
         }
 
         CatalogEntry {
-            id: format!("mcp-reg:{}", server.id),
+            id: format!(
+                "mcp-reg:{}",
+                if server.id.is_empty() {
+                    &server.name
+                } else {
+                    &server.id
+                }
+            ),
             kind: AddonKind::Mcp,
             name: server.name.clone(),
             description: server.description.clone().unwrap_or_default(),
@@ -387,11 +397,15 @@ impl McpRegistryClient {
     }
 
     fn write_cache(&self, servers: &[RegistryServer]) {
-        let Some(dir) = self.cache_dir.as_ref() else { return };
+        let Some(dir) = self.cache_dir.as_ref() else {
+            return;
+        };
         if std::fs::create_dir_all(dir).is_err() {
             return;
         }
-        let body = RegistryResponse { servers: servers.to_vec() };
+        let body = RegistryResponse {
+            servers: servers.to_vec(),
+        };
         if let Ok(json) = serde_json::to_string_pretty(&body) {
             let _ = std::fs::write(dir.join("mcp-registry-servers.json"), json);
         }
@@ -402,17 +416,25 @@ impl McpRegistryClient {
 /// ignored so registry additions don't break parsing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryResponse {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_registry_servers")]
     pub servers: Vec<RegistryServer>,
 }
 
+/// Inner server payload returned by the registry. The real API wraps each
+/// entry as `{"server": {...}, "_meta": {...}}`; we accept that shape as well
+/// as a flat `{id, name, ...}` for backward compatibility with cached files
+/// and tests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegistryServer {
+    #[serde(default)]
     pub id: String,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    #[serde(default)]
+    /// Registry API returns this as an object `{url, source, id?, subfolder?}`;
+    /// older cache files may store a plain string. Normalized to the string
+    /// form (`owner/name` or URL) for downstream use.
+    #[serde(default, deserialize_with = "deserialize_repository")]
     pub repository: Option<String>,
     #[serde(default)]
     pub version: Option<String>,
@@ -429,6 +451,71 @@ pub struct RegistryServer {
     pub verified: bool,
     #[serde(default)]
     pub package: Option<RegistryPackage>,
+}
+
+/// Accept `repository` as either a string (legacy cache) or an object with
+/// a `url` field (current registry API). Other object fields are dropped.
+fn deserialize_repository<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    if raw.is_null() {
+        return Ok(None);
+    }
+    if let Some(s) = raw.as_str() {
+        return Ok(Some(s.to_string()));
+    }
+    if let Some(obj) = raw.as_object() {
+        if let Some(url) = obj.get("url").and_then(|v| v.as_str()) {
+            return Ok(Some(url.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+fn deserialize_registry_servers<'de, D>(deserializer: D) -> Result<Vec<RegistryServer>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    let Some(arr) = raw.as_array() else {
+        return Ok(Vec::new());
+    };
+
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let (server_val, meta_val) = match item.get("server") {
+            Some(inner) => (inner.clone(), item.get("_meta").cloned()),
+            None => (item.clone(), None),
+        };
+
+        let mut server: RegistryServer =
+            serde_json::from_value(server_val).map_err(serde::de::Error::custom)?;
+
+        if server.id.is_empty() {
+            server.id = server.name.clone();
+        }
+
+        if let Some(meta) = meta_val {
+            if let Some(status) = meta
+                .get("io.modelcontextprotocol.registry/official")
+                .and_then(|v| v.get("status"))
+                .and_then(|v| v.as_str())
+            {
+                if status == "active" {
+                    server.verified = true;
+                }
+            }
+        }
+
+        out.push(server);
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -475,7 +562,10 @@ mod tests {
 
     #[test]
     fn featured_vendor_converts_to_catalog_entry_with_metadata() {
-        let vendor = featured_vendors().into_iter().find(|v| v.slug == "notion").unwrap();
+        let vendor = featured_vendors()
+            .into_iter()
+            .find(|v| v.slug == "notion")
+            .unwrap();
         let entry = vendor.to_catalog_entry();
         assert_eq!(entry.kind, AddonKind::Mcp);
         assert_eq!(entry.id, "featured:notion");
@@ -601,7 +691,8 @@ mod tests {
             ]
         }"#;
         let fetcher: Arc<dyn HttpFetch> = Arc::new(StaticFetch(body.into()));
-        let client = McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let client =
+            McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
         let servers = client.list_servers().await.expect("fetch");
         assert_eq!(servers.len(), 2);
         assert_eq!(servers[0].name, "Notion");
@@ -631,7 +722,11 @@ mod tests {
 
         let _ = client.list_servers().await.unwrap();
         let _ = client.list_servers().await.unwrap();
-        assert_eq!(call_count.load(std::sync::atomic::Ordering::SeqCst), 1, "second call should hit cache");
+        assert_eq!(
+            call_count.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "second call should hit cache"
+        );
     }
 
     #[tokio::test]
@@ -644,7 +739,8 @@ mod tests {
             }
         }
         let fetcher: Arc<dyn HttpFetch> = Arc::new(ErrFetch);
-        let client = McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let client =
+            McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
         let err = client.list_servers().await.unwrap_err();
         assert!(matches!(err, InstallError::Network(_)));
     }
@@ -652,7 +748,8 @@ mod tests {
     #[tokio::test]
     async fn registry_client_returns_format_error_on_bad_json() {
         let fetcher: Arc<dyn HttpFetch> = Arc::new(StaticFetch("not json".into()));
-        let client = McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let client =
+            McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
         let err = client.list_servers().await.unwrap_err();
         assert!(matches!(err, InstallError::Format(_)));
     }
@@ -668,5 +765,43 @@ mod tests {
 
         let _ = client.list_servers().await.unwrap();
         let _ = client.list_servers().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn registry_client_parses_real_wrapped_api_shape() {
+        let body = r#"{
+            "servers": [
+                {
+                    "server": {
+                        "name": "ac.inference.sh/mcp",
+                        "description": "Run 150+ AI apps.",
+                        "title": "inference.sh",
+                        "version": "1.0.0",
+                        "remotes": [
+                            {"type": "streamable-http", "url": "https://sh.inference.ac"}
+                        ]
+                    },
+                    "_meta": {
+                        "io.modelcontextprotocol.registry/official": {
+                            "status": "active",
+                            "publishedAt": "2026-04-13T17:32:20.852269Z"
+                        }
+                    }
+                }
+            ],
+            "metadata": {"nextCursor": "x", "count": 1}
+        }"#;
+        let fetcher: Arc<dyn HttpFetch> = Arc::new(StaticFetch(body.into()));
+        let client =
+            McpRegistryClient::new(fetcher).with_cache_dir(tempfile::tempdir().unwrap().keep());
+        let servers = client.list_servers().await.expect("fetch");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].name, "ac.inference.sh/mcp");
+        assert_eq!(
+            servers[0].id, "ac.inference.sh/mcp",
+            "id defaults from name"
+        );
+        assert_eq!(servers[0].version.as_deref(), Some("1.0.0"));
+        assert!(servers[0].verified, "active official status marks verified");
     }
 }

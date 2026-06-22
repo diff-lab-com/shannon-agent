@@ -145,7 +145,7 @@ export default function AdvancedSettings() {
               </div>
               <div>
                 <h3 className="font-headline-md text-[24px] font-bold text-error mb-1">{t('settings.advanced.resetTitle')}</h3>
-                <p className="text-on-surface-variant text-body-sm max-w-xl">{t('settings.advanced.resetDesc')}</p>
+                <p className="text-on-surface-variant text-body-sm">{t('settings.advanced.resetDesc')}</p>
               </div>
             </div>
             <Button

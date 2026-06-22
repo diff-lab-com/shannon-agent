@@ -68,14 +68,18 @@ pub struct McpbAuthor {
 ///
 /// The target directory will be created if missing. Returns the parsed
 /// manifest and the path the caller should record as the install path.
-pub fn extract_mcpb(bytes: &[u8], target_dir: &Path) -> Result<(McpbManifest, PathBuf), InstallError> {
+pub fn extract_mcpb(
+    bytes: &[u8],
+    target_dir: &Path,
+) -> Result<(McpbManifest, PathBuf), InstallError> {
     let manifest = parse_manifest_from_zip(bytes)?;
 
     let server_root = target_dir.join(&manifest.name);
     std::fs::create_dir_all(&server_root).map_err(|e| InstallError::Io(e.to_string()))?;
 
     let cursor = Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| InstallError::Format(format!("zip read: {e}")))?;
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| InstallError::Format(format!("zip read: {e}")))?;
 
     for i in 0..archive.len() {
         let mut entry = archive
@@ -105,7 +109,8 @@ pub fn extract_mcpb(bytes: &[u8], target_dir: &Path) -> Result<(McpbManifest, Pa
 
 fn parse_manifest_from_zip(bytes: &[u8]) -> Result<McpbManifest, InstallError> {
     let cursor = Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| InstallError::Format(format!("zip read: {e}")))?;
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|e| InstallError::Format(format!("zip read: {e}")))?;
 
     // Search for manifest.json at archive root (not nested in subdirectory).
     let mut manifest_idx: Option<usize> = None;
@@ -120,7 +125,8 @@ fn parse_manifest_from_zip(bytes: &[u8]) -> Result<McpbManifest, InstallError> {
         }
     }
 
-    let idx = manifest_idx.ok_or_else(|| InstallError::Format("manifest.json not found in archive".into()))?;
+    let idx = manifest_idx
+        .ok_or_else(|| InstallError::Format("manifest.json not found in archive".into()))?;
     let mut entry = archive
         .by_index(idx)
         .map_err(|e| InstallError::Format(format!("manifest entry: {e}")))?;
@@ -130,8 +136,8 @@ fn parse_manifest_from_zip(bytes: &[u8]) -> Result<McpbManifest, InstallError> {
         .read_to_string(&mut body)
         .map_err(|e| InstallError::Io(format!("manifest read: {e}")))?;
 
-    let manifest: McpbManifest =
-        serde_json::from_str(&body).map_err(|e| InstallError::Format(format!("manifest parse: {e}")))?;
+    let manifest: McpbManifest = serde_json::from_str(&body)
+        .map_err(|e| InstallError::Format(format!("manifest parse: {e}")))?;
 
     if manifest.manifest_version.is_empty() {
         return Err(InstallError::Format("manifest_version missing".into()));
@@ -161,13 +167,13 @@ fn sanitize_zip_path(entry_name: &str, root: &Path) -> Result<PathBuf, InstallEr
             Prefix(_) | RootDir => {
                 return Err(InstallError::Format(format!(
                     "zip entry {entry_name:?} contains absolute path"
-                )))
+                )));
             }
             CurDir => {}
             ParentDir => {
                 return Err(InstallError::Format(format!(
                     "zip entry {entry_name:?} contains '..' (zip slip attempt)"
-                )))
+                )));
             }
             Normal(p) => composed.push(p),
         }
@@ -205,8 +211,8 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::tempdir;
-    use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
+    use zip::write::SimpleFileOptions;
 
     fn make_minimal_mcpb(name: &str, server_type: &str, command: &str) -> Vec<u8> {
         let buf: std::io::Cursor<Vec<u8>> = std::io::Cursor::new(Vec::new());
@@ -280,7 +286,9 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let err = extract_mcpb(&bytes, dir.path()).unwrap_err();
-        assert!(matches!(err, InstallError::Format(ref m) if m.contains("manifest.json not found")));
+        assert!(
+            matches!(err, InstallError::Format(ref m) if m.contains("manifest.json not found"))
+        );
     }
 
     #[test]
@@ -315,7 +323,10 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let err = extract_mcpb(&bytes, dir.path()).unwrap_err();
-        assert!(matches!(err, InstallError::Format(ref m) if m.contains("zip slip")), "got: {err:?}");
+        assert!(
+            matches!(err, InstallError::Format(ref m) if m.contains("zip slip")),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -334,7 +345,10 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let err = extract_mcpb(&bytes, dir.path()).unwrap_err();
-        assert!(matches!(err, InstallError::Format(ref m) if m.contains("absolute path")), "got: {err:?}");
+        assert!(
+            matches!(err, InstallError::Format(ref m) if m.contains("absolute path")),
+            "got: {err:?}"
+        );
     }
 
     #[test]
@@ -360,7 +374,10 @@ mod tests {
         let mut zw = ZipWriter::new(buf);
         let opts = SimpleFileOptions::default();
         zw.start_file("manifest.json", opts).unwrap();
-        zw.write_all(br#"{"manifest_version":"","name":"x","server":{"type":"stdio","command":"x"}}"#).unwrap();
+        zw.write_all(
+            br#"{"manifest_version":"","name":"x","server":{"type":"stdio","command":"x"}}"#,
+        )
+        .unwrap();
         let bytes = zw.finish().unwrap().into_inner();
 
         let dir = tempdir().unwrap();
@@ -380,7 +397,10 @@ mod tests {
     fn sha256_known_vector() {
         // SHA-256("hello") known value.
         let hash = archive_sha256_hex(b"hello");
-        assert_eq!(hash, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+        assert_eq!(
+            hash,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
     }
 
     #[test]

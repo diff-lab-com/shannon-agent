@@ -11,12 +11,29 @@ use shannon_desktop::scheduled_commands::compute_opc_metrics;
 
 fn synthetic_tasks(n: usize) -> Vec<TaskInfo> {
     let statuses = [
-        "pending", "in_progress", "completed", "done", "blocked", "running",
+        "pending",
+        "in_progress",
+        "completed",
+        "done",
+        "blocked",
+        "running",
     ];
-    let priorities: [Option<&str>; 7] =
-        [Some("P0"), Some("P1"), Some("P2"), Some("P3"), None, Some("P0"), Some("P2")];
+    let priorities: [Option<&str>; 7] = [
+        Some("P0"),
+        Some("P1"),
+        Some("P2"),
+        Some("P3"),
+        None,
+        Some("P0"),
+        Some("P2"),
+    ];
     let assignees = [
-        Some("alice"), Some("bob"), Some("carol"), None, Some("dave"), Some("eve"),
+        Some("alice"),
+        Some("bob"),
+        Some("carol"),
+        None,
+        Some("dave"),
+        Some("eve"),
     ];
 
     (0..n)

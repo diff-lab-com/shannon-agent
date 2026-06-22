@@ -9,6 +9,7 @@ Cargo.lock.bak
 /ui/coverage
 /ui/test-results
 /ui/.vite
+.vite
 
 # Tauri build artifacts
 /src-tauri/target
@@ -26,3 +27,4 @@ Cargo.lock.bak
 
 # OMC working state
 /.omc
+**/.omc/

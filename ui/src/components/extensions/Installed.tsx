@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 import { useIntl } from "react-intl";
 import { listInstalledAddons } from "@/lib/tauri-api";
 import type { InstalledAddonSummary, AddonKind } from "@/types";
+import EmptyState from "@/components/ui/empty-state";
 
 /**
  * Installed tab — P1's only fully-wired view.
@@ -18,6 +19,7 @@ import type { InstalledAddonSummary, AddonKind } from "@/types";
 export default function Installed() {
   const intl = useIntl();
   const t = (id: string) => intl.formatMessage({ id });
+  const navigate = useNavigate();
   const { search } = useOutletContext<{ search: string }>();
   const [addons, setAddons] = useState<InstalledAddonSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,6 +46,25 @@ export default function Installed() {
     };
   }, []);
 
+  // Auto-refresh when an extension is installed from the marketplace
+  useEffect(() => {
+    const handleInstalledEvent = () => {
+      listInstalledAddons()
+        .then((rows) => {
+          setAddons(rows);
+          setError(null);
+        })
+        .catch((err) => {
+          setError(String(err));
+        });
+    };
+
+    window.addEventListener("shannon:extension-installed", handleInstalledEvent);
+    return () => {
+      window.removeEventListener("shannon:extension-installed", handleInstalledEvent);
+    };
+  }, []);
+
   const filtered = search
     ? addons.filter(
         (a) =>
@@ -59,7 +80,7 @@ export default function Installed() {
       <div className="p-lg max-w-4xl mx-auto">
         <div className="text-center py-3xl text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin text-[32px] mb-md">progress_activity</span>
-          <p className="text-body-md">Scanning local configs…</p>
+          <p className="text-body-md">{t('extensions.installed.scanning')}</p>
         </div>
       </div>
     );
@@ -84,18 +105,12 @@ export default function Installed() {
   if (filtered.length === 0) {
     return (
       <div className="p-lg max-w-4xl mx-auto">
-        <div className="text-center py-3xl">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-surface-container-low mb-md">
-            <span className="material-symbols-outlined text-on-surface-variant text-[32px]">download</span>
-          </div>
-          <h2 className="text-headline-md font-bold text-on-surface mb-sm">
-            Nothing installed yet
-          </h2>
-          <p className="text-body-md text-on-surface-variant max-w-md mx-auto">
-            Browse the Featured, MCP Servers, Skills, and Plugins tabs to add
-            your first extension.
-          </p>
-        </div>
+        <EmptyState
+          icon="download"
+          title={t('extensions.installed.nothingInstalled')}
+          description={t('extensions.installed.nothingDesc')}
+          action={{ label: t('extensions.installed.cta'), onClick: () => navigate('/extensions/skills') }}
+        />
       </div>
     );
   }
@@ -106,10 +121,13 @@ export default function Installed() {
     <div className="p-lg max-w-4xl mx-auto">
       <header className="mb-lg">
         <h1 className="text-headline-sm font-bold text-on-surface">
-          Installed Extensions
+          {t('extensions.installed.title')}
         </h1>
         <p className="text-label-sm text-on-surface-variant">
-          {filtered.length} {filtered.length === 1 ? "entry" : "entries"} across {populatedKinds.length} {populatedKinds.length === 1 ? "category" : "categories"}
+          {intl.formatMessage({ id: 'extensions.installed.count' }, {
+            entries: filtered.length,
+            categories: populatedKinds.length,
+          })}
         </p>
       </header>
 
@@ -119,7 +137,7 @@ export default function Installed() {
           return (
             <section key={kind}>
               <h2 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-                {KIND_LABELS[kind]}{' · '}{rows.length}
+                {kindLabel(intl, kind)}{' · '}{rows.length}
               </h2>
               <div className="border border-outline-variant/30 rounded-2xl overflow-hidden bg-surface-container-lowest/50">
                 {rows.map((row, i) => (
@@ -135,6 +153,8 @@ export default function Installed() {
 }
 
 function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boolean }) {
+  const intl = useIntl();
+  const t = (id: string) => intl.formatMessage({ id });
   return (
     <div className={`flex items-start gap-md px-md py-sm ${isLast ? "" : "border-b border-outline-variant/15"}`}>
       <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${row.enabled ? "bg-primary/10" : "bg-surface-container-low"}`}>
@@ -152,7 +172,7 @@ function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boo
           )}
           {!row.enabled && (
             <span className="text-label-xs px-xs py-[1px] rounded bg-warning-container/50 text-on-warning-container font-bold">
-              Disabled
+              {t('extensions.installed.disabled')}
             </span>
           )}
         </div>
@@ -163,7 +183,7 @@ function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boo
         )}
         {row.installed_at && (
           <p className="text-label-xs text-outline mt-[2px]">
-            installed {formatDate(row.installed_at)}
+            {intl.formatMessage({ id: 'extensions.installed.installedAt' }, { date: formatDate(row.installed_at) })}
           </p>
         )}
       </div>
@@ -173,13 +193,17 @@ function InstalledRow({ row, isLast }: { row: InstalledAddonSummary; isLast: boo
 
 const KIND_ORDER: AddonKind[] = ["mcp", "skill", "agent", "data_source", "plugin"];
 
-const KIND_LABELS: Record<AddonKind, string> = {
-  mcp: "MCP Servers",
-  skill: "Skills",
-  agent: "Agents",
-  data_source: "Data Sources",
-  plugin: "Plugins",
+const KIND_LABEL_KEYS: Record<AddonKind, string> = {
+  mcp: "extensions.installed.mcpServers",
+  skill: "extensions.installed.skills",
+  agent: "extensions.installed.agents",
+  data_source: "extensions.installed.dataSources",
+  plugin: "extensions.installed.plugins",
 };
+
+function kindLabel(intl: ReturnType<typeof useIntl>, kind: AddonKind): string {
+  return intl.formatMessage({ id: KIND_LABEL_KEYS[kind] });
+}
 
 const KIND_ICONS: Record<AddonKind, string> = {
   mcp: "cloud",

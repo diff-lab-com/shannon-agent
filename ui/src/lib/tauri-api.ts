@@ -21,6 +21,8 @@ import type {
   FileDiff,
   FileNode,
   WorkingDirInfo,
+  CatalogEntry,
+  DataSourceResult,
 } from '@/types'
 import type {
   ScheduledRoutine,
@@ -81,6 +83,70 @@ export async function clearWebhookConfig(): Promise<void> {
   await invoke('clear_webhook_config')
 }
 
+export interface SlackInboundDto {
+  bot_token: string
+  trigger_word: string
+  allowed_channels: string[]
+}
+
+export interface TelegramInboundDto {
+  bot_token: string
+  trigger_word: string
+  allowed_chats: string[]
+}
+
+export interface InboundConfigDto {
+  slack?: SlackInboundDto | null
+  telegram?: TelegramInboundDto | null
+}
+
+export async function getInboundConfig(): Promise<InboundConfigDto> {
+  return invoke('get_inbound_config')
+}
+
+export async function saveInboundConfig(dto: InboundConfigDto): Promise<void> {
+  await invoke('save_inbound_config', { dto })
+}
+
+export async function clearInboundConfig(): Promise<void> {
+  await invoke('clear_inbound_config')
+}
+
+export interface InboundListenerStatus {
+  telegram_running: boolean
+  slack_running: boolean
+}
+
+export async function getInboundListenerStatus(): Promise<InboundListenerStatus> {
+  return invoke('get_inbound_listener_status')
+}
+
+export async function stopInboundListener(): Promise<void> {
+  await invoke('stop_inbound_listener')
+}
+
+export type NotificationLevel = 'info' | 'warning' | 'error' | 'success'
+
+export interface NotificationPayload {
+  title: string
+  body: string
+  level?: NotificationLevel
+}
+
+export async function sendNotification(payload: NotificationPayload): Promise<void> {
+  await invoke('send_notification', { payload })
+}
+
+export interface InboundMessage {
+  provider: 'slack' | 'telegram'
+  source_id: string
+  source_name: string
+  sender_id: string
+  sender_name: string
+  text: string
+  timestamp: number
+}
+
 export async function switchProvider(req: ProviderSwitchRequest): Promise<void> {
   await invoke('switch_provider', { request: req })
 }
@@ -121,6 +187,10 @@ export async function switchSession(id: string): Promise<ChatMessage[]> {
   return invoke('switch_session', { id })
 }
 
+export async function setSessionWorkingDir(id: string, path: string): Promise<void> {
+  await invoke('set_session_working_dir', { id, path })
+}
+
 export async function deleteSession(id: string): Promise<boolean> {
   return invoke('delete_session', { id })
 }
@@ -131,6 +201,10 @@ export async function renameSession(id: string, title: string): Promise<boolean>
 
 export async function duplicateSession(id: string): Promise<SessionInfo> {
   return invoke('duplicate_session', { id })
+}
+
+export async function branchSession(parentId: string, branchPoint: number): Promise<SessionInfo> {
+  return invoke('branch_session', { parentId, branchPoint })
 }
 
 export async function exportSession(id: string, format: 'markdown' | 'json'): Promise<string> {
@@ -144,6 +218,10 @@ export async function saveTextFile(path: string, content: string): Promise<void>
 }
 
 // --- Permissions ---
+
+export async function requestPermission(tool: string, input: unknown, risk: string): Promise<boolean> {
+  return invoke('request_permission', { tool, input, risk })
+}
 
 export async function respondPermission(requestId: string, allow: boolean, note?: string): Promise<void> {
   await invoke('respond_permission', { requestId, allow, note: note ?? null })
@@ -205,6 +283,19 @@ export async function listInstalledAddons(): Promise<InstalledAddonSummary[]> {
   return invoke('list_installed_addons')
 }
 
+export interface CatalogUpstream {
+  kind: 'skill' | 'agent' | 'mcp' | 'data_source' | 'native'
+  slug: string
+  display_name: string
+  repo: string | null
+  trust: 'verified' | 'official' | 'community' | 'unknown'
+  entry_count: number
+}
+
+export async function listCatalogUpstreams(): Promise<CatalogUpstream[]> {
+  return invoke('list_catalog_upstreams')
+}
+
 // --- Extensions Hub (P2: MCP installers) ---
 
 export interface FeaturedVendor {
@@ -256,6 +347,10 @@ export async function listFeaturedVendors(): Promise<FeaturedVendor[]> {
   return invoke('list_featured_vendors')
 }
 
+export async function featuredVendorToEntry(slug: string): Promise<CatalogEntry> {
+  return invoke('featured_vendor_to_entry', { slug })
+}
+
 export async function listMcpRegistryServers(): Promise<RegistryServer[]> {
   return invoke('list_mcp_registry_servers')
 }
@@ -274,6 +369,22 @@ export async function installMcpOAuthAuthorizeUrl(vendorSlug: string, redirectUr
 
 export async function installMcpOAuthComplete(vendorSlug: string, accessToken: string): Promise<InstallResult> {
   return invoke('install_mcp_oauth_complete', { vendorSlug, accessToken })
+}
+
+/**
+ * One-click OAuth loopback installer (RFC 6749 §3.1.2.4 + RFC 7636 PKCE).
+ *
+ * The Rust side binds an ephemeral loopback port, opens the vendor's
+ * authorize URL in the default browser, accepts the callback, exchanges
+ * the code for a token, and writes the MCP server config. Resolves with
+ * the InstallResult; rejects on any failure (bind / browse / callback /
+ * token exchange / write).
+ *
+ * UI should show a busy state for the whole await — no manual token
+ * paste step is needed.
+ */
+export async function installMcpOAuthLoopback(vendorSlug: string): Promise<InstallResult> {
+  return invoke('install_mcp_oauth_loopback', { vendorSlug })
 }
 
 export async function uninstallMcpServer(serverName: string): Promise<void> {
@@ -486,6 +597,13 @@ export async function readDataSourceConfig(
   return invoke('read_data_source_config', { slug })
 }
 
+export async function queryDataSource(
+  slug: string,
+  query: string,
+): Promise<DataSourceResult> {
+  return invoke('query_data_source', { slug, query })
+}
+
 // --- Extensions Hub (P6: Security hardening) ---
 
 export type InjectionRisk = 'clean' | 'suspicious' | 'dangerous'
@@ -596,7 +714,7 @@ export async function updatePlugin(name: string): Promise<void> {
   await invoke('update_plugin', { name })
 }
 
-export async function listPluginMarketplace(): Promise<unknown[]> {
+export async function listPluginMarketplace(): Promise<CatalogEntry[]> {
   return invoke('list_plugin_marketplace')
 }
 
@@ -695,18 +813,6 @@ export async function getCostHistory(days: number): Promise<import('@/types').Co
 
 export async function getBillingHistory(): Promise<import('@/types').BillingHistory[]> {
   return invoke('get_billing_history')
-}
-
-// --- File Context ---
-
-export async function getFileContext(): Promise<import('@/types').FileContext[]> {
-  return invoke('get_file_context')
-}
-
-// --- Task Detail ---
-
-export async function getTaskDetail(id: string): Promise<TaskItem> {
-  return invoke('get_task_detail', { id })
 }
 
 // --- Scheduled Tasks (Sprint 2) ---

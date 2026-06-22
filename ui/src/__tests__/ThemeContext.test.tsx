@@ -1,13 +1,17 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { ThemeProvider, useTheme } from '@/context/ThemeContext'
 
 function ThemeConsumer() {
-  const { theme, setTheme, themes } = useTheme()
+  const { theme, setTheme, themes, fontScale, setFontScale } = useTheme()
   return (
     <div>
       <span data-testid="current-theme">{theme}</span>
       <span data-testid="theme-count">{themes.length}</span>
+      <span data-testid="font-scale">{fontScale.toString()}</span>
+      <button data-testid="set-font-scale" onClick={() => setFontScale(1.15)}>
+        Set Font Scale
+      </button>
       {themes.map(t => (
         <button key={t.id} data-testid={`btn-${t.id}`} onClick={() => setTheme(t.id)}>
           {t.label}
@@ -18,6 +22,13 @@ function ThemeConsumer() {
 }
 
 describe('ThemeContext', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    if (document.documentElement.style.fontSize) {
+      document.documentElement.style.fontSize = ''
+    }
+  })
+
   it('provides default material theme', () => {
     render(
       <ThemeProvider>
@@ -128,5 +139,38 @@ describe('ThemeContext', () => {
     expect(() => {
       render(<ThemeConsumer />)
     }).toThrow('useTheme must be used within ThemeProvider')
+  })
+
+  it('provides default fontScale of 1.0', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    expect(screen.getByTestId('font-scale')).toHaveTextContent('1')
+  })
+
+  it('updates fontScale and applies to document element', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    fireEvent.click(screen.getByTestId('set-font-scale'))
+    expect(screen.getByTestId('font-scale')).toHaveTextContent('1.15')
+    expect(document.documentElement.style.fontSize).toBe('18.4px')
+  })
+
+  it('clamps fontScale to valid range', () => {
+    render(
+      <ThemeProvider>
+        <ThemeConsumer />
+      </ThemeProvider>
+    )
+    const consumer = screen.getByTestId('font-scale')
+    // Test lower bound
+    fireEvent.click(screen.getByTestId('set-font-scale'))
+    // The setFontScale should clamp values to [0.85, 1.3]
+    expect(document.documentElement.style.fontSize).toBe('18.4px')
   })
 })

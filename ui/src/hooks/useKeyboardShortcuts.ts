@@ -15,13 +15,13 @@ export function useKeyboardShortcuts(onTogglePalette?: () => void, onToggleHelp?
       'mod+n': () => navigate('/chat'),
       'mod+shift+n': () => navigate('/chat'),
       'mod+k': () => onTogglePalette?.(),
+      'mod+d': () => window.dispatchEvent(new Event('shannon:change-wd')),
       'mod+/': () => {
         const sidebar = document.querySelector('[data-sidebar]')
         sidebar?.classList.toggle('collapsed')
       },
       'mod+1': () => navigate('/chat'),
-      'mod+2': () => navigate('/goals'),
-      'mod+3': () => navigate('/tasks'),
+      'mod+2': () => navigate('/tasks'),
       '?': () => onToggleHelp?.(),
       'escape': () => {
         if (isQuerying) cancelQuery()

@@ -10,6 +10,7 @@ import {
   type DataSourceField,
   type InstalledDataSource,
 } from "@/lib/tauri-api";
+import DataSourcesQuery from "./DataSourcesQuery";
 
 /**
  * P5 Data Sources tab — Tier-1 native Rust adapters.
@@ -26,6 +27,8 @@ export default function DataSources() {
   const t = (id: string) => intl.formatMessage({ id })
 
   const { search } = useOutletContext<{ search: string }>();
+
+  const [activeTab, setActiveTab] = useState<'adapters' | 'query'>('adapters');
 
   const [catalog, setCatalog] = useState<DataSourceCatalogEntry[]>([]);
   const [catalogLoading, setCatalogLoading] = useState(true);
@@ -134,7 +137,7 @@ export default function DataSources() {
     : catalog;
 
   return (
-    <div className="p-lg max-w-5xl mx-auto space-y-xl">
+    <div className="p-lg max-w-6xl mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.datasources.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
@@ -142,7 +145,34 @@ export default function DataSources() {
         </p>
       </header>
 
-      {catalogLoading ? (
+      <div className="flex gap-md border-b border-outline-variant/30">
+        <button
+          type="button"
+          onClick={() => setActiveTab('adapters')}
+          className={`px-md py-sm font-bold text-label-md transition-colors ${
+            activeTab === 'adapters'
+              ? 'text-primary border-b-2 border-primary'
+              : 'text-on-surface-variant hover:text-on-surface'
+          }`}
+        >
+          {t('extensions.datasources.tab.adapters')}
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('query')}
+          className={`px-md py-sm font-bold text-label-md transition-colors ${
+            activeTab === 'query'
+              ? 'text-primary border-b-2 border-primary'
+              : 'text-on-surface-variant hover:text-on-surface'
+          }`}
+        >
+          {t('extensions.datasources.tab.query')}
+        </button>
+      </div>
+
+      {activeTab === 'query' ? (
+        <DataSourcesQuery />
+      ) : catalogLoading ? (
         <div className="text-center py-lg text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
           {t('extensions.datasources.loading')}
@@ -259,95 +289,133 @@ function AdapterCard({
   const t = (id: string) => intl.formatMessage({ id })
 
   const fields: DataSourceField[] = entry.metadata.fields ?? [];
-  const icon = entry.metadata.kind === "email_imap" ? "mail" : "menu_book";
+  const kind = (entry.metadata.kind as string | undefined) ?? "";
+  const accent = ACCENT_BY_KIND[kind] ?? ACCENT_DEFAULT;
+  const isQueryPending = CONFIG_ONLY_KINDS.has(kind);
   return (
-    <div className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/40 flex flex-col">
-      <div className="flex items-start gap-sm mb-xs">
-        <span className="material-symbols-outlined text-primary text-[24px] mt-[-2px]">{icon}</span>
-        <div className="flex-1">
-          <h4 className="font-bold text-label-md text-on-surface">{entry.name}</h4>
-          <p className="text-label-sm text-on-surface-variant line-clamp-2">{entry.description}</p>
+    <div className="relative overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/40 hover:shadow-lg transition-all flex flex-col group">
+      <div className={`h-1 w-full bg-gradient-to-r ${accent.bar}`} />
+      <div className="p-md flex flex-col flex-1">
+        <div className="flex items-start gap-sm mb-xs">
+          <div className={`w-11 h-11 rounded-xl bg-gradient-to-br ${accent.icon} flex items-center justify-center shrink-0 shadow-sm`}>
+            <span className="material-symbols-outlined text-white text-[22px]">{accent.icon_name}</span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <h4 className="font-bold text-label-md text-on-surface truncate">{entry.name}</h4>
+            <p className="text-label-sm text-on-surface-variant line-clamp-2">{entry.description}</p>
+          </div>
+          <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container/50 text-on-primary-container shrink-0">
+            Verified
+          </span>
         </div>
-        <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container/50 text-on-primary-container">
-          Verified
-        </span>
-      </div>
 
-      {feedback && (
-        <div className={`text-label-xs mb-xs ${feedback.ok ? "text-primary" : "text-error"}`}>
-          {feedback.msg}
-        </div>
-      )}
+        {isQueryPending && !isInstalled && (
+          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-secondary-container/40 text-on-secondary-container">
+            <span className="material-symbols-outlined text-[12px]">schedule</span>
+            Query coming soon — install/configure works today
+          </div>
+        )}
 
-      {!isInstalling ? (
-        <div className="flex gap-xs mt-auto">
-          {entry.homepage_url && (
-            <a
-              href={entry.homepage_url}
-              target="_blank"
-              rel="noreferrer"
-              className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest"
-            >
-              {t('extensions.datasources.view')}
-            </a>
-          )}
-          <button
-            type="button"
-            onClick={onStartInstall}
-            disabled={isInstalled}
-            className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isInstalled ? t('extensions.datasources.installed') : t('extensions.datasources.configureInstall')}
-          </button>
-        </div>
-      ) : (
-        <form
-          className="mt-auto space-y-sm"
-          onSubmit={(e) => {
-            e.preventDefault();
-            onSubmitInstall();
-          }}
-        >
-          {fields.map((field) => (
-            <div key={field.key}>
-              <label className="block text-label-xs font-bold text-on-surface-variant mb-[2px]">
-                {field.label}
-                {field.required ? <span className="text-error ml-[2px]">*</span> : null}
-              </label>
-              <input
-                type={field.kind === "password" ? "password" : field.kind === "number" ? "text" : "text"}
-                value={installForm[field.key] ?? ""}
-                onChange={(e) => onFormChange(field.key, e.target.value)}
-                placeholder={field.placeholder ?? ""}
-                className="w-full px-sm py-xs rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-sm font-mono focus:outline-none focus:border-primary"
-              />
-              {field.help && (
-                <p className="text-label-xs text-on-surface-variant mt-[2px]">{field.help}</p>
-              )}
-            </div>
-          ))}
-          <div className="flex gap-xs pt-xs">
-            <button
-              type="submit"
-              disabled={busy}
-              className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50"
-            >
-              {busy ? t('extensions.datasources.saving') : t('extensions.datasources.save')}
-            </button>
+        {feedback && (
+          <div className={`text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded ${feedback.ok ? "bg-primary-container/50 text-on-primary-container" : "bg-error-container/50 text-on-error-container"}`}>
+            <span className="material-symbols-outlined text-[12px]">{feedback.ok ? "check_circle" : "error"}</span>
+            {feedback.msg}
+          </div>
+        )}
+
+        {!isInstalling ? (
+          <div className="flex gap-xs mt-auto pt-sm">
+            {entry.homepage_url && (
+              <a
+                href={entry.homepage_url}
+                target="_blank"
+                rel="noreferrer"
+                className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest"
+              >
+                {t('extensions.datasources.view')}
+              </a>
+            )}
             <button
               type="button"
-              onClick={onCancelInstall}
-              disabled={busy}
-              className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest disabled:opacity-50"
+              onClick={onStartInstall}
+              disabled={isInstalled}
+              className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {t('extensions.datasources.cancel')}
+              {isInstalled ? t('extensions.datasources.installed') : t('extensions.datasources.configureInstall')}
             </button>
           </div>
-        </form>
-      )}
+        ) : (
+          <form
+            className="mt-auto space-y-sm pt-sm"
+            onSubmit={(e) => {
+              e.preventDefault();
+              onSubmitInstall();
+            }}
+          >
+            {fields.map((field) => (
+              <div key={field.key}>
+                <label className="block text-label-xs font-bold text-on-surface-variant mb-[2px]">
+                  {field.label}
+                  {field.required ? <span className="text-error ml-[2px]">*</span> : null}
+                </label>
+                <input
+                  type={field.kind === "password" ? "password" : field.kind === "number" ? "text" : "text"}
+                  value={installForm[field.key] ?? ""}
+                  onChange={(e) => onFormChange(field.key, e.target.value)}
+                  placeholder={field.placeholder ?? ""}
+                  className="w-full px-sm py-xs rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-sm font-mono focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                />
+                {field.help && (
+                  <p className="text-label-xs text-on-surface-variant mt-[2px]">{field.help}</p>
+                )}
+              </div>
+            ))}
+            <div className="flex gap-xs pt-xs">
+              <button
+                type="submit"
+                disabled={busy}
+                className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50"
+              >
+                {busy ? t('extensions.datasources.saving') : t('extensions.datasources.save')}
+              </button>
+              <button
+                type="button"
+                onClick={onCancelInstall}
+                disabled={busy}
+                className="px-sm py-xs rounded-lg bg-surface-container-high text-on-surface text-label-xs font-bold hover:bg-surface-container-highest disabled:opacity-50"
+              >
+                {t('extensions.datasources.cancel')}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
     </div>
   );
 }
+
+/// Kinds whose query path is stubbed (config-only). Surfaced as a "coming
+/// soon" badge in the card header so users know install works today.
+const CONFIG_ONLY_KINDS = new Set(["slack", "discord", "telegram", "rss", "ical"]);
+
+const ACCENT_DEFAULT = {
+  bar: "from-primary/60 to-primary/20",
+  icon: "from-primary to-primary/70",
+  icon_name: "database",
+};
+const ACCENT_BY_KIND: Record<string, typeof ACCENT_DEFAULT> = {
+  obsidian: { bar: "from-violet-500/60 to-purple-400/20", icon: "from-violet-600 to-purple-500", icon_name: "menu_book" },
+  email_imap: { bar: "from-blue-500/60 to-sky-400/20", icon: "from-blue-600 to-sky-500", icon_name: "mail" },
+  notion: { bar: "from-zinc-800/60 to-zinc-500/20", icon: "from-zinc-800 to-zinc-600", icon_name: "description" },
+  linear: { bar: "from-indigo-500/60 to-violet-400/20", icon: "from-indigo-600 to-violet-500", icon_name: "linear" },
+  github_issues: { bar: "from-slate-600/60 to-slate-400/20", icon: "from-slate-700 to-slate-500", icon_name: "bug_report" },
+  jira: { bar: "from-blue-500/60 to-cyan-400/20", icon: "from-blue-600 to-cyan-500", icon_name: "task" },
+  slack: { bar: "from-purple-500/60 to-rose-400/20", icon: "from-purple-600 to-rose-500", icon_name: "tag" },
+  discord: { bar: "from-indigo-500/60 to-violet-400/20", icon: "from-indigo-600 to-violet-500", icon_name: "forum" },
+  telegram: { bar: "from-sky-500/60 to-blue-400/20", icon: "from-sky-600 to-blue-500", icon_name: "send" },
+  rss: { bar: "from-orange-500/60 to-amber-400/20", icon: "from-orange-600 to-amber-500", icon_name: "rss_feed" },
+  ical: { bar: "from-red-500/60 to-rose-400/20", icon: "from-red-600 to-rose-500", icon_name: "calendar_month" },
+};
 
 /** Convert catalog id `native:data-source-obsidian-vault` → slug `obsidian-vault`. */
 function entrySlug(id: string): string {

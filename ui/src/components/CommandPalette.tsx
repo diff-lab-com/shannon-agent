@@ -42,7 +42,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
-  const { sessions, models, tasks, agents, refreshConfig } = useApp()
+  const { sessions, models, tasks, agents, refreshConfig, switchSession } = useApp()
   const intl = useIntl()
 
   const t = (id: string) => intl.formatMessage({ id })
@@ -51,7 +51,6 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     const actions: PaletteItem[] = [
       { id: 'a-new-chat', label: t('palette.action.newChat'), icon: 'add_comment', category: t('palette.category.actions'), action: () => navigate('/chat') },
       { id: 'a-new-task', label: t('palette.action.newTask'), icon: 'add_task', category: t('palette.category.actions'), action: () => navigate('/tasks') },
-      { id: 'a-new-routine', label: t('palette.action.newRoutine'), icon: 'schedule', category: t('palette.category.actions'), action: () => navigate('/routines') },
       { id: 'a-new-agent', label: t('palette.action.browseAgents'), icon: 'smart_toy', category: t('palette.category.actions'), action: () => navigate('/agents') },
       { id: 'a-toggle-theme', label: t('palette.action.changeTheme'), icon: 'palette', category: t('palette.category.actions'), action: () => navigate('/settings/theme') },
     ]
@@ -59,13 +58,8 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       { id: 'p-chat', label: t('nav.chat'), icon: 'chat_bubble', category: t('palette.category.pages'), action: () => navigate('/chat') },
       { id: 'p-today', label: t('palette.page.today'), icon: 'today', category: t('palette.category.pages'), action: () => navigate('/today') },
       { id: 'p-tasks', label: t('nav.scheduled'), icon: 'task_alt', category: t('palette.category.pages'), action: () => navigate('/tasks') },
-      { id: 'p-conversations', label: t('nav.conversations'), icon: 'forum', category: t('palette.category.pages'), action: () => navigate('/conversations') },
       { id: 'p-ext', label: t('palette.page.extensionsHub'), icon: 'grid_view', category: t('palette.category.pages'), action: () => navigate('/extensions') },
-      { id: 'p-routines', label: t('palette.page.routines'), icon: 'schedule', category: t('palette.category.pages'), action: () => navigate('/routines') },
-      { id: 'p-hooks', label: t('palette.page.hooks'), icon: 'webhook', category: t('palette.category.pages'), action: () => navigate('/hooks') },
-      { id: 'p-profiles', label: t('palette.page.permissionProfiles'), icon: 'shield', category: t('palette.category.pages'), action: () => navigate('/profiles') },
       { id: 'p-editor', label: t('palette.page.codeEditor'), icon: 'code', category: t('palette.category.pages'), action: () => navigate('/editor') },
-      { id: 'p-perf', label: t('nav.performance'), icon: 'speed', category: t('palette.category.pages'), action: () => navigate('/perf') },
       { id: 'p-set', label: t('nav.settings'), icon: 'settings', category: t('palette.category.pages'), action: () => navigate('/settings') },
       { id: 'p-theme', label: t('palette.page.themeSettings'), icon: 'palette', category: t('palette.category.settings'), action: () => navigate('/settings/theme') },
       { id: 'p-models', label: t('palette.page.modelSettings'), icon: 'neurology', category: t('palette.category.settings'), action: () => navigate('/settings/models') },
@@ -86,7 +80,10 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       action: () => navigate('/agents'),
     }))
     const sessionItems: PaletteItem[] = sessions.slice(0, 10).map(s => ({
-      id: `s-${s.id}`, label: s.title || t('palette.untitled'), icon: 'history', category: t('palette.category.recentChats'), action: () => navigate('/chat'),
+      id: `s-${s.id}`, label: s.title || t('palette.untitled'), icon: 'history', category: t('palette.category.recentChats'), action: () => {
+        switchSession(s.id)
+        navigate('/chat')
+      },
     }))
     const modelItems: PaletteItem[] = models.slice(0, 5).map(m => ({
       id: `m-${m.id}`, label: m.name, icon: 'neurology', category: t('palette.category.switchModel'), action: () => {
@@ -101,7 +98,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       },
     }))
     return [...actions, ...pages, ...taskItems, ...agentItems, ...sessionItems, ...modelItems]
-  }, [intl, navigate, sessions, models, tasks, agents, refreshConfig, t])
+  }, [intl, navigate, sessions, models, tasks, agents, refreshConfig, switchSession, t])
 
   // Fuzzy-scored + ranked results. Empty query returns items unchanged (stable
   // category order). Non-matching items drop out; matches sort by score desc.

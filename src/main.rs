@@ -7,6 +7,18 @@
 #[cfg(feature = "tauri")]
 fn main() {
     use shannon_desktop::commands;
+    use shannon_desktop::commands_agents;
+    use shannon_desktop::commands_billing;
+    use shannon_desktop::commands_chat;
+    use shannon_desktop::commands_config;
+    use shannon_desktop::commands_files;
+    use shannon_desktop::commands_mcp;
+    use shannon_desktop::commands_notifications;
+    use shannon_desktop::commands_onboarding;
+    use shannon_desktop::commands_permissions;
+    use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_sessions;
+    use shannon_desktop::commands_tasks;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
@@ -45,36 +57,38 @@ fn main() {
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             commands::send_message,
-            commands::get_conversation,
-            commands::list_models,
-            commands::get_status,
-            commands::cancel_query,
-            commands::list_tools,
-            commands::configure,
-            commands::switch_provider,
-            commands::get_config,
-            commands::new_session,
-            commands::list_sessions,
-            commands::search_sessions,
-            commands::load_session,
-            commands::export_session,
-            commands::save_text_file,
-            commands::switch_session,
-            commands::delete_session,
-            commands::rename_session,
-            commands::duplicate_session,
-            commands::request_permission,
-            commands::respond_permission,
-            commands::get_file_diff,
-            commands::apply_diff,
-            commands::add_mcp_server,
-            commands::remove_mcp_server,
-            commands::restart_mcp_server,
-            commands::get_mcp_server_config,
-            commands::list_mcp_servers,
-            commands::list_skills,
-            commands::get_skill_detail,
-            commands::list_installed_addons,
+            commands_chat::get_conversation,
+            commands_chat::list_models,
+            commands_chat::get_status,
+            commands_chat::cancel_query,
+            commands_chat::list_tools,
+            commands_config::configure,
+            commands_config::switch_provider,
+            commands_config::get_config,
+            commands_sessions::new_session,
+            commands_sessions::list_sessions,
+            commands_sessions::search_sessions,
+            commands_sessions::load_session,
+            commands_sessions::export_session,
+            commands_sessions::switch_session,
+            commands_sessions::set_session_working_dir,
+            commands_sessions::delete_session,
+            commands_sessions::rename_session,
+            commands_sessions::duplicate_session,
+            commands_sessions::branch_session,
+            commands_permissions::request_permission,
+            commands_permissions::respond_permission,
+            commands_files::get_file_diff,
+            commands_files::apply_diff,
+            commands_files::save_text_file,
+            commands_mcp::add_mcp_server,
+            commands_mcp::remove_mcp_server,
+            commands_mcp::restart_mcp_server,
+            commands_mcp::get_mcp_server_config,
+            commands_mcp::list_mcp_servers,
+            commands_mcp::list_skills,
+            commands_mcp::get_skill_detail,
+            commands_mcp::list_installed_addons,
             // Extensions hub P2 — MCP installers (see extensions_commands.rs)
             extensions_commands::list_featured_vendors,
             extensions_commands::list_mcp_registry_servers,
@@ -83,6 +97,7 @@ fn main() {
             extensions_commands::install_mcp_mcpb,
             extensions_commands::install_mcp_oauth_authorize_url,
             extensions_commands::install_mcp_oauth_complete,
+            extensions_commands::install_mcp_oauth_loopback,
             extensions_commands::uninstall_mcp_server,
             // Extensions hub P3 — Skills catalog + installer
             extensions_commands::list_skill_catalog,
@@ -103,6 +118,7 @@ fn main() {
             extensions_commands::list_installed_data_sources,
             extensions_commands::uninstall_data_source,
             extensions_commands::read_data_source_config,
+            extensions_commands::query_data_source,
             // Extensions hub P6 — Security hardening
             extensions_commands::scan_prompt_injection,
             extensions_commands::scan_prompt_injection_with_readme,
@@ -111,29 +127,30 @@ fn main() {
             extensions_commands::list_catalog_reports,
             extensions_commands::clear_catalog_report,
             // Plugin management (A.3)
-            commands::list_plugins,
-            commands::install_plugin,
-            commands::install_plugin_from_git,
-            commands::uninstall_plugin,
-            commands::enable_plugin,
-            commands::disable_plugin,
-            commands::update_plugin,
-            commands::list_plugin_marketplace,
+            commands_plugins::list_plugins,
+            commands_plugins::install_plugin,
+            commands_plugins::install_plugin_from_git,
+            commands_plugins::uninstall_plugin,
+            commands_plugins::enable_plugin,
+            commands_plugins::disable_plugin,
+            commands_plugins::update_plugin,
+            commands_plugins::list_plugin_marketplace,
+            commands_plugins::list_catalog_upstreams,
             commands::start_background_task,
             commands::get_background_tasks,
             commands::cancel_background_task,
-            commands::list_agents,
-            commands::list_agent_definitions,
-            commands::create_agent_definition,
-            commands::delete_agent_definition,
+            commands_agents::list_agents,
+            commands_agents::list_agent_definitions,
+            commands_agents::create_agent_definition,
+            commands_agents::delete_agent_definition,
             // Inter-agent message history (Phase D C3)
-            commands::list_agent_messages,
-            commands::list_agent_message_teams,
-            commands::record_agent_message,
-            commands::list_tasks,
-            commands::update_task,
-            commands::get_file_tree,
-            commands::get_working_dir_info,
+            commands_agents::list_agent_messages,
+            commands_agents::list_agent_message_teams,
+            commands_agents::record_agent_message,
+            commands_tasks::list_tasks,
+            commands_tasks::update_task,
+            commands_files::get_file_tree,
+            commands_files::get_working_dir_info,
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)
             shannon_desktop::scheduled_commands::list_scheduled_tasks,
             shannon_desktop::scheduled_commands::create_scheduled_task,
@@ -167,17 +184,35 @@ fn main() {
             shannon_desktop::scheduled_commands::remove_task_worktree,
             shannon_desktop::scheduled_commands::prune_task_worktrees,
             // Onboarding seed (#75) — first-run sample tasks
-            commands::seed_sample_data,
+            commands_onboarding::seed_sample_data,
             // P3 notifications — native OS notification bridge
-            commands::send_notification,
-            commands::get_webhook_config,
-            commands::save_webhook_config,
-            commands::clear_webhook_config,
+            commands_notifications::send_notification,
+            commands_notifications::get_webhook_config,
+            commands_notifications::save_webhook_config,
+            commands_notifications::clear_webhook_config,
+            // P5 Phase 1 — inbound notifications (Slack + Telegram) config storage
+            commands_notifications::get_inbound_config,
+            commands_notifications::save_inbound_config,
+            commands_notifications::clear_inbound_config,
+            // P5 Phase 2 — inbound listener supervisor
+            commands_notifications::get_inbound_listener_status,
+            commands_notifications::stop_inbound_listener,
+            // P0-c — billing demo data (UI shows "Demo mode" banner)
+            commands_billing::get_billing_plan,
+            commands_billing::get_cost_history,
+            commands_billing::get_billing_history,
         ])
         .setup(|app| {
             let mut state = commands::AppState::new();
             state.attach_notification_handler(app.handle().clone());
             app.manage(state);
+
+            // P5 Phase 2 — auto-start inbound listener if config already exists.
+            let app_handle = app.handle().clone();
+            let state_ref: tauri::State<'_, commands::AppState> = app.state();
+            tauri::async_runtime::block_on(async move {
+                commands_notifications::bootstrap_inbound_listener(&*state_ref, &app_handle).await;
+            });
 
             // Bundle A — Click-to-foreground: when a Shannon notification is
             // clicked, bring the main window to the foreground. On macOS and
@@ -244,16 +279,22 @@ fn main() {
                 });
             });
 
-            // System tray configuration
+            // System tray configuration.
+            //
+            // Audit #25: the status line and tooltip previously hardcoded
+            // `anthropic / claude-sonnet-4-6`. They are now built from the
+            // current desktop config, and a background task refreshes the tray
+            // whenever the provider/model changes (covers both `configure` and
+            // `switch_provider`).
+            let initial_label = tray_status_label(&shannon_desktop::config::load_config());
             let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
             let new_session_item =
                 MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
             let check_updates_item =
                 MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
-            let status_item =
-                MenuItemBuilder::with_id("status", "Status: anthropic / claude-sonnet-4-6")
-                    .enabled(false)
-                    .build(app)?;
+            let status_item = MenuItemBuilder::with_id("status", initial_label.clone())
+                .enabled(false)
+                .build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 
             let menu = MenuBuilder::new(app)
@@ -266,8 +307,8 @@ fn main() {
                 ])
                 .build()?;
 
-            let _tray = TrayIconBuilder::new()
-                .tooltip("Shannon AI Assistant — anthropic / claude-sonnet-4-6")
+            let _tray = TrayIconBuilder::with_id(TRAY_ID)
+                .tooltip(format!("Shannon AI Assistant — {initial_label}"))
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show" => {
@@ -307,6 +348,21 @@ fn main() {
                 })
                 .build(app)?;
 
+            // Audit #25 / F3: refresh the tray menu + tooltip when the
+            // provider or model changes. Both `configure` and `switch_provider`
+            // emit `config-updated`, so we listen for that event and rebuild
+            // the menu on change. Replaces the prior 2-second polling loop.
+            let refresh_handle = app.handle().clone();
+            let _ = app.listen(
+                shannon_desktop::events::event_names::CONFIG_UPDATED,
+                move |_| {
+                    let label = tray_status_label(&shannon_desktop::config::load_config());
+                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
+                        tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
+                    }
+                },
+            );
+
             // Auto-update check on startup
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -335,4 +391,65 @@ fn main() {
     eprintln!("Shannon Desktop requires the `tauri` feature.");
     eprintln!("Build with: cargo build -p shannon-desktop --features tauri");
     std::process::exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// System-tray helpers (audit #25)
+// ---------------------------------------------------------------------------
+
+/// Stable identifier for the Shannon tray icon so we can look it up with
+/// `app.tray_by_id(TRAY_ID)` when refreshing its menu/tooltip.
+#[cfg(feature = "tauri")]
+const TRAY_ID: &str = "main";
+
+/// Build the human-readable status label shown in the tray menu and tooltip.
+/// Falls back to sane defaults when the config is missing fields.
+///
+/// Format: `Status: <provider> / <model>`. Provider defaults to `anthropic`,
+/// model to `claude-sonnet-4-6` (the prior hardcoded value) — only used if the
+/// config genuinely has no value yet.
+#[cfg(feature = "tauri")]
+fn tray_status_label(cfg: &shannon_desktop::config::DesktopConfig) -> String {
+    let provider = cfg.provider.as_deref().unwrap_or("anthropic");
+    let model = cfg.model.as_deref().unwrap_or("claude-sonnet-4-6");
+    format!("Status: {provider} / {model}")
+}
+
+/// Rebuild the tray's menu and tooltip with an updated status label. Looks up
+/// the tray by [`TRAY_ID`]; returns an error if the tray is gone (e.g. the app
+/// is shutting down).
+#[cfg(feature = "tauri")]
+fn rebuild_tray_menu(
+    app: &tauri::AppHandle,
+    label: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+    use tauri::tray::TrayIcon;
+
+    let tray: TrayIcon = app
+        .tray_by_id(TRAY_ID)
+        .ok_or_else(|| "tray icon not found".to_string())?;
+
+    let show_item = MenuItemBuilder::with_id("show", "Show Shannon").build(app)?;
+    let new_session_item = MenuItemBuilder::with_id("new-session", "New Session").build(app)?;
+    let check_updates_item =
+        MenuItemBuilder::with_id("check-updates", "Check for Updates").build(app)?;
+    let status_item = MenuItemBuilder::with_id("status", label)
+        .enabled(false)
+        .build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+
+    let menu = MenuBuilder::new(app)
+        .items(&[
+            &status_item,
+            &show_item,
+            &new_session_item,
+            &check_updates_item,
+            &quit_item,
+        ])
+        .build()?;
+
+    tray.set_menu(Some(menu))?;
+    tray.set_tooltip(Some(format!("Shannon AI Assistant — {label}")))?;
+    Ok(())
 }

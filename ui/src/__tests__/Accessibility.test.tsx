@@ -33,7 +33,6 @@ describe('Accessibility', () => {
     it('nav links have visible text labels', () => {
       render(wrap(<Sidebar />))
       expect(screen.getByText('Chat')).toBeInTheDocument()
-      expect(screen.getByText('Projects')).toBeInTheDocument()
       expect(screen.getByText('Scheduled')).toBeInTheDocument()
     })
 

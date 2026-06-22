@@ -110,7 +110,7 @@ export default function ExtensionsHub() {
                     </div>
                     <div className="flex-1 min-w-0">
                       <p className="font-label-md text-label-md font-bold">{skill.name}</p>
-                      <p className="text-label-sm font-label-sm text-on-surface-variant truncate">{skill.description || `Trigger: ${skill.trigger}`}</p>
+                      <p className="text-label-sm font-label-sm text-on-surface-variant truncate">{skill.description || intl.formatMessage({ id: 'extensions.hub.triggerFallback' }, { trigger: skill.trigger })}</p>
                     </div>
                     <span className="px-sm py-xs bg-surface-container-low rounded-full text-label-sm font-label-sm text-on-surface-variant">{skill.source}</span>
                     <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{selectedSkill?.name === skill.name ? 'expand_less' : 'expand_more'}</span>
@@ -119,12 +119,12 @@ export default function ExtensionsHub() {
                 {sortedSkills(cat).map(skill => selectedSkill?.name === skill.name && (
                   <div key={`${skill.name}-detail`} className="bg-surface-container-low border border-primary/30 rounded-xl p-lg space-y-sm">
                     <h5 className="font-label-md text-on-surface font-bold">{skill.name}</h5>
-                    <p className="text-body-sm text-on-surface-variant">{skill.description || 'No description available.'}</p>
+                    <p className="text-body-sm text-on-surface-variant">{skill.description || t('extensions.hub.noDescription')}</p>
                     <div className="flex items-center gap-md text-label-sm text-on-surface-variant">
-                      <span className="flex items-center gap-xs"><span className="material-symbols-outlined text-[14px]">terminal</span>Trigger: {skill.trigger}</span>
+                      <span className="flex items-center gap-xs"><span className="material-symbols-outlined text-[14px]">terminal</span>{intl.formatMessage({ id: 'extensions.hub.triggerLabel' }, { trigger: skill.trigger })}</span>
                       <span className="flex items-center gap-xs"><span className="material-symbols-outlined text-[14px]">source</span>{skill.source}</span>
                     </div>
-                    <button className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md hover:opacity-90 transition-all" onClick={() => setSelectedSkill(null)}>Close</button>
+                    <button className="px-md py-sm bg-primary text-on-primary rounded-lg font-label-md hover:opacity-90 transition-all" onClick={() => setSelectedSkill(null)}>{t('extensions.hub.close')}</button>
                   </div>
                 ))}
               </div>

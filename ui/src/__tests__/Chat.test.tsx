@@ -16,6 +16,8 @@ const ctx = vi.hoisted(() => ({
   sessions: [] as any[],
   currentSessionId: null as string | null,
   error: null as string | null,
+  config: null as any,
+  status: null as any,
   sendMessage: vi.fn(),
   cancelQuery: vi.fn(),
   createSession: vi.fn(),
@@ -38,6 +40,8 @@ function resetCtx() {
   ctx.sessions = []
   ctx.currentSessionId = null
   ctx.error = null
+  ctx.config = null
+  ctx.status = null
   ctx.sendMessage = vi.fn()
   ctx.cancelQuery = vi.fn()
   ctx.createSession = vi.fn()
@@ -219,6 +223,48 @@ describe('Chat page', () => {
     expect(screen.queryByText('Python Debug')).not.toBeInTheDocument()
   })
 
+  // C1: backend full-text search debounced — fires when query ≥ 3 chars.
+  it('calls searchSessions backend after debounce for queries ≥ 3 chars', async () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Python Debug', created_at: Date.now(), updated_at: Date.now() },
+      { id: 's2', title: 'React Setup', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    vi.mocked(api.searchSessions).mockResolvedValue([
+      { id: 's2', title: 'React Setup', created_at: 0, message_count: 0 },
+    ])
+    renderChat()
+    fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'hook' } })
+    await waitFor(() => expect(api.searchSessions).toHaveBeenCalledWith('hook'))
+  })
+
+  it('uses backend hits to surface sessions whose title does not match query', async () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Python Debug', created_at: Date.now(), updated_at: Date.now() },
+      { id: 's2', title: 'React Setup', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    // Backend reports s2 as a content match for "useState" (no title overlap)
+    vi.mocked(api.searchSessions).mockResolvedValue([
+      { id: 's2', title: 'React Setup', created_at: 0, message_count: 0 },
+    ])
+    renderChat()
+    fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'useState' } })
+    await waitFor(() => expect(api.searchSessions).toHaveBeenCalledWith('useState'))
+    await waitFor(() => expect(screen.getByText(/React/)).toBeInTheDocument())
+    expect(screen.queryByText('Python Debug')).not.toBeInTheDocument()
+  })
+
+  it('does not call backend when query is shorter than 3 chars', () => {
+    resetCtx()
+    ctx.sessions = [
+      { id: 's1', title: 'Go', created_at: Date.now(), updated_at: Date.now() },
+    ]
+    renderChat()
+    fireEvent.change(screen.getByPlaceholderText('Search sessions...'), { target: { value: 'go' } })
+    expect(api.searchSessions).not.toHaveBeenCalled()
+  })
+
   it('renders error message when error present', () => {
     resetCtx()
     ctx.error = 'Something went wrong'
@@ -379,6 +425,69 @@ describe('Chat page', () => {
     await waitFor(() => {
       expect(api.exportSession).toHaveBeenCalledWith('s1', 'markdown')
       expect(spy).toHaveBeenCalledWith('', '_blank', 'width=900,height=700')
+    })
+  })
+
+  // Header working-directory chip was removed when ChatInput took ownership
+  // of WD selection. Per-input chip behavior is covered in ChatInput.test.tsx;
+  // session-list hint below remains.
+
+  it('shows WD hint in session list item when set', () => {
+    resetCtx()
+    ctx.sessions = [{
+      id: 's1', title: 'Project Chat', created_at: Date.now(), message_count: 3,
+      working_dir: '/home/alice/code/myproject',
+    }]
+    renderChat()
+    expect(screen.getByText('…/code/myproject')).toBeInTheDocument()
+  })
+
+  it('shows provider/model pill when status is present', () => {
+    resetCtx()
+    ctx.currentSessionId = 's1'
+    ctx.sessions = [{ id: 's1', title: 'Sess', created_at: Date.now(), message_count: 0 }]
+    ctx.status = { provider: 'anthropic', model: 'claude-sonnet-4-6', querying: false, message_count: 0, working_dir: '' }
+    renderChat()
+    expect(screen.getByText(/anthropic\/claude-sonnet-4-6/)).toBeInTheDocument()
+  })
+
+  describe('API key missing banner', () => {
+    it('renders banner when config has no api_key and provider is not ollama', () => {
+      resetCtx()
+      ctx.config = { provider: 'anthropic' }
+      renderChat()
+      expect(screen.getByText('Add your API key to start chatting')).toBeInTheDocument()
+      expect(screen.getByText('Open Settings')).toBeInTheDocument()
+    })
+
+    it('hides banner when api_key is present', () => {
+      resetCtx()
+      ctx.config = { provider: 'anthropic', api_key: 'sk-xxx' }
+      renderChat()
+      expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
+    })
+
+    it('hides banner when provider is ollama (no key required)', () => {
+      resetCtx()
+      ctx.config = { provider: 'ollama' }
+      renderChat()
+      expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
+    })
+
+    it('hides banner when user clicks dismiss', () => {
+      resetCtx()
+      ctx.config = { provider: 'anthropic' }
+      renderChat()
+      fireEvent.click(screen.getByLabelText('Dismiss'))
+      expect(screen.queryByText('Add your API key to start chatting')).not.toBeInTheDocument()
+    })
+
+    it('deep-links to /settings/models when CTA clicked', () => {
+      resetCtx()
+      ctx.config = { provider: 'anthropic' }
+      renderChat()
+      const cta = screen.getByText('Open Settings').closest('button')!
+      expect(cta).toBeInTheDocument()
     })
   })
 })

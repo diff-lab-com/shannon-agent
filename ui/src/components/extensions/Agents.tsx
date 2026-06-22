@@ -120,7 +120,7 @@ export default function Agents() {
     : catalog;
 
   return (
-    <div className="p-lg max-w-5xl mx-auto space-y-xl">
+    <div className="p-lg max-w-6xl mx-auto space-y-xl">
       <header>
         <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.agents.title')}</h2>
         <p className="text-body-md text-on-surface-variant">

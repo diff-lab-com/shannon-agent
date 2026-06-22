@@ -2,6 +2,285 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — supply-chain-hardening]
+
+### Security
+
+- **Rustup install hardened.** `release.yml::Install Rust` step in the
+  build job no longer pipes `sh.rustup.rs` directly to `sh`. Instead it
+  downloads the pinned `rustup-init` binary from
+  `static.rust-lang.org/rustup/archive/{RUSTUP_VERSION}/{TARGET}/` along
+  with the official `.sha256` file, verifies the checksum with
+  `sha256sum -c`, then executes. Version is controlled by the
+  `RUSTUP_VERSION` env var (currently `1.28.2`) for explicit bump cadence.
+
+- **Supply chain trust model documented.** New `docs/supply-chain.md`
+  explains what each dependency source is, what trust basis it relies on,
+  and how the hardening measures mitigate supply chain attacks. Includes
+  incident response playbook.
+
+### CI/CD
+
+- **`workflow_dispatch` branch filter.** Manual workflow triggers
+  restricted to `branches: [main, dev]` — protected branches only.
+
+## [Unreleased] — S2 P1.1 commands.rs split + follow-ups
+
+### CI/CD (release pipeline — v0.3.6 betas)
+
+- **AppImage bundling fixed in rootless DinD (beta7).** `APPIMAGE_EXTRACT_AND_RUN=1`
+  env var tells `linuxdeploy` + plugins to extract their own AppImage to a
+  temp dir and run from there — pure userspace, no `/dev/fuse` required.
+  Costs ~5s per build. Without this, rootless DinD runners cannot
+  self-mount AppImages.
+- **China mirrors for Linux + macOS release builds (beta8 → beta11).** Cut
+  Linux build time from ~95 min to ~48 min by mirroring rustup artifacts,
+  crates.io index, and npm registry:
+  - **rustup**: `RUSTUP_DIST_SERVER=https://rsproxy.cn` +
+    `RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup` (no `/dist` suffix — the
+    shell script appends it).
+  - **crates.io**: sparse protocol at `sparse+https://rsproxy.cn/index/`.
+  - **npm**: `https://registry.npmmirror.com`.
+  - Selected rsproxy.cn over tuna/bfsu/USTC because those prune old
+    toolchain versions (`rust-1.88.0` returns 404); rsproxy keeps the full
+    archive. Three corrections to `RUSTUP_UPDATE_ROOT` were needed (beta9
+    `/rustup/rustup` → beta10 `/rustup/dist` → beta11 `/rustup`); the
+    rustup-init shell script was the source of truth for the path shape.
+  - Mirrors scoped to `runner.os != 'Windows'` (Windows runner not yet
+    verified for mirror connectivity).
+
+## [Unreleased — superseded by v0.3.6 betas] — S2 P1.1 commands.rs split + follow-ups
+
+Multiple extraction PRs to shrink `commands.rs` (~140KB → target ~40KB), plus UI cleanup and CI/docs improvements. All based on `dev` @ `87e854b`.
+
+### Refactors (commands.rs split — S2 P1.1)
+
+- **Extracted `commands_chat.rs`** (PR #9) — `get_conversation`, `list_models`, `get_status`, `cancel_query`, `list_tools`.
+- **Extracted `commands_sessions.rs`** (PR #10) — `new_session`, `list_sessions`, `search_sessions`, `load_session`, `export_session`, `switch_session`, `set_session_working_dir`, `delete_session`, `rename_session`, `duplicate_session`, `branch_session`.
+- **Extracted `commands_plugins.rs`** (PR #12) — `list_plugins`, `install_plugin`, `install_plugin_from_git`, `uninstall_plugin`, `enable_plugin`, `disable_plugin`, `update_plugin`, `list_plugin_marketplace`, `list_catalog_upstreams`.
+- **Extracted `commands_agents.rs`** (PR #13) — `list_agents`, `list_agent_definitions`, `create_agent_definition`, `delete_agent_definition`, `list_agent_messages`, `list_agent_message_teams`, `record_agent_message`. Fixed missing `#[tauri::command]` on `list_agents`.
+- **Extracted `commands_billing.rs`** (PR #14) — `get_billing_plan`, `get_cost_history`, `get_billing_history`.
+- **Extracted `commands_permissions.rs` + `commands_files.rs`** (PR #18) — `request_permission`, `respond_permission`, `save_text_file`.
+
+### Fixes
+
+- Removed stray `.vite/vitest/results.json` artifact and broadened `.gitignore` to cover `.vite` everywhere (was only `/ui/.vite`).
+- Fixed i18n-parity CI workflow to use `https://gitea.com/actions/checkout@v4` mirror (runner can't reach github.com).
+- Fixed flaky `LspQuickFixPanel` refresh-button test — waited for `disabled === false` before clicking.
+- Fixed flaky `Featured` loopback-fallback test — switched from `getByText` to `await findByText`.
+- Suppressed `tauri_plugin_shell::Shell::open` deprecation at call site with TODO for `tauri-plugin-opener` migration.
+- Added `bundle.icon` array to `tauri.conf.json` — fixes AppImage bundler failure ("couldn't find a square icon").
+- Set `bundle.createUpdaterArtifacts` to `false` — updater plugin has empty pubkey/endpoints, so the signing requirement was failing release builds.
+
+### CI/CD
+
+- **Multi-platform release workflow** (`.gitea/workflows/release.yml`). Matrix builds `.deb`/`.rpm`/`.AppImage` (Linux), `.msi`/`.exe` (Windows), `.dmg` (macOS arm64 + x86_64). GitHub HTTPS traffic routed through `gh-proxy.com` via `git config url.insteadOf`; `shannon-code` sibling cloned at pinned rev `00510a7`. Branch guard rejects non-`main`/non-`v*` tag triggers.
+
+## v0.3.5 (2026-06-19) — S2 P0–P2 landing
+
+Six PRs merged into `dev` covering the S2 P0–P2 sprint scope. CI
+slimmed to UI-only after the Gitea runner could not reliably reach
+github.com for action checkout / sibling fetch; Rust checks moved to
+`scripts/local-check.sh` as a local pre-merge gate.
+
+### Tooling
+
+- **P0.3–P0.5: Gitea CI slim-down + `rust-toolchain.toml` + ADR-0001 (PR #1 + #6).**
+  `rust-toolchain.toml` (channel `1.88`, profile `minimal`, components
+  `rustfmt`/`clippy`) is now the single source of truth for the toolchain.
+  CI workflow `.gitea/workflows/ci.yml` runs only the `ui` job (pnpm install
+  + lint + vitest) on the `ubuntu-22.04` self-hosted runner — Rust jobs
+  (`rust-test`, `rust-clippy`, `rust-fmt`, `cargo-deny`) were removed because
+  the runner cannot reliably reach github.com for `actions/checkout` and the
+  shannon-code sibling fetch. ADR-0001 lands the positioning + CI + engine
+  distribution decision record.
+- **Local cargo gate.** `scripts/local-check.sh` runs `cargo fmt --check`,
+  `cargo clippy -D warnings`, `cargo test`, `cargo deny check`, then UI
+  lint + vitest. Run before merge to `main`/`dev`.
+- **i18n key-parity CI (P1.3, PR #2).** `scripts/check-i18n-parity.mjs`
+  diffs keys between `en.json` and `zh-CN.json` and fails on mismatch. Runs
+  as a separate `i18n-parity` CI job.
+
+### Features
+
+- **Featured install flow i18n + granular progress (P1.4 phase 1, PR #4).**
+  Extensions Hub Featured surface now ships full en + zh-CN strings for
+  install progress (cloning → building → registering), error toasts, and
+  the trust-badge tooltip. Phase 2 (OAuth loopback for MCP-remote servers)
+  deferred to a follow-up session.
+
+### Security
+
+- **CSP hardening + Markdown sanitize (P2.4, PR #3).** Production CSP
+  drops `'unsafe-inline'` from `script-src`. `Markdown.tsx` now runs
+  `rehype-sanitize` on rendered LLM output, closing an XSS vector where a
+  malicious model response could inject arbitrary HTML into the chat view.
+  External links continue to use `tauri-plugin-shell` → system browser
+  (unaffected by CSP). `style-src 'unsafe-inline'` retained (Tailwind 4 +
+  pervasive inline styles — separate cleanup).
+
+### Docs
+
+- **User-facing docs (P2.3, PR #5).** `docs/user/{README,getting-started,features}.md`
+  written for a general (non-coder) audience. `README.md` gains a "For
+  users" pointer block at the top so the project's primary README opens
+  with consumer-facing context, not contributor context.
+
+### Version sync
+
+- `Cargo.toml`, `tauri.conf.json`, `ui/package.json` bumped 0.3.2 → 0.3.5
+  to match this entry (prior releases shipped 0.3.2 binaries under a 0.3.4
+  changelog header — drift now closed).
+
+### Known issues
+
+- 6 merged remote branches (`s2/p0-cleanup`, `s2/p1.3-i18n-parity`,
+  `s2/p2.4-csp-sanitize`, `s2/p1.4-mcp-1click`, `s2/p2.3-user-docs`,
+  `s2/ci-fixes`) pending deletion — `git push origin --delete` hangs on the
+  SSH path from the developer machine; clean up via Gitea web UI at
+  convenience.
+
+## v0.3.4 (2026-06-19) — R2 scope reduction (partial)
+
+R2 of the four-sprint plan, partial delivery. The two remaining R2 items
+(commands.rs split, full unwrap cleanup) deferred to follow-up sessions
+because each is a multi-hour focused refactor with regression risk.
+
+### Tests
+
+- **R2-A1: Flaky HOME-env tests fixed.** `extensions::security::tests::remove_report_drops_matching_entries` and `extensions::skill_installers::tests::list_installed_skills_returns_plugin_subdirs` (plus 6 sibling tests in the same files) no longer mutate `std::env::HOME` via `unsafe`. New pattern: thread-local override + RAII guard (`set_test_reports_home` / `set_test_skills_root`). `reports_path()` and `shannon_skills_root()` check the thread-local first, fall back to `dirs::home_dir()` in production. Eliminates the cross-file race that forced `--test-threads=1`. Verified stable across 3 consecutive `cargo test --lib` runs at default parallelism (296/296 each).
+
+### Security
+
+- **R2-A2: `withGlobalTauri: false`.** Tauri v2 exposes `window.__TAURI__` to all JS (including any XSS payload) when this flag is `true`. With CSP also tightened in R1, this closes another vector. Audit: grep across `ui/src/` found only a TS declaration in `vite-env.d.ts` (no runtime usage). All actual IPC already goes through typed `@tauri-apps/api` imports. UI tests: 884/884 still pass.
+
+### Deferred to follow-up sessions
+
+- **R2-A3 commands.rs split** — 5527-line god-file needs per-domain extraction (chat / sessions / config / mcp / agents / files). Multi-hour focused work; start with one cohesive domain as template.
+- **R2-A4 unwrap cleanup** — 317 `.unwrap()` calls across the tree, concentrated in `mcpb.rs` (41), `lsp_commands.rs` (47), `mcp_installers.rs` (37), `commands.rs` (32). Priority: unwraps on user-input paths in Tauri command handlers (can panic in production).
+
+## v0.3.3 (2026-06-19) — R1 industrialization baseline (CI-only scope)
+
+Sprint R1 scoped down to CI-only after the Gitea pivot and "先解决自动化CI"
+decision. Updater wiring, release pipeline, and Dependabot were drafted and
+then reverted — see "Deferred" below.
+
+### Tooling
+
+- **R1-A1: CI workflow (Gitea Actions).** Added `.gitea/workflows/ci.yml` gating push/PR on `main` and `dev`. Jobs: `rust-test` (cargo nextest), `rust-clippy` (`-D warnings` with shannon-code's allow list), `rust-fmt` (`cargo fmt --check`), `cargo-deny` (advisories + licenses + bans), and `ui` (pnpm install + lint + vitest). Runs on the `ubuntu-22.04` self-hosted runner label. CI failure blocks merge. Migrated off GitHub Actions syntax (original `.github/workflows/` draft) after the project standardized on `gitea.diff-lab.com`.
+- **R1-A2: cargo-deny policy.** Added `deny.toml` mirroring `shannon-code/deny.toml`: same advisory ignore list, same license allowlist (MIT/Apache/BSD/ISC/MPL/Unicode-3.0/CDLA-Permissive-2.0), same source allowlist plus `ssh://git@github.com/shannon-agent/shannon-code.git` for the engine subpath dep.
+- **R1-A3: Version sync.** Bumped `Cargo.toml`, `ui/package.json`, `tauri.conf.json` from 0.3.1 → 0.3.2 to match the v0.3.2 changelog entry. Previous releases shipped a 0.3.1 binary labeled "v0.3.2" in notes.
+- **R1-A8: CODEOWNERS.** Added `.gitea/CODEOWNERS` marking `.gitea/workflows/`, `tauri.conf.json`, `Cargo.toml`, and `docs/RELEASING.md` as `@ericdong`-owned. First line of defense against workflow tampering once signer secrets land. Wire up via Gitea branch protection → "Require code owner review" on `main` and `dev`.
+
+### Deferred to a future sprint
+
+The following R1 candidates were drafted then scoped out — preserved in
+`docs/RELEASING.md` as the agreed design:
+
+- **R1-A4 (Tauri updater wiring) — deferred.** `endpoints: []` and `pubkey: ""` stay empty. Plan: wire to an S3 + CDN distribution channel (token-free public read for the updater manifest, preferred over Gitea Releases for a private repo) once the signing keypair + bucket exist.
+- **R1-A5 (Release pipeline) — deferred.** Drafted `.github/workflows/release.yml` using `tauri-apps/tauri-action@v0`, then removed it along with the rest of `.github/`. Release remains a manual `cargo tauri build`.
+- **R1-A7 (Dependabot) — deferred.** Removed `.github/dependabot.yml`. Renovate (Gitea-compatible) is the planned replacement for cargo/npm/action-version drift PRs.
+
+### Tests
+
+- **R1-A6: Pure-function coverage gaps closed.** Added targeted unit tests for seven high-value helpers that previously lacked direct coverage:
+  - `parse_approval_mode` (11 documented aliases + case-insensitivity + safe fallback)
+  - `detect_media_type` (5 image MIMEs + case-insensitivity + non-image rejection)
+  - `provider_from_str` (9 LLM providers)
+  - `iso_days_ago` (format check + zero/negative edge cases)
+  - `template_to_str` / `template_from_str` (8 known variants + custom roundtrip + unknown fallback)
+  - `parse_trigger_type` (4 trigger kinds + case-insensitivity + rejection)
+  - `is_completed_status` / `is_in_progress_status` (positive/negative matrices, with documented whitespace non-handling)
+- 22 new test fns. Total Rust lib tests: **296** (295 passing in parallel; 1 pre-existing HOME-env-race flake in `skill_installers::list_installed_skills_returns_plugin_subdirs` passes under `--test-threads=1`).
+
+### Docs
+
+- **`docs/RELEASING.md`.** Prefixed with a "Deferred" status banner. The signing-keypair, secret-configuration, S3+CDN distribution, tag-push trigger, rollback, and troubleshooting sections are preserved as the design reference for when release automation is prioritized.
+
+### Known issues (pre-existing, surfaced by R1)
+
+- Two unit tests (`extensions::security::tests::remove_report_drops_matching_entries`, `extensions::skill_installers::tests::list_installed_skills_returns_plugin_subdirs`) flake under parallel test execution because they mutate `std::env::HOME` via `unsafe`. They pass under `--test-threads=1`. Fixing requires moving the helpers off `HOME` env var to an explicit path parameter — tracked as Sprint R2 followup.
+
+## v0.3.2 (2026-06-18) — plugin marketplace browser + data source fetchers + triage + branching sessions
+
+### Features
+
+- **D1 — Plugin marketplace browser.** Replaced the placeholder Plugins tab with a real catalog browser backed by the existing `list_plugin_marketplace` command. Cards render per entry (name, author, description, trust badge, stars, license, version, source). Filter chips group by kind (MCP / Skills / Agents / Data Sources / Plugins), the kind picker narrows the list, and the layout search input drives client-side text search across name/description/tags/source. Typed `CatalogEntry` / `CatalogSource` / `TrustLevel` shared between Rust and TS via the existing extensions type surface. Full `en` + `zh-CN` parity for 22 new i18n keys.
+- **D1.2 — Real install wiring + sort + auto-refresh.** Install button now actually calls `install_skill_from_repo` / `install_agent_from_repo` for skills/agents with `git_hub_repo` source (MCP/data_source still route to their dedicated tabs since their installers need form input). New sort dropdown: trust (default) / stars / name / recently updated — applied within each kind group. On successful install, a `shannon:extension-installed` window event fires and the Installed tab auto-refreshes.
+- **D2 — 4 more data source adapters.** Added Notion, Linear, GitHub Issues, and Jira to the native data source catalog. Each ships as a declarative `DataSourceAdapter` with install-form fields (token + optional default scope), surfaced automatically in the Extensions → Data Sources tab. Catalog now exposes 6 adapters total (Obsidian, Email IMAP, Notion, Linear, GitHub Issues, Jira).
+- **D3 — Real HTTP fetchers for the 4 new data sources.** Each adapter now has a fetcher implementation: Notion (POST `/v1/databases/{id}/query`), Linear (GraphQL `/graphql`), GitHub Issues (REST `/repos/{owner}/{repo}/issues`), Jira (REST `/rest/api/3/search`). New `query_data_source(slug, query)` Tauri command dispatches to the right fetcher based on the `kind` field stored in `~/.shannon/data-sources/<slug>.toml`. Normalized `DataSourceResult` shape shared across all sources. Per-source error mapping (AuthError / RateLimited / UpstreamError).
+- **P6 — Triage queue + branching sessions.** Sidebar Tasks entry now shows an unread triage count badge (30s polling via `list_triage_stats`). New `TriageDrawer` popover with filters (All/Unread/by kind) and per-row actions (mark read, archive, open linked). Branching sessions: new `branch_session(parent_id, branch_point)` Tauri command clones the first N messages from a parent into a new session, with `parent_id` and `branch_point` fields exposed on `SessionInfo`. Engine already supported these fields — this commit surfaces them end-to-end.
+
+### Tests
+
+- 9 UI tests for the marketplace browser (`Plugins.marketplace.test.tsx`): loading, empty, error, kind filtering, kind grouping, trust badges, license/version/stars rendering, homepage link, search-via-outlet-context.
+- 3 UI tests for sort/install/auto-refresh: sort-by-stars ordering, install function call, window event dispatch.
+- 4 Rust tests for the data source catalog: notion token field, jira required fields, snake_case serialization across all kinds, expanded adapter list assertion.
+- 16 Rust tests for D3 fetchers (4 per source: deserialization, auth requirement, mapping, edge cases).
+- 2 Rust tests for `branch_session` (basic branch with N messages, parent_id stored correctly).
+- 2 UI tests for TriageDrawer + 1 for sidebar badge.
+
+### Notes
+
+- E2E Playwright coverage for the marketplace tab is deferred — the existing smoke test suite has stale assertions from the P1 navigation restructure that need fixing first.
+- Engine pin remains at `00510a7` (already at remote latest).
+
+## v0.3.1 (2026-06-18) — full-text session search + keyboard shortcuts + test coverage
+
+### Features
+
+- **C1 — Full-text session search.** `search_sessions` now also scans session messages for matches when the title doesn't match. Title hits rank first; content matches fill the rest (capped at 200 sessions/keystroke to bound cost). Chat sidebar debounces the backend call (250 ms) once the query is ≥ 3 chars; shorter queries stay on the client-side title filter for instant feedback. Backend errors fall back to the client filter so the UI never dead-ends.
+- **C2 — Cmd/Ctrl+K quick session switcher.** CommandPalette session items now call `switchSession(id)` instead of just navigating to `/chat`, so the palette works as a real session switcher (already had keyboard arrow nav + Enter).
+- **C2 — Cmd/Ctrl+D change working directory.** New `mod+d` shortcut dispatches a window-level `shannon:change-wd` event. The Chat page listens via a ref and opens the same native folder picker the WD chip button uses — so users can repoint the WD without leaving the keyboard.
+
+### Fixes
+
+- **KeyboardShortcutsHelp missing translations.** The dialog was rendering raw key strings (`shortcuts.help.goChat`, etc.) for 7 of its 10 rows because those keys didn't exist in `en.json` / `zh-CN.json`. Added all 11 `shortcuts.help.*` keys (including the new `changeWorkingDir`) at full parity.
+
+### Tests
+
+- **B2 — coverage for new Tauri commands.** 12 new tests: 7 for the per-session WD chip in `Chat.test.tsx` (placeholder, breadcrumb, config fallback, folder picker, cancel-noop, session-list hint, provider pill), 5 for the `InboundSection` of `NotificationsSettings.test.tsx` (render, prefill, save wiring, empty-token omission, clear). Mocks for `setSessionWorkingDir` + `get/save/clear_inbound_config` added to `setup.ts`. Total: 819 tests across 76 files, all passing.
+
+## v0.3.0 (2026-06-18) — navigation restructure + per-session working dir + Extensions Hub + i18n audit
+
+### Features
+
+- **P1 — Sidebar navigation restructure.** Sidebar now exposes only Chat + Scheduled as top-level entries. Automation, Goals, Triage, and Mission Control removed from primary nav; Tasks moved to internal tabs within Scheduled. Cuts the surface area to what the redesigned chat-first flow actually uses.
+- **P2 — Chat right context panel + inline QuickFix/Editor.** Chat page gains a right-side context panel (token usage with context-window bar, active tools with live status, file context chips). QuickFix and Editor — previously top-level routes — are now inline modals launched from the chat input toolbar. Lazy-loaded so the main chat bundle stays small.
+- **P3 — Scheduled Sprint 2 form.** Dual-mode schedule input at the top of `ScheduleForm`: natural-language ("every weekday at 9am") parses to a cron preview, plus the raw cron editor underneath for power users. Picks up shannon-code engine B6 (event-triggered routines) + B9 (per-task worktrees) wire-compatible schemas.
+- **P4 — Extensions catalog expansion + Models quick-setup presets.** MCP registry installer surfaces a `tool_count` badge on installed servers. New Models quick-setup cards for Deepseek / GLM / MiniMax / OpenAI / Kimi — each card takes an inline API key and calls `switchProvider` with the right `base_url` + `model`.
+- **P5 Phase 1 — Slack + Telegram inbound config storage.** `NotificationsSettings` gains an Inbound section for Slack (bot_token + trigger_word + allowed_channels) and Telegram (bot_token + trigger_word + allowed_chats). Persisted to `~/.shannon/desktop/config.json` under `[notifications.inbound]`. Listener (Phase 2) not yet wired — this commit only lands storage + UI.
+- **Per-session working directory.** `SessionMeta` gains an optional `working_dir`. New `set_session_working_dir(id, path)` Tauri command canonicalizes the path, updates session metadata, syncs the process cwd when the session is active, and emits `CONFIG_UPDATED`. `switch_session` restores the process cwd from session metadata so each conversation remembers its own project root. Chat page exposes this via a header strip breadcrumb chip with native folder picker.
+
+### Fixes
+
+- **P0 — timestamp millis.** Engine contract uses Unix epoch milliseconds for `chrono_timestamp()`. Desktop was passing through seconds, which broke every "x minutes ago" computation in the UI. Now serializes millis consistently across `QueryEvent` payloads and session metadata.
+- **P0 — MCP registry wrapped shape.** `list_mcp_registry_servers` was unwrapping a paginated envelope. Now returns the inner `servers[]` array the frontend expects.
+- **P0 — billing demo data.** `get_billing_plan` / `get_cost_history` / `get_billing_history` were stubs returning empty; now return demo data so the Usage & Billing page renders meaningfully out of the box.
+- **P0 — Advanced rename.** Renamed the Advanced Settings subpage (was mislabeled "Performance" in nav) so labels match across sidebar, page header, and route.
+- **P0 — `/perf` route removal.** Legacy performance route still linked from a stale nav entry. Removed the route and all inbound links.
+- **Chat page visual refresh.** New header strip shows session title + working directory breadcrumb + provider/model pill. Subtle ambient backdrop for depth. Session list items show working-directory hint when set. Refined spacing and typography on message bubbles.
+
+### Accessibility
+
+- **T9 — WCAG AA on NotificationsSettings** (carried over from v0.2.9). Loading spinners have `role="status"` + `aria-live="polite"`. Form fields use associated `<label htmlFor>` elements. Show/hide secret button exposes `aria-label`. Save/Clear states communicated via disabled + label change.
+- **Per-session WD chip** keyboard-accessible: focus-visible ring, aria-label, native folder picker.
+
+### i18n
+
+- **P7 — McpServers + Installed bilingual coverage.** Both Extensions Hub tabs now have every user-visible string wrapped with `intl.formatMessage`. ICU message fix: `extensions.installed.count` was using `{filtered.length}` (invalid — ICU doesn't allow dotted variable names); restructured to use plain `entries` / `categories` variables.
+- **GeneralSettings audit.** Header, subheader, all 5 approval modes (label + description), session info labels (Provider / Active Provider / Model / Working Directory), toast messages ("Approval mode: X", "Failed to update approval mode") — all bilingual.
+- **Plugins tab audit.** Previously fully English. Now wraps title, description (with rich-text `<code>` via FormattedMessage), "Coming in P3" preview, "Soon" badge, entries count, and all 4 placeholder repo descriptions.
+- **OPCKanbanBoard variant cards.** Critical / Review / Done / Archived / In Progress / "Proposed by {name}" / "Assigned to {name}" — all localized in both blocked, active, done, failed, and default card variants.
+- **TaskDAGView legend.** Completed / Running / Pending legend + "Click any task to view details" hint localized.
+- **ExtensionsHub detail pane.** Close button, "No description available." fallback, "Trigger: X" label localized.
+- **Chat beautification i18n.** 12 new `chat.header.*` and `chat.session.workingDirHint` keys for the per-session working directory UI.
+- All keys at full parity between `en.json` and `zh-CN.json` (zero missing on either side).
+
+### Dependencies
+
+- shannon-code engine remains at v0.5.5 (no rev bump this sprint — see Cargo.toml `[patch."ssh://..."]` block for the path-dep override).
+
 ## v0.2.9 (2026-06-17) — webhook config UI + load fix + i18n
 
 ### Features

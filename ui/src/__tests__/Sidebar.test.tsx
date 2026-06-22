@@ -1,9 +1,17 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { I18nProvider } from '@/i18n'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { Sidebar, SIDEBAR_MODE_KEY } from '@/components/Sidebar'
+
+// Mock useTriageStats hook
+vi.mock('@/hooks/scheduled-tasks', () => ({
+  useTriageStats: () => ({
+    stats: { unread: 3, total: 5 },
+    refresh: vi.fn(),
+  }),
+}))
 
 function wrap(ui: React.ReactElement, { path = '/chat' } = {}) {
   return (
@@ -15,6 +23,12 @@ function wrap(ui: React.ReactElement, { path = '/chat' } = {}) {
       </AppProvider>
     </I18nProvider>
   )
+}
+
+// Helper component to capture current location
+function LocationCapture() {
+  const location = useLocation()
+  return <div data-testid="current-location">{location.pathname}</div>
 }
 
 describe('Sidebar', () => {
@@ -40,7 +54,6 @@ describe('Sidebar', () => {
   it('renders primary nav links', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Projects')).toBeInTheDocument()
     expect(screen.getByText('Scheduled')).toBeInTheDocument()
   })
 
@@ -70,7 +83,7 @@ describe('Sidebar — Simple mode (default)', () => {
 
   it('defaults to Simple mode', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByRole('button', { name: /Switch to Dev mode/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Switch to Advanced mode/ })).toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
 
@@ -79,76 +92,55 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
   })
 
-  it('shows Automations section in Simple mode (collapsed by default)', () => {
-    render(wrap(<Sidebar />))
-    expect(screen.getByText('Automations')).toBeInTheDocument()
-    // Sub-links hidden until expanded
-    expect(screen.queryByText('Schedules')).not.toBeInTheDocument()
-    expect(screen.queryByText('Triggers')).not.toBeInTheDocument()
-    expect(screen.queryByText('Permission Modes')).not.toBeInTheDocument()
-  })
-
-  it('expands Automations in Simple mode on click', () => {
-    render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByText('Automations'))
-    expect(screen.getByText('Schedules')).toBeInTheDocument()
-    expect(screen.getByText('Triggers')).toBeInTheDocument()
-    expect(screen.getByText('Permission Modes')).toBeInTheDocument()
-  })
-
   it('hides OPC section in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.queryByText('OPC')).not.toBeInTheDocument()
     expect(screen.queryByText('One Person Company')).not.toBeInTheDocument()
   })
 
-  it('hides Quick Fix, Editor, Performance in Simple mode', () => {
+  it('hides Quick Fix, Editor in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.queryByText('Quick Fix')).not.toBeInTheDocument()
     expect(screen.queryByText('Editor')).not.toBeInTheDocument()
-    expect(screen.queryByText('Performance')).not.toBeInTheDocument()
   })
 
   it('still shows core nav in Simple mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Chat')).toBeInTheDocument()
-    expect(screen.getByText('Projects')).toBeInTheDocument()
     expect(screen.getByText('Scheduled')).toBeInTheDocument()
-    expect(screen.getByText('Conversations')).toBeInTheDocument()
-    expect(screen.getByText('Inbox')).toBeInTheDocument()
   })
 
-  it('toggles to Dev mode on mode button click', () => {
+  it('toggles to Advanced mode on mode button click', () => {
     render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Switch to Dev mode/ }))
-    // Now in Dev mode — Extensions visible
+    fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
+    // Now in Advanced mode — Extensions visible
     expect(screen.getByText('Extensions')).toBeInTheDocument()
-    expect(screen.getByText('Dev mode')).toBeInTheDocument()
+    expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
   it('persists mode to localStorage', () => {
     render(wrap(<Sidebar />))
-    fireEvent.click(screen.getByRole('button', { name: /Switch to Dev mode/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
     expect(window.localStorage.getItem(SIDEBAR_MODE_KEY)).toBe('dev')
   })
 
-  it('remembers Dev mode from localStorage on subsequent mount', () => {
+  it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
     expect(screen.getByText('Extensions')).toBeInTheDocument()
-    expect(screen.getByText('Dev mode')).toBeInTheDocument()
+    expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
   it('mode toggle button has correct aria-pressed', () => {
     render(wrap(<Sidebar />))
-    const toggle = screen.getByRole('button', { name: /Switch to Dev mode/ })
+    const toggle = screen.getByRole('button', { name: /Switch to Advanced mode/ })
     expect(toggle).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(toggle)
     expect(screen.getByRole('button', { name: /Switch to Simple mode/ })).toHaveAttribute('aria-pressed', 'true')
   })
 })
 
-describe('Sidebar — Dev mode', () => {
+describe('Sidebar — Advanced mode', () => {
   beforeEach(() => {
     window.localStorage.clear()
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
@@ -203,5 +195,44 @@ describe('Sidebar — Dev mode', () => {
     fireEvent.click(screen.getByRole('button', { name: /Switch to Simple mode/ }))
     expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
+  })
+})
+
+describe('Sidebar — Navigation', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('navigates to /tasks when clicking Scheduled', async () => {
+    render(
+      wrap(
+        <>
+          <Sidebar />
+          <LocationCapture />
+        </>
+      )
+    )
+
+    const scheduledLink = screen.getByText('Scheduled')
+    fireEvent.click(scheduledLink)
+
+    await waitFor(() => {
+      const location = screen.getByTestId('current-location')
+      expect(location.textContent).toBe('/tasks')
+    })
+  })
+
+  it('renders Triage button with badge when there are unread items', () => {
+    render(wrap(<Sidebar />))
+
+    expect(screen.getByText('Triage')).toBeInTheDocument()
+    expect(screen.getByText('3')).toBeInTheDocument() // Badge shows unread count
+  })
+
+  it('Triage link has proper aria-label', () => {
+    render(wrap(<Sidebar />))
+
+    const triageLink = screen.getByRole('link', { name: /Open Triage page/i })
+    expect(triageLink).toBeInTheDocument()
   })
 })

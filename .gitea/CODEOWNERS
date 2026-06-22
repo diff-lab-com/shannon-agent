@@ -1,0 +1,25 @@
+# CODEOWNERS — reviewers required for security-sensitive paths.
+#
+# Wire this up in Gitea: Settings → Branches → Protected Branches →
+# enable "Require code owner review" on `main` and `dev`.
+#
+# Any PR touching these paths must be approved by the listed owner
+# before it can merge. This is the first line of defense against
+# workflow tampering that could exfiltrate CI secrets once release
+# automation lands.
+
+# CI/CD workflow files — anyone editing these can change what runs on
+# the runner and (once release.yml exists) potentially access signer
+# keys.
+.gitea/workflows/    @ericdong
+
+# Tauri config — controls CSP, updater endpoint, signing pubkey, and
+# global Tauri API exposure. Treat as security-critical.
+tauri.conf.json      @ericdong
+
+# Cargo manifest — controls which shannon-code rev is pulled in and
+# what features are enabled by default.
+Cargo.toml           @ericdong
+
+# Release documentation — describes the signing key rotation flow.
+docs/RELEASING.md    @ericdong

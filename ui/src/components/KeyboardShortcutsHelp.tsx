@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl'
 const SHORTCUTS = [
   { keys: '⌘ K', action: 'shortcuts.help.openPalette' },
   { keys: '⌘ N', action: 'shortcuts.help.newChat' },
+  { keys: '⌘ D', action: 'shortcuts.help.changeWorkingDir' },
   { keys: '⌘ 1', action: 'shortcuts.help.goChat' },
   { keys: '⌘ 2', action: 'shortcuts.help.goGoals' },
   { keys: '⌘ 3', action: 'shortcuts.help.goTasks' },

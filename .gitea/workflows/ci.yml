@@ -1,0 +1,47 @@
+name: CI
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Rust build / clippy / fmt / cargo-deny were removed from CI because the
+  # Gitea runner cannot reliably reach github.com — both cloning
+  # actions/checkout and fetching the shannon-code sibling time out.
+  # Run them locally before merge:
+  #   cargo fmt --all -- --check
+  #   cargo clippy --workspace -- -D warnings
+  #   cargo test --workspace
+  #   cargo deny check --hide-inclusion-graph
+  ui:
+    name: UI · lint + test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4
+      - uses: https://gitea.com/actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Enable pnpm 10 via corepack
+        run: corepack prepare pnpm@10 --activate
+      - name: Install UI deps
+        run: pnpm install --dir ui --frozen-lockfile
+      - name: Type check
+        run: pnpm --dir ui lint
+      - name: Unit tests
+        run: pnpm --dir ui test --run
+
+  i18n-parity:
+    name: i18n · key parity
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4
+      - uses: https://gitea.com/actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check en/zh-CN key parity
+        run: node scripts/check-i18n-parity.mjs

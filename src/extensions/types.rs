@@ -82,9 +82,7 @@ pub enum CatalogSource {
         ref_: Option<String>,
     },
     /// User-supplied URL (Tier 3 escape hatch).
-    Custom {
-        url: String,
-    },
+    Custom { url: String },
     /// Native Rust integration, no upstream catalog.
     Native,
 }
@@ -250,11 +248,21 @@ pub enum ConfirmationLevel {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProgressEvent {
-    Started { total_steps: Option<u32> },
-    Step { description: String, current: Option<u32>, total: Option<u32> },
-    Log { message: String },
+    Started {
+        total_steps: Option<u32>,
+    },
+    Step {
+        description: String,
+        current: Option<u32>,
+        total: Option<u32>,
+    },
+    Log {
+        message: String,
+    },
     Finished,
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
 }
 
 /// Sink installer writes progress events into. Front-end reads via event stream.
@@ -266,13 +274,20 @@ pub struct ProgressSink {
 impl ProgressSink {
     /// No-op sink — used when the caller doesn't care about progress.
     pub fn null() -> Self {
-        Self { inner: Arc::new(Mutex::new(None)) }
+        Self {
+            inner: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// Channel-backed sink — each emit goes to the receiver.
     pub fn channel() -> (Self, tokio::sync::mpsc::UnboundedReceiver<ProgressEvent>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        (Self { inner: Arc::new(Mutex::new(Some(tx))) }, rx)
+        (
+            Self {
+                inner: Arc::new(Mutex::new(Some(tx))),
+            },
+            rx,
+        )
     }
 
     pub async fn emit(&self, event: ProgressEvent) {
@@ -306,7 +321,10 @@ mod tests {
     #[test]
     fn catalog_entry_with_metadata_serializes() {
         let mut meta = HashMap::new();
-        meta.insert("endpoint".to_string(), serde_json::json!("https://mcp.notion.com/mcp"));
+        meta.insert(
+            "endpoint".to_string(),
+            serde_json::json!("https://mcp.notion.com/mcp"),
+        );
         let entry = CatalogEntry {
             id: "gh:makenotion/notion-mcp-server".to_string(),
             kind: AddonKind::Mcp,
@@ -341,11 +359,18 @@ mod tests {
     fn progress_sink_channel_delivers_events() {
         let (sink, mut rx) = ProgressSink::channel();
         let rt = tokio::runtime::Runtime::new().expect("rt");
-        rt.block_on(sink.emit(ProgressEvent::Started { total_steps: Some(3) }));
+        rt.block_on(sink.emit(ProgressEvent::Started {
+            total_steps: Some(3),
+        }));
         rt.block_on(sink.emit(ProgressEvent::Finished));
         let first = rx.blocking_recv().expect("event 1");
         let second = rx.blocking_recv().expect("event 2");
-        assert!(matches!(first, ProgressEvent::Started { total_steps: Some(3) }));
+        assert!(matches!(
+            first,
+            ProgressEvent::Started {
+                total_steps: Some(3)
+            }
+        ));
         assert!(matches!(second, ProgressEvent::Finished));
     }
 
@@ -362,7 +387,9 @@ mod tests {
 
     #[test]
     fn install_target_keychain_tag_works() {
-        let t = InstallTarget::Keychain { slot: "obsidian-vault".to_string() };
+        let t = InstallTarget::Keychain {
+            slot: "obsidian-vault".to_string(),
+        };
         let json = serde_json::to_string(&t).expect("serialize");
         assert!(json.contains("keychain"));
         assert!(json.contains("obsidian-vault"));

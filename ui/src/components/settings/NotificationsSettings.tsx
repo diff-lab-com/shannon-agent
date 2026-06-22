@@ -2,31 +2,70 @@ import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
+import SlackWizard from './notifications/SlackWizard'
+import TelegramWizard from './notifications/TelegramWizard'
+import EmailWizard from './notifications/EmailWizard'
 
-const TEMPLATES = [
-  { value: 'slack', label: 'Slack' },
-  { value: 'discord', label: 'Discord' },
-  { value: 'feishu', label: 'Feishu (飞书)' },
-  { value: 'wechat', label: 'WeChat Work (企业微信)' },
-  { value: 'teams', label: 'Microsoft Teams' },
-  { value: 'telegram', label: 'Telegram' },
-  { value: 'dingtalk', label: 'DingTalk (钉钉)' },
-  { value: 'raw', label: 'Raw JSON' },
-] as const
+type ChannelType = 'slack' | 'telegram' | 'email' | null
 
-function isCustom(t: string): t is `custom:${string}` {
-  return t.startsWith('custom:')
+/** Channel preset id — stored as the webhook `template` discriminator. */
+type WebhookPreset = 'feishu' | 'dingtalk' | 'wechat' | 'slack' | 'custom'
+
+const PRESET_IDS: WebhookPreset[] = ['feishu', 'dingtalk', 'wechat', 'slack', 'custom']
+
+const PRESET_META: Record<
+  WebhookPreset,
+  { icon: string; urlPlaceholder: string; urlHintKey: string; labelKey: string }
+> = {
+  feishu: {
+    icon: 'forum',
+    urlPlaceholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/send/<token>',
+    urlHintKey: 'settings.notifications.preset.urlHint.feishu',
+    labelKey: 'settings.notifications.preset.feishu',
+  },
+  dingtalk: {
+    icon: 'notifications',
+    urlPlaceholder: 'https://oapi.dingtalk.com/robot/send?access_token=<token>',
+    urlHintKey: 'settings.notifications.preset.urlHint.dingtalk',
+    labelKey: 'settings.notifications.preset.dingtalk',
+  },
+  wechat: {
+    icon: 'chat',
+    urlPlaceholder: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=<key>',
+    urlHintKey: 'settings.notifications.preset.urlHint.wechat',
+    labelKey: 'settings.notifications.preset.wechat',
+  },
+  slack: {
+    icon: 'tag',
+    urlPlaceholder: 'https://hooks.slack.com/services/...',
+    urlHintKey: 'settings.notifications.preset.urlHint.slack',
+    labelKey: 'settings.notifications.preset.slack',
+  },
+  custom: {
+    icon: 'tune',
+    urlPlaceholder: 'https://example.com/webhook',
+    urlHintKey: 'settings.notifications.url',
+    labelKey: 'settings.notifications.preset.custom',
+  },
 }
 
-function templateToSelect(t: string): string {
-  if (isCustom(t)) return 'custom'
-  if (TEMPLATES.some((tpl) => tpl.value === t)) return t
-  return ''
+/** Map a stored template string back to its preset id. Unknown values → 'custom'. */
+function presetFromTemplate(template: string | undefined): WebhookPreset {
+  if (!template) return 'custom'
+  if (template.startsWith('custom:')) return 'custom'
+  return PRESET_IDS.includes(template as WebhookPreset) ? (template as WebhookPreset) : 'custom'
 }
 
-export default function NotificationsSettings() {
+function WebhookSection() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
@@ -34,10 +73,10 @@ export default function NotificationsSettings() {
   const [saving, setSaving] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [url, setUrl] = useState('')
-  const [template, setTemplate] = useState<string>('raw')
+  const [template, setTemplate] = useState('raw')
+  const [preset, setPreset] = useState<WebhookPreset>('custom')
   const [customBody, setCustomBody] = useState('')
   const [secret, setSecret] = useState('')
-  const [showSecret, setShowSecret] = useState(false)
   const [timeoutMs, setTimeoutMs] = useState(5000)
   const [includeBody, setIncludeBody] = useState(false)
 
@@ -49,7 +88,8 @@ export default function NotificationsSettings() {
         if (cancelled || !dto) return
         setUrl(dto.url)
         setTemplate(dto.template || 'raw')
-        if (isCustom(dto.template)) setCustomBody(dto.template.slice('custom:'.length))
+        setPreset(presetFromTemplate(dto.template))
+        if (dto.template?.startsWith('custom:')) setCustomBody(dto.template.slice('custom:'.length))
         setSecret(dto.secret ?? '')
         setTimeoutMs(dto.timeout_ms || 5000)
         setIncludeBody(dto.include_body)
@@ -63,27 +103,46 @@ export default function NotificationsSettings() {
     }
   }, [])
 
-  const selectValue = templateToSelect(template)
-
-  const buildDto = (): api.WebhookConfigDto => {
-    const finalTemplate = selectValue === 'custom' ? `custom:${customBody}` : (selectValue || 'raw')
-    return {
-      url: url.trim(),
-      template: finalTemplate,
-      secret: secret.trim() ? secret.trim() : null,
-      timeout_ms: timeoutMs,
-      include_body: includeBody,
+  const handlePresetChange = (next: WebhookPreset) => {
+    setPreset(next)
+    // Only pre-fill the URL when the user hasn't typed one yet.
+    if (!url.trim()) {
+      setUrl(PRESET_META[next].urlPlaceholder)
     }
   }
 
   const handleSave = async () => {
-    if (!url.trim()) {
+    const trimmed = url.trim()
+    if (!trimmed) {
       toast.error(t('settings.notifications.error.urlRequired'))
+      return
+    }
+    const check = validateWebhookUrl(trimmed)
+    if (!check.ok) {
+      const key =
+        check.reason === 'scheme' ? 'settings.notifications.error.urlBadScheme'
+        : check.reason === 'private' ? 'settings.notifications.error.urlPrivate'
+        : 'settings.notifications.error.urlInvalid'
+      toast.error(t(key))
       return
     }
     setSaving(true)
     try {
-      await api.saveWebhookConfig(buildDto())
+      // Encode the selected preset as the template discriminator. Preserves the
+      // legacy `custom:<body>` shape for the Custom preset.
+      const encodedTemplate =
+        preset === 'custom'
+          ? template.startsWith('custom:')
+            ? template
+            : `custom:${customBody}`
+          : preset
+      await api.saveWebhookConfig({
+        url: url.trim(),
+        template: encodedTemplate,
+        secret: secret.trim() || null,
+        timeout_ms: timeoutMs,
+        include_body: includeBody,
+      })
       toast.success(t('settings.notifications.saved'))
     } catch (e) {
       console.warn('saveWebhookConfig error:', e)
@@ -98,6 +157,7 @@ export default function NotificationsSettings() {
       await api.clearWebhookConfig()
       setUrl('')
       setTemplate('raw')
+      setPreset('custom')
       setCustomBody('')
       setSecret('')
       setTimeoutMs(5000)
@@ -119,6 +179,167 @@ export default function NotificationsSettings() {
     )
   }
 
+  const presetMeta = PRESET_META[preset]
+
+  return (
+    <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
+      <div>
+        <h3 className="font-headline-md text-on-surface">{t('settings.notifications.webhook.title')}</h3>
+        <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
+      </div>
+
+      <div>
+        <label
+          id="webhook-preset-label"
+          className="block font-label-lg text-on-surface mb-sm"
+        >
+          {t('settings.notifications.preset.label')}
+        </label>
+        <Select value={preset} onValueChange={(v) => handlePresetChange(v as WebhookPreset)}>
+          <SelectTrigger
+            aria-labelledby="webhook-preset-label"
+            className="w-full border-outline bg-surface text-on-surface"
+          >
+            <span className="material-symbols-outlined text-[18px] text-primary" aria-hidden="true">
+              {presetMeta.icon}
+            </span>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PRESET_IDS.map((id) => (
+              <SelectItem key={id} value={id}>
+                <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                  {PRESET_META[id].icon}
+                </span>
+                <span>{t(PRESET_META[id].labelKey)}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div>
+        <label htmlFor="webhook-url" className="block font-label-lg text-on-surface mb-sm">
+          {t('settings.notifications.url')}
+        </label>
+        <input
+          id="webhook-url"
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder={presetMeta.urlPlaceholder}
+          aria-describedby="webhook-url-hint"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+        />
+        <p id="webhook-url-hint" className="mt-xs text-on-surface-variant font-body-sm">
+          {t(presetMeta.urlHintKey)}
+        </p>
+      </div>
+
+      <div className="flex gap-sm pt-md">
+        <Button onClick={handleSave} disabled={saving}>
+          {saving ? t('settings.notifications.saving') : t('settings.notifications.save')}
+        </Button>
+        <Button variant="outline" onClick={handleClear} disabled={clearing}>
+          {clearing ? t('settings.notifications.clearing') : t('settings.notifications.clear')}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+export default function NotificationsSettings() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+
+  const [loading, setLoading] = useState(true)
+  const [selectedChannel, setSelectedChannel] = useState<ChannelType>(null)
+  const [inboundConfig, setInboundConfig] = useState<api.InboundConfigDto | null>(null)
+  const [status, setStatus] = useState<api.InboundListenerStatus | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api
+      .getInboundConfig()
+      .then((cfg) => {
+        if (cancelled) return
+        setInboundConfig(cfg)
+      })
+      .catch((e) => console.warn('getInboundConfig error:', e))
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    api
+      .getInboundListenerStatus()
+      .then((s) => {
+        if (!cancelled) setStatus(s)
+      })
+      .catch((e) => console.warn('getInboundListenerStatus error:', e))
+    const pollId = window.setInterval(() => {
+      api
+        .getInboundListenerStatus()
+        .then((s) => {
+          if (!cancelled) setStatus(s)
+        })
+        .catch((e) => console.warn('getInboundListenerStatus poll error:', e))
+    }, 30000)
+    return () => {
+      cancelled = true
+      window.clearInterval(pollId)
+    }
+  }, [])
+
+  const handleSaveInbound = async (dto: api.SlackInboundDto | api.TelegramInboundDto) => {
+    const config: api.InboundConfigDto = {
+      slack: 'bot_token' in dto ? dto as api.SlackInboundDto : inboundConfig?.slack || null,
+      telegram: 'allowed_chats' in dto ? dto as api.TelegramInboundDto : inboundConfig?.telegram || null,
+    }
+    await api.saveInboundConfig(config)
+    setInboundConfig(config)
+    const updated = await api.getInboundListenerStatus()
+    setStatus(updated)
+    setSelectedChannel(null)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
+        <span className="material-symbols-outlined text-[32px] text-primary animate-spin" aria-hidden="true">progress_activity</span>
+        <span className="sr-only">{t('settings.notifications.loading')}</span>
+      </div>
+    )
+  }
+
+  const channels = [
+    {
+      id: 'slack' as const,
+      name: 'Slack',
+      icon: 'tag',
+      configured: !!inboundConfig?.slack,
+      active: status?.slack_running || false,
+    },
+    {
+      id: 'telegram' as const,
+      name: 'Telegram',
+      icon: 'send',
+      configured: !!inboundConfig?.telegram,
+      active: status?.telegram_running || false,
+    },
+    {
+      id: 'email' as const,
+      name: 'Email',
+      icon: 'email',
+      configured: false,
+      active: false,
+    },
+  ]
+
+  type HealthState = 'connected' | 'inactive' | 'setup'
+  const healthFor = (c: (typeof channels)[number]): HealthState => {
+    if (!c.configured) return 'setup'
+    return c.active ? 'connected' : 'inactive'
+  }
+
   return (
     <div className="pb-xl">
       <div className="mb-xl">
@@ -130,133 +351,87 @@ export default function NotificationsSettings() {
         </p>
       </div>
 
-      <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
-        <div>
-          <label htmlFor="webhook-url" className="block font-label-lg text-on-surface mb-sm">
-            {t('settings.notifications.url')}
-          </label>
-          <input
-            id="webhook-url"
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://hooks.slack.com/services/..."
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
-          />
+      <WebhookSection />
+
+      <div className="mt-xl">
+        <div className="mb-lg">
+          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.inbound.title')}</h3>
+          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.inbound.subtitle')}</p>
         </div>
 
-        <div>
-          <label htmlFor="webhook-template" className="block font-label-lg text-on-surface mb-sm">
-            {t('settings.notifications.template')}
-          </label>
-          <select
-            id="webhook-template"
-            value={selectValue || 'raw'}
-            onChange={(e) => {
-              const v = e.target.value
-              if (v === 'custom') {
-                setTemplate('custom:')
-              } else {
-                setTemplate(v)
-              }
-            }}
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
-          >
-            {TEMPLATES.map((tpl) => (
-              <option key={tpl.value} value={tpl.value}>
-                {tpl.label}
-              </option>
+        {!selectedChannel ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
+            {channels.map((channel) => (
+              <button
+                key={channel.id}
+                onClick={() => setSelectedChannel(channel.id)}
+                className="p-md rounded-xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/50 transition-colors text-left"
+              >
+                <div className="flex items-center justify-between mb-sm">
+                  <div className="flex items-center gap-sm">
+                    <span className="material-symbols-outlined text-primary">{channel.icon}</span>
+                    <span className="font-label-md font-bold text-on-surface">{channel.name}</span>
+                  </div>
+                  {(() => {
+                    const health = healthFor(channel)
+                    if (health === 'connected') {
+                      return (
+                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-tertiary/20 text-tertiary font-label-sm" role="status">
+                          <span className="w-1 h-1 rounded-full bg-tertiary animate-pulse" aria-hidden="true" />
+                          {t('settings.notifications.wizard.channel.status.connected')}
+                        </span>
+                      )
+                    }
+                    if (health === 'inactive') {
+                      return (
+                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-error/15 text-error font-label-sm" role="status" title={t('settings.notifications.wizard.channel.status.inactive')}>
+                          <span className="material-symbols-outlined text-[12px]" aria-hidden="true">warning</span>
+                          {t('settings.notifications.wizard.channel.status.inactive')}
+                        </span>
+                      )
+                    }
+                    return null
+                  })()}
+                </div>
+                {channel.configured ? (
+                  <p className="text-on-surface-variant text-sm">
+                    {t('settings.notifications.wizard.channel.status.configured')}
+                  </p>
+                ) : (
+                  <p className="text-primary text-sm font-body-md">
+                    + {t('settings.notifications.wizard.channel.status.setup')}
+                  </p>
+                )}
+              </button>
             ))}
-            <option value="custom">
-              {t('settings.notifications.templateCustom')}
-            </option>
-          </select>
-        </div>
-
-        {isCustom(template) && (
-          <div>
-            <label htmlFor="webhook-custom" className="block font-label-lg text-on-surface mb-sm">
-              {t('settings.notifications.customBody')}
-            </label>
-            <textarea
-              id="webhook-custom"
-              value={customBody}
-              onChange={(e) => setCustomBody(e.target.value)}
-              placeholder={'{"text": "{title}: {body}"}'}
-              rows={3}
-              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary font-mono text-sm"
-            />
-            <p className="text-on-surface-variant text-xs mt-sm">
-              {t('settings.notifications.customBodyHint')}
-            </p>
           </div>
+        ) : (
+          <>
+            {selectedChannel === 'slack' && (
+              <SlackWizard
+                config={inboundConfig?.slack || null}
+                onSave={handleSaveInbound}
+                onCancel={() => setSelectedChannel(null)}
+              />
+            )}
+            {selectedChannel === 'telegram' && (
+              <TelegramWizard
+                config={inboundConfig?.telegram || null}
+                onSave={handleSaveInbound}
+                onCancel={() => setSelectedChannel(null)}
+              />
+            )}
+            {selectedChannel === 'email' && (
+              <EmailWizard
+                onSave={async () => {
+                  // Email not implemented in backend yet
+                  toast.info(t('settings.notifications.wizard.email.comingSoon'))
+                }}
+                onCancel={() => setSelectedChannel(null)}
+              />
+            )}
+          </>
         )}
-
-        <div>
-          <label htmlFor="webhook-secret" className="block font-label-lg text-on-surface mb-sm">
-            {t('settings.notifications.secret')}
-          </label>
-          <div className="flex gap-sm">
-            <input
-              id="webhook-secret"
-              type={showSecret ? 'text' : 'password'}
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
-              placeholder={t('settings.notifications.secretPlaceholder')}
-              className="flex-1 px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
-            />
-            <Button
-              variant="outline"
-              onClick={() => setShowSecret((s) => !s)}
-              aria-label={t('settings.notifications.toggleSecret')}
-            >
-              <span className="material-symbols-outlined">
-                {showSecret ? 'visibility_off' : 'visibility'}
-              </span>
-            </Button>
-          </div>
-          <p className="text-on-surface-variant text-xs mt-sm">
-            {t('settings.notifications.secretHint')}
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-          <div>
-            <label htmlFor="webhook-timeout" className="block font-label-lg text-on-surface mb-sm">
-              {t('settings.notifications.timeoutMs')}
-            </label>
-            <input
-              id="webhook-timeout"
-              type="number"
-              min={500}
-              step={500}
-              value={timeoutMs}
-              onChange={(e) => setTimeoutMs(Number(e.target.value) || 5000)}
-              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
-            />
-          </div>
-          <div className="flex items-end pb-sm">
-            <div className="flex items-center gap-md">
-              <Switch checked={includeBody} onCheckedChange={setIncludeBody} id="include-body" />
-              <label htmlFor="include-body" className="font-body-md text-on-surface cursor-pointer">
-                {t('settings.notifications.includeBody')}
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex gap-sm pt-md">
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? t('settings.notifications.saving') : t('settings.notifications.save')}
-          </Button>
-          <Button variant="outline" onClick={handleClear} disabled={clearing}>
-            {clearing ? t('settings.notifications.clearing') : t('settings.notifications.clear')}
-          </Button>
-        </div>
-
-        <p className="text-on-surface-variant text-xs pt-sm border-t border-outline-variant/30">
-          {t('settings.notifications.restartHint')}
-        </p>
       </div>
     </div>
   )

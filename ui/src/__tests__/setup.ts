@@ -16,6 +16,7 @@ vi.mock('@testing-library/react', async () => {
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue(undefined),
+  convertFileSrc: (path: string) => `asset://localhost/${path.replace(/^\//, '')}`,
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
@@ -92,10 +93,12 @@ vi.mock('@/lib/tauri-api', () => ({
   searchSessions: vi.fn().mockResolvedValue([]),
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
+  setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),
   deleteSession: vi.fn().mockResolvedValue(true),
   renameSession: vi.fn().mockResolvedValue(true),
   duplicateSession: vi.fn().mockResolvedValue({ id: 'dup-1', title: 'Copy', created_at: 0 }),
   exportSession: vi.fn().mockResolvedValue(''),
+  branchSession: vi.fn().mockResolvedValue({ id: 'branch-1', title: 'Branch', created_at: 0, message_count: 0 }),
   saveTextFile: vi.fn().mockResolvedValue(undefined),
   respondPermission: vi.fn().mockResolvedValue(undefined),
   getFileDiff: vi.fn().mockResolvedValue({ path: '', hunks: [] }),
@@ -117,6 +120,19 @@ vi.mock('@/lib/tauri-api', () => ({
   getBillingPlan: vi.fn().mockResolvedValue({ name: 'Free', price: 0, token_limit: 100000, features: ['Basic models', '5 sessions'] }),
   getCostHistory: vi.fn().mockResolvedValue([]),
   getBillingHistory: vi.fn().mockResolvedValue([]),
-  getFileContext: vi.fn().mockResolvedValue([]),
-  getTaskDetail: vi.fn().mockResolvedValue({ id: '1', title: 'Test', status: 'pending' }),
+  requestPermission: vi.fn().mockResolvedValue(true),
+  featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
+  sendNotification: vi.fn().mockResolvedValue(undefined),
+  getInboundConfig: vi.fn().mockResolvedValue({ slack: null, telegram: null }),
+  saveInboundConfig: vi.fn().mockResolvedValue(undefined),
+  clearInboundConfig: vi.fn().mockResolvedValue(undefined),
+  getInboundListenerStatus: vi.fn().mockResolvedValue({ slack_running: false, telegram_running: false }),
+  stopInboundListener: vi.fn().mockResolvedValue(undefined),
+  listPluginMarketplace: vi.fn().mockResolvedValue([]),
+  listCatalogUpstreams: vi.fn().mockResolvedValue([]),
+  installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
+  installAgentFromRepo: vi.fn().mockResolvedValue({ id: 'agent-1', name: 'Test Agent', install_path: '/path/to/agent' }),
+  listDataSourceCatalog: vi.fn().mockResolvedValue([]),
+  listInstalledDataSources: vi.fn().mockResolvedValue([]),
+  queryDataSource: vi.fn().mockResolvedValue({ items: [], total: 0, has_more: false }),
 }))
