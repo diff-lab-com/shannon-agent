@@ -300,6 +300,8 @@
   "palette.toast.switchFailed": "切换模型失败",
   "palette.footer.shortcuts": "↑↓ 选择  ↵ 确认  esc 关闭",
   "palette.footer.results": "{count, plural, other {{count, number} 条结果}}",
+  "tasks.steps.empty": "暂无步骤事件。",
+  "tasks.steps.retrying": "重试中（第 {attempt}/{max} 次）……",
   "tasks.tab.active": "进行中",
   "tasks.tab.history": "历史",
   "tasks.tab.worktrees": "工作树",
