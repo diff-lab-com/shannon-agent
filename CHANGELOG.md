@@ -43,6 +43,24 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
   flag flip, `latest.json` publishing). Without this, every Shannon
   Desktop release required users to manually download + reinstall.
 
+## [Unreleased — P0 iterations] — C1+C2+C3
+
+### Features
+
+- **Sidebar sessions: drag-and-drop reorder + search (C1+C2).** Sessions
+  section in the sidebar now supports drag-to-reorder (persisted to
+  localStorage) and fuzzy search by title. Visible limit raised from 5
+  to 8. Empty-state message when search returns nothing.
+  (`s2/p0-1-sessions-sidebar`)
+
+- **Worktree auto-cleanup on session delete (C3).** `delete_session`
+  now inspects the session's `working_dir`; if it lives under the
+  default worktree base (`.shannon/scheduled-worktrees/`), the worktree
+  is removed via `shannon_core::scheduled_worktree::remove`. Failures
+  are logged via `tracing::warn` but do not block session deletion —
+  orphan worktrees can be cleaned up via `prune_task_worktrees`.
+  (`s2/p0-2-worktree-session`)
+
 ## [Unreleased] — S2 P1.1 commands.rs split + follow-ups
 
 ### CI/CD (release pipeline — v0.3.6 betas)
