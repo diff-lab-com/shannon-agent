@@ -94,6 +94,7 @@ vi.mock('@/lib/tauri-api', () => ({
   loadSession: vi.fn().mockResolvedValue([]),
   switchSession: vi.fn().mockResolvedValue([]),
   setSessionWorkingDir: vi.fn().mockResolvedValue(undefined),
+  createSessionWorktree: vi.fn().mockResolvedValue({ task_id: 's-1', task_name: 'Session', path: '/tmp/wt', branch: 'wt-s-1' }),
   deleteSession: vi.fn().mockResolvedValue(true),
   renameSession: vi.fn().mockResolvedValue(true),
   duplicateSession: vi.fn().mockResolvedValue({ id: 'dup-1', title: 'Copy', created_at: 0 }),

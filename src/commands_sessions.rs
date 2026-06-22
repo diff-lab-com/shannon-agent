@@ -4,6 +4,7 @@
 //! cluster is the largest cohesive domain — new/list/search/load/export/
 //! switch/delete/rename/duplicate/branch + working_dir. StateManager-backed.
 
+use crate::scheduled_commands::TaskWorktreeDto;
 use crate::commands::{AppState, ChatMessage, SessionMeta, chrono_timestamp};
 use crate::{config, events, events::event_names};
 use tauri::Emitter;
@@ -479,7 +480,71 @@ pub async fn set_session_working_dir(
     Ok(())
 }
 
-/// Delete a session by ID.
+
+/// Create an isolated git worktree for a session and bind it as the session's
+/// working directory. Delegates to [`shannon_core::scheduled_worktree::create_for_task`]
+/// — the same helper used by scheduled tasks — so session and task worktrees
+/// live under the same base dir (`.shannon/scheduled-worktrees/` by default).
+///
+/// Safe to call repeatedly: if the worktree path already exists, the helper
+/// returns the existing descriptor instead of erroring.
+#[tauri::command]
+pub async fn create_session_worktree(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+    title: String,
+) -> Result<TaskWorktreeDto, String> {
+    let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+
+    // Verify session exists before creating worktree (avoid orphan worktrees)
+    {
+        let sessions = state.sessions.lock().await;
+        let exists = sessions.iter().any(|s| s.id == id);
+        if !exists {
+            return Err(format!("Session not found: {}", id));
+        }
+    }
+
+    let id_str = session_uuid.to_string();
+    let base = shannon_core::scheduled_worktree::default_base_dir();
+    let wt = shannon_core::scheduled_worktree::create_for_task(&id_str, &title, &base)
+        .map_err(|e| e.to_string())?;
+    let wt_path = wt.path.to_string_lossy().into_owned();
+
+    // Update session metadata to point at the worktree
+    {
+        let mut sessions = state.sessions.lock().await;
+        if let Some(meta) = sessions.iter_mut().find(|s| s.id == id_str) {
+            meta.working_dir = Some(wt_path.clone());
+        }
+    }
+
+    // If this is the current session, switch process cwd + desktop config
+    let current = state.current_session_id.lock().await.clone();
+    if current.as_deref() == Some(id.as_str()) {
+        let _ = std::env::set_current_dir(&wt_path);
+        let mut desktop_cfg = state.desktop_config.write().await;
+        desktop_cfg.working_dir = Some(wt_path.clone());
+        drop(desktop_cfg);
+        let desktop_cfg = state.desktop_config.read().await;
+        let _ = config::save_config(&desktop_cfg);
+        let _ = app_handle.emit(
+            event_names::CONFIG_UPDATED,
+            events::ConfigUpdatedPayload {
+                key: "working_dir".into(),
+                value: wt_path.clone(),
+            },
+        );
+    }
+
+    let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());
+    Ok(wt.into())
+}
+
+/// Delete a session by ID. If the session had a bound worktree (working_dir
+/// pointing inside the default worktree base), the worktree is removed too —
+/// best-effort, logs failures but does not block session deletion.
 #[tauri::command]
 pub async fn delete_session(
     state: tauri::State<'_, AppState>,
@@ -487,6 +552,15 @@ pub async fn delete_session(
     id: String,
 ) -> Result<bool, String> {
     let session_uuid = uuid::Uuid::parse_str(&id).map_err(|e| format!("Invalid UUID: {}", e))?;
+
+    // Capture working_dir before deleting so we can clean up worktree
+    let working_dir = {
+        let sessions = state.sessions.lock().await;
+        sessions
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.working_dir.clone())
+    };
 
     // Delete from StateManager
     let deleted = state
@@ -496,8 +570,28 @@ pub async fn delete_session(
 
     if deleted {
         // Remove from sessions list
-        let mut sessions = state.sessions.lock().await;
-        sessions.retain(|s| s.id != id);
+        {
+            let mut sessions = state.sessions.lock().await;
+            sessions.retain(|s| s.id != id);
+        }
+
+        // Best-effort worktree cleanup: if working_dir lives under the
+        // default worktree base dir, remove the worktree. Failures are
+        // logged but do not block session deletion — orphan worktrees can
+        // be cleaned up later via prune_task_worktrees.
+        if let Some(wd) = working_dir {
+            let base = shannon_core::scheduled_worktree::default_base_dir();
+            let wd_path = std::path::Path::new(&wd);
+            if wd_path.starts_with(&base) {
+                if let Err(e) = shannon_core::scheduled_worktree::remove(wd_path) {
+                    tracing::warn!(
+                        worktree = %wd,
+                        error = %e,
+                        "failed to remove worktree during session deletion;                          use prune_task_worktrees to clean up later"
+                    );
+                }
+            }
+        }
 
         // Emit sessions updated event
         let _ = app_handle.emit(event_names::SESSIONS_UPDATED, ());

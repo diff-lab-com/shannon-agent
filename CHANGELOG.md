@@ -2,6 +2,29 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — P0.2] — Per-session worktree
+
+### Features
+
+- **New session → worktree isolation.** A secondary "New in worktree" button
+  in the sidebar creates a new session and immediately provisions a git
+  worktree for it (via `shannon_core::scheduled_worktree::create_for_task`).
+  The worktree path becomes the session's `working_dir`, so all subsequent
+  agent actions in that session are isolated to its own checkout. Mirrors
+  Codex Desktop's flagship per-session isolation feature.
+
+### Added
+
+- `src/commands_sessions.rs::create_session_worktree` — new Tauri command
+  wrapping the existing `shannon_core::scheduled_worktree::create_for_task`
+  helper. Registered in `main.rs::invoke_handler!`.
+- `ui/src/lib/tauri-api.ts::createSessionWorktree` — typed wrapper.
+- `ui/src/context/AppContext.tsx::createSessionInWorktree` — orchestrates
+  newSession → createSessionWorktree → state refresh.
+- `ui/src/components/Sidebar.tsx` — ghost "New in worktree" button below
+  the primary "New chat" button.
+- `sidebar.worktree.new*` i18n keys (en + zh-CN).
+
 ## [Unreleased] — S2 P1.1 commands.rs split + follow-ups
 
 ### CI/CD (release pipeline — v0.3.6 betas)

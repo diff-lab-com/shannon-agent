@@ -165,7 +165,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   });
   const dragging = useRef(false);
   const location = useLocation();
-  const { status, createSession, sessions, currentSessionId, switchSession } = useApp();
+  const { status, createSession, sessions, currentSessionId, switchSession, createSessionInWorktree } = useApp();
   const intl = useIntl();
   const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
 
@@ -258,11 +258,21 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
       <Button
         aria-label={intl.formatMessage({ id: 'nav.newChat.aria' })}
-        className="mb-lg w-full py-3 px-4 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
+        className="mb-xs w-full py-3 px-4 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
         onClick={createSession}
       >
         <span className="material-symbols-outlined text-[20px]">add</span>
         <span>{intl.formatMessage({ id: 'nav.newChat' })}</span>
+      </Button>
+      <Button
+        variant="ghost"
+        aria-label={intl.formatMessage({ id: 'sidebar.worktree.new.aria' })}
+        title={intl.formatMessage({ id: 'sidebar.worktree.new.title' })}
+        className="mb-lg w-full py-2 px-3 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-label-md flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
+        onClick={createSessionInWorktree}
+      >
+        <span className="material-symbols-outlined text-[16px]">account_tree</span>
+        <span>{intl.formatMessage({ id: 'sidebar.worktree.new' })}</span>
       </Button>
 
       {sessions.length > 0 && (
