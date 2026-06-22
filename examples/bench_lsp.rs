@@ -35,12 +35,12 @@ async fn main() {
 
     match result {
         Ok(res) => {
-            println!("lsp_code_actions: {:?}", elapsed);
+            println!("lsp_code_actions: {elapsed:?}");
             println!("  actions: {}", res.actions.len());
         }
         Err(e) => {
-            println!("lsp_code_actions failed after {:?}", elapsed);
-            println!("  error: {}", e);
+            println!("lsp_code_actions failed after {elapsed:?}");
+            println!("  error: {e}");
         }
     }
 }

@@ -1372,7 +1372,7 @@
   "triage.delete.aria": "Delete item",
   "triage.delete.title": "Delete",
   "triage.toast.deleted": "Deleted {count} item",
-  "triage.title": "Inbox",
+  "triage.title": "Triage Queue",
   "triage.subtitle": "Inbox",
   "triage.sort.aria": "Toggle sort order",
   "triage.bulk.title": "Bulk actions",
@@ -1744,7 +1744,6 @@
   "extensions.hub.noDescription": "No description available.",
   "extensions.hub.triggerLabel": "Trigger: {trigger}",
   "extensions.hub.triggerFallback": "Trigger: {trigger}",
-  "triage.title": "Triage Queue",
   "triage.filterAll": "All",
   "triage.filterUnread": "Unread",
   "triage.markRead": "Mark Read",
@@ -1775,5 +1774,14 @@
   "settings.notifications.preset.urlHint.feishu": "Paste your Feishu bot webhook URL",
   "settings.notifications.preset.urlHint.dingtalk": "Paste your DingTalk robot webhook URL",
   "settings.notifications.preset.urlHint.wechat": "Paste your WeChat Work bot webhook key",
-  "settings.notifications.preset.urlHint.slack": "Paste your Slack incoming webhook URL"
+  "settings.notifications.preset.urlHint.slack": "Paste your Slack incoming webhook URL",
+  "sidebar.sessions.title": "Recent Sessions",
+  "sidebar.sessions.list.aria": "Recent chat sessions",
+  "sidebar.sessions.untitled": "Untitled session",
+  "sidebar.sessions.search.placeholder": "Search sessions…",
+  "sidebar.sessions.search.aria": "Search sessions",
+  "sidebar.sessions.noResults": "No matching sessions",
+  "sidebar.worktree.new": "New in worktree",
+  "sidebar.worktree.new.title": "Create a new session isolated in its own git worktree",
+  "sidebar.worktree.new.aria": "Create new session in worktree"
 }

@@ -33,7 +33,7 @@ impl DataSourceFetcher for GitHubFetcher {
 
         let mut request = client
             .get(&url)
-            .header("Authorization", format!("Bearer {}", token))
+            .header("Authorization", format!("Bearer {token}"))
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "shannon-desktop");
 
@@ -57,10 +57,7 @@ impl GitHubFetcher {
             // Query specific repository
             if query.is_empty() {
                 // List open issues
-                format!(
-                    "https://api.github.com/repos/{}/issues?state=open&per_page=50",
-                    default_repo
-                )
+                format!("https://api.github.com/repos/{default_repo}/issues?state=open&per_page=50")
             } else {
                 // Search within repository
                 format!(
@@ -135,12 +132,10 @@ impl GitHubFetcher {
                 401 | 403 => Err(DataSourceError::AuthError),
                 429 => Err(DataSourceError::RateLimited),
                 _ if status.is_server_error() => Err(DataSourceError::UpstreamError(format!(
-                    "GitHub returned {}",
-                    status
+                    "GitHub returned {status}"
                 ))),
                 _ => Err(DataSourceError::UpstreamError(format!(
-                    "GitHub returned {}",
-                    status
+                    "GitHub returned {status}"
                 ))),
             }
         }

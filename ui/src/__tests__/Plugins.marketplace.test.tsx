@@ -67,28 +67,27 @@ describe('Plugins (marketplace browser)', () => {
     await waitFor(() => expect(screen.getByText(/Failed to load catalog/i)).toBeInTheDocument())
   })
 
-  it('filters by kind when a kind chip is clicked', async () => {
+  it('filters by source when the Source dropdown changes', async () => {
     vi.mocked(api.listPluginMarketplace).mockResolvedValue([
-      entry({ id: 'a', kind: 'skill', name: 'Skill One' }),
-      entry({ id: 'b', kind: 'mcp', name: 'MCP One' }),
+      entry({ id: 'a', kind: 'skill', name: 'Skill One', source: { type: 'git_hub_repo', repo: 'a/b', ref_: 'main' } }),
+      entry({ id: 'b', kind: 'mcp', name: 'MCP One', source: { type: 'native' } }),
     ])
     renderPlugins()
     await waitFor(() => expect(screen.getByText('Skill One')).toBeInTheDocument())
-    const mcpChip = screen.getAllByText('MCP Servers').find((el) => el.closest('button') !== null)!
-    fireEvent.click(mcpChip)
+    const sourceSelect = screen.getByLabelText('Source')
+    fireEvent.change(sourceSelect, { target: { value: 'native' } })
     await waitFor(() => expect(screen.queryByText('Skill One')).not.toBeInTheDocument())
     expect(screen.getByText('MCP One')).toBeInTheDocument()
   })
 
-  it('groups rows under their kind heading', async () => {
+  it('renders cards of mixed kinds in the flat grid', async () => {
     vi.mocked(api.listPluginMarketplace).mockResolvedValue([
       entry({ id: 'a', kind: 'mcp', name: 'Mcp A' }),
       entry({ id: 'b', kind: 'skill', name: 'Skill B' }),
     ])
     renderPlugins()
     await waitFor(() => expect(screen.getByText('Mcp A')).toBeInTheDocument())
-    expect(screen.getAllByText('Skills').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('MCP Servers').length).toBeGreaterThan(0)
+    expect(screen.getByText('Skill B')).toBeInTheDocument()
   })
 
   it('renders the correct trust badge per level', async () => {

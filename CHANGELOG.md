@@ -2,6 +2,65 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — P0.2] — Per-session worktree
+
+### Features
+
+- **New session → worktree isolation.** A secondary "New in worktree" button
+  in the sidebar creates a new session and immediately provisions a git
+  worktree for it (via `shannon_core::scheduled_worktree::create_for_task`).
+  The worktree path becomes the session's `working_dir`, so all subsequent
+  agent actions in that session are isolated to its own checkout. Mirrors
+  Codex Desktop's flagship per-session isolation feature.
+
+### Added
+
+- `src/commands_sessions.rs::create_session_worktree` — new Tauri command
+  wrapping the existing `shannon_core::scheduled_worktree::create_for_task`
+  helper. Registered in `main.rs::invoke_handler!`.
+- `ui/src/lib/tauri-api.ts::createSessionWorktree` — typed wrapper.
+- `ui/src/context/AppContext.tsx::createSessionInWorktree` — orchestrates
+  newSession → createSessionWorktree → state refresh.
+- `ui/src/components/Sidebar.tsx` — ghost "New in worktree" button below
+  the primary "New chat" button.
+- `sidebar.worktree.new*` i18n keys (en + zh-CN).
+
+## [Unreleased — P0.3] — Auto-updater config
+
+### Features
+
+- **Tauri auto-updater configured.** `plugins.updater` in `tauri.conf.json`
+  now has an endpoint (`https://gitea.diff-lab.com/.../latest/latest.json`)
+  and a pubkey placeholder. `bundle.createUpdaterArtifacts` stays **false**
+  until an operator generates a real Ed25519 keypair and replaces the
+  placeholder — shipping with the placeholder would let the updater accept
+  any signature.
+
+### Docs
+
+- **`docs/updater-setup.md`** walks through the 5-step activation
+  (keypair generation, CI secret configuration, pubkey replacement,
+  flag flip, `latest.json` publishing). Without this, every Shannon
+  Desktop release required users to manually download + reinstall.
+
+## [Unreleased — P0 iterations] — C1+C2+C3
+
+### Features
+
+- **Sidebar sessions: drag-and-drop reorder + search (C1+C2).** Sessions
+  section in the sidebar now supports drag-to-reorder (persisted to
+  localStorage) and fuzzy search by title. Visible limit raised from 5
+  to 8. Empty-state message when search returns nothing.
+  (`s2/p0-1-sessions-sidebar`)
+
+- **Worktree auto-cleanup on session delete (C3).** `delete_session`
+  now inspects the session's `working_dir`; if it lives under the
+  default worktree base (`.shannon/scheduled-worktrees/`), the worktree
+  is removed via `shannon_core::scheduled_worktree::remove`. Failures
+  are logged via `tracing::warn` but do not block session deletion —
+  orphan worktrees can be cleaned up via `prune_task_worktrees`.
+  (`s2/p0-2-worktree-session`)
+
 ## [Unreleased — supply-chain-hardening]
 
 ### Security

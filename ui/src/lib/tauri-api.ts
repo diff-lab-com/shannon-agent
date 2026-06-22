@@ -191,6 +191,10 @@ export async function setSessionWorkingDir(id: string, path: string): Promise<vo
   await invoke('set_session_working_dir', { id, path })
 }
 
+export async function createSessionWorktree(id: string, title: string): Promise<TaskWorktreeDto> {
+  return invoke('create_session_worktree', { id, title })
+}
+
 export async function deleteSession(id: string): Promise<boolean> {
   return invoke('delete_session', { id })
 }

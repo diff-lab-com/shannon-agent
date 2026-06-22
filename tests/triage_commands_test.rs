@@ -10,7 +10,6 @@
 //! real `~/.shannon/triage.jsonl` file.
 
 use shannon_desktop::scheduled_commands::{TriageFilter, TriageItem, TriageStore};
-use tempfile::TempDir;
 
 /// Helper to seed test triage items.
 fn seed_triage_items(store: &TriageStore, count: usize) -> Vec<TriageItem> {
@@ -22,7 +21,7 @@ fn seed_triage_items(store: &TriageStore, count: usize) -> Vec<TriageItem> {
             "needs_review"
         };
         let item = store
-            .add(kind, &format!("Test triage item {}", i))
+            .add(kind, &format!("Test triage item {i}"))
             .expect("add triage item");
         items.push(item);
     }

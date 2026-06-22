@@ -64,7 +64,7 @@ struct TgUser {
 
 /// Build the API URL for a given method. Exposed so tests can verify shape.
 pub(crate) fn api_url(bot_token: &str, method: &str) -> String {
-    format!("https://api.telegram.org/bot{}/{}", bot_token, method)
+    format!("https://api.telegram.org/bot{bot_token}/{method}")
 }
 
 pub async fn run(app: AppHandle, cfg: TelegramConfig, shutdown: watch::Receiver<bool>) {
@@ -170,9 +170,9 @@ fn format_tg_user_name(user: &Option<TgUser>) -> String {
         return "unknown".into();
     };
     if let Some(un) = &u.username {
-        format!("@{}", un)
+        format!("@{un}")
     } else if let (Some(first), Some(last)) = (&u.first_name, &u.last_name) {
-        format!("{} {}", first, last)
+        format!("{first} {last}")
     } else if let Some(first) = &u.first_name {
         first.clone()
     } else {
@@ -185,11 +185,11 @@ fn format_tg_chat_name(chat: &TgChat) -> String {
         return t.clone();
     }
     if let Some(un) = &chat.username {
-        return format!("@{}", un);
+        return format!("@{un}");
     }
     if let Some(first) = &chat.first_name {
         if let Some(last) = &chat.last_name {
-            return format!("{} {}", first, last);
+            return format!("{first} {last}");
         }
         return first.clone();
     }

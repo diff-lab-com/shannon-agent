@@ -445,12 +445,12 @@ async fn run_diagnostics(req: FileDiagnosticsRequest) -> Result<FileDiagnosticsR
             message: d.message,
             severity: d
                 .severity
-                .map(|s| format!("{:?}", s).to_lowercase())
+                .map(|s| format!("{s:?}").to_lowercase())
                 .unwrap_or_else(|| "warning".to_string()),
             source: d.source,
-            code: d.code.and_then(|c| match c {
-                lsp_types::NumberOrString::Number(n) => Some(n.to_string()),
-                lsp_types::NumberOrString::String(s) => Some(s),
+            code: d.code.map(|c| match c {
+                lsp_types::NumberOrString::Number(n) => n.to_string(),
+                lsp_types::NumberOrString::String(s) => s,
             }),
         })
         .collect();

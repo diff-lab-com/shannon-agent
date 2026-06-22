@@ -552,10 +552,6 @@ mod tests {
         HOME_LOCK.get_or_init(|| Mutex::new(()))
     }
 
-    fn settings_path_in(dir: &std::path::Path) -> PathBuf {
-        dir.join(".shannon/settings.json")
-    }
-
     /// Override `dirs::home_dir` indirectly: we can't, but we can write
     /// directly via the public API once we know the path. For unit tests we
     /// exercise the underlying JSON manipulation by serializing in-memory.
@@ -676,6 +672,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn stdio_installer_writes_settings() {
         let dir = tempdir().unwrap();
         let _home_guard = home_lock().lock().unwrap();
@@ -815,6 +812,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn mcpb_installer_extracts_and_registers() {
         let dir = tempdir().unwrap();
         let _home_guard = home_lock().lock().unwrap();

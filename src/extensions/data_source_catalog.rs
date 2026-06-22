@@ -13,7 +13,7 @@
 //! 5. **GitHub Issues** — queries issues/PRs via the GitHub REST API.
 //! 6. **Jira** — queries issues via the Jira Cloud REST API.
 //! 7. **Slack** — queries Slack channels via the Web API (config-only; query
-//!       lands in a follow-up).
+//!    lands in a follow-up).
 //! 8. **Discord** — queries Discord channel history via the REST API (config-only).
 //! 9. **Telegram** — queries Telegram bot chats via the Bot API (config-only).
 //! 10. **RSS Feed** — fetches and parses any RSS/Atom feed.

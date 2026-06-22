@@ -6,7 +6,7 @@
 //! Run with: `cargo bench --bench load_tests`
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use shannon_desktop::commands::TaskInfo;
+use shannon_desktop::commands_tasks::TaskInfo;
 use shannon_desktop::scheduled_commands::compute_opc_metrics;
 
 fn synthetic_tasks(n: usize) -> Vec<TaskInfo> {

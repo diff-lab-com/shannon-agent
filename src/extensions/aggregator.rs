@@ -117,7 +117,7 @@ fn skills() -> Vec<InstalledAddonSummary> {
                 continue;
             }
             out.push(InstalledAddonSummary {
-                id: format!("skill:{}", name),
+                id: format!("skill:{name}"),
                 kind: AddonKind::Skill,
                 name,
                 install_path: Some(path.display().to_string()),
@@ -153,7 +153,7 @@ fn agents() -> Vec<InstalledAddonSummary> {
                 None => continue,
             };
             out.push(InstalledAddonSummary {
-                id: format!("agent:{}", name),
+                id: format!("agent:{name}"),
                 kind: AddonKind::Agent,
                 name,
                 install_path: Some(path.display().to_string()),

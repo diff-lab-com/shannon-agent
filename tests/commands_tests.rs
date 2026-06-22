@@ -63,6 +63,7 @@ struct ConfigUpdate {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct ProviderSwitchRequest {
     provider: String,
     api_key: Option<String>,
@@ -154,7 +155,7 @@ async fn send_message(state: &AppState, message: String) -> Result<SendMessageRe
         let mut messages = state.messages.lock().await;
         messages.push(ChatMessage {
             role: "assistant".into(),
-            content: format!("Simulated response for query {}", query_id),
+            content: format!("Simulated response for query {query_id}"),
             timestamp: chrono_timestamp(),
         });
     }
@@ -458,7 +459,7 @@ async fn load_session(state: &AppState, id: &str) -> Result<Vec<ChatMessage>, St
     sessions
         .iter()
         .find(|s| s.id == id)
-        .ok_or_else(|| format!("Session not found: {}", id))?;
+        .ok_or_else(|| format!("Session not found: {id}"))?;
     drop(sessions);
 
     let uuid = uuid::Uuid::parse_str(id).map_err(|e| e.to_string())?;
@@ -526,7 +527,7 @@ async fn delete_session(state: &AppState, id: &str) -> Result<bool, String> {
                 let path = std::path::PathBuf::from(home)
                     .join(".shannon")
                     .join("sessions")
-                    .join(format!("{}.json", uuid));
+                    .join(format!("{uuid}.json"));
                 let _ = std::fs::remove_file(&path);
             }
         }
@@ -596,7 +597,7 @@ async fn respond_permission(state: &AppState, request_id: &str, allow: bool) -> 
         let _ = tx.send(allow);
         Ok(())
     } else {
-        Err(format!("Permission request not found: {}", request_id))
+        Err(format!("Permission request not found: {request_id}"))
     }
 }
 
@@ -755,11 +756,10 @@ async fn list_models_all_have_valid_fields() {
     for provider in &["anthropic", "openai", "deepseek", "ollama"] {
         let models = list_models(provider);
         for m in &models {
-            assert!(!m.id.is_empty(), "model id empty for provider {}", provider);
+            assert!(!m.id.is_empty(), "model id empty for provider {provider}");
             assert!(
                 !m.name.is_empty(),
-                "model name empty for provider {}",
-                provider
+                "model name empty for provider {provider}"
             );
             assert_eq!(m.provider, *provider);
             assert!(m.context_window > 0, "context_window must be positive");
@@ -911,7 +911,7 @@ async fn list_tools_has_expected_names() {
     let tools = list_tools();
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
     for expected in &["bash", "read", "write", "edit", "grep", "glob"] {
-        assert!(names.contains(expected), "missing tool: {}", expected);
+        assert!(names.contains(expected), "missing tool: {expected}");
     }
 }
 
@@ -1650,8 +1650,7 @@ fn approval_mode_valid_modes() {
         assert!(!mode.is_empty(), "mode should not be empty");
         assert!(
             mode.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-            "mode '{}' should be lowercase_snake",
-            mode
+            "mode '{mode}' should be lowercase_snake"
         );
     }
 }
@@ -1699,7 +1698,7 @@ fn mcp_server_config_accepts_valid_names() {
             && name
                 .chars()
                 .all(|c| c.is_alphanumeric() || c == '-' || c == '_');
-        assert!(is_valid, "name '{}' should be valid", name);
+        assert!(is_valid, "name '{name}' should be valid");
     }
 }
 
@@ -1712,7 +1711,7 @@ fn mcp_server_config_rejects_special_chars() {
             && name
                 .chars()
                 .all(|c| c.is_alphanumeric() || c == '-' || c == '_');
-        assert!(!is_valid, "name '{}' should be rejected", name);
+        assert!(!is_valid, "name '{name}' should be rejected");
     }
 }
 
@@ -1733,7 +1732,7 @@ fn mcp_env_vars_type_check() {
 #[test]
 fn mcp_lifecycle_state_transitions() {
     // Simulated states
-    let states = vec!["Starting", "Healthy", "Unhealthy", "Stopped"];
+    let states = ["Starting", "Healthy", "Unhealthy", "Stopped"];
 
     // Starting → Healthy (normal flow)
     assert!(states.contains(&"Starting"));
@@ -1745,12 +1744,11 @@ fn mcp_lifecycle_state_transitions() {
     assert_ne!(healthy, after_stop);
 
     // Restart: Stopped → Starting → Healthy
-    let restart_sequence = vec!["Stopped", "Starting", "Healthy"];
+    let restart_sequence = ["Stopped", "Starting", "Healthy"];
     for (i, window) in restart_sequence.windows(2).enumerate() {
         assert_ne!(
             window[0], window[1],
-            "step {} should transition to different state",
-            i
+            "step {i} should transition to different state"
         );
     }
 }
@@ -1758,6 +1756,7 @@ fn mcp_lifecycle_state_transitions() {
 /// Validates that the tool_count field starts at 0 for new servers.
 #[test]
 fn mcp_new_server_zero_tools() {
+    #[allow(dead_code)]
     struct McpServerInfo {
         name: String,
         tool_count: usize,
@@ -1782,9 +1781,9 @@ fn export_markdown_format() {
     let role = "user";
     let content = "Hello, world!";
 
-    let mut md = format!("# {}\n\n", title);
+    let mut md = format!("# {title}\n\n");
     md.push_str("---\n\n");
-    md.push_str(&format!("### **{}**\n\n{}\n\n---\n\n", role, content));
+    md.push_str(&format!("### **{role}**\n\n{content}\n\n---\n\n"));
 
     assert!(md.starts_with("# Test Session"));
     assert!(md.contains("**user**"));
@@ -1838,7 +1837,7 @@ fn export_role_labels() {
             "user" => "**You**",
             "assistant" => "**Assistant**",
             "system" => "**System**",
-            other => &format!("**{}**", other),
+            other => &format!("**{other}**"),
         };
         assert_eq!(label, *expected_label);
     }
@@ -1970,7 +1969,7 @@ fn mcp_init_no_servers() {
 /// MCP init with disabled servers skips them.
 #[test]
 fn mcp_init_disabled_server_skipped() {
-    let configs = vec![
+    let configs = [
         serde_json::json!({"name": "active", "command": "npx", "args": [], "enabled": true}),
         serde_json::json!({"name": "inactive", "command": "npx", "args": [], "enabled": false}),
     ];
@@ -2036,7 +2035,7 @@ fn window_state_roundtrip() {
 /// Tray menu items are correctly structured.
 #[test]
 fn tray_menu_items() {
-    let items = vec![
+    let items = [
         serde_json::json!({"id": "show", "label": "Show Shannon"}),
         serde_json::json!({"id": "new-session", "label": "New Session"}),
         serde_json::json!({"id": "check-updates", "label": "Check for Updates"}),

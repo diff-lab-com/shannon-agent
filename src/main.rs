@@ -72,6 +72,7 @@ fn main() {
             commands_sessions::export_session,
             commands_sessions::switch_session,
             commands_sessions::set_session_working_dir,
+            commands_sessions::create_session_worktree,
             commands_sessions::delete_session,
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
@@ -211,7 +212,7 @@ fn main() {
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
             tauri::async_runtime::block_on(async move {
-                commands_notifications::bootstrap_inbound_listener(&*state_ref, &app_handle).await;
+                commands_notifications::bootstrap_inbound_listener(&state_ref, &app_handle).await;
             });
 
             // Bundle A — Click-to-foreground: when a Shannon notification is

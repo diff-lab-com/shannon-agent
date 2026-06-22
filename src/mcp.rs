@@ -44,24 +44,21 @@ impl McpManager {
                 env: server_config.env,
             };
 
-            match shannon_config {
-                ShannonMcpServerConfig::Stdio { command, args, env } => {
-                    info!(server = %name, command = %command, "Starting MCP server");
+            if let ShannonMcpServerConfig::Stdio { command, args, env } = shannon_config {
+                info!(server = %name, command = %command, "Starting MCP server");
 
-                    match self.pool.start_server(&name, &command, &args, &env).await {
-                        Ok(_) => {
-                            info!(server = %name, "MCP server started");
-                            servers_started.push(name.clone());
-                            // Discover actual tools from the server
-                            let tools = self.pool.refresh_tools_for_server(&name).await;
-                            total_tools += tools.len();
-                        }
-                        Err(e) => {
-                            error!(server = %name, error = %e, "Failed to start MCP server");
-                        }
+                match self.pool.start_server(&name, &command, &args, &env).await {
+                    Ok(_) => {
+                        info!(server = %name, "MCP server started");
+                        servers_started.push(name.clone());
+                        // Discover actual tools from the server
+                        let tools = self.pool.refresh_tools_for_server(&name).await;
+                        total_tools += tools.len();
+                    }
+                    Err(e) => {
+                        error!(server = %name, error = %e, "Failed to start MCP server");
                     }
                 }
-                _ => {}
             }
         }
 

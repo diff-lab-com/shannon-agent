@@ -437,6 +437,6 @@ include_attachments = "true"
         let config = parse_config_section(body);
         assert_eq!(config.get("vault_path").unwrap(), "/vault");
         assert_eq!(config.get("include_attachments").unwrap(), "true");
-        assert!(config.get("slug").is_none());
+        assert!(!config.contains_key("slug"));
     }
 }
