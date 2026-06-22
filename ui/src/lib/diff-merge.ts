@@ -10,7 +10,7 @@
 // keys stay stable across re-renders as long as the underlying diff doesn't
 // shift.
 
-import { diffLines, type Change } from 'diff'
+import { diffArrays, type Change } from 'diff'
 
 export type HunkDecision = 'accept' | 'reject' | 'pending'
 
@@ -42,30 +42,21 @@ interface RawLine {
   newLineNo: number | null
 }
 
-function changeToType(change: Change): DiffLineType {
+type ArrayChange = Change & { value: string[] }
+
+function changeToType(change: ArrayChange): DiffLineType {
   if (change.added) return 'added'
   if (change.removed) return 'removed'
   return 'context'
 }
 
-// The `diff` package returns multi-line `value` strings (with trailing \n).
-// Split into individual lines, dropping the trailing empty string from the
-// final newline so a 3-line Change has count=3 not 4.
-function splitLines(value: string): string[] {
-  if (value === '') return []
-  const lines = value.split('\n')
-  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-  return lines
-}
-
-function expandChanges(changes: Change[]): RawLine[] {
+function expandChanges(changes: ArrayChange[]): RawLine[] {
   const out: RawLine[] = []
   let oldNo = 1
   let newNo = 1
   for (const change of changes) {
     const type = changeToType(change)
-    const lines = splitLines(change.value)
-    for (const text of lines) {
+    for (const text of change.value) {
       let oldLineNo: number | null = null
       let newLineNo: number | null = null
       if (type === 'context') {
@@ -163,9 +154,22 @@ function groupHunks(lines: RawLine[]): Hunk[] {
 
 export function computeHunks(oldContent: string, newContent: string): Hunk[] {
   if (oldContent === newContent) return []
-  const changes = diffLines(oldContent, newContent)
+  // diffArrays on split lines gives correct line-level context matching,
+  // unlike diffLines which can over-group adjacent edits. The trailing \n
+  // (if present) becomes an empty trailing string after split; strip it
+  // so a 3-line file produces exactly 3 entries.
+  const oldLines = splitToLines(oldContent)
+  const newLines = splitToLines(newContent)
+  const changes = diffArrays(oldLines, newLines) as ArrayChange[]
   const lines = expandChanges(changes)
   return groupHunks(lines)
+}
+
+function splitToLines(content: string): string[] {
+  if (content === '') return []
+  const lines = content.split('\n')
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines
 }
 
 /**
@@ -185,13 +189,10 @@ export function mergeFile(
   decisions: Map<string, HunkDecision>,
 ): string {
   const hunks = computeHunks(oldContent, newContent)
-  const changes = diffLines(oldContent, newContent)
+  const oldLines = splitToLines(oldContent)
+  const newLines = splitToLines(newContent)
+  const changes = diffArrays(oldLines, newLines) as ArrayChange[]
   const lines = expandChanges(changes)
-  const hunkByFirstLine = new Map<number, Hunk>()
-  for (const h of hunks) {
-    // The first non-context line of a hunk marks its start in the flat line array.
-    hunkByFirstLine.set(h.lines[0].oldLineNo ?? -h.lines[0].newLineNo! - 1, h)
-  }
   // Walk `lines` linearly. When we cross from context → non-context, we've
   // entered a hunk; look up the decision and emit the chosen side.
   const out: string[] = []
@@ -203,7 +204,6 @@ export function mergeFile(
       i += 1
       continue
     }
-    // Entered a hunk — find its boundaries.
     const hunkStartIdx = i
     while (i < lines.length && lines[i].type !== 'context') {
       i += 1
@@ -230,5 +230,5 @@ export function mergeFile(
       // removed && accept → drop
     }
   }
-  return out.join('\n') + (out.length > 0 ? '\n' : '')
+  return out.length > 0 ? out.join('\n') + '\n' : ''
 }

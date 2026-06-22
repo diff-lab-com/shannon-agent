@@ -2,6 +2,59 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — P1.1 M1] — Diff review loop (single file)
+
+### Features
+
+- **Per-hunk accept/reject/undecided controls.** `DiffViewer` renders a
+  header pill above each hunk with the current decision (Undecided /
+  Accepted / Rejected). Clicking the header cycles the decision:
+  pending → accept → reject → pending. Accepted hunks get a tertiary
+  left-border accent; rejected hunks get an error accent. Background
+  shading on individual add/del lines mirrors the decision so the user
+  sees at a glance which changes will land on disk.
+  (`s2/p1.1-diff-review-m1` Day 3)
+
+- **Bulk controls: Accept all / Reject all / Reset.** The DiffDialog
+  review toolbar surfaces three bulk buttons plus a `decided / total`
+  counter so the user can see how many hunks still need attention.
+
+- **Apply flow (client-side merge → save_text_file).** `Apply {N}`
+  button in the dialog footer calls `mergeFile(old, new, decisions)`
+  (pure function in `lib/diff-merge.ts`) then writes the result via
+  the existing `save_text_file` Tauri command. Zero Rust changes —
+  the existing `apply_diff` command has different semantics (it only
+  blanks out rejected line ranges from the on-disk file) and would
+  have required a schema change. Toasts success/failure via `sonner`
+  and closes the modal on success.
+
+### Added
+
+- `ui/src/lib/diff-merge.ts::mergeFile` — pure function that walks
+  hunks and emits a merged file string per the decisions Map. Uses
+  `diffArrays` from the `diff` package for correct line-level context
+  matching (`diffLines` over-groups adjacent edits).
+- `ui/src/components/diff/DiffViewer.tsx` — controlled component
+  accepting `decisions: Map<string, HunkDecision>` and an optional
+  `onToggleHunk(id)` callback. Decision state is owned by the caller.
+- `ui/src/components/diff/DiffDialog.tsx` — owns decisions Map state,
+  wires bulk controls + Apply footer, toasts results via `sonner`.
+- 15 i18n keys (`diff.dialog.apply*`, `diff.review.*`) in en + zh-CN.
+
+### Tests
+
+- `ui/src/__tests__/diff-merge.test.ts` — 18 unit tests covering
+  identical content, replacement, pure insertion/deletion anchoring,
+  multi-hunk, mixed accept/reject, trailing-newline preservation,
+  stable content-addressed hunk ids.
+- `ui/src/__tests__/DiffViewer.test.tsx` — 12 tests including 7
+  Day-3 cases (default state pills, accepted/rejected rendering,
+  toggle callback, disabled state, multi-hunk).
+- `ui/src/__tests__/DiffDialog.test.tsx` — 10 tests including 5
+  Apply-flow cases (disabled-until-accepted, all-accept writes
+  new_content, all-reject stays disabled, save failure toasts + keeps
+  modal open, Cancel closes without saving).
+
 ## [Unreleased — P0.2] — Per-session worktree
 
 ### Features

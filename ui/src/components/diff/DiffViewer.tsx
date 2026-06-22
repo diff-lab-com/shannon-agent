@@ -1,87 +1,129 @@
-// Unified-diff renderer for FileDiff payloads from get_file_diff().
+// Unified-diff renderer with per-hunk accept/reject controls (P1.1 M1 Day 3).
 //
-// Computes a line-by-line LCS over old/new content (small N, no need
-// for a real diff library) and renders + / − / context rows with MD3
-// tokens. Deleted lines keep the old line number; added lines keep
-// the new line number; context lines show both.
+// Hunks come from the shared `computeHunks` pure function (lib/diff-merge.ts),
+// so the merge logic that runs on Apply is consistent with what the user
+// reviewed here. The component is controlled — caller owns `decisions` state
+// and supplies an `onToggleHunk(id)` callback. Clicking the hunk header row
+// cycles the decision: pending → accept → reject → pending.
 //
 // The viewer is presentational — fetch + apply lives in the caller.
 
-import { useMemo } from 'react'
+import { Fragment, useMemo } from 'react'
+import { useIntl } from 'react-intl'
 import type { FileDiff } from '@/types'
+import { computeHunks, type HunkDecision } from '@/lib/diff-merge'
 
 interface DiffViewerProps {
   diff: FileDiff
+  /** Hunk id → decision. Hunks absent from the map are treated as pending. */
+  decisions: Map<string, HunkDecision>
+  onToggleHunk?: (hunkId: string) => void
   className?: string
 }
 
 type LineKind = 'context' | 'add' | 'del'
 
-interface DiffLine {
+interface FlatLine {
   kind: LineKind
-  oldNo?: number
-  newNo?: number
+  oldNo: number | null
+  newNo: number | null
   text: string
+  /** Hunk id this line belongs to (null for context lines outside any hunk). */
+  hunkId: string | null
 }
 
-function computeLines(oldStr: string, newStr: string): DiffLine[] {
-  const a = oldStr.split('\n')
-  const b = newStr.split('\n')
-  const m = a.length
-  const n = b.length
+const KIND_STYLES: Record<LineKind, { sign: string; signColor: string }> = {
+  context: { sign: ' ', signColor: 'text-outline' },
+  add: { sign: '+', signColor: 'text-tertiary' },
+  del: { sign: '−', signColor: 'text-error' },
+}
 
-  // LCS DP table. For files under a few thousand lines this is fine.
-  // For huge files we'd want Myers, but the desktop preview pane isn't
-  // expected to handle multi-MB sources.
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+/**
+ * Flatten computeHunks output into a single line array for table rendering.
+ * Each line is tagged with its owning hunk id (or null) so the row can pick
+ * up the decision color from the surrounding hunk.
+ */
+function flattenHunks(hunks: ReturnType<typeof computeHunks>): FlatLine[] {
+  const out: FlatLine[] = []
+  let lastCtxOldNo = 0
+  let lastCtxNewNo = 0
+  for (const h of hunks) {
+    for (const line of h.lines) {
+      const kind: LineKind = line.type === 'added' ? 'add' : line.type === 'removed' ? 'del' : 'context'
+      out.push({
+        kind,
+        oldNo: line.oldLineNo,
+        newNo: line.newLineNo,
+        text: line.text,
+        hunkId: h.id,
+      })
+      if (kind === 'context') {
+        if (line.oldLineNo !== null) lastCtxOldNo = line.oldLineNo
+        if (line.newLineNo !== null) lastCtxNewNo = line.newLineNo
+      }
     }
   }
+  // Note: lastCtxOldNo / lastCtxNewNo aren't used right now — kept for a
+  // future "context collapse" affordance that shows 3 lines around each
+  // hunk instead of the whole file.
+  void lastCtxOldNo
+  void lastCtxNewNo
+  return out
+}
 
-  const out: DiffLine[] = []
-  let i = 0
-  let j = 0
-  while (i < m && j < n) {
-    if (a[i] === b[j]) {
-      out.push({ kind: 'context', oldNo: i + 1, newNo: j + 1, text: a[i] })
-      i++
-      j++
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      out.push({ kind: 'del', oldNo: i + 1, text: a[i] })
-      i++
-    } else {
-      out.push({ kind: 'add', newNo: j + 1, text: b[j] })
-      j++
-    }
-  }
-  while (i < m) {
-    out.push({ kind: 'del', oldNo: i + 1, text: a[i] })
-    i++
-  }
-  while (j < n) {
-    out.push({ kind: 'add', newNo: j + 1, text: b[j] })
-    j++
+/**
+ * Compute the insertion point (flat array index) where each hunk header
+ * should render — always directly above the hunk's first line.
+ */
+function hunkHeaderIndices(lines: FlatLine[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (let i = 0; i < lines.length; i++) {
+    const id = lines[i].hunkId
+    if (id !== null && !out.has(id)) out.set(id, i)
   }
   return out
 }
 
-const KIND_STYLES: Record<LineKind, { bg: string; sign: string; signColor: string; textColor: string }> = {
-  context: { bg: 'bg-surface-container-lowest', sign: ' ', signColor: 'text-outline', textColor: 'text-on-surface' },
-  add: { bg: 'bg-tertiary-container/30', sign: '+', signColor: 'text-tertiary', textColor: 'text-on-surface' },
-  del: { bg: 'bg-error-container/30', sign: '−', signColor: 'text-error', textColor: 'text-on-surface' },
+function decisionBorderStyle(decision: HunkDecision): string {
+  switch (decision) {
+    case 'accept': return 'border-l-4 border-l-tertiary'
+    case 'reject': return 'border-l-4 border-l-error'
+    default: return 'border-l-4 border-l-transparent'
+  }
 }
 
-export default function DiffViewer({ diff, className }: DiffViewerProps) {
-  const lines = useMemo(() => computeLines(diff.old_content, diff.new_content), [diff.old_content, diff.new_content])
-  const adds = lines.filter(l => l.kind === 'add').length
-  const dels = lines.filter(l => l.kind === 'del').length
+function decisionHeaderStyle(decision: HunkDecision): string {
+  switch (decision) {
+    case 'accept': return 'bg-tertiary-container/40 text-tertiary'
+    case 'reject': return 'bg-error-container/40 text-error'
+    default: return 'bg-surface-container-low text-on-surface-variant'
+  }
+}
+
+export default function DiffViewer({ diff, decisions, onToggleHunk, className }: DiffViewerProps) {
+  const intl = useIntl()
+  const hunks = useMemo(
+    () => computeHunks(diff.old_content, diff.new_content),
+    [diff.old_content, diff.new_content],
+  )
+  const lines = useMemo(() => flattenHunks(hunks), [hunks])
+  const headerIndices = useMemo(() => hunkHeaderIndices(lines), [lines])
+
+  const addCount = lines.filter(l => l.kind === 'add').length
+  const delCount = lines.filter(l => l.kind === 'del').length
 
   const gutterWidth = Math.max(
     String(Math.max(...lines.map(l => l.oldNo ?? 0), 1)).length,
     String(Math.max(...lines.map(l => l.newNo ?? 0), 1)).length,
   )
+
+  const stateLabel = (d: HunkDecision): string => {
+    switch (d) {
+      case 'accept': return intl.formatMessage({ id: 'diff.review.state.accept' })
+      case 'reject': return intl.formatMessage({ id: 'diff.review.state.reject' })
+      default: return intl.formatMessage({ id: 'diff.review.state.pending' })
+    }
+  }
 
   return (
     <div className={`rounded-xl border border-outline-variant/30 overflow-hidden bg-surface-container-lowest ${className ?? ''}`}>
@@ -94,29 +136,64 @@ export default function DiffViewer({ diff, className }: DiffViewerProps) {
           ) : null}
         </div>
         <div className="flex items-center gap-md shrink-0">
-          <span className="font-label-sm text-tertiary">+{adds}</span>
-          <span className="font-label-sm text-error">−{dels}</span>
+          <span className="font-label-sm text-tertiary">+{addCount}</span>
+          <span className="font-label-sm text-error">−{delCount}</span>
         </div>
       </header>
       <div className="overflow-x-auto font-mono text-[12px] leading-[1.5]">
-        {adds === 0 && dels === 0 ? (
+        {hunks.length === 0 ? (
           <p className="px-md py-lg text-body-sm text-on-surface-variant italic">No changes.</p>
         ) : (
           <table className="w-full border-collapse">
             <tbody>
               {lines.map((line, idx) => {
                 const style = KIND_STYLES[line.kind]
+                const decision = line.hunkId !== null ? (decisions.get(line.hunkId) ?? 'pending') : 'pending'
+                const bgClass = line.kind === 'add'
+                  ? (decision === 'reject' ? 'bg-surface-container-lowest' : 'bg-tertiary-container/30')
+                  : line.kind === 'del'
+                    ? (decision === 'accept' ? 'bg-surface-container-lowest opacity-40' : 'bg-error-container/30')
+                    : 'bg-surface-container-lowest'
+                const headerIdx = line.hunkId !== null ? headerIndices.get(line.hunkId) : undefined
+                const renderHeader = headerIdx === idx
+                const hunkId = line.hunkId
                 return (
-                  <tr key={idx} className={style.bg}>
-                    <td className={`w-[1ch] px-xs text-center select-none ${style.signColor}`}>{style.sign}</td>
-                    <td className="px-xs text-right text-outline select-none" style={{ width: `${gutterWidth + 1}ch` }}>
-                      {line.oldNo ?? ''}
-                    </td>
-                    <td className="px-xs text-right text-outline select-none border-r border-outline-variant/20" style={{ width: `${gutterWidth + 1}ch` }}>
-                      {line.newNo ?? ''}
-                    </td>
-                    <td className={`px-md whitespace-pre ${style.textColor}`}>{line.text || ' '}</td>
-                  </tr>
+                  <Fragment key={idx}>
+                    {renderHeader && hunkId !== null && (
+                      <tr className={decisionHeaderStyle(decision)}>
+                        <td colSpan={4} className="px-md py-xs">
+                          <button
+                            type="button"
+                            onClick={() => onToggleHunk?.(hunkId)}
+                            disabled={!onToggleHunk}
+                            className="flex items-center gap-sm w-full text-left cursor-pointer disabled:cursor-default focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary rounded"
+                            aria-label={intl.formatMessage(
+                              { id: 'diff.review.hunk.aria' },
+                              { state: stateLabel(decision) },
+                            )}
+                          >
+                            <span className="material-symbols-outlined text-[16px]">
+                              {decision === 'accept' ? 'check_circle' : decision === 'reject' ? 'cancel' : 'radio_button_unchecked'}
+                            </span>
+                            <span className="font-label-sm uppercase tracking-wider">{stateLabel(decision)}</span>
+                            <span className="font-label-sm opacity-60 ml-auto">
+                              {hunks.find(h => h.id === hunkId)?.lines.length ?? 0} lines
+                            </span>
+                          </button>
+                        </td>
+                      </tr>
+                    )}
+                    <tr className={`${bgClass} ${line.hunkId !== null ? decisionBorderStyle(decision) : ''}`}>
+                      <td className={`w-[1ch] px-xs text-center select-none ${style.signColor}`}>{style.sign}</td>
+                      <td className="px-xs text-right text-outline select-none" style={{ width: `${gutterWidth + 1}ch` }}>
+                        {line.oldNo ?? ''}
+                      </td>
+                      <td className="px-xs text-right text-outline select-none border-r border-outline-variant/20" style={{ width: `${gutterWidth + 1}ch` }}>
+                        {line.newNo ?? ''}
+                      </td>
+                      <td className="px-md whitespace-pre text-on-surface">{line.text || ' '}</td>
+                    </tr>
+                  </Fragment>
                 )
               })}
             </tbody>
