@@ -425,6 +425,142 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<DesktopConf
     Ok(display)
 }
 
+/// Result of scanning the process environment for a pre-configured provider.
+///
+/// The Welcome wizard uses this on mount to pre-select a provider + skip the
+/// API key entry step when the user already has `ANTHROPIC_API_KEY` etc. set
+/// in their shell.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetectedProvider {
+    pub provider: String,
+    pub has_api_key: bool,
+}
+
+/// Scan env vars for a known provider API key. First match wins — the order
+/// mirrors the Welcome wizard's recommended-provider ranking.
+///
+/// Returns `None` if no provider env var is set. Ollama is handled separately
+/// (no API key; detected via `OLLAMA_HOST` or default `localhost:11434`).
+#[tauri::command]
+pub fn detect_provider_from_env() -> Option<DetectedProvider> {
+    let candidates: &[(&str, &str)] = &[
+        ("ANTHROPIC_API_KEY", "anthropic"),
+        ("OPENAI_API_KEY", "openai"),
+        ("DEEPSEEK_API_KEY", "deepseek"),
+    ];
+    for (env_var, provider) in candidates {
+        if let Ok(val) = std::env::var(env_var) {
+            if !val.trim().is_empty() {
+                return Some(DetectedProvider {
+                    provider: (*provider).into(),
+                    has_api_key: true,
+                });
+            }
+        }
+    }
+    if std::env::var("OLLAMA_HOST").is_ok() {
+        return Some(DetectedProvider {
+            provider: "ollama".into(),
+            has_api_key: false,
+        });
+    }
+    None
+}
+
+/// Categorized connection test result for the Welcome "Test connection" button.
+///
+/// The frontend maps each variant to a specific toast message so the user
+/// knows whether their key is invalid, the network is down, or the provider
+/// is having an outage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum TestConnectionResult {
+    Success,
+    InvalidKey,
+    RateLimited,
+    ProviderError { status: u16 },
+    NetworkUnreachable,
+    Unknown { message: String },
+}
+
+/// Ping a provider's "list models" endpoint to verify the API key works.
+///
+/// Each provider has a cheap GET endpoint that requires auth — we use it as
+/// a liveness check. 200 → Success, 401/403 → InvalidKey, 429 → RateLimited,
+/// 5xx → ProviderError, network failure → NetworkUnreachable, everything
+/// else → Unknown.
+#[tauri::command]
+pub async fn test_provider_connection(
+    provider: String,
+    api_key: String,
+) -> Result<TestConnectionResult, String> {
+    let (url, auth_header) = match provider.as_str() {
+        "anthropic" => (
+            "https://api.anthropic.com/v1/models?limit=1".to_string(),
+            format!("x-api-key: {api_key}"),
+        ),
+        "openai" => (
+            "https://api.openai.com/v1/models".to_string(),
+            format!("Authorization: Bearer {api_key}"),
+        ),
+        "deepseek" => (
+            "https://api.deepseek.com/models".to_string(),
+            format!("Authorization: Bearer {api_key}"),
+        ),
+        "ollama" => {
+            // Ollama doesn't need auth; just ping the tags endpoint.
+            let host = std::env::var("OLLAMA_HOST")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string());
+            return ping_provider(&format!("{}/api/tags", host.trim_end_matches('/')), None)
+                .await
+                .map_err(|e| e.to_string());
+        }
+        other => return Err(format!("unknown provider: {other}")),
+    };
+    ping_provider(&url, Some(&auth_header))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn ping_provider(
+    url: &str,
+    auth_header: Option<&str>,
+) -> Result<TestConnectionResult, Box<dyn std::error::Error + Send + Sync>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let mut req = client.get(url);
+    if let Some(auth) = auth_header {
+        let (name, value) = auth
+            .split_once(": ")
+            .ok_or_else(|| "malformed auth header".to_string())?;
+        req = req.header(name, value);
+    }
+    if auth_header.is_some() && auth_header.unwrap().starts_with("x-api-key:") {
+        req = req.header("anthropic-version", "2023-06-01");
+    }
+    let resp = req.send().await.map_err(|e| {
+        if e.is_connect() || e.is_timeout() {
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::NetworkUnreachable,
+                e.to_string(),
+            )) as Box<dyn std::error::Error + Send + Sync>
+        } else {
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        }
+    })?;
+    let status = resp.status().as_u16();
+    Ok(match status {
+        200..=299 => TestConnectionResult::Success,
+        401 | 403 => TestConnectionResult::InvalidKey,
+        429 => TestConnectionResult::RateLimited,
+        500..=599 => TestConnectionResult::ProviderError { status },
+        _ => TestConnectionResult::Unknown {
+            message: format!("HTTP {status}"),
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

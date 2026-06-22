@@ -65,6 +65,8 @@ fn main() {
             commands_config::configure,
             commands_config::switch_provider,
             commands_config::get_config,
+            commands_config::detect_provider_from_env,
+            commands_config::test_provider_connection,
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,
