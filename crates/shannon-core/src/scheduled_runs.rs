@@ -219,6 +219,14 @@ impl ScheduledRunsStore {
         Ok(runs)
     }
 
+    /// List the most recent runs across all tasks, newest first.
+    pub fn list_recent(&self, limit: usize) -> Result<Vec<ScheduledRun>, RunsStoreError> {
+        let mut runs = self.iter_all()?;
+        runs.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+        runs.truncate(limit);
+        Ok(runs)
+    }
+
     /// Prune entries older than `rolling_days`. Returns count pruned.
     ///
     /// Pruning is in-place: the file is rewritten with only entries inside
