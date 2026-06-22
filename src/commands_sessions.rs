@@ -4,7 +4,7 @@
 //! cluster is the largest cohesive domain — new/list/search/load/export/
 //! switch/delete/rename/duplicate/branch + working_dir. StateManager-backed.
 
-use crate::commands::{chrono_timestamp, AppState, ChatMessage, SessionMeta};
+use crate::commands::{AppState, ChatMessage, SessionMeta, chrono_timestamp};
 use crate::{config, events, events::event_names};
 use tauri::Emitter;
 

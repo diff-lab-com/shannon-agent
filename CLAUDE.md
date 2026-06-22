@@ -36,6 +36,21 @@ pnpm test:coverage             # vitest with v8 coverage
 pnpm test:e2e                  # playwright (ui/playwright.config.ts)
 ```
 
+### Local checks (pre-push hook)
+
+`scripts/hooks/pre-push` runs `scripts/local-check.sh` (fmt + clippy +
+test + deny + UI lint + vitest) before any push to `main` or `dev`. CI is
+UI-only because the Gitea runner can't reach github.com, so the local
+hook is the Rust gate.
+
+One-time setup per clone:
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+Bypass for a single push (e.g. WIP branch): `git push --no-verify`.
+
 ### Critical: the sibling-checkout patch
 
 `Cargo.toml` has a `[patch."ssh://git@github.com/shannon-agent/shannon-code.git"]`

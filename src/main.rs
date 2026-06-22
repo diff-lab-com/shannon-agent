@@ -9,8 +9,8 @@ fn main() {
     use shannon_desktop::commands;
     use shannon_desktop::commands_agents;
     use shannon_desktop::commands_billing;
-    use shannon_desktop::commands_config;
     use shannon_desktop::commands_chat;
+    use shannon_desktop::commands_config;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_notifications;
@@ -353,12 +353,15 @@ fn main() {
             // emit `config-updated`, so we listen for that event and rebuild
             // the menu on change. Replaces the prior 2-second polling loop.
             let refresh_handle = app.handle().clone();
-            let _ = app.listen(shannon_desktop::events::event_names::CONFIG_UPDATED, move |_| {
-                let label = tray_status_label(&shannon_desktop::config::load_config());
-                if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
-                    tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
-                }
-            });
+            let _ = app.listen(
+                shannon_desktop::events::event_names::CONFIG_UPDATED,
+                move |_| {
+                    let label = tray_status_label(&shannon_desktop::config::load_config());
+                    if let Err(e) = rebuild_tray_menu(&refresh_handle, &label) {
+                        tracing::warn!(error = %e, "tray refresh: failed to rebuild menu");
+                    }
+                },
+            );
 
             // Auto-update check on startup
             let handle = app.handle().clone();

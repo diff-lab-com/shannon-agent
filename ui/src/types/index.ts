@@ -433,16 +433,6 @@ export interface BillingHistory {
   status: 'paid' | 'pending' | 'failed'
 }
 
-// --- Context Types ---
-
-export interface FileContext {
-  path: string
-  name: string
-  language: string
-  lines: number
-  relevant_lines?: { start: number; end: number }[]
-}
-
 // --- Scheduled Tasks (Sprint 2) ---
 //
 // Field names mirror Rust structs in shannon-desktop/src/scheduled_commands.rs

@@ -162,11 +162,22 @@ pub(crate) fn fallback_marketplace_catalog() -> Vec<crate::extensions::CatalogEn
     /// Heuristic field set so the install dialog can route to the
     /// marketplace-bundle installer. Repos below all publish a
     /// `.claude-plugin/marketplace.json` at their root.
-    fn bundle(name: &str, description: &str, repo: &str, trust: TrustLevel, stars: u64, tags: &[&str], now: chrono::DateTime<chrono::Utc>) -> CatalogEntry {
+    fn bundle(
+        name: &str,
+        description: &str,
+        repo: &str,
+        trust: TrustLevel,
+        stars: u64,
+        tags: &[&str],
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> CatalogEntry {
         let mut metadata = HashMap::new();
-        metadata.insert("marketplace_manifest".to_string(), serde_json::json!(format!(
-            "https://github.com/{repo}/raw/main/.claude-plugin/marketplace.json"
-        )));
+        metadata.insert(
+            "marketplace_manifest".to_string(),
+            serde_json::json!(format!(
+                "https://github.com/{repo}/raw/main/.claude-plugin/marketplace.json"
+            )),
+        );
         CatalogEntry {
             id: format!("plugin-bundle:{repo}"),
             kind: AddonKind::Plugin,
@@ -178,7 +189,10 @@ pub(crate) fn fallback_marketplace_catalog() -> Vec<crate::extensions::CatalogEn
             license: Some("Apache-2.0".into()),
             stars: Some(stars),
             last_updated: Some(now),
-            source: CatalogSource::GitHubRepo { repo: repo.into(), ref_: Some("main".into()) },
+            source: CatalogSource::GitHubRepo {
+                repo: repo.into(),
+                ref_: Some("main".into()),
+            },
             trust,
             metadata,
             tags: tags.iter().map(|s| s.to_string()).collect(),

@@ -9,9 +9,7 @@
 //! `pub use crate::commands_chat::*;` in `commands.rs`, so the invoke_handler
 //! list in `main.rs` does not change.
 
-use crate::commands::{
-    AppState, ChatMessage, ModelInfo, StatusResponse, ToolInfo,
-};
+use crate::commands::{AppState, ChatMessage, ModelInfo, StatusResponse, ToolInfo};
 
 /// Get all conversation messages.
 #[tauri::command]

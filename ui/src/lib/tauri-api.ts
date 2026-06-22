@@ -125,6 +125,18 @@ export async function stopInboundListener(): Promise<void> {
   await invoke('stop_inbound_listener')
 }
 
+export type NotificationLevel = 'info' | 'warning' | 'error' | 'success'
+
+export interface NotificationPayload {
+  title: string
+  body: string
+  level?: NotificationLevel
+}
+
+export async function sendNotification(payload: NotificationPayload): Promise<void> {
+  await invoke('send_notification', { payload })
+}
+
 export interface InboundMessage {
   provider: 'slack' | 'telegram'
   source_id: string
@@ -206,6 +218,10 @@ export async function saveTextFile(path: string, content: string): Promise<void>
 }
 
 // --- Permissions ---
+
+export async function requestPermission(tool: string, input: unknown, risk: string): Promise<boolean> {
+  return invoke('request_permission', { tool, input, risk })
+}
 
 export async function respondPermission(requestId: string, allow: boolean, note?: string): Promise<void> {
   await invoke('respond_permission', { requestId, allow, note: note ?? null })
@@ -329,6 +345,10 @@ export interface StdioMcpSpecPayload {
 
 export async function listFeaturedVendors(): Promise<FeaturedVendor[]> {
   return invoke('list_featured_vendors')
+}
+
+export async function featuredVendorToEntry(slug: string): Promise<CatalogEntry> {
+  return invoke('featured_vendor_to_entry', { slug })
 }
 
 export async function listMcpRegistryServers(): Promise<RegistryServer[]> {
@@ -793,18 +813,6 @@ export async function getCostHistory(days: number): Promise<import('@/types').Co
 
 export async function getBillingHistory(): Promise<import('@/types').BillingHistory[]> {
   return invoke('get_billing_history')
-}
-
-// --- File Context ---
-
-export async function getFileContext(): Promise<import('@/types').FileContext[]> {
-  return invoke('get_file_context')
-}
-
-// --- Task Detail ---
-
-export async function getTaskDetail(id: string): Promise<TaskItem> {
-  return invoke('get_task_detail', { id })
 }
 
 // --- Scheduled Tasks (Sprint 2) ---

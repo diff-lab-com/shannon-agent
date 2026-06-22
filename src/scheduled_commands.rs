@@ -771,18 +771,10 @@ pub async fn list_task_executions(
             .scheduled_runs_store()
             .list_by_task(id, cap)
             .map_err(|e| e.to_string())?,
-        _ => {
-            let mut all = state
-                .scheduled_runs_store()
-                .list_by_time_range(
-                    chrono::Utc::now() - chrono::Duration::days(365 * 50),
-                    chrono::Utc::now() + chrono::Duration::days(1),
-                )
-                .map_err(|e| e.to_string())?;
-            all.sort_by(|a, b| b.started_at.cmp(&a.started_at));
-            all.truncate(cap);
-            all
-        }
+        _ => state
+            .scheduled_runs_store()
+            .list_recent(cap)
+            .map_err(|e| e.to_string())?,
     };
     Ok(runs.iter().map(run_to_execution).collect())
 }
