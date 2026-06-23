@@ -488,6 +488,11 @@ pub async fn send_message(
         let stream = engine.process_query(context, None).await;
         let mut final_content = String::new();
 
+        let query_start = std::time::Instant::now();
+        let mut tool_call_count: usize = 0;
+        let mut tool_names_used: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;
         let mut pin_stream = std::pin::pin!(stream);
@@ -522,6 +527,8 @@ pub async fn send_message(
                         tool_input,
                         ..
                     } => {
+                        tool_call_count += 1;
+                        tool_names_used.insert(tool_name.clone());
                         let _ = app.emit(
                             event_names::QUERY_TOOL_START,
                             events::ToolStartPayload {
@@ -653,30 +660,26 @@ pub async fn send_message(
                         // Skill loop evaluation hook (spawned, non-blocking)
                         let app_clone = app.clone();
                         let user_prompt = message_for_skill_loop.clone();
+                        let elapsed_secs = query_start.elapsed().as_secs();
+                        let task_tool_call_count = tool_call_count;
+                        let task_tool_names_used = tool_names_used.clone();
                         tokio::spawn(async move {
                             use tauri::Manager;
                             let cfg = crate::config::load_config();
                             if cfg.skill_loop_enabled {
                                 if cfg.skill_loop_enabled {
-                                    // TODO: Collect actual tool_calls_count and tool_names_used from query stream
-                                    // For now, using placeholder values as per task instructions
-                                    let tool_calls_count = 0;
-                                    let tool_names_used = Vec::<String>::new();
-
-                                    // Check minimum thresholds
-                                    let duration_met = true; // TODO: Track actual query start time
-                                    let tools_met = tool_calls_count >= cfg.skill_loop_min_tool_calls;
+                                    let duration_met = elapsed_secs >= cfg.skill_loop_min_duration_secs;
+                                    let tools_met = task_tool_call_count >= cfg.skill_loop_min_tool_calls;
 
                                     if duration_met || tools_met {
                                         use shannon_core::skill_loop::{TaskEvaluation, TaskOutcome};
-                                        use std::collections::HashSet;
 
                                         let evaluation = TaskEvaluation {
-                                            duration_secs: cfg.skill_loop_min_duration_secs,
-                                            tool_call_count: tool_calls_count,
+                                            duration_secs: elapsed_secs,
+                                            tool_call_count: task_tool_call_count,
                                             user_prompt,
                                             outcome: TaskOutcome::Success,
-                                            tool_names_used: tool_names_used.into_iter().collect::<HashSet<_>>(),
+                                            tool_names_used: task_tool_names_used,
                                             started_at: None,
                                             completed_at: None,
                                         };
