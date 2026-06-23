@@ -12,6 +12,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
+shannon-stability-attr = { workspace = true }
 
 [build-dependencies]
 serde = { workspace = true }

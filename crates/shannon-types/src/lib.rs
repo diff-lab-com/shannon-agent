@@ -12,18 +12,23 @@
 pub mod events;
 
 use serde::{Deserialize, Serialize};
+use shannon_stability_attr::stable_api;
 use uuid::Uuid;
 
 /// Unique identifier for entities in the Shannon system
+#[stable_api(since = "0.5.5")]
 pub type EntityId = Uuid;
 
 /// Timestamp type
+#[stable_api(since = "0.5.5")]
 pub type Timestamp = chrono::DateTime<chrono::Utc>;
 
 /// Generic result type for Shannon operations
+#[stable_api(since = "0.5.5")]
 pub type ShannonResult<T> = Result<T, ShannonError>;
 
 /// Common error type
+#[stable_api(since = "0.5.5")]
 #[derive(Debug, thiserror::Error)]
 pub enum ShannonError {
     #[error("IO error: {0}")]

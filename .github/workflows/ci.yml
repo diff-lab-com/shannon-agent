@@ -136,4 +136,5 @@ jobs:
       - name: Note
         run: |
           echo "Semver failures are advisory only. See docs/STABILITY.md for the policy."
-          echo "Promote a failure to a hard block only after the affected API is marked #[stable]."
+          echo "Promotion to blocking requires baselines against git tags"
+          echo "(default crates.io lookup hits unrelated 'shannon-cli' package)."
