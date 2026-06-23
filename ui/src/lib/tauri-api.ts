@@ -125,6 +125,47 @@ export async function stopInboundListener(): Promise<void> {
   await invoke('stop_inbound_listener')
 }
 
+export interface SlackOutboundDto {
+  bot_token: string
+  channel: string
+}
+
+export interface TelegramOutboundDto {
+  bot_token: string
+  chat_id: string
+}
+
+export interface OutboundConfigDto {
+  slack?: SlackOutboundDto | null
+  telegram?: TelegramOutboundDto | null
+}
+
+export interface ChannelResult {
+  provider: string
+  ok: boolean
+  error?: string | null
+}
+
+export interface SendResultDto {
+  results: ChannelResult[]
+}
+
+export async function getOutboundConfig(): Promise<OutboundConfigDto> {
+  return invoke('get_outbound_config')
+}
+
+export async function saveOutboundConfig(dto: OutboundConfigDto): Promise<void> {
+  await invoke('save_outbound_config', { dto })
+}
+
+export async function clearOutboundConfig(): Promise<void> {
+  await invoke('clear_outbound_config')
+}
+
+export async function sendOutboundTest(message: string): Promise<SendResultDto> {
+  return invoke('send_outbound_test', { message })
+}
+
 export type NotificationLevel = 'info' | 'warning' | 'error' | 'success'
 
 export interface NotificationPayload {
@@ -149,6 +190,30 @@ export interface InboundMessage {
 
 export async function switchProvider(req: ProviderSwitchRequest): Promise<void> {
   await invoke('switch_provider', { request: req })
+}
+
+export interface DetectedProvider {
+  provider: string
+  has_api_key: boolean
+}
+
+export async function detectProviderFromEnv(): Promise<DetectedProvider | null> {
+  return invoke('detect_provider_from_env')
+}
+
+export type TestConnectionResult =
+  | { kind: 'success' }
+  | { kind: 'invalid_key' }
+  | { kind: 'rate_limited' }
+  | { kind: 'provider_error'; status: number }
+  | { kind: 'network_unreachable' }
+  | { kind: 'unknown'; message: string }
+
+export async function testProviderConnection(
+  provider: string,
+  apiKey: string,
+): Promise<TestConnectionResult> {
+  return invoke('test_provider_connection', { provider, apiKey })
 }
 
 // --- Models & Status ---
@@ -1069,3 +1134,123 @@ export interface SeedReport {
 export async function seedSampleData(): Promise<SeedReport> {
   return invoke('seed_sample_data')
 }
+
+// --- Routine templates (P1.4) ---
+
+export interface RoutineTemplate {
+  id: string
+  name: string
+  description: string
+  category: string
+  prompt: string
+  trigger_type: string
+  cron_expr?: string | null
+  interval_secs?: number | null
+  timezone?: string | null
+}
+
+export async function listRoutineTemplates(): Promise<RoutineTemplate[]> {
+  return invoke('list_routine_templates')
+}
+
+export async function instantiateRoutineTemplate(
+  templateId: string,
+  nameOverride?: string | null,
+): Promise<ScheduledRoutine> {
+  return invoke('instantiate_routine_template', {
+    templateId,
+    nameOverride: nameOverride ?? null,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// P2.1 — Persistent memory layer (wraps shannon_core::memory::MemoryStore)
+// ---------------------------------------------------------------------------
+
+export type MemoryCategory = 'preference' | 'pattern' | 'decision' | 'error' | 'context'
+
+export interface MemoryEntry {
+  id: string
+  project: string
+  category: MemoryCategory
+  content: string
+  tags: string[]
+  confidence: number
+  created_at: string
+  accessed_at: string
+  access_count: number
+}
+
+export interface MemoryStats {
+  total: number
+  by_category: Record<string, number>
+  by_project: Record<string, number>
+  most_recent_at: string | null
+}
+
+export async function listMemoryProjects(): Promise<string[]> {
+  return invoke('list_memory_projects')
+}
+
+export async function listMemories(opts?: {
+  project?: string | null
+  category?: string | null
+  query?: string | null
+}): Promise<MemoryEntry[]> {
+  return invoke('list_memories', {
+    project: opts?.project ?? null,
+    category: opts?.category ?? null,
+    query: opts?.query ?? null,
+  })
+}
+
+export async function createMemory(input: {
+  project: string
+  category: string
+  content: string
+  tags?: string[]
+  confidence?: number
+}): Promise<MemoryEntry> {
+  return invoke('create_memory', input)
+}
+
+export async function updateMemory(input: {
+  id: string
+  content?: string | null
+  tags?: string[] | null
+  category?: string | null
+}): Promise<MemoryEntry> {
+  return invoke('update_memory', input)
+}
+
+export async function deleteMemory(id: string): Promise<boolean> {
+  return invoke('delete_memory', { id })
+}
+
+export async function searchMemories(query: string, project?: string | null): Promise<MemoryEntry[]> {
+  return invoke('search_memories', { query, project: project ?? null })
+}
+
+export async function getMemoryStats(): Promise<MemoryStats> {
+  return invoke('get_memory_stats')
+}
+
+// --- Skill Loop (E2) ---
+
+export const skillLoop = {
+  evaluate: (evaluation: import('@/types').TaskEvaluation) =>
+    invoke<import('@/types').EvaluationResult>('skill_loop_evaluate', { evaluation }),
+
+  generate: (evaluation: import('@/types').TaskEvaluation) =>
+    invoke<import('@/types').SkillProposal>('skill_loop_generate', { evaluation }),
+
+  listProposals: () =>
+    invoke<import('@/types').SkillProposal[]>('skill_loop_list_proposals'),
+
+  approve: (proposalId: string) =>
+    invoke<string>('skill_loop_approve', { proposalId }),
+
+  reject: (proposalId: string) =>
+    invoke<void>('skill_loop_reject', { proposalId }),
+}
+

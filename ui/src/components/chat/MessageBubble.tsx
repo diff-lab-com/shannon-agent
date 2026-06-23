@@ -7,6 +7,7 @@ import { useApp } from '@/context/AppContext'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
+import { FootnoteMarkdown } from '@/components/chat/FootnoteMarkdown'
 import {
   Message,
   MessageAvatar,
@@ -17,6 +18,7 @@ import {
   ToolHeader,
   ToolContent,
 } from '@/components/ai-elements'
+import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 
 interface MessageBubbleProps {
@@ -119,6 +121,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const isUser = message.role === 'user'
   const [liked, setLiked] = useState(false)
   const [isBranching, setIsBranching] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
   const { sendMessage, currentSessionId, switchSession, refreshSessions } = useApp()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -152,6 +155,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   }
 
   const hasAttachments = message.file_attachments && message.file_attachments.length > 0
+  const hasReport = !!message.research_report
 
   if (isUser) {
     return (
@@ -197,7 +201,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
       <MessageContent className="space-y-md flex-1">
         <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
-            <Markdown>{message.content}</Markdown>
+            <FootnoteMarkdown>{message.content}</FootnoteMarkdown>
           </ResponseStream>
           {message.tool_calls && message.tool_calls.length > 0 && (
             <div className="mt-md space-y-sm">
@@ -217,7 +221,24 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
           </Button>
+          {hasReport && (
+            <Button
+              aria-label={t('chat.message.report.aria')}
+              onClick={() => setReportOpen(true)}
+              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors"
+            >
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">article</span>
+              <span className="text-label-sm">{t('chat.message.report')}</span>
+            </Button>
+          )}
         </ActionToolbar>
+        {hasReport && (
+          <ResearchReportModal
+            report={message.research_report!}
+            open={reportOpen}
+            onClose={() => setReportOpen(false)}
+          />
+        )}
       </MessageContent>
     </Message>
   )

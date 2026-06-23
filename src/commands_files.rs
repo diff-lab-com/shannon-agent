@@ -190,6 +190,7 @@ pub async fn apply_diff(
 
 /// Recursively read a directory and return a file tree.
 #[tauri::command]
+#[tracing::instrument(fields(path = %path))]
 pub async fn get_file_tree(path: String) -> Result<Vec<FileTreeNode>, String> {
     use std::fs;
     let root = std::path::Path::new(&path);

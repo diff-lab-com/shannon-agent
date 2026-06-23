@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 pub mod config;
 pub mod events;
 pub mod extensions;
+pub mod file_permissions;
 pub mod mcp;
+pub mod routine_templates;
 
 /// Resolve `path` relative to `working_dir` (or use it as-is if absolute),
 /// then canonicalize both and ensure the resolved path is inside the working
@@ -103,6 +105,9 @@ pub mod commands_billing;
 pub mod commands_config;
 
 #[cfg(feature = "tauri")]
+pub mod commands_memory;
+
+#[cfg(feature = "tauri")]
 pub mod commands_chat;
 
 #[cfg(feature = "tauri")]
@@ -110,6 +115,9 @@ pub mod commands_mcp;
 
 #[cfg(feature = "tauri")]
 pub mod commands_notifications;
+
+#[cfg(feature = "tauri")]
+pub mod commands_outbound;
 
 #[cfg(feature = "tauri")]
 pub mod commands_files;
@@ -133,6 +141,9 @@ pub mod commands_tasks;
 pub mod scheduled_commands;
 
 #[cfg(feature = "tauri")]
+pub mod commands_routine_templates;
+
+#[cfg(feature = "tauri")]
 pub mod lsp_commands;
 
 #[cfg(feature = "tauri")]
@@ -142,7 +153,13 @@ pub mod automation_commands;
 pub mod extensions_commands;
 
 #[cfg(feature = "tauri")]
+pub mod commands_skill_loop;
+
+#[cfg(feature = "tauri")]
 pub mod notifications;
 
 #[cfg(feature = "tauri")]
 pub mod inbound;
+
+#[cfg(feature = "tauri")]
+pub mod outbound;

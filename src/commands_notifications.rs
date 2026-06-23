@@ -229,6 +229,7 @@ pub async fn save_inbound_config(
     notif_table.insert("inbound".into(), toml::Value::Table(inbound));
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(&path);
     tracing::info!(path = %path.display(), "inbound config saved");
     restart_inbound_listener(&state, &app_handle, &dto).await;
     Ok(())
@@ -259,6 +260,7 @@ pub async fn clear_inbound_config(state: tauri::State<'_, AppState>) -> Result<(
     }
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(&path);
     tracing::info!(path = %path.display(), "inbound config cleared");
     let mut listener = state.inbound_listener.lock().await;
     if let Some(h) = listener.as_mut() {
@@ -457,6 +459,7 @@ fn save_webhook_config_to_disk(dto: &WebhookConfigDto) -> Result<(), String> {
 
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(&path);
     tracing::info!(path = %path.display(), "webhook config saved");
     Ok(())
 }
@@ -480,6 +483,7 @@ fn clear_webhook_config_on_disk() -> Result<(), String> {
     }
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(&path);
     tracing::info!(path = %path.display(), "webhook config cleared");
     Ok(())
 }

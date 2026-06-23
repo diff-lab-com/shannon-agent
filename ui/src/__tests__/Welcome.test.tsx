@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { toast } from 'sonner'
 import * as api from '@/lib/tauri-api'
 import Welcome, { shouldShowWelcome, markWelcomeSeen, WELCOME_SEEN_KEY } from '@/pages/Welcome'
 import { I18nProvider } from '@/i18n'
@@ -17,10 +18,22 @@ vi.mock('@/context/AppContext', () => ({
   useApp: () => ctx,
 }))
 
+// Mock sonner so toast.success/error/warning calls can be asserted.
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    warning: vi.fn(),
+    info: vi.fn(),
+  },
+}))
+
 vi.mock('@/lib/tauri-api', () => ({
   configure: vi.fn().mockResolvedValue(undefined),
   switchProvider: vi.fn().mockResolvedValue(undefined),
   seedSampleData: vi.fn().mockResolvedValue({ tasks_seeded: 3 }),
+  detectProviderFromEnv: vi.fn().mockResolvedValue(null),
+  testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
 }))
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -306,6 +319,190 @@ describe('Welcome component — 4-step flow', () => {
     // Should not throw — finish() catches and navigates anyway.
     await waitFor(() => {
       expect(api.seedSampleData).toHaveBeenCalled()
+    })
+  })
+})
+
+describe('Welcome — env provider detection (T7.A)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue(null)
+    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'success' })
+  })
+
+  function wrap() {
+    return render(
+      <I18nProvider>
+        <MemoryRouter>
+          <Welcome />
+        </MemoryRouter>
+      </I18nProvider>
+    )
+  }
+
+  it('calls detectProviderFromEnv on mount', async () => {
+    wrap()
+    await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
+  })
+
+  it('pre-selects OpenAI when env has OPENAI_API_KEY', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'openai',
+      has_api_key: true,
+    })
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    await waitFor(() => {
+      const openaiBtn = screen.getByRole('button', { name: /GPT-4o \/ o1/ })
+      expect(openaiBtn).toHaveAttribute('aria-pressed', 'true')
+    })
+  })
+
+  it('pre-selects Ollama and toasts when OLLAMA_HOST is set', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'ollama',
+      has_api_key: false,
+    })
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    await waitFor(() => {
+      const ollamaBtn = screen.getByRole('button', { name: /Local models/ })
+      expect(ollamaBtn).toHaveAttribute('aria-pressed', 'true')
+    })
+  })
+
+  it('allows Continue without API key when env detection confirms a key', async () => {
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue({
+      provider: 'anthropic',
+      has_api_key: true,
+    })
+    wrap()
+    await waitFor(() => expect(api.detectProviderFromEnv).toHaveBeenCalled())
+    fireEvent.click(screen.getByText('Continue →'))
+    // Default provider is anthropic and envHasKey=true unlocks Continue.
+    const continueBtns = screen.getAllByRole('button', { name: /Continue/ })
+    const modelContinue = continueBtns[continueBtns.length - 1]
+    expect(modelContinue).not.toBeDisabled()
+  })
+})
+
+describe('Welcome — Test connection button (T7.B + T7.D)', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+    vi.mocked(api.detectProviderFromEnv).mockResolvedValue(null)
+    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'success' })
+  })
+
+  function wrap() {
+    return render(
+      <I18nProvider>
+        <MemoryRouter>
+          <Welcome />
+        </MemoryRouter>
+      </I18nProvider>
+    )
+  }
+
+  it('renders Test connection button on Model step for non-Ollama', () => {
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    expect(screen.getByRole('button', { name: /Test connection/ })).toBeInTheDocument()
+  })
+
+  it('disables Test button until API key is entered', () => {
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    const btn = screen.getByRole('button', { name: /Test connection/ })
+    expect(btn).toBeDisabled()
+  })
+
+  it('enables Test button after API key typed', () => {
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
+    expect(screen.getByRole('button', { name: /Test connection/ })).not.toBeDisabled()
+  })
+
+  it('hides Test button for Ollama (no API key needed)', () => {
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.click(screen.getByText('Ollama'))
+    expect(screen.queryByRole('button', { name: /Test connection/ })).not.toBeInTheDocument()
+  })
+
+  it('shows success toast on Success result', async () => {
+    // toast imported at top
+    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'success' })
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
+    await waitFor(() => {
+      expect(api.testProviderConnection).toHaveBeenCalledWith('anthropic', 'sk-test')
+      expect(toast.success).toHaveBeenCalled()
+    })
+  })
+
+  it('shows invalid-key toast on InvalidKey result', async () => {
+    // toast imported at top
+    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'invalid_key' })
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-bad' } })
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Invalid API key/))
+    })
+  })
+
+  it('shows rate-limited warning on RateLimited result', async () => {
+    // toast imported at top
+    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'rate_limited' })
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith(expect.stringMatching(/Rate limited/))
+    })
+  })
+
+  it('shows provider error toast with status on ProviderError', async () => {
+    // toast imported at top
+    vi.mocked(api.testProviderConnection).mockResolvedValue({
+      kind: 'provider_error',
+      status: 503,
+    })
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('503'))
+    })
+  })
+
+  it('shows network-unreachable toast on NetworkUnreachable', async () => {
+    // toast imported at top
+    vi.mocked(api.testProviderConnection).mockResolvedValue({ kind: 'network_unreachable' })
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Can't reach/))
+    })
+  })
+
+  it('shows fallback error toast when invoke rejects', async () => {
+    // toast imported at top
+    vi.mocked(api.testProviderConnection).mockRejectedValue(new Error('invoke boom'))
+    wrap()
+    fireEvent.click(screen.getByText('Continue →'))
+    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
+    fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Test failed/))
     })
   })
 })

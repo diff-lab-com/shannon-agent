@@ -129,6 +129,10 @@ vi.mock('@/lib/tauri-api', () => ({
   clearInboundConfig: vi.fn().mockResolvedValue(undefined),
   getInboundListenerStatus: vi.fn().mockResolvedValue({ slack_running: false, telegram_running: false }),
   stopInboundListener: vi.fn().mockResolvedValue(undefined),
+  getOutboundConfig: vi.fn().mockResolvedValue({ slack: null, telegram: null }),
+  saveOutboundConfig: vi.fn().mockResolvedValue(undefined),
+  clearOutboundConfig: vi.fn().mockResolvedValue(undefined),
+  sendOutboundTest: vi.fn().mockResolvedValue({ results: [] }),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
@@ -136,4 +140,21 @@ vi.mock('@/lib/tauri-api', () => ({
   listDataSourceCatalog: vi.fn().mockResolvedValue([]),
   listInstalledDataSources: vi.fn().mockResolvedValue([]),
   queryDataSource: vi.fn().mockResolvedValue({ items: [], total: 0, has_more: false }),
+  listRoutineTemplates: vi.fn().mockResolvedValue([]),
+  instantiateRoutineTemplate: vi.fn().mockResolvedValue({ id: 'test', name: 'Test' }),
+  listMemoryProjects: vi.fn().mockResolvedValue([]),
+  listMemories: vi.fn().mockResolvedValue([]),
+  createMemory: vi.fn().mockResolvedValue({
+    id: 'mem-1', project: '.', category: 'context', content: '',
+    tags: [], confidence: 1.0, created_at: '', accessed_at: '', access_count: 0,
+  }),
+  updateMemory: vi.fn().mockResolvedValue({
+    id: 'mem-1', project: '.', category: 'context', content: '',
+    tags: [], confidence: 1.0, created_at: '', accessed_at: '', access_count: 0,
+  }),
+  deleteMemory: vi.fn().mockResolvedValue(true),
+  searchMemories: vi.fn().mockResolvedValue([]),
+  getMemoryStats: vi.fn().mockResolvedValue({
+    total: 0, by_category: {}, by_project: {}, most_recent_at: null,
+  }),
 }))

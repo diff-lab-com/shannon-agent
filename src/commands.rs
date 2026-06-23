@@ -458,6 +458,7 @@ pub async fn send_message(
 
     // Create query context
     let model = state.model.lock().await.clone();
+    let message_for_skill_loop = message.clone();
     let context = QueryContext {
         query_id,
         session_id: uuid::Uuid::new_v4(),
@@ -486,6 +487,11 @@ pub async fn send_message(
     tokio::spawn(async move {
         let stream = engine.process_query(context, None).await;
         let mut final_content = String::new();
+
+        let query_start = std::time::Instant::now();
+        let mut tool_call_count: usize = 0;
+        let mut tool_names_used: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
         // Consume the stream using futures::StreamExt
         use futures::StreamExt;
@@ -521,6 +527,8 @@ pub async fn send_message(
                         tool_input,
                         ..
                     } => {
+                        tool_call_count += 1;
+                        tool_names_used.insert(tool_name.clone());
                         let _ = app.emit(
                             event_names::QUERY_TOOL_START,
                             events::ToolStartPayload {
@@ -648,6 +656,58 @@ pub async fn send_message(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Completed,
                         );
+
+                        // Skill loop evaluation hook (spawned, non-blocking)
+                        let app_clone = app.clone();
+                        let user_prompt = message_for_skill_loop.clone();
+                        let elapsed_secs = query_start.elapsed().as_secs();
+                        let task_tool_call_count = tool_call_count;
+                        let task_tool_names_used = tool_names_used.clone();
+                        tokio::spawn(async move {
+                            use tauri::Manager;
+                            let cfg = crate::config::load_config();
+                            if cfg.skill_loop_enabled {
+                                if cfg.skill_loop_enabled {
+                                    let duration_met = elapsed_secs >= cfg.skill_loop_min_duration_secs;
+                                    let tools_met = task_tool_call_count >= cfg.skill_loop_min_tool_calls;
+
+                                    if duration_met || tools_met {
+                                        use shannon_core::skill_loop::{TaskEvaluation, TaskOutcome};
+
+                                        let evaluation = TaskEvaluation {
+                                            duration_secs: elapsed_secs,
+                                            tool_call_count: task_tool_call_count,
+                                            user_prompt,
+                                            outcome: TaskOutcome::Success,
+                                            tool_names_used: task_tool_names_used,
+                                            started_at: None,
+                                            completed_at: None,
+                                        };
+
+                                        let client_config = {
+                                            let state_guard = app_clone.state::<AppState>();
+                                            state_guard.client_config.read().await.clone()
+                                        };
+                                        let client = shannon_core::api::client::LlmClient::new(client_config);
+
+                                        match shannon_core::skill_loop::evaluate_task(&client, evaluation).await {
+                                            Ok(result) if result.suggest => {
+                                                let _ = app_clone.emit(
+                                                    crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,
+                                                    crate::commands_skill_loop::SkillProposalCountPayload { pending_count: 1 },
+                                                );
+                                            }
+                                            Ok(_) => {
+                                                // suggest=false, silent skip
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(error = %e, "skill loop evaluate failed (non-blocking)");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
                     }
                     QueryEvent::Failed { error, .. } => {
                         let _ = app.emit(
@@ -709,6 +769,9 @@ pub async fn send_message(
 // commands_files::save_text_file in main.rs).
 // request_permission + respond_permission extracted to `commands_permissions.rs`
 // (registered as commands_permissions::* in main.rs).
+
+// Skill loop commands extracted to `commands_skill_loop.rs` (registered as
+// commands_skill_loop::* in main.rs).
 
 pub(crate) fn chrono_timestamp() -> i64 {
     // Milliseconds since UNIX_EPOCH. All UI consumers construct

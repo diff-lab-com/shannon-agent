@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { convertFileSrc } from '@tauri-apps/api/core'
+import { Chart, parseChartSpec } from '@/components/chat/Chart'
 
 const sanitizeSchema = {
   ...defaultSchema,
@@ -31,7 +32,7 @@ export const Markdown = memo(function Markdown({ children, className }: Markdown
           [rehypeSanitize, sanitizeSchema],
         ]}
         components={{
-          pre: CodeBlock,
+          pre: PreOrChart,
           img: LocalImage,
         }}
       >
@@ -40,6 +41,25 @@ export const Markdown = memo(function Markdown({ children, className }: Markdown
     </div>
   )
 })
+
+function PreOrChart(props: React.HTMLAttributes<HTMLPreElement>) {
+  const child = Array.isArray(props.children) ? props.children[0] : props.children
+  if (child && typeof child === 'object' && 'props' in child) {
+    const codeProps = (child as { props: { className?: string; children?: ReactNode } }).props
+    if (/language-chart/.test(codeProps.className ?? '')) {
+      const raw = extractText(codeProps.children)
+      const spec = parseChartSpec(raw)
+      if (spec) return <Chart spec={spec} />
+      return (
+        <div className="my-md p-sm rounded-lg bg-error-container/20 border border-error/30 text-label-sm text-error">
+          <span className="material-symbols-outlined text-[14px] align-middle mr-xs">error</span>
+          Invalid chart spec — expected JSON with type and data[].
+        </div>
+      )
+    }
+  }
+  return <CodeBlock {...props} />
+}
 
 function extractText(node: ReactNode): string {
   if (typeof node === 'string') return node

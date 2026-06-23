@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
@@ -82,6 +82,50 @@ const SHORTCUT_ROWS = [
   { keys: 'Esc', actionKey: 'shortcuts.cancel' },
 ] as const
 
+// ─── Documents skill recommendations (P2.4) ─────────────────────────────────
+// Instead of building a Documents engine inside Shannon (Phase D's MVP), we
+// surface host-side Documents skills the user can install with one click.
+// Each entry maps to a GitHub repo that `install_skill_from_repo` clones into
+// `~/.shannon/skills/`. The catalog is deliberately short — only the most
+// universally useful Documents skills. Repos are placeholders until the
+// matching shannon-skills-* repos are published; the install UI gracefully
+// reports failure so users can retry once a repo goes live.
+interface DocumentsSkill {
+  id: string
+  labelKey: string
+  descKey: string
+  icon: string
+  repo: string
+  ref: string
+}
+
+const DOCUMENTS_SKILLS: DocumentsSkill[] = [
+  {
+    id: 'pandoc-docx',
+    labelKey: 'welcome.skills.pandoc.label',
+    descKey: 'welcome.skills.pandoc.desc',
+    icon: 'description',
+    repo: 'shannon-agent/shannon-skills-docs',
+    ref: 'main',
+  },
+  {
+    id: 'python-docx',
+    labelKey: 'welcome.skills.pydocx.label',
+    descKey: 'welcome.skills.pydocx.desc',
+    icon: 'data_object',
+    repo: 'shannon-agent/shannon-skills-docs',
+    ref: 'main',
+  },
+  {
+    id: 'markdown-beautify',
+    labelKey: 'welcome.skills.beautify.label',
+    descKey: 'welcome.skills.beautify.desc',
+    icon: 'auto_fix_high',
+    repo: 'shannon-agent/shannon-skills-docs',
+    ref: 'main',
+  },
+]
+
 export const WELCOME_SEEN_KEY = 'shannon.hasSeenWelcome'
 
 export function shouldShowWelcome(loading: boolean, hasProvider: boolean): boolean {
@@ -115,9 +159,70 @@ export default function Welcome() {
   const [pickedDir, setPickedDir] = useState<string | null>(null)
   const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({})
   const [devMode, setDevMode] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [envHasKey, setEnvHasKey] = useState(false)
+  const envCheckedRef = useRef(false)
+  const [skillState, setSkillState] = useState<
+    Record<string, { status: 'idle' | 'installing' | 'installed' | 'failed'; error?: string }>
+  >({})
 
   const currentTask = TASKS.find(t => t.id === task)!
   const recommendedProvider = PROVIDERS.find(p => p.id === currentTask.recommendedProvider)
+
+  // On mount, probe the shell for a pre-configured provider so the user can
+  // skip the API-key entry step. Only fires once — the ref guards against
+  // StrictMode double-invoke in dev.
+  useEffect(() => {
+    if (envCheckedRef.current) return
+    envCheckedRef.current = true
+    api.detectProviderFromEnv()
+      .then(detected => {
+        if (!detected) return
+        setProvider(detected.provider)
+        if (detected.provider === 'ollama') {
+          toast.info(intl.formatMessage({ id: 'welcome.envDetected.ollama' }))
+        } else if (detected.has_api_key) {
+          setEnvHasKey(true)
+          const label = PROVIDERS.find(p => p.id === detected.provider)?.label ?? detected.provider
+          toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: label }))
+        }
+      })
+      .catch(e => console.warn('detectProviderFromEnv failed:', e))
+  }, [intl])
+
+  const runTestConnection = async () => {
+    if (provider === 'ollama') return
+    setTesting(true)
+    try {
+      const result = await api.testProviderConnection(provider, apiKey)
+      const label = PROVIDERS.find(p => p.id === provider)?.label ?? provider
+      switch (result.kind) {
+        case 'success':
+          toast.success(intl.formatMessage({ id: 'welcome.testConnection.success' }, { provider: label }))
+          return
+        case 'invalid_key':
+          toast.error(intl.formatMessage({ id: 'welcome.testConnection.invalidKey' }))
+          return
+        case 'rate_limited':
+          toast.warning(intl.formatMessage({ id: 'welcome.testConnection.rateLimited' }))
+          return
+        case 'provider_error':
+          toast.error(intl.formatMessage({ id: 'welcome.testConnection.providerError' }, { provider: label, status: result.status }))
+          return
+        case 'network_unreachable':
+          toast.error(intl.formatMessage({ id: 'welcome.testConnection.networkUnreachable' }, { provider: label }))
+          return
+        case 'unknown':
+          toast.error(intl.formatMessage({ id: 'welcome.testConnection.unknown' }, { message: result.message }))
+          return
+      }
+    } catch (e) {
+      console.warn('testProviderConnection failed:', e)
+      toast.error(intl.formatMessage({ id: 'welcome.testConnection.failed' }))
+    } finally {
+      setTesting(false)
+    }
+  }
 
   const finish = async () => {
     markWelcomeSeen()
@@ -179,6 +284,19 @@ export default function Welcome() {
   }
 
   const enabledToolCount = Object.values(enabledTools).filter(Boolean).length
+
+  const installDocumentsSkill = async (skill: DocumentsSkill) => {
+    setSkillState(prev => ({ ...prev, [skill.id]: { status: 'installing' } }))
+    try {
+      await api.installSkillFromRepo(skill.id, skill.repo, skill.ref)
+      setSkillState(prev => ({ ...prev, [skill.id]: { status: 'installed' } }))
+      toast.success(intl.formatMessage({ id: 'welcome.skills.toast.installed' }, { name: intl.formatMessage({ id: skill.labelKey }) }))
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setSkillState(prev => ({ ...prev, [skill.id]: { status: 'failed', error: msg } }))
+      toast.error(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }))
+    }
+  }
 
   return (
     <div className="min-h-screen bg-background text-on-surface flex flex-col">
@@ -266,7 +384,7 @@ export default function Welcome() {
                   </button>
                   <button
                     onClick={handleModelSubmit}
-                    disabled={saving || (provider !== 'ollama' && !apiKey)}
+                    disabled={saving || (provider !== 'ollama' && !apiKey && !envHasKey)}
                     className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
                     {saving
@@ -308,13 +426,26 @@ export default function Welcome() {
                     type="password"
                     value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
-                    placeholder="sk-..."
+                    placeholder={envHasKey ? '(loaded from environment)' : 'sk-...'}
                     autoComplete="off"
                     className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
                   />
-                  <p className="font-label-sm text-on-surface-variant mt-xs">
-                    {intl.formatMessage({ id: 'welcome.model.apiKey.help' })}
-                  </p>
+                  <div className="flex items-center justify-between gap-md mt-xs">
+                    <p className="font-label-sm text-on-surface-variant flex-1">
+                      {intl.formatMessage({ id: 'welcome.model.apiKey.help' })}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={runTestConnection}
+                      disabled={testing || !apiKey}
+                      className="shrink-0 px-md py-xs rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary flex items-center gap-xs"
+                    >
+                      {testing && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
+                      {testing
+                        ? intl.formatMessage({ id: 'welcome.testConnection.testing' })
+                        : intl.formatMessage({ id: 'welcome.testConnection.button' })}
+                    </button>
+                  </div>
                 </div>
               )}
             </Card>
@@ -484,6 +615,77 @@ export default function Welcome() {
                   </div>
                 </div>
               </label>
+
+              {/* P2.4 — Documents skill recommendations. Optional one-click
+                  install; users can skip and install later from Extensions Hub. */}
+              <div className="mt-md p-md rounded-xl border border-outline-variant/50 bg-surface-container-low">
+                <div className="flex items-center gap-xs mb-xs">
+                  <span className="material-symbols-outlined text-primary text-[20px]">extension</span>
+                  <span className="font-headline-md text-on-surface">
+                    {intl.formatMessage({ id: 'welcome.skills.title' })}
+                  </span>
+                </div>
+                <p className="font-body-sm text-on-surface-variant mb-md">
+                  {intl.formatMessage({ id: 'welcome.skills.subtitle' })}
+                </p>
+                <ul className="space-y-sm">
+                  {DOCUMENTS_SKILLS.map(skill => {
+                    const state = skillState[skill.id] ?? { status: 'idle' as const }
+                    return (
+                      <li
+                        key={skill.id}
+                        className="flex items-start gap-sm p-sm rounded-lg bg-surface-container-lowest border border-outline-variant/30"
+                      >
+                        <span className="material-symbols-outlined text-on-surface-variant text-[20px] mt-[2px] shrink-0">
+                          {skill.icon}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-label-md text-on-surface">{intl.formatMessage({ id: skill.labelKey })}</div>
+                          <div className="font-body-sm text-on-surface-variant mt-[2px]">
+                            {intl.formatMessage({ id: skill.descKey })}
+                          </div>
+                          {state.status === 'failed' && state.error && (
+                            <div className="font-body-sm text-error mt-xs">{state.error}</div>
+                          )}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => installDocumentsSkill(skill)}
+                          disabled={state.status === 'installing' || state.status === 'installed'}
+                          className="shrink-0 px-md py-xs rounded-lg font-label-md text-label-sm bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant/50 text-on-surface cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-xs"
+                          aria-label={intl.formatMessage({ id: 'welcome.skills.install.aria' }, { name: intl.formatMessage({ id: skill.labelKey }) })}
+                        >
+                          {state.status === 'installing' && (
+                            <span className="material-symbols-outlined text-[14px] animate-spin">progress_activity</span>
+                          )}
+                          {state.status === 'installed' ? (
+                            <span className="material-symbols-outlined text-[14px]">check</span>
+                          ) : state.status === 'installing' ? (
+                            intl.formatMessage({ id: 'welcome.skills.installing' })
+                          ) : (
+                            intl.formatMessage({ id: 'welcome.skills.install' })
+                          )}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+                <p className="font-body-sm text-on-surface-variant mt-md">
+                  {intl.formatMessage(
+                    { id: 'welcome.skills.later' },
+                    {
+                      link: (chunks: React.ReactNode) => (
+                        <button
+                          onClick={() => { markWelcomeSeen(); navigate('/extensions/featured') }}
+                          className="text-primary hover:underline cursor-pointer"
+                        >
+                          {chunks}
+                        </button>
+                      ),
+                    },
+                  )}
+                </p>
+              </div>
             </Card>
           )}
         </div>

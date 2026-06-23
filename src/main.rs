@@ -12,12 +12,16 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_files;
+    use shannon_desktop::commands_memory;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
+    use shannon_desktop::commands_outbound;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_routine_templates;
     use shannon_desktop::commands_sessions;
+    use shannon_desktop::commands_skill_loop;
     use shannon_desktop::commands_tasks;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
@@ -65,6 +69,8 @@ fn main() {
             commands_config::configure,
             commands_config::switch_provider,
             commands_config::get_config,
+            commands_config::detect_provider_from_env,
+            commands_config::test_provider_connection,
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,
@@ -77,6 +83,12 @@ fn main() {
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
             commands_sessions::branch_session,
+            // E2 skill loop — task evaluation and skill proposal management
+            commands_skill_loop::skill_loop_evaluate,
+            commands_skill_loop::skill_loop_generate,
+            commands_skill_loop::skill_loop_list_proposals,
+            commands_skill_loop::skill_loop_approve,
+            commands_skill_loop::skill_loop_reject,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
             commands_files::get_file_diff,
@@ -155,6 +167,9 @@ fn main() {
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)
             shannon_desktop::scheduled_commands::list_scheduled_tasks,
             shannon_desktop::scheduled_commands::create_scheduled_task,
+            // Routine templates library (P1.4)
+            commands_routine_templates::list_routine_templates,
+            commands_routine_templates::instantiate_routine_template,
             shannon_desktop::scheduled_commands::update_scheduled_task,
             shannon_desktop::scheduled_commands::delete_scheduled_task,
             shannon_desktop::scheduled_commands::toggle_scheduled_task,
@@ -198,10 +213,23 @@ fn main() {
             // P5 Phase 2 — inbound listener supervisor
             commands_notifications::get_inbound_listener_status,
             commands_notifications::stop_inbound_listener,
+            // P1.3 — outbound messaging (Slack + Telegram)
+            commands_outbound::get_outbound_config,
+            commands_outbound::save_outbound_config,
+            commands_outbound::clear_outbound_config,
+            commands_outbound::send_outbound_test,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
             commands_billing::get_billing_plan,
             commands_billing::get_cost_history,
             commands_billing::get_billing_history,
+            // P2.1 — persistent memory layer (wraps shannon_core::memory::MemoryStore)
+            commands_memory::list_memory_projects,
+            commands_memory::list_memories,
+            commands_memory::create_memory,
+            commands_memory::update_memory,
+            commands_memory::delete_memory,
+            commands_memory::search_memories,
+            commands_memory::get_memory_stats,
         ])
         .setup(|app| {
             let mut state = commands::AppState::new();

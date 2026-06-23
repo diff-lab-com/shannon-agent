@@ -68,6 +68,7 @@ export interface ChatMessage {
   tool_calls?: ToolCall[]
   thinking?: string
   file_attachments?: FileAttachment[]
+  research_report?: ResearchReport
 }
 
 export interface ToolCall {
@@ -79,6 +80,28 @@ export interface ToolCall {
   progress?: number
   progress_message?: string
   status: 'running' | 'completed' | 'error'
+}
+
+export interface ResearchReport {
+  title: string
+  summary: string
+  sections: ResearchSection[]
+  citations: ResearchCitation[]
+  generated_at: number
+}
+
+export interface ResearchSection {
+  heading: string
+  body: string
+}
+
+export interface ResearchCitation {
+  id: number
+  title: string
+  url?: string
+  snippet?: string
+  source?: string
+  accessed_at?: number
 }
 
 export interface FileAttachment {
@@ -158,6 +181,9 @@ export interface DesktopConfig {
   temperature?: number
   max_tokens?: number
   plan?: string
+  skill_loop_enabled?: boolean
+  skill_loop_min_duration_secs?: number
+  skill_loop_min_tool_calls?: number
 }
 
 export interface SendMessageResponse {
@@ -680,4 +706,39 @@ export interface AgentMessageEntry {
   content_kind: 'text' | 'structured' | 'protocol'
   priority: 'low' | 'normal' | 'high' | 'critical'
   timestamp: number
+}
+
+// --- Skill Loop (E2) ---
+
+export type ProposalStatus = 'Pending' | 'Approved' | 'Rejected'
+export type TaskOutcome = 'Success' | 'Failure' | 'Partial'
+
+export interface TaskEvaluation {
+  duration_secs: number
+  tool_call_count: number
+  user_prompt: string
+  outcome: TaskOutcome
+  tool_names_used: string[]
+}
+
+export interface EvaluationResult {
+  suggest: boolean
+  reason: string
+  confidence: number
+}
+
+export interface SkillProposal {
+  id: string
+  name: string
+  slug: string
+  description: string
+  trigger_patterns: string[]
+  example_workflow: string
+  source_task_id: string | null
+  created_at: string
+  status: ProposalStatus
+}
+
+export interface SkillProposalCountPayload {
+  pending_count: number
 }
