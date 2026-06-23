@@ -11,6 +11,7 @@
     "test": "vitest",
     "test:e2e": "playwright test",
     "test:coverage": "vitest --coverage",
+    "test:ci": "CI=1 vitest --run",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

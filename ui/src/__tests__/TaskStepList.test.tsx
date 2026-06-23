@@ -50,7 +50,7 @@ describe('TaskStepList', () => {
   it('renders a step when task-step event fires', async () => {
     render(<TaskStepList taskId="t1" />)
     await screen.findByText('No steps streamed yet.')
-    emit('task-step', {
+    emit('task:step', {
       task_id: 't1',
       run_id: 'r1',
       step_index: 1,
@@ -67,7 +67,7 @@ describe('TaskStepList', () => {
   it('renders retry banner when task-retry event fires', async () => {
     render(<TaskStepList taskId="t1" />)
     await screen.findByText('No steps streamed yet.')
-    emit('task-retry', {
+    emit('task:retry', {
       task_id: 't1',
       run_id: 'r1',
       attempt: 2,
@@ -83,7 +83,7 @@ describe('TaskStepList', () => {
   it('ignores events for other task ids', async () => {
     render(<TaskStepList taskId="t1" />)
     await screen.findByText('No steps streamed yet.')
-    emit('task-step', {
+    emit('task:step', {
       task_id: 't2',
       run_id: 'r1',
       step_index: 1,

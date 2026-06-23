@@ -100,7 +100,7 @@ export function useTaskStreaming(taskIds: string[]) {
     let unlistenRetry: (() => void) | undefined
     let cancelled = false
     ;(async () => {
-      unlistenStep = await listen<RawTaskStepEvent>('task-step', e => {
+      unlistenStep = await listen<RawTaskStepEvent>('task:step', e => {
         const p = e.payload
         const status = p.status === 'completed' || p.status === 'failed' || p.status === 'started'
           ? (p.status as TaskStep['status'])
@@ -118,7 +118,7 @@ export function useTaskStreaming(taskIds: string[]) {
         unlistenStep()
         return
       }
-      unlistenRetry = await listen<RawTaskRetryEvent>('task-retry', e => {
+      unlistenRetry = await listen<RawTaskRetryEvent>('task:retry', e => {
         const p = e.payload
         upsertRetry(p.task_id, {
           attempt: p.attempt,

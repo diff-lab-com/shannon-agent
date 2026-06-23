@@ -227,7 +227,7 @@ pub struct TaskRetryPayload {
     pub timestamp_ms: u64,
 }
 
-/// P1.2 workflow streaming — helper to emit a `task-step` event from
+/// P1.2 workflow streaming — helper to emit a `task:step` event from
 /// anywhere with an `AppHandle`. Silently no-ops on emit error so a
 /// frontend disconnect never breaks task execution.
 pub fn emit_task_step<R: tauri::Runtime>(
@@ -258,7 +258,7 @@ pub fn emit_task_step<R: tauri::Runtime>(
     let _ = app.emit(event_names::TASK_STEP, payload);
 }
 
-/// P1.2 workflow streaming — helper to emit a `task-retry` event.
+/// P1.2 workflow streaming — helper to emit a `task:retry` event.
 pub fn emit_task_retry<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     task_id: &str,
@@ -309,10 +309,10 @@ pub mod event_names {
     pub const CHECK_UPDATES: &str = "check-updates";
     /// P1.2 workflow streaming — emitted by scheduled_commands at step
     /// boundaries so the Tasks UI can show live execution progress.
-    pub const TASK_STEP: &str = "task-step";
+    pub const TASK_STEP: &str = "task:step";
     /// P1.2 workflow streaming — emitted when a failed task is auto-retried
     /// per the routine's retry config.
-    pub const TASK_RETRY: &str = "task-retry";
+    pub const TASK_RETRY: &str = "task:retry";
     /// E2 skill loop — emitted when proposal count changes (new proposal approved/rejected).
     pub const SKILL_PROPOSAL_AVAILABLE: &str = "skill-proposal-available";
 }
