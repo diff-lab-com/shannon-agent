@@ -71,17 +71,35 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
     }
   }
 
-  // Optimistic local override — backend update_task_status is not wired yet
-  const handleMoveTask = (taskId: string, target: TaskStatusFamily) => {
+  // Optimistic local override + backend persist via update_task(status).
+  // The override is applied immediately so the card jumps without waiting
+  // for the round-trip; refreshTasks() reconciles after the write lands.
+  const handleMoveTask = async (taskId: string, target: TaskStatusFamily) => {
     const task = effectiveTasks.find(t => t.id === taskId)
     if (!task) return
     const current = classifyStatus(task.status)
     if (current === target) return
     const newStatus = canonicalStatusFor(target)
     setOverrides(prev => ({ ...prev, [taskId]: newStatus }))
-    toast.success(intl.formatMessage({ id: 'opc.kanban.movedTo' }, { column: STATUS_FAMILY[target].title }), {
-      description: t('opc.kanban.overrideDesc'),
-    })
+    toast.success(intl.formatMessage({ id: 'opc.kanban.movedTo' }, { column: STATUS_FAMILY[target].title }))
+    try {
+      await api.updateTask({ id: taskId, status: newStatus })
+      setOverrides(prev => {
+        const next = { ...prev }
+        delete next[taskId]
+        return next
+      })
+      await refreshTasks()
+    } catch (e) {
+      console.warn('updateTask failed, rolling back override:', e)
+      setOverrides(prev => {
+        const next = { ...prev }
+        delete next[taskId]
+        return next
+      })
+      toast.error(t('opc.kanban.moveFailed'))
+      await refreshTasks()
+    }
   }
 
   const toolbar = (

@@ -1001,6 +1001,7 @@
   "opc.kanban.taskCreated": "Task created",
   "opc.kanban.createFailed": "Failed to create task",
   "opc.kanban.movedTo": "Moved to {column}",
+  "opc.kanban.moveFailed": "Failed to move task — reverted",
   "opc.kanban.localOverride": "Local override — backend persistence pending",
   "opc.kanban.resetOverrides": "Reset local overrides",
   "opc.kanban.noDeprecatedTasks": "No deprecated tasks.",
