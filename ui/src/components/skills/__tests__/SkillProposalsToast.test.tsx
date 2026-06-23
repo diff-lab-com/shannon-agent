@@ -5,8 +5,8 @@ import SkillProposalsToast from '../SkillProposalsToast'
 
 const mockUseTauriEvent = vi.fn()
 
-vi.mock('@/hooks/useTauriEvent', () => ({
-  useTauriEvent: (...args: unknown[]) => mockUseTauriEvent(...args),
+vi.mock('@/hooks/useTauriEventValidated', () => ({
+  useTauriEventValidated: (...args: unknown[]) => mockUseTauriEvent(...args),
 }))
 
 vi.mock('sonner', () => ({
