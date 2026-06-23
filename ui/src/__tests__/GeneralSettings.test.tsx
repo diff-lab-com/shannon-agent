@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { I18nProvider } from '@/i18n'
 import { MemoryRouter } from 'react-router-dom'
 import GeneralSettings from '@/components/settings/GeneralSettings'
+import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 
 function wrap(ui: React.ReactElement) {
   return (
@@ -50,5 +51,25 @@ describe('GeneralSettings', () => {
   it('shows current mode description', () => {
     render(wrap(<GeneralSettings />))
     expect(screen.getByText(/Current:/)).toBeInTheDocument()
+  })
+
+  describe('Re-run setup wizard', () => {
+    beforeEach(() => {
+      window.localStorage.clear()
+      window.localStorage.setItem(WELCOME_SEEN_KEY, '1')
+    })
+
+    it('renders the re-run wizard section', () => {
+      render(wrap(<GeneralSettings />))
+      expect(screen.getByRole('heading', { name: 'Setup wizard' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Re-run setup wizard' })).toBeInTheDocument()
+    })
+
+    it('clears the seen flag on click', () => {
+      render(wrap(<GeneralSettings />))
+      expect(window.localStorage.getItem(WELCOME_SEEN_KEY)).toBe('1')
+      fireEvent.click(screen.getByRole('button', { name: 'Re-run setup wizard' }))
+      expect(window.localStorage.getItem(WELCOME_SEEN_KEY)).toBeNull()
+    })
   })
 })

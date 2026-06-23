@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
@@ -115,9 +115,67 @@ export default function Welcome() {
   const [pickedDir, setPickedDir] = useState<string | null>(null)
   const [enabledTools, setEnabledTools] = useState<Record<string, boolean>>({})
   const [devMode, setDevMode] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [envHasKey, setEnvHasKey] = useState(false)
+  const envCheckedRef = useRef(false)
 
   const currentTask = TASKS.find(t => t.id === task)!
   const recommendedProvider = PROVIDERS.find(p => p.id === currentTask.recommendedProvider)
+
+  // On mount, probe the shell for a pre-configured provider so the user can
+  // skip the API-key entry step. Only fires once — the ref guards against
+  // StrictMode double-invoke in dev.
+  useEffect(() => {
+    if (envCheckedRef.current) return
+    envCheckedRef.current = true
+    api.detectProviderFromEnv()
+      .then(detected => {
+        if (!detected) return
+        setProvider(detected.provider)
+        if (detected.provider === 'ollama') {
+          toast.info(intl.formatMessage({ id: 'welcome.envDetected.ollama' }))
+        } else if (detected.has_api_key) {
+          setEnvHasKey(true)
+          const label = PROVIDERS.find(p => p.id === detected.provider)?.label ?? detected.provider
+          toast.success(intl.formatMessage({ id: 'welcome.envDetected.toast' }, { provider: label }))
+        }
+      })
+      .catch(e => console.warn('detectProviderFromEnv failed:', e))
+  }, [intl])
+
+  const runTestConnection = async () => {
+    if (provider === 'ollama') return
+    setTesting(true)
+    try {
+      const result = await api.testProviderConnection(provider, apiKey)
+      const label = PROVIDERS.find(p => p.id === provider)?.label ?? provider
+      switch (result.kind) {
+        case 'success':
+          toast.success(intl.formatMessage({ id: 'welcome.testConnection.success' }, { provider: label }))
+          return
+        case 'invalid_key':
+          toast.error(intl.formatMessage({ id: 'welcome.testConnection.invalidKey' }))
+          return
+        case 'rate_limited':
+          toast.warning(intl.formatMessage({ id: 'welcome.testConnection.rateLimited' }))
+          return
+        case 'provider_error':
+          toast.error(intl.formatMessage({ id: 'welcome.testConnection.providerError' }, { provider: label, status: result.status }))
+          return
+        case 'network_unreachable':
+          toast.error(intl.formatMessage({ id: 'welcome.testConnection.networkUnreachable' }, { provider: label }))
+          return
+        case 'unknown':
+          toast.error(intl.formatMessage({ id: 'welcome.testConnection.unknown' }, { message: result.message }))
+          return
+      }
+    } catch (e) {
+      console.warn('testProviderConnection failed:', e)
+      toast.error(intl.formatMessage({ id: 'welcome.testConnection.failed' }))
+    } finally {
+      setTesting(false)
+    }
+  }
 
   const finish = async () => {
     markWelcomeSeen()
@@ -266,7 +324,7 @@ export default function Welcome() {
                   </button>
                   <button
                     onClick={handleModelSubmit}
-                    disabled={saving || (provider !== 'ollama' && !apiKey)}
+                    disabled={saving || (provider !== 'ollama' && !apiKey && !envHasKey)}
                     className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   >
                     {saving
@@ -308,13 +366,26 @@ export default function Welcome() {
                     type="password"
                     value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
-                    placeholder="sk-..."
+                    placeholder={envHasKey ? '(loaded from environment)' : 'sk-...'}
                     autoComplete="off"
                     className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
                   />
-                  <p className="font-label-sm text-on-surface-variant mt-xs">
-                    {intl.formatMessage({ id: 'welcome.model.apiKey.help' })}
-                  </p>
+                  <div className="flex items-center justify-between gap-md mt-xs">
+                    <p className="font-label-sm text-on-surface-variant flex-1">
+                      {intl.formatMessage({ id: 'welcome.model.apiKey.help' })}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={runTestConnection}
+                      disabled={testing || !apiKey}
+                      className="shrink-0 px-md py-xs rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary flex items-center gap-xs"
+                    >
+                      {testing && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
+                      {testing
+                        ? intl.formatMessage({ id: 'welcome.testConnection.testing' })
+                        : intl.formatMessage({ id: 'welcome.testConnection.button' })}
+                    </button>
+                  </div>
                 </div>
               )}
             </Card>

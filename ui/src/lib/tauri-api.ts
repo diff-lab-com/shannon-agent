@@ -151,6 +151,30 @@ export async function switchProvider(req: ProviderSwitchRequest): Promise<void> 
   await invoke('switch_provider', { request: req })
 }
 
+export interface DetectedProvider {
+  provider: string
+  has_api_key: boolean
+}
+
+export async function detectProviderFromEnv(): Promise<DetectedProvider | null> {
+  return invoke('detect_provider_from_env')
+}
+
+export type TestConnectionResult =
+  | { kind: 'success' }
+  | { kind: 'invalid_key' }
+  | { kind: 'rate_limited' }
+  | { kind: 'provider_error'; status: number }
+  | { kind: 'network_unreachable' }
+  | { kind: 'unknown'; message: string }
+
+export async function testProviderConnection(
+  provider: string,
+  apiKey: string,
+): Promise<TestConnectionResult> {
+  return invoke('test_provider_connection', { provider, apiKey })
+}
+
 // --- Models & Status ---
 
 export async function listModels(): Promise<ModelInfo[]> {

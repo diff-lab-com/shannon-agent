@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useIntl } from 'react-intl'
 import { useApp } from '@/context/AppContext'
@@ -6,6 +7,7 @@ import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
 import type { ApprovalMode } from '@/types'
+import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 
 type ApprovalModeKey = ApprovalMode
 
@@ -20,12 +22,18 @@ const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptio
 export default function GeneralSettings() {
   const { config, refreshConfig } = useApp()
   const intl = useIntl()
+  const navigate = useNavigate()
   const t = (id: string) => intl.formatMessage({ id })
   const { locale, setLocale } = useI18n()
   const notify = useNotification()
   const [approvalMode, setApprovalMode] = useState<number>(2) // default to "plan"
   const [saving, setSaving] = useState(false)
   const [testingNotification, setTestingNotification] = useState(false)
+
+  const handleRerunWizard = () => {
+    window.localStorage.removeItem(WELCOME_SEEN_KEY)
+    navigate('/welcome')
+  }
 
   const handleTestNotification = async () => {
     setTestingNotification(true)
@@ -170,6 +178,21 @@ export default function GeneralSettings() {
             {testingNotification
               ? intl.formatMessage({ id: 'settings.notifications.sending' })
               : intl.formatMessage({ id: 'settings.notifications.testButton' })}
+          </button>
+        </section>
+
+        {/* Re-run setup wizard */}
+        <section className="bg-surface-container-lowest rounded-xl border border-outline-variant/30 p-xl shadow-sm">
+          <div className="flex items-center gap-md mb-xs">
+            <span className="material-symbols-outlined text-primary" style={{fontVariationSettings: "'FILL' 1"}}>refresh</span>
+            <h3 className="font-headline-md text-headline-md">{t('settings.general.rerunWizard.title')}</h3>
+          </div>
+          <p className="font-body-sm text-on-surface-variant mb-xl">{t('settings.general.rerunWizard.description')}</p>
+          <button
+            onClick={handleRerunWizard}
+            className="px-lg py-sm rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+          >
+            {t('settings.general.rerunWizard.button')}
           </button>
         </section>
       </div>
