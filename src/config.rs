@@ -35,6 +35,15 @@ pub struct DesktopConfig {
     pub max_tokens: Option<u32>,
     /// Billing plan name (local-app echo of provider plan).
     pub plan: Option<String>,
+    /// Skill loop evaluation enabled (default: false).
+    #[serde(default)]
+    pub skill_loop_enabled: bool,
+    /// Minimum task duration (seconds) to trigger skill evaluation.
+    #[serde(default = "default_skill_loop_min_duration_secs")]
+    pub skill_loop_min_duration_secs: u64,
+    /// Minimum tool call count to trigger skill evaluation.
+    #[serde(default = "default_skill_loop_min_tool_calls")]
+    pub skill_loop_min_tool_calls: usize,
 }
 
 /// MCP server configuration.
@@ -45,6 +54,14 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     pub env: std::collections::HashMap<String, String>,
     pub enabled: bool,
+}
+
+fn default_skill_loop_min_duration_secs() -> u64 {
+    30
+}
+
+fn default_skill_loop_min_tool_calls() -> usize {
+    2
 }
 
 impl Default for DesktopConfig {
@@ -67,6 +84,9 @@ impl Default for DesktopConfig {
             temperature: None,
             max_tokens: None,
             plan: None,
+            skill_loop_enabled: false,
+            skill_loop_min_duration_secs: default_skill_loop_min_duration_secs(),
+            skill_loop_min_tool_calls: default_skill_loop_min_tool_calls(),
         }
     }
 }
@@ -169,12 +189,23 @@ mod tests {
             temperature: None,
             max_tokens: None,
             plan: None,
+            skill_loop_enabled: false,
+            skill_loop_min_duration_secs: 30,
+            skill_loop_min_tool_calls: 2,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.provider, Some("openai".into()));
         assert_eq!(parsed.api_key, Some("sk-test".into()));
         assert_eq!(parsed.model, Some("gpt-4.1".into()));
+    }
+
+    #[test]
+    fn test_skill_loop_config_defaults() {
+        let config = DesktopConfig::default();
+        assert_eq!(config.skill_loop_enabled, false);
+        assert_eq!(config.skill_loop_min_duration_secs, 30);
+        assert_eq!(config.skill_loop_min_tool_calls, 2);
     }
 
     #[test]
@@ -205,6 +236,9 @@ mod tests {
             temperature: None,
             max_tokens: None,
             plan: None,
+            skill_loop_enabled: false,
+            skill_loop_min_duration_secs: 30,
+            skill_loop_min_tool_calls: 2,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -231,6 +265,9 @@ mod tests {
             temperature: None,
             max_tokens: None,
             plan: None,
+            skill_loop_enabled: false,
+            skill_loop_min_duration_secs: 30,
+            skill_loop_min_tool_calls: 2,
         };
 
         // Test serialization preserves approval_mode

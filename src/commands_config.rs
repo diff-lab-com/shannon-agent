@@ -379,6 +379,9 @@ pub async fn switch_provider(
         temperature: existing.temperature,
         max_tokens: existing.max_tokens,
         plan: existing.plan.clone(),
+        skill_loop_enabled: existing.skill_loop_enabled,
+        skill_loop_min_duration_secs: existing.skill_loop_min_duration_secs,
+        skill_loop_min_tool_calls: existing.skill_loop_min_tool_calls,
     };
     drop(existing);
 

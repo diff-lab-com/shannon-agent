@@ -14,6 +14,7 @@ export default function AdvancedSettings() {
   const [telemetryEnabled, setTelemetryEnabled] = useState(config?.telemetry_enabled ?? false)
   const [encryptionEnabled, setEncryptionEnabled] = useState(config?.encryption_enabled ?? true)
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
+  const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
   const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
@@ -51,6 +52,24 @@ export default function AdvancedSettings() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-gutter">
+        {/* Skill Extraction */}
+        <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
+          <div className="flex items-center gap-md mb-md">
+            <div className="p-2 bg-tertiary/10 rounded-lg text-tertiary flex items-center justify-center">
+              <span className="material-symbols-outlined">auto_awesome</span>
+            </div>
+            <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.skillLoop.title')}</h3>
+          </div>
+          <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.skillLoop.description')}</p>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.enabled')}</div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.enabledDesc')}</div>
+            </div>
+            <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" />
+          </div>
+        </div>
+
         {/* Memory Management */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 group hover:shadow-md transition-shadow">
           <div className="flex items-center gap-md mb-md">

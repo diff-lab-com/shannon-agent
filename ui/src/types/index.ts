@@ -181,6 +181,9 @@ export interface DesktopConfig {
   temperature?: number
   max_tokens?: number
   plan?: string
+  skill_loop_enabled?: boolean
+  skill_loop_min_duration_secs?: number
+  skill_loop_min_tool_calls?: number
 }
 
 export interface SendMessageResponse {
