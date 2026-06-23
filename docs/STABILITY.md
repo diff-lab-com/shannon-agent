@@ -60,24 +60,23 @@ Everything else is `unstable` until explicitly promoted.
 
 ## cargo-semver-checks
 
-CI runs `cargo-semver-checks` as an **advisory** step. Failures do not
-block PRs.
+CI runs `cargo-semver-checks --baseline-rev v0.5.5` as an **advisory**
+step. Failures do not block PRs yet.
+
+Baseline is pinned to the `v0.5.5` git tag because the default
+crates.io lookup hits an unrelated `shannon-cli` package squatting the
+name. Bump the baseline only when cutting a new release tag and the
+workspace version has moved.
 
 Promotion to blocking requires:
-1. Pin baseline to a git tag (e.g. `--baseline-rev v0.5.5`) — the
-   default crates.io lookup hits an unrelated `shannon-cli` package
-   published under someone else's name.
-2. Exclude or publish crates not on crates.io (currently
-   `shannon-agents`, `shannon-agent`, etc.).
-3. Verify zero drift against the chosen baseline.
-
-Until those land, failures are surfacing-only.
+1. One full CI run with zero drift against `v0.5.5`.
+2. Remove `continue-on-error: true` and `|| true` from the semver job.
 
 To run locally:
 
 ```bash
 cargo install cargo-semver-checks --locked
-cargo semver-checks --baseline-rev <git-tag>
+cargo semver-checks --baseline-rev v0.5.5
 ```
 
 ## Deprecation cycle
