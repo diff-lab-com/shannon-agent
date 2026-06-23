@@ -15,6 +15,7 @@ fn main() {
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
+    use shannon_desktop::commands_outbound;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_sessions;
@@ -200,6 +201,11 @@ fn main() {
             // P5 Phase 2 — inbound listener supervisor
             commands_notifications::get_inbound_listener_status,
             commands_notifications::stop_inbound_listener,
+            // P1.3 — outbound messaging (Slack + Telegram)
+            commands_outbound::get_outbound_config,
+            commands_outbound::save_outbound_config,
+            commands_outbound::clear_outbound_config,
+            commands_outbound::send_outbound_test,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
             commands_billing::get_billing_plan,
             commands_billing::get_cost_history,

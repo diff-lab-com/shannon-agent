@@ -125,6 +125,47 @@ export async function stopInboundListener(): Promise<void> {
   await invoke('stop_inbound_listener')
 }
 
+export interface SlackOutboundDto {
+  bot_token: string
+  channel: string
+}
+
+export interface TelegramOutboundDto {
+  bot_token: string
+  chat_id: string
+}
+
+export interface OutboundConfigDto {
+  slack?: SlackOutboundDto | null
+  telegram?: TelegramOutboundDto | null
+}
+
+export interface ChannelResult {
+  provider: string
+  ok: boolean
+  error?: string | null
+}
+
+export interface SendResultDto {
+  results: ChannelResult[]
+}
+
+export async function getOutboundConfig(): Promise<OutboundConfigDto> {
+  return invoke('get_outbound_config')
+}
+
+export async function saveOutboundConfig(dto: OutboundConfigDto): Promise<void> {
+  await invoke('save_outbound_config', { dto })
+}
+
+export async function clearOutboundConfig(): Promise<void> {
+  await invoke('clear_outbound_config')
+}
+
+export async function sendOutboundTest(message: string): Promise<SendResultDto> {
+  return invoke('send_outbound_test', { message })
+}
+
 export type NotificationLevel = 'info' | 'warning' | 'error' | 'success'
 
 export interface NotificationPayload {

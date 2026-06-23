@@ -14,6 +14,7 @@ import * as api from '@/lib/tauri-api'
 import SlackWizard from './notifications/SlackWizard'
 import TelegramWizard from './notifications/TelegramWizard'
 import EmailWizard from './notifications/EmailWizard'
+import OutboundSection from './notifications/OutboundSection'
 
 type ChannelType = 'slack' | 'telegram' | 'email' | null
 
@@ -352,6 +353,10 @@ export default function NotificationsSettings() {
       </div>
 
       <WebhookSection />
+
+      <div className="mt-xl">
+        <OutboundSection />
+      </div>
 
       <div className="mt-xl">
         <div className="mb-lg">
