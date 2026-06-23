@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, memo } from 'react'
+import { useEffect, useMemo, useRef, useState, memo, useCallback } from 'react'
 import { useIntl } from 'react-intl'
+import { toast } from 'sonner'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import { Markdown } from '@/components/chat/Markdown'
 import { Button } from '@/components/ui/button'
@@ -39,6 +40,24 @@ export const ResearchReportModal = memo(function ResearchReportModal({
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
 
+  const handleExportPdf = useCallback(() => {
+    try {
+      const printWindow = window.open('', '_blank', 'width=900,height=700')
+      if (!printWindow) {
+        toast.error(t('chat.report.printFailed'), { description: t('chat.report.popupBlocked') })
+        return
+      }
+      const doc = printWindow.document
+      doc.title = report.title
+      doc.head.appendChild(buildStyleElement(doc))
+      doc.body.appendChild(buildReportDom(doc, report))
+      printWindow.focus()
+      setTimeout(() => printWindow.print(), 250)
+    } catch (e) {
+      toast.error(t('chat.report.printFailed'), { description: String(e) })
+    }
+  }, [report, t])
+
   if (!open) return null
 
   return (
@@ -64,13 +83,24 @@ export const ResearchReportModal = memo(function ResearchReportModal({
             </div>
             <h2 className="text-headline-sm font-bold text-on-surface truncate">{report.title}</h2>
           </div>
-          <Button
-            aria-label={t('chat.report.close.aria')}
-            onClick={onClose}
-            className="shrink-0 rounded-full p-sm hover:bg-surface-container"
-          >
-            <span className="material-symbols-outlined">close</span>
-          </Button>
+          <div className="flex items-center gap-xs shrink-0">
+            <Button
+              aria-label={t('chat.report.export.aria')}
+              onClick={handleExportPdf}
+              className="rounded-lg px-sm py-xs hover:bg-surface-container text-on-surface-variant"
+              title={t('chat.report.export')}
+            >
+              <span className="material-symbols-outlined text-[18px]">picture_as_pdf</span>
+              <span className="text-label-sm ml-xs hidden sm:inline">{t('chat.report.export')}</span>
+            </Button>
+            <Button
+              aria-label={t('chat.report.close.aria')}
+              onClick={onClose}
+              className="rounded-full p-sm hover:bg-surface-container"
+            >
+              <span className="material-symbols-outlined">close</span>
+            </Button>
+          </div>
         </header>
 
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1.6fr_1fr] overflow-hidden">
@@ -216,4 +246,101 @@ function splitByCitations(text: string): Segment[] {
   }
   if (last < text.length) out.push({ kind: 'text', value: text.slice(last) })
   return out
+}
+
+const CITATION_PRINT_PATTERN = /\[(\d+)\]/g
+
+function stripCitations(text: string): string {
+  return text.replace(CITATION_PRINT_PATTERN, (_m, n: string) => `[${n}]`)
+}
+
+function buildStyleElement(doc: Document): HTMLStyleElement {
+  const style = doc.createElement('style')
+  style.textContent = `
+    body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; color: #111; max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 24px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin-top: 28px; color: #444; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+    h3 { font-size: 16px; margin-top: 22px; }
+    .summary { font-style: italic; color: #444; margin: 12px 0 24px; }
+    .meta { color: #666; font-size: 12px; margin-bottom: 24px; }
+    .citations { margin-top: 32px; padding-top: 16px; border-top: 1px solid #ddd; }
+    .citation { margin-bottom: 8px; padding-left: 28px; position: relative; }
+    .citation .num { position: absolute; left: 0; top: 0; font-weight: 600; color: #666; }
+    .citation a { color: #0066cc; text-decoration: none; word-break: break-all; }
+    .citation a:hover { text-decoration: underline; }
+    pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 13px; }
+    p { white-space: pre-wrap; }
+  `
+  return style
+}
+
+function buildReportDom(doc: Document, report: ResearchReport): HTMLElement {
+  const root = doc.createElement('div')
+
+  const h1 = doc.createElement('h1')
+  h1.textContent = report.title
+  root.appendChild(h1)
+
+  const meta = doc.createElement('div')
+  meta.className = 'meta'
+  meta.textContent = new Date(report.generated_at).toLocaleString()
+  root.appendChild(meta)
+
+  const summary = doc.createElement('p')
+  summary.className = 'summary'
+  summary.textContent = report.summary
+  root.appendChild(summary)
+
+  for (const s of report.sections) {
+    const h2 = doc.createElement('h2')
+    h2.textContent = s.heading
+    root.appendChild(h2)
+    appendParagraphsWithCitations(doc, root, s.body)
+  }
+
+  if (report.citations.length > 0) {
+    const h2 = doc.createElement('h2')
+    h2.textContent = 'Citations'
+    root.appendChild(h2)
+    const ol = doc.createElement('div')
+    ol.className = 'citations'
+    for (const c of report.citations) {
+      const row = doc.createElement('div')
+      row.className = 'citation'
+      const num = doc.createElement('span')
+      num.className = 'num'
+      num.textContent = `[${c.id}]`
+      row.appendChild(num)
+      if (c.url) {
+        const a = doc.createElement('a')
+        a.href = c.url
+        a.target = '_blank'
+        a.rel = 'noreferrer'
+        a.textContent = c.title
+        row.appendChild(a)
+      } else {
+        const titleSpan = doc.createElement('span')
+        titleSpan.textContent = c.title
+        row.appendChild(titleSpan)
+      }
+      if (c.source) {
+        const src = doc.createElement('span')
+        src.textContent = ` — ${c.source}`
+        row.appendChild(src)
+      }
+      ol.appendChild(row)
+    }
+    root.appendChild(ol)
+  }
+
+  return root
+}
+
+function appendParagraphsWithCitations(doc: Document, parent: HTMLElement, body: string): void {
+  for (const paragraph of body.split(/\n{2,}/)) {
+    const p = doc.createElement('p')
+    p.textContent = stripCitations(paragraph.trim())
+    parent.appendChild(p)
+  }
 }

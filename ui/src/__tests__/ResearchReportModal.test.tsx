@@ -62,6 +62,38 @@ describe('ResearchReportModal', () => {
     expect(onClose).toHaveBeenCalled()
   })
 
+  it('opens a print window with report content when Export PDF is clicked', () => {
+    const headAppendChild = vi.fn()
+    const bodyAppendChild = vi.fn()
+    const printDoc = {
+      title: '',
+      head: { appendChild: headAppendChild },
+      body: { appendChild: bodyAppendChild },
+      createElement: vi.fn((tag: string) => ({
+        tagName: tag.toUpperCase(),
+        textContent: '',
+        appendChild: vi.fn(),
+        setAttribute: vi.fn(),
+      })),
+      createTextNode: vi.fn(),
+    }
+    const printWin = {
+      document: printDoc,
+      focus: vi.fn(),
+      print: vi.fn(),
+    }
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(printWin as unknown as Window)
+    render(<ResearchReportModal report={sampleReport} open onClose={() => {}} />)
+    const exportBtn = screen.getByLabelText('Export report as PDF via system print dialog')
+    fireEvent.click(exportBtn)
+    expect(openSpy).toHaveBeenCalledWith('', '_blank', 'width=900,height=700')
+    expect(printDoc.title).toBe('Vector DB Comparison')
+    expect(headAppendChild).toHaveBeenCalled()
+    expect(bodyAppendChild).toHaveBeenCalled()
+    expect(printWin.focus).toHaveBeenCalled()
+    openSpy.mockRestore()
+  })
+
   it('shows empty state when no citations', () => {
     const noCitations: ResearchReport = {
       ...sampleReport,
