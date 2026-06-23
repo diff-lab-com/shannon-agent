@@ -13,6 +13,7 @@ import type { TaskItem } from '@/types'
 vi.mock('@/lib/tauri-api', () => ({
   startBackgroundTask: vi.fn().mockResolvedValue('ok'),
   configure: vi.fn().mockResolvedValue(undefined),
+  updateTask: vi.fn().mockResolvedValue(undefined),
 }))
 
 function renderBoard(tasks: TaskItem[] = []) {
