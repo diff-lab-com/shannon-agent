@@ -286,6 +286,24 @@ fn builtin_skills() -> Vec<CatalogEntry> {
             "/sql",
             &["sql", "native", "database"],
         ),
+        native(
+            "plotly-charts",
+            "Generate Plotly figures from data. Returns a JSON chart spec compatible with the chat chart renderer, or an interactive HTML file for richer figures.",
+            "/plotly",
+            &["python", "plotly", "charts", "data-analysis"],
+        ),
+        native(
+            "data-analysis",
+            "Load CSV/JSON/parquet via pandas, summarise distributions, surface outliers, and produce a markdown report with embedded charts.",
+            "/analyze",
+            &["python", "pandas", "data-analysis", "statistics"],
+        ),
+        native(
+            "jupyter-session",
+            "Persistent Python kernel session: keep variables across turns, render matplotlib/plotly figures inline.",
+            "/py",
+            &["python", "jupyter", "kernel", "data-analysis"],
+        ),
     ]
 }
 
@@ -349,8 +367,8 @@ mod tests {
             .filter(|e| e.source == CatalogSource::Native)
             .count();
         assert!(
-            native_count >= 10,
-            "expected at least 10 native entries, got {native_count}"
+            native_count >= 13,
+            "expected at least 13 native entries, got {native_count}"
         );
     }
 
@@ -360,8 +378,8 @@ mod tests {
         let client = SkillCatalogClient::new(Arc::new(StaticFetch(manifest_json())))
             .with_cache_dir(tmp.path());
         let entries = client.list_skills().await.expect("list");
-        // 10 native + 2 skills × 2 upstreams = 14
-        assert_eq!(entries.len(), 14);
+        // 13 native + 2 skills × 2 upstreams = 17
+        assert_eq!(entries.len(), 17);
         let brainstorming = entries
             .iter()
             .find(|e| e.name == "brainstorming")
@@ -388,8 +406,20 @@ mod tests {
         let client2 = SkillCatalogClient::new(http_bad).with_cache_dir(tmp.path());
         let second = client2.list_skills().await.expect("list");
         assert_eq!(first.len(), second.len());
-        // 10 native + 2 × 2 upstream = 14
-        assert_eq!(first.len(), 14);
+        // 13 native + 2 × 2 upstream = 17
+        assert_eq!(first.len(), 17);
+    }
+
+    #[tokio::test]
+    async fn exposes_plotly_data_analysis_skills() {
+        let client = SkillCatalogClient::new(Arc::new(StaticFetch("{}".to_string())));
+        let entries = client.list_skills().await.expect("list");
+        for required in ["plotly-charts", "data-analysis", "jupyter-session"] {
+            assert!(
+                entries.iter().any(|e| e.name == required),
+                "expected {required} in catalog"
+            );
+        }
     }
 
     #[tokio::test]

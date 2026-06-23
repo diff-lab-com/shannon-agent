@@ -68,6 +68,7 @@ export interface ChatMessage {
   tool_calls?: ToolCall[]
   thinking?: string
   file_attachments?: FileAttachment[]
+  research_report?: ResearchReport
 }
 
 export interface ToolCall {
@@ -79,6 +80,28 @@ export interface ToolCall {
   progress?: number
   progress_message?: string
   status: 'running' | 'completed' | 'error'
+}
+
+export interface ResearchReport {
+  title: string
+  summary: string
+  sections: ResearchSection[]
+  citations: ResearchCitation[]
+  generated_at: number
+}
+
+export interface ResearchSection {
+  heading: string
+  body: string
+}
+
+export interface ResearchCitation {
+  id: number
+  title: string
+  url?: string
+  snippet?: string
+  source?: string
+  accessed_at?: number
 }
 
 export interface FileAttachment {
