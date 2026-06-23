@@ -9,6 +9,8 @@
 //!
 //! Common types used across the Shannon project.
 
+pub mod events;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
