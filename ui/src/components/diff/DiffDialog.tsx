@@ -15,6 +15,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import DiffViewer from '@/components/diff/DiffViewer'
+import { useDiffKeyboard } from '@/hooks/useDiffKeyboard'
 import * as api from '@/lib/tauri-api'
 import { computeHunks, mergeFile, type HunkDecision } from '@/lib/diff-merge'
 import type { FileDiff } from '@/types'
@@ -108,6 +109,18 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
     setDecisions(new Map())
   }
 
+  const handleSetDecision = (hunkId: string, decision: HunkDecision) => {
+    setDecisions(prev => {
+      const next = new Map(prev)
+      if (decision === 'pending') {
+        next.delete(hunkId)
+      } else {
+        next.set(hunkId, decision)
+      }
+      return next
+    })
+  }
+
   const handleApply = async () => {
     if (!diff || !filePath) return
     setApplying(true)
@@ -126,6 +139,14 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
       setApplying(false)
     }
   }
+
+  const { currentHunkId } = useDiffKeyboard({
+    enabled: open && !!diff,
+    hunks,
+    onToggleDecision: handleSetDecision,
+    onApply: acceptedCount > 0 ? handleApply : undefined,
+  })
+  void currentHunkId
 
   if (!open) return null
 
