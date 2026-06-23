@@ -2,6 +2,50 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — D-group + P0 fixes] — Skill loop + events refactor
+
+### Fixes
+
+- **Skill loop OOM root cause.** `SkillProposalReviewPanel.tsx` had
+  `useEffect(..., [open, t])` where `t` was an inline closure recreated
+  every render, causing an infinite re-render loop that eventually
+  triggered `v8::FatalProcessOutOfMemory`. The fix wraps `t` in
+  `useCallback(..., [intl])` so the dep is stable across renders. UI
+  suite: 94/94 files pass in 53 s (previously 127 s + 1 file hung).
+  (`s2/p0-skill-loop-fixes`)
+
+- **Skill loop tool_calls collection.** `commands.rs::send_message` now
+  collects real `tool_call_count` and `tool_names_used` from the
+  `QueryEvent::ToolUseRequest` stream (previously a placeholder 0).
+  `duration_secs` uses actual elapsed time from `Instant::now()` rather
+  than the configured minimum threshold. The skill loop evaluator now
+  has the data it needs to judge task complexity accurately.
+
+### Changes
+
+- **Events moved to `shannon_types::events` (D4).** All 23 event
+  payload structs + the `event_names` module now live in the engine
+  crate so the shell and engine share a single wire-format contract.
+  `src/events.rs` shrinks from 465 to ~160 lines: a re-export plus
+  the two Tauri-specific `emit_task_step` / `emit_task_retry` helpers
+  that cannot move because they depend on `tauri::AppHandle`. The
+  engine also gains `EventEnvelope<T>` and `EVENT_SCHEMA_VERSION = 1`
+  for future event families that need forward-compatible negotiation.
+  No wire-format change: field names, serde attrs, and event-name
+  strings are identical. UI tests 1012/1012 pass; Rust tests 324/324
+  pass.
+
+- **Engine pin bumped to `30b4a35`.** Picks up shannon-code PRs #45
+  (D4 events) and #46 (D3 API semver — workspace version aligned to
+  0.5.5, `STABILITY.md` policy, advisory `cargo-semver-checks` CI).
+
+### Documentation
+
+- **Skill loop setup guide.** New `docs/user/skill-loop.md` covering
+  enable/disable, tuning thresholds, dedup behavior, privacy
+  contract, and a troubleshooting table. Distinct from the design
+  doc (`docs/architecture/e2-skill-loop.md`) which covers internals.
+
 ## [Unreleased — P1.1 M1] — Diff review loop (single file)
 
 ### Features
