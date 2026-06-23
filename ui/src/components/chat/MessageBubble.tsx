@@ -17,6 +17,7 @@ import {
   ToolHeader,
   ToolContent,
 } from '@/components/ai-elements'
+import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 
 interface MessageBubbleProps {
@@ -119,6 +120,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const isUser = message.role === 'user'
   const [liked, setLiked] = useState(false)
   const [isBranching, setIsBranching] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
   const { sendMessage, currentSessionId, switchSession, refreshSessions } = useApp()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -152,6 +154,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   }
 
   const hasAttachments = message.file_attachments && message.file_attachments.length > 0
+  const hasReport = !!message.research_report
 
   if (isUser) {
     return (
@@ -217,7 +220,24 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
           </Button>
+          {hasReport && (
+            <Button
+              aria-label={t('chat.message.report.aria')}
+              onClick={() => setReportOpen(true)}
+              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors"
+            >
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">article</span>
+              <span className="text-label-sm">{t('chat.message.report')}</span>
+            </Button>
+          )}
         </ActionToolbar>
+        {hasReport && (
+          <ResearchReportModal
+            report={message.research_report!}
+            open={reportOpen}
+            onClose={() => setReportOpen(false)}
+          />
+        )}
       </MessageContent>
     </Message>
   )
