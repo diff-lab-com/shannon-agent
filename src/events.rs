@@ -8,6 +8,16 @@
 //!
 //! See `docs/architecture/d4-state-sync-protocol.md` for the schema
 //! versioning contract.
+//!
+//! **`events::ChatMessage` vs `commands::ChatMessage`** — these are
+//! distinct types with different roles, not duplicates:
+//! - `events::ChatMessage` (re-exported here from `shannon_types::events`)
+//!   is the wire format emitted to the frontend: 3 fields
+//!   (`role`, `content`, `timestamp`).
+//! - `commands::ChatMessage` (defined in `src/commands.rs`) is the
+//!   app-internal representation that additionally carries
+//!   `file_attachments`. Conversion happens at the IPC boundary inside
+//!   `commands_sessions::load_session` and `switch_session`.
 
 #[cfg(feature = "tauri")]
 use tauri::Emitter;
