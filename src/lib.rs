@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 pub mod config;
 pub mod events;
 pub mod extensions;
+pub mod file_permissions;
 pub mod mcp;
 pub mod routine_templates;
 

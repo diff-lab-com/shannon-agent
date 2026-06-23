@@ -108,7 +108,9 @@ pub fn save_config(config: &DesktopConfig) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    crate::file_permissions::restrict_to_owner(&path);
+    Ok(())
 }
 
 /// Load MCP server configs from disk.
@@ -127,7 +129,9 @@ pub fn save_mcp_servers(servers: &[McpServerConfig]) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(servers).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    crate::file_permissions::restrict_to_owner(&path);
+    Ok(())
 }
 
 #[cfg(test)]
