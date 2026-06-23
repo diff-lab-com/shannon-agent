@@ -15,12 +15,12 @@ We follow Cargo semver:
 - **Patch** (0.5.5 → 0.5.6): additive changes, bug fixes, performance.
   Existing public APIs continue to compile and behave identically.
 - **Minor** (0.5.5 → 0.6.0): breaking changes to APIs marked
-  `#[unstable]` or undocumented. New stable APIs may land here too.
+  `#[unstable_api]` or undocumented. New stable APIs may land here too.
 - **Major** (0.x → 1.0): reserved for the stability lock-down — no
-  breaking changes to `#[stable]` APIs without a deprecation cycle.
+  breaking changes to `#[stable_api]` APIs without a deprecation cycle.
 
 Until 1.0, treat every minor bump as potentially breaking for any API
-not marked `#[stable]`.
+not marked `#[stable_api]`.
 
 ## Stability tiers
 
@@ -29,14 +29,14 @@ Until items are explicitly tagged, assume `unstable`.
 
 | Tier | Marker | Stability promise |
 |------|--------|-------------------|
-| **Stable** | `#[stable]` attribute + doc entry | No breaking changes without deprecation cycle + minor bump. |
-| **Unstable** | (default — no marker) | May break in any minor bump. Safe to depend on inside the workspace; external consumers should pin. |
+| **Stable** | `#[stable_api(since = "...")]` attribute + doc entry | No breaking changes without deprecation cycle + minor bump. |
+| **Unstable** | (default — no marker, or `#[unstable_api]`) | May break in any minor bump. Safe to depend on inside the workspace; external consumers should pin. |
 | **Deprecated** | `#[deprecated]` attribute | Scheduled for removal. Migration note required in doc comment. |
 | **Internal** | `#[doc(hidden)]` | Not part of the public API. May be removed without bump. |
 
-`#[stable]` is a custom attribute — see `crates/shannon-codegen/` for
-the macro definition (landing in a follow-up PR). Until that lands,
-stability is documented per-module in this file.
+The attribute macros live in `crates/shannon-stability-attr/`. The names
+`stable_api` / `unstable_api` are used because Rust reserves `#[stable]`
+and `#[unstable]` for the standard library (E0734).
 
 ## Currently stable surface (as of 0.5.5)
 
@@ -60,25 +60,33 @@ Everything else is `unstable` until explicitly promoted.
 
 ## cargo-semver-checks
 
-CI runs `cargo-semver-checks` against the latest published tag as an
-**advisory** step. Failures do not block PRs; they are surfaced in the
-PR comment for review. Promote a failure to a hard block only after the
-affected API has been marked `#[stable]`.
+CI runs `cargo-semver-checks` as an **advisory** step. Failures do not
+block PRs.
+
+Promotion to blocking requires:
+1. Pin baseline to a git tag (e.g. `--baseline-rev v0.5.5`) — the
+   default crates.io lookup hits an unrelated `shannon-cli` package
+   published under someone else's name.
+2. Exclude or publish crates not on crates.io (currently
+   `shannon-agents`, `shannon-agent`, etc.).
+3. Verify zero drift against the chosen baseline.
+
+Until those land, failures are surfacing-only.
 
 To run locally:
 
 ```bash
 cargo install cargo-semver-checks --locked
-cargo semver-checks
+cargo semver-checks --baseline-rev <git-tag>
 ```
 
 ## Deprecation cycle
 
-When a `#[stable]` API needs to break:
+When a `#[stable_api]` API needs to break:
 
 1. Add `#[deprecated(since = "0.x.y", note = "Migration plan...")]` on
    the old API.
-2. Ship the new API alongside it, marked `#[stable]`.
+2. Ship the new API alongside it, marked `#[stable_api]`.
 3. Wait one minor cycle.
 4. Remove the deprecated API in the next minor bump.
 

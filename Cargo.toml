@@ -13,6 +13,7 @@ members = [
     "crates/shannon-skills",
     "crates/shannon-tool-interface",
     "crates/shannon-codegen",
+    "crates/shannon-stability-attr",
 ]
 
 [workspace.package]
@@ -87,6 +88,12 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
 # Property-based testing
 proptest = "1"
+
+# Proc-macro infrastructure (for shannon-stability-attr)
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+shannon-stability-attr = { path = "crates/shannon-stability-attr" }
 
 [profile.release]
 opt-level = 3
