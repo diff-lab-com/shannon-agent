@@ -117,6 +117,7 @@ pub mod session_recovery;
 pub mod session_transcript;
 pub mod skill_loop;
 pub mod team_memory_sync;
+pub mod telemetry;
 pub mod ui_adapter;
 pub mod webhook;
 
@@ -124,6 +125,58 @@ pub mod testing;
 
 pub mod i18n;
 pub mod triggered_routines;
+
+// ============================================================================
+// Phase 1: Internal Domain Reorganization
+// These pub mod blocks organize modules by domain for future extraction.
+// All existing pub use paths remain unchanged for backward compatibility.
+// ============================================================================
+
+// Domain 1: Hooks - Hook event system, permission classification, profiles, policy limits
+pub mod hooks_domain {
+    pub use super::hooks::*;
+    pub use super::permission_classifier::*;
+    pub use super::permission_profile::*;
+    pub use super::policy_limits::*;
+}
+
+// Domain 2: Billing - Billing, AI limits, rate limiting, telemetry, analytics
+pub mod billing_domain {
+    pub use super::ai_limits::*;
+    pub use super::analytics::*;
+    pub use super::billing::*;
+    pub use super::rate_limit::*;
+    pub use super::rate_limit_messages::*;
+    pub use super::telemetry::*;
+}
+
+// Domain 3: Scheduled - Scheduled routines and task management
+pub mod scheduled_domain {
+    pub use super::scheduled_routines::*;
+}
+
+// Domain 4: Media - Voice mode, sleep prevention, VCR, webhook, recording
+pub mod media_domain {
+    pub use super::prevent_sleep::*;
+    pub use super::recording::*;
+    pub use super::vcr::*;
+    pub use super::voice_mode::*;
+    pub use super::webhook::*;
+}
+
+// Domain 5: LSP - Language Server Protocol client
+pub mod lsp_domain {
+    pub use super::lsp::*;
+}
+
+// Domain 6: Memory - Memory storage, extraction, preferences, projects, team sync
+pub mod memory_domain {
+    pub use super::extract_memories::*;
+    pub use super::memory::*;
+    pub use super::preference_memory::*;
+    pub use super::project_memory::*;
+    pub use super::team_memory_sync::*;
+}
 
 // Re-export key types for convenience
 pub use ai_limits::{AiLimitType, AiLimitsTracker, AiUsageRecord, LimitStatus};
