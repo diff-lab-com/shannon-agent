@@ -1,6 +1,6 @@
 [package]
 name = "shannon-cli"
-version = "0.2.4"
+version.workspace = true
 edition = "2024"
 description = "AI-powered code assistant with multi-provider LLM support"
 authors = ["Shannon Code Contributors"]
