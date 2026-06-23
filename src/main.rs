@@ -12,6 +12,7 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_files;
+    use shannon_desktop::commands_memory;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
@@ -214,6 +215,14 @@ fn main() {
             commands_billing::get_billing_plan,
             commands_billing::get_cost_history,
             commands_billing::get_billing_history,
+            // P2.1 — persistent memory layer (wraps shannon_core::memory::MemoryStore)
+            commands_memory::list_memory_projects,
+            commands_memory::list_memories,
+            commands_memory::create_memory,
+            commands_memory::update_memory,
+            commands_memory::delete_memory,
+            commands_memory::search_memories,
+            commands_memory::get_memory_stats,
         ])
         .setup(|app| {
             let mut state = commands::AppState::new();

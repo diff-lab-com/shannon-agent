@@ -142,4 +142,19 @@ vi.mock('@/lib/tauri-api', () => ({
   queryDataSource: vi.fn().mockResolvedValue({ items: [], total: 0, has_more: false }),
   listRoutineTemplates: vi.fn().mockResolvedValue([]),
   instantiateRoutineTemplate: vi.fn().mockResolvedValue({ id: 'test', name: 'Test' }),
+  listMemoryProjects: vi.fn().mockResolvedValue([]),
+  listMemories: vi.fn().mockResolvedValue([]),
+  createMemory: vi.fn().mockResolvedValue({
+    id: 'mem-1', project: '.', category: 'context', content: '',
+    tags: [], confidence: 1.0, created_at: '', accessed_at: '', access_count: 0,
+  }),
+  updateMemory: vi.fn().mockResolvedValue({
+    id: 'mem-1', project: '.', category: 'context', content: '',
+    tags: [], confidence: 1.0, created_at: '', accessed_at: '', access_count: 0,
+  }),
+  deleteMemory: vi.fn().mockResolvedValue(true),
+  searchMemories: vi.fn().mockResolvedValue([]),
+  getMemoryStats: vi.fn().mockResolvedValue({
+    total: 0, by_category: {}, by_project: {}, most_recent_at: null,
+  }),
 }))

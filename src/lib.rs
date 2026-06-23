@@ -104,6 +104,9 @@ pub mod commands_billing;
 pub mod commands_config;
 
 #[cfg(feature = "tauri")]
+pub mod commands_memory;
+
+#[cfg(feature = "tauri")]
 pub mod commands_chat;
 
 #[cfg(feature = "tauri")]

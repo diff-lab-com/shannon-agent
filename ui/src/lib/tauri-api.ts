@@ -1162,3 +1162,76 @@ export async function instantiateRoutineTemplate(
     nameOverride: nameOverride ?? null,
   })
 }
+
+// ---------------------------------------------------------------------------
+// P2.1 — Persistent memory layer (wraps shannon_core::memory::MemoryStore)
+// ---------------------------------------------------------------------------
+
+export type MemoryCategory = 'preference' | 'pattern' | 'decision' | 'error' | 'context'
+
+export interface MemoryEntry {
+  id: string
+  project: string
+  category: MemoryCategory
+  content: string
+  tags: string[]
+  confidence: number
+  created_at: string
+  accessed_at: string
+  access_count: number
+}
+
+export interface MemoryStats {
+  total: number
+  by_category: Record<string, number>
+  by_project: Record<string, number>
+  most_recent_at: string | null
+}
+
+export async function listMemoryProjects(): Promise<string[]> {
+  return invoke('list_memory_projects')
+}
+
+export async function listMemories(opts?: {
+  project?: string | null
+  category?: string | null
+  query?: string | null
+}): Promise<MemoryEntry[]> {
+  return invoke('list_memories', {
+    project: opts?.project ?? null,
+    category: opts?.category ?? null,
+    query: opts?.query ?? null,
+  })
+}
+
+export async function createMemory(input: {
+  project: string
+  category: string
+  content: string
+  tags?: string[]
+  confidence?: number
+}): Promise<MemoryEntry> {
+  return invoke('create_memory', input)
+}
+
+export async function updateMemory(input: {
+  id: string
+  content?: string | null
+  tags?: string[] | null
+  category?: string | null
+}): Promise<MemoryEntry> {
+  return invoke('update_memory', input)
+}
+
+export async function deleteMemory(id: string): Promise<boolean> {
+  return invoke('delete_memory', { id })
+}
+
+export async function searchMemories(query: string, project?: string | null): Promise<MemoryEntry[]> {
+  return invoke('search_memories', { query, project: project ?? null })
+}
+
+export async function getMemoryStats(): Promise<MemoryStats> {
+  return invoke('get_memory_stats')
+}
+
