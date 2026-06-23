@@ -1372,6 +1372,8 @@
   "chat.report.close.aria": "关闭报告",
   "chat.report.generatedAt": "生成于 {ts}",
   "chat.report.sections": "小节",
+  "chat.footnotes.section": "脚注",
+  "chat.footnotes.back": "返回引用 {id}",
   "editor.title": "代码编辑器",
   "editor.loading": "加载中…",
   "editor.running": "运行中…",

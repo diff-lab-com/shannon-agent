@@ -1372,6 +1372,8 @@
   "chat.report.close.aria": "Close report",
   "chat.report.generatedAt": "Generated {ts}",
   "chat.report.sections": "sections",
+  "chat.footnotes.section": "Footnotes",
+  "chat.footnotes.back": "Back to reference {id}",
   "editor.title": "Code Editor",
   "editor.loading": "Load file",
   "editor.running": "Re-run diagnostics",

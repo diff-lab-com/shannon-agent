@@ -7,6 +7,7 @@ import { useApp } from '@/context/AppContext'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
+import { FootnoteMarkdown } from '@/components/chat/FootnoteMarkdown'
 import {
   Message,
   MessageAvatar,
@@ -200,7 +201,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
       <MessageContent className="space-y-md flex-1">
         <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm">
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
-            <Markdown>{message.content}</Markdown>
+            <FootnoteMarkdown>{message.content}</FootnoteMarkdown>
           </ResponseStream>
           {message.tool_calls && message.tool_calls.length > 0 && (
             <div className="mt-md space-y-sm">
