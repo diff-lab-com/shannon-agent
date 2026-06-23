@@ -296,6 +296,10 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
            <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
         </NavLink>
+        <NavLink to="/memory" className={getNavClass} onClick={handleNavClick}>
+           <span className="material-symbols-outlined">psychology</span>
+           <span className="flex-1">{intl.formatMessage({ id: 'nav.memory' })}</span>
+        </NavLink>
 
         {/* Triage full-page navigation */}
         <NavLink
