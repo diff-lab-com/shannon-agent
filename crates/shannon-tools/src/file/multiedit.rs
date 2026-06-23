@@ -178,9 +178,6 @@ mod tests {
         for p in paths {
             let _ = std::fs::remove_file(p);
         }
-        if let Some(dir) = paths.first().and_then(|p| p.parent()) {
-            let _ = std::fs::remove_dir(dir);
-        }
     }
 
     #[tokio::test]
