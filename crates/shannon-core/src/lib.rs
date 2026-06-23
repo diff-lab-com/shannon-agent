@@ -115,6 +115,7 @@ pub mod scheduled_worktree;
 pub mod session_persist;
 pub mod session_recovery;
 pub mod session_transcript;
+pub mod skill_loop;
 pub mod team_memory_sync;
 pub mod ui_adapter;
 pub mod webhook;
