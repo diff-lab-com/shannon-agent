@@ -311,6 +311,8 @@
   "palette.toast.switchFailed": "Failed to switch model",
   "palette.footer.shortcuts": "↑↓ navigate  ↵ select  esc close",
   "palette.footer.results": "{count, plural, =1 {1 result} other {{count, number} results}}",
+  "tasks.steps.empty": "No steps streamed yet.",
+  "tasks.steps.retrying": "Retrying (attempt {attempt}/{max})…",
   "tasks.tab.active": "Active",
   "tasks.tab.history": "History",
   "tasks.tab.worktrees": "Worktrees",

@@ -4,6 +4,8 @@
 //! JSON payloads emitted via `app_handle.emit()`.
 
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "tauri")]
+use tauri::Emitter;
 
 /// A streaming text chunk from the LLM.
 #[derive(Debug, Clone, Serialize)]
@@ -185,6 +187,104 @@ pub struct DiffHunk {
     pub content: String,
 }
 
+/// P1.2 workflow streaming — a task has moved to a new step.
+///
+/// Emitted by scheduled_commands at step boundaries (start, progress,
+/// complete, fail). The Tasks UI listens via `useTauriEvent` and updates
+/// the step indicator in real time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskStepPayload {
+    pub task_id: String,
+    pub run_id: String,
+    /// 1-indexed step position within the current run.
+    pub step_index: usize,
+    /// Total number of steps in the routine (0 if unknown).
+    pub step_total: usize,
+    /// Human-readable label for the step (e.g., "Running query", "Applying diff").
+    pub step_label: String,
+    /// "started" | "completed" | "failed"
+    pub status: String,
+    /// Optional error message when status === "failed".
+    pub error: Option<String>,
+    /// Unix-millis timestamp when the event was emitted.
+    pub timestamp_ms: u64,
+}
+
+/// P1.2 workflow streaming — a task is being auto-retried after a failure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskRetryPayload {
+    pub task_id: String,
+    pub run_id: String,
+    /// 1-indexed retry attempt (1 = first retry after the initial failure).
+    pub attempt: usize,
+    /// Total attempts configured (initial run + max_retries).
+    pub max_attempts: usize,
+    /// Delay before the next attempt starts, in milliseconds.
+    pub delay_ms: u64,
+    /// Error from the previous failed attempt.
+    pub last_error: String,
+    /// Unix-millis timestamp when the event was emitted.
+    pub timestamp_ms: u64,
+}
+
+/// P1.2 workflow streaming — helper to emit a `task-step` event from
+/// anywhere with an `AppHandle`. Silently no-ops on emit error so a
+/// frontend disconnect never breaks task execution.
+pub fn emit_task_step<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    run_id: &str,
+    step_index: usize,
+    step_total: usize,
+    step_label: &str,
+    status: &str,
+    error: Option<&str>,
+) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let payload = TaskStepPayload {
+        task_id: task_id.into(),
+        run_id: run_id.into(),
+        step_index,
+        step_total,
+        step_label: step_label.into(),
+        status: status.into(),
+        error: error.map(|s| s.into()),
+        timestamp_ms,
+    };
+    let _ = app.emit(event_names::TASK_STEP, payload);
+}
+
+/// P1.2 workflow streaming — helper to emit a `task-retry` event.
+pub fn emit_task_retry<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    task_id: &str,
+    run_id: &str,
+    attempt: usize,
+    max_attempts: usize,
+    delay_ms: u64,
+    last_error: &str,
+) {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let payload = TaskRetryPayload {
+        task_id: task_id.into(),
+        run_id: run_id.into(),
+        attempt,
+        max_attempts,
+        delay_ms,
+        last_error: last_error.into(),
+        timestamp_ms,
+    };
+    let _ = app.emit(event_names::TASK_RETRY, payload);
+}
+
 /// Tauri event names used in emit/listen.
 pub mod event_names {
     pub const QUERY_TEXT: &str = "query:text";
@@ -207,6 +307,12 @@ pub mod event_names {
     pub const UPDATE_PROGRESS: &str = "update-progress";
     pub const UPDATE_COMPLETED: &str = "update-completed";
     pub const CHECK_UPDATES: &str = "check-updates";
+    /// P1.2 workflow streaming — emitted by scheduled_commands at step
+    /// boundaries so the Tasks UI can show live execution progress.
+    pub const TASK_STEP: &str = "task-step";
+    /// P1.2 workflow streaming — emitted when a failed task is auto-retried
+    /// per the routine's retry config.
+    pub const TASK_RETRY: &str = "task-retry";
 }
 
 #[cfg(test)]
@@ -244,6 +350,47 @@ mod tests {
         assert!(event_names::QUERY_TOOL_START.contains(':'));
         assert!(event_names::QUERY_COMPLETED.contains(':'));
         assert!(event_names::QUERY_FAILED.contains(':'));
+        assert!(event_names::TASK_STEP.contains(':'));
+        assert!(event_names::TASK_RETRY.contains(':'));
+    }
+
+    #[test]
+    fn test_task_step_payload_serialization() {
+        let p = TaskStepPayload {
+            task_id: "t1".into(),
+            run_id: "r1".into(),
+            step_index: 2,
+            step_total: 5,
+            step_label: "Running query".into(),
+            status: "started".into(),
+            error: None,
+            timestamp_ms: 1700000000,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: TaskStepPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.task_id, "t1");
+        assert_eq!(back.step_index, 2);
+        assert_eq!(back.step_total, 5);
+        assert_eq!(back.status, "started");
+        assert!(back.error.is_none());
+    }
+
+    #[test]
+    fn test_task_retry_payload_serialization() {
+        let p = TaskRetryPayload {
+            task_id: "t1".into(),
+            run_id: "r1".into(),
+            attempt: 1,
+            max_attempts: 3,
+            delay_ms: 500,
+            last_error: "rate limited".into(),
+            timestamp_ms: 1700000000,
+        };
+        let json = serde_json::to_string(&p).unwrap();
+        let back: TaskRetryPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.attempt, 1);
+        assert_eq!(back.max_attempts, 3);
+        assert_eq!(back.last_error, "rate limited");
     }
 
     #[test]
