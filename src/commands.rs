@@ -710,6 +710,9 @@ pub async fn send_message(
 // request_permission + respond_permission extracted to `commands_permissions.rs`
 // (registered as commands_permissions::* in main.rs).
 
+// Skill loop commands extracted to `commands_skill_loop.rs` (registered as
+// commands_skill_loop::* in main.rs).
+
 pub(crate) fn chrono_timestamp() -> i64 {
     // Milliseconds since UNIX_EPOCH. All UI consumers construct
     // `new Date(ts)` which interprets the argument as milliseconds.

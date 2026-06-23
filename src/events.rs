@@ -313,6 +313,8 @@ pub mod event_names {
     /// P1.2 workflow streaming — emitted when a failed task is auto-retried
     /// per the routine's retry config.
     pub const TASK_RETRY: &str = "task-retry";
+    /// E2 skill loop — emitted when proposal count changes (new proposal approved/rejected).
+    pub const SKILL_PROPOSAL_AVAILABLE: &str = "skill-proposal-available";
 }
 
 #[cfg(test)]
