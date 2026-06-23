@@ -3,7 +3,7 @@
 // Displays proposal details (name, description, triggers, workflow) with
 // Approve/Reject buttons. Fetches proposals on mount and refreshes after actions.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { skillLoop } from '@/lib/tauri-api'
@@ -19,7 +19,7 @@ export default function SkillProposalReviewPanel({
   onClose,
 }: SkillProposalReviewPanelProps) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = useCallback((id: string) => intl.formatMessage({ id }), [intl])
   const [proposals, setProposals] = useState<SkillProposal[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(false)
