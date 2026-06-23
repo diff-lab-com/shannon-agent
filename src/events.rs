@@ -1,235 +1,31 @@
 //! Typed event payloads for Tauri frontend events.
 //!
-//! These map directly from QueryEngine's QueryEvent variants to
-//! JSON payloads emitted via `app_handle.emit()`.
+//! All payload structs and the `event_names` constants are defined in
+//! `shannon_types::events` so the engine and shell share a single wire
+//! contract. This module re-exports them for convenience inside the
+//! desktop shell and adds Tauri-specific emit helpers that depend on
+//! `tauri::AppHandle`.
+//!
+//! See `docs/architecture/d4-state-sync-protocol.md` for the schema
+//! versioning contract.
 
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "tauri")]
 use tauri::Emitter;
 
-/// A streaming text chunk from the LLM.
-#[derive(Debug, Clone, Serialize)]
-pub struct QueryTextPayload {
-    pub query_id: String,
-    pub content: String,
-}
+pub use shannon_types::events::event_names;
+pub use shannon_types::events::{
+    BackgroundTaskInfo, BackgroundTaskUpdate, ChatMessage, ConfigUpdatedPayload, DiffFileInfo,
+    DiffHunk, EventEnvelope, HunkAction, PermissionRequest, QueryCancelledPayload,
+    QueryCompletedPayload, QueryFailedPayload, QueryTextPayload, SessionInfo, SessionLoaded,
+    TaskRetryPayload, TaskStepPayload, ThinkingPayload, ToolProgressPayload, ToolResultPayload,
+    ToolStartPayload, UpdateAvailablePayload, UpdateProgressPayload, UsagePayload,
+    EVENT_SCHEMA_VERSION,
+};
 
-/// A tool call has started.
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolStartPayload {
-    pub query_id: String,
-    pub tool_use_id: String,
-    pub tool_name: String,
-    pub tool_input: serde_json::Value,
-}
-
-/// A tool call has completed.
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolResultPayload {
-    pub query_id: String,
-    pub tool_use_id: String,
-    pub tool_name: String,
-    pub result: String,
-    pub is_error: bool,
-}
-
-/// Tool progress update (e.g., bash command output).
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolProgressPayload {
-    pub query_id: String,
-    pub tool_use_id: String,
-    pub tool_name: String,
-    pub progress: f32,
-    pub message: String,
-}
-
-/// Extended thinking content.
-#[derive(Debug, Clone, Serialize)]
-pub struct ThinkingPayload {
-    pub query_id: String,
-    pub content: String,
-}
-
-/// Background task status and update.
-#[derive(Debug, Clone, Serialize)]
-pub struct BackgroundTaskUpdate {
-    pub task_id: String,
-    pub status: String, // "running", "completed", "failed"
-    pub prompt: String,
-    pub output: String,
-    pub started_at: i64,
-    pub completed_at: Option<i64>,
-}
-
-/// Background task info for listing.
-#[derive(Debug, Clone, Serialize)]
-pub struct BackgroundTaskInfo {
-    pub task_id: String,
-    pub prompt: String,
-    pub status: String,
-    pub started_at: i64,
-    pub completed_at: Option<i64>,
-    pub output: String,
-}
-
-/// Token usage and cost update.
-#[derive(Debug, Clone, Serialize)]
-pub struct UsagePayload {
-    pub query_id: String,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cost_usd: f64,
-}
-
-/// Query completed successfully.
-#[derive(Debug, Clone, Serialize)]
-pub struct QueryCompletedPayload {
-    pub query_id: String,
-}
-
-/// Query failed.
-#[derive(Debug, Clone, Serialize)]
-pub struct QueryFailedPayload {
-    pub query_id: String,
-    pub error: String,
-}
-
-/// Permission request for tool execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionRequest {
-    pub tool: String,
-    pub input: serde_json::Value,
-    pub risk: String,
-    pub request_id: String,
-}
-
-/// Session information for session list.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
-    pub id: String,
-    pub title: String,
-    pub created_at: i64,
-    pub message_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub working_dir: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch_point: Option<usize>,
-}
-
-/// Session loaded event with messages.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionLoaded {
-    pub messages: Vec<ChatMessage>,
-}
-
-/// Chat message (replicated from commands.rs for event serialization).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-    pub timestamp: i64,
-}
-
-/// Query cancelled event payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryCancelledPayload {
-    pub query_id: String,
-}
-
-/// Config updated event payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfigUpdatedPayload {
-    pub key: String,
-    pub value: String,
-}
-
-/// Hunk action for applying diffs.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HunkAction {
-    pub line_start: u32,
-    pub line_end: u32,
-    pub action: String, // "accept" or "reject"
-}
-
-/// Update available event payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateAvailablePayload {
-    pub version: String,
-    pub date: Option<String>,
-    pub body: Option<String>,
-}
-
-/// Update download progress event payload.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UpdateProgressPayload {
-    pub progress: f32, // 0.0 to 1.0
-    pub status: String,
-}
-
-/// Diff file info for review panel.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiffFileInfo {
-    pub path: String,
-    pub status: String, // "modified", "added", "deleted"
-    pub hunks: Vec<DiffHunk>,
-}
-
-/// Diff hunk containing changed lines.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiffHunk {
-    pub old_start: u32,
-    pub old_lines: u32,
-    pub new_start: u32,
-    pub new_lines: u32,
-    pub content: String,
-}
-
-/// P1.2 workflow streaming — a task has moved to a new step.
-///
-/// Emitted by scheduled_commands at step boundaries (start, progress,
-/// complete, fail). The Tasks UI listens via `useTauriEvent` and updates
-/// the step indicator in real time.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskStepPayload {
-    pub task_id: String,
-    pub run_id: String,
-    /// 1-indexed step position within the current run.
-    pub step_index: usize,
-    /// Total number of steps in the routine (0 if unknown).
-    pub step_total: usize,
-    /// Human-readable label for the step (e.g., "Running query", "Applying diff").
-    pub step_label: String,
-    /// "started" | "completed" | "failed"
-    pub status: String,
-    /// Optional error message when status === "failed".
-    pub error: Option<String>,
-    /// Unix-millis timestamp when the event was emitted.
-    pub timestamp_ms: u64,
-}
-
-/// P1.2 workflow streaming — a task is being auto-retried after a failure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskRetryPayload {
-    pub task_id: String,
-    pub run_id: String,
-    /// 1-indexed retry attempt (1 = first retry after the initial failure).
-    pub attempt: usize,
-    /// Total attempts configured (initial run + max_retries).
-    pub max_attempts: usize,
-    /// Delay before the next attempt starts, in milliseconds.
-    pub delay_ms: u64,
-    /// Error from the previous failed attempt.
-    pub last_error: String,
-    /// Unix-millis timestamp when the event was emitted.
-    pub timestamp_ms: u64,
-}
-
-/// P1.2 workflow streaming — helper to emit a `task:step` event from
+/// Workflow streaming — helper to emit a `task:step` event from
 /// anywhere with an `AppHandle`. Silently no-ops on emit error so a
 /// frontend disconnect never breaks task execution.
+#[cfg(feature = "tauri")]
 pub fn emit_task_step<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     task_id: &str,
@@ -258,7 +54,8 @@ pub fn emit_task_step<R: tauri::Runtime>(
     let _ = app.emit(event_names::TASK_STEP, payload);
 }
 
-/// P1.2 workflow streaming — helper to emit a `task:retry` event.
+/// Workflow streaming — helper to emit a `task:retry` event.
+#[cfg(feature = "tauri")]
 pub fn emit_task_retry<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     task_id: &str,
@@ -285,44 +82,25 @@ pub fn emit_task_retry<R: tauri::Runtime>(
     let _ = app.emit(event_names::TASK_RETRY, payload);
 }
 
-/// Tauri event names used in emit/listen.
-pub mod event_names {
-    pub const QUERY_TEXT: &str = "query:text";
-    pub const QUERY_TOOL_START: &str = "query:tool-start";
-    pub const QUERY_TOOL_RESULT: &str = "query:tool-result";
-    pub const QUERY_TOOL_PROGRESS: &str = "query:tool-progress";
-    pub const QUERY_THINKING: &str = "query:thinking";
-    pub const QUERY_USAGE: &str = "query:usage";
-    pub const QUERY_COMPLETED: &str = "query:completed";
-    pub const QUERY_FAILED: &str = "query:failed";
-    pub const QUERY_CANCELLED: &str = "query:cancelled";
-    pub const PERMISSION_REQUEST: &str = "permission-request";
-    pub const SESSIONS_UPDATED: &str = "sessions-updated";
-    pub const SESSION_LOADED: &str = "session-loaded";
-    pub const CONFIG_UPDATED: &str = "config-updated";
-    pub const DIFF_REVIEW_AVAILABLE: &str = "diff-review-available";
-    pub const BACKGROUND_TASK_UPDATE: &str = "background-task-update";
-    pub const BACKGROUND_TASKS_UPDATED: &str = "background-tasks-updated";
-    pub const UPDATE_AVAILABLE: &str = "update-available";
-    pub const UPDATE_PROGRESS: &str = "update-progress";
-    pub const UPDATE_COMPLETED: &str = "update-completed";
-    pub const CHECK_UPDATES: &str = "check-updates";
-    /// P1.2 workflow streaming — emitted by scheduled_commands at step
-    /// boundaries so the Tasks UI can show live execution progress.
-    pub const TASK_STEP: &str = "task:step";
-    /// P1.2 workflow streaming — emitted when a failed task is auto-retried
-    /// per the routine's retry config.
-    pub const TASK_RETRY: &str = "task:retry";
-    /// E2 skill loop — emitted when proposal count changes (new proposal approved/rejected).
-    pub const SKILL_PROPOSAL_AVAILABLE: &str = "skill-proposal-available";
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_query_text_payload_serialization() {
+    fn re_exports_match_canonical_schema_version() {
+        assert_eq!(EVENT_SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn event_names_re_exported() {
+        assert_eq!(event_names::QUERY_TEXT, "query:text");
+        assert_eq!(event_names::TASK_STEP, "task:step");
+        assert_eq!(event_names::TASK_RETRY, "task:retry");
+        assert_eq!(event_names::SKILL_PROPOSAL_AVAILABLE, "skill-proposal-available");
+    }
+
+    #[test]
+    fn query_text_payload_round_trip() {
         let p = QueryTextPayload {
             query_id: "abc".into(),
             content: "hello".into(),
@@ -333,7 +111,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_start_payload_serialization() {
+    fn tool_start_payload_carries_input_value() {
         let p = ToolStartPayload {
             query_id: "q1".into(),
             tool_use_id: "t1".into(),
@@ -346,18 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn test_event_names_are_valid() {
-        // Ensure event names follow the namespaced format
-        assert!(event_names::QUERY_TEXT.contains(':'));
-        assert!(event_names::QUERY_TOOL_START.contains(':'));
-        assert!(event_names::QUERY_COMPLETED.contains(':'));
-        assert!(event_names::QUERY_FAILED.contains(':'));
-        assert!(event_names::TASK_STEP.contains(':'));
-        assert!(event_names::TASK_RETRY.contains(':'));
-    }
-
-    #[test]
-    fn test_task_step_payload_serialization() {
+    fn task_step_payload_round_trip() {
         let p = TaskStepPayload {
             task_id: "t1".into(),
             run_id: "r1".into(),
@@ -372,31 +139,11 @@ mod tests {
         let back: TaskStepPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back.task_id, "t1");
         assert_eq!(back.step_index, 2);
-        assert_eq!(back.step_total, 5);
         assert_eq!(back.status, "started");
-        assert!(back.error.is_none());
     }
 
     #[test]
-    fn test_task_retry_payload_serialization() {
-        let p = TaskRetryPayload {
-            task_id: "t1".into(),
-            run_id: "r1".into(),
-            attempt: 1,
-            max_attempts: 3,
-            delay_ms: 500,
-            last_error: "rate limited".into(),
-            timestamp_ms: 1700000000,
-        };
-        let json = serde_json::to_string(&p).unwrap();
-        let back: TaskRetryPayload = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.attempt, 1);
-        assert_eq!(back.max_attempts, 3);
-        assert_eq!(back.last_error, "rate limited");
-    }
-
-    #[test]
-    fn test_permission_request_serialization() {
+    fn permission_request_round_trip() {
         let req = PermissionRequest {
             tool: "bash".into(),
             input: serde_json::json!({"command": "ls"}),
@@ -404,62 +151,9 @@ mod tests {
             request_id: "req-123".into(),
         };
         let json = serde_json::to_string(&req).unwrap();
-        let deserialized: PermissionRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.tool, "bash");
-        assert_eq!(deserialized.risk, "medium");
-        assert_eq!(deserialized.request_id, "req-123");
-    }
-
-    #[test]
-    fn test_session_info_serialization() {
-        let info = SessionInfo {
-            id: "sess-1".into(),
-            title: "My Chat".into(),
-            created_at: 1700000000,
-            message_count: 5,
-            working_dir: None,
-            parent_id: None,
-            branch_point: None,
-        };
-        let json = serde_json::to_string(&info).unwrap();
-        let deserialized: SessionInfo = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.id, "sess-1");
-        assert_eq!(deserialized.title, "My Chat");
-        assert_eq!(deserialized.message_count, 5);
-    }
-
-    #[test]
-    fn test_session_loaded_serialization() {
-        let loaded = SessionLoaded {
-            messages: vec![
-                ChatMessage {
-                    role: "user".into(),
-                    content: "hello".into(),
-                    timestamp: 100,
-                },
-                ChatMessage {
-                    role: "assistant".into(),
-                    content: "hi".into(),
-                    timestamp: 101,
-                },
-            ],
-        };
-        let json = serde_json::to_string(&loaded).unwrap();
-        let deserialized: SessionLoaded = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.messages.len(), 2);
-        assert_eq!(deserialized.messages[0].role, "user");
-    }
-
-    #[test]
-    fn test_chat_message_serialization() {
-        let msg = ChatMessage {
-            role: "user".into(),
-            content: "test".into(),
-            timestamp: 1700000000,
-        };
-        let json = serde_json::to_string(&msg).unwrap();
-        let deserialized: ChatMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.role, "user");
-        assert_eq!(deserialized.content, "test");
+        let back: PermissionRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tool, "bash");
+        assert_eq!(back.risk, "medium");
+        assert_eq!(back.request_id, "req-123");
     }
 }
