@@ -113,6 +113,54 @@ pub fn featured_vendors() -> Vec<FeaturedVendor> {
             },
             homepage_url: "https://developers.google.com/gmail".into(),
         },
+        FeaturedVendor {
+            slug: "tavily".into(),
+            display_name: "Tavily Search".into(),
+            description: "Web search and content extraction for LLMs.".into(),
+            icon: "travel_explore".into(),
+            category: FeaturedCategory::DataSources,
+            trust: TrustLevel::Verified,
+            install_kind: FeaturedInstallKind::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "tavily-mcp@latest".into()],
+                env_vars: vec![("TAVILY_API_KEY".into(), "".into())],
+                display_name: "Install Tavily".into(),
+            },
+            homepage_url: "https://tavily.com/".into(),
+        },
+        FeaturedVendor {
+            slug: "brave-search".into(),
+            display_name: "Brave Search".into(),
+            description: "Web and local search via the Brave Search API.".into(),
+            icon: "shield".into(),
+            category: FeaturedCategory::DataSources,
+            trust: TrustLevel::Verified,
+            install_kind: FeaturedInstallKind::Stdio {
+                command: "npx".into(),
+                args: vec![
+                    "-y".into(),
+                    "@modelcontextprotocol/server-brave-search".into(),
+                ],
+                env_vars: vec![("BRAVE_API_KEY".into(), "".into())],
+                display_name: "Install Brave Search".into(),
+            },
+            homepage_url: "https://brave.com/search/api/".into(),
+        },
+        FeaturedVendor {
+            slug: "exa".into(),
+            display_name: "Exa Search".into(),
+            description: "Neural web search and page contents for research.".into(),
+            icon: "manage_search".into(),
+            category: FeaturedCategory::DataSources,
+            trust: TrustLevel::Verified,
+            install_kind: FeaturedInstallKind::Stdio {
+                command: "npx".into(),
+                args: vec!["-y".into(), "exa-mcp-server".into()],
+                env_vars: vec![("EXA_API_KEY".into(), "".into())],
+                display_name: "Install Exa".into(),
+            },
+            homepage_url: "https://exa.ai/".into(),
+        },
     ]
 }
 
@@ -549,15 +597,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn featured_vendors_includes_five_canonical_vendors() {
+    fn featured_vendors_includes_eight_canonical_vendors() {
         let vendors = featured_vendors();
-        assert_eq!(vendors.len(), 5, "ADR specifies exactly 5 featured vendors");
+        assert_eq!(vendors.len(), 8, "5 OAuth vendors + 3 search data sources");
         let slugs: Vec<&str> = vendors.iter().map(|v| v.slug.as_str()).collect();
         assert!(slugs.contains(&"notion"));
         assert!(slugs.contains(&"linear"));
         assert!(slugs.contains(&"slack"));
         assert!(slugs.contains(&"github"));
         assert!(slugs.contains(&"gmail"));
+        assert!(slugs.contains(&"tavily"));
+        assert!(slugs.contains(&"brave-search"));
+        assert!(slugs.contains(&"exa"));
+    }
+
+    #[test]
+    fn stdio_vendors_carry_command_metadata() {
+        let tavily = featured_vendors()
+            .into_iter()
+            .find(|v| v.slug == "tavily")
+            .unwrap();
+        let entry = tavily.to_catalog_entry();
+        assert_eq!(
+            entry.metadata.get("transport").and_then(|v| v.as_str()),
+            Some("stdio")
+        );
+        assert_eq!(
+            entry.metadata.get("command").and_then(|v| v.as_str()),
+            Some("npx")
+        );
+        assert!(entry.tags.contains(&"data_sources".to_string()));
     }
 
     #[test]

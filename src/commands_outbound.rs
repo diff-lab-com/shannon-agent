@@ -135,6 +135,7 @@ async fn save_outbound(dto: &OutboundConfigDto) -> Result<(), String> {
     notif_table.insert("outbound".into(), toml::Value::Table(outbound));
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(&path);
     tracing::info!(path = %path.display(), "outbound config saved");
     Ok(())
 }
@@ -158,6 +159,7 @@ async fn clear_outbound() -> Result<(), String> {
     }
     let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
     std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
+    crate::file_permissions::restrict_to_owner(&path);
     tracing::info!(path = %path.display(), "outbound config cleared");
     Ok(())
 }

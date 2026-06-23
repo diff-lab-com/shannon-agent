@@ -21,6 +21,7 @@ fn main() {
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_routine_templates;
     use shannon_desktop::commands_sessions;
+    use shannon_desktop::commands_skill_loop;
     use shannon_desktop::commands_tasks;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
@@ -82,6 +83,12 @@ fn main() {
             commands_sessions::rename_session,
             commands_sessions::duplicate_session,
             commands_sessions::branch_session,
+            // E2 skill loop — task evaluation and skill proposal management
+            commands_skill_loop::skill_loop_evaluate,
+            commands_skill_loop::skill_loop_generate,
+            commands_skill_loop::skill_loop_list_proposals,
+            commands_skill_loop::skill_loop_approve,
+            commands_skill_loop::skill_loop_reject,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
             commands_files::get_file_diff,

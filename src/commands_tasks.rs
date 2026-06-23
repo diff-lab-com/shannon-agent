@@ -56,6 +56,7 @@ pub struct UpdateTaskPayload {
 /// `blockedBy`, `blocks`, `dueDate`, `activeForm`, `owner`, and `priority`
 /// from the JSON shape used by the Claude Code / Shannon task format.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn list_tasks() -> Result<Vec<TaskInfo>, String> {
     let tasks_dir = std::path::Path::new(".claude/tasks");
     if !tasks_dir.is_dir() {

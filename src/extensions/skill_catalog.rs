@@ -304,6 +304,18 @@ fn builtin_skills() -> Vec<CatalogEntry> {
             "/py",
             &["python", "jupyter", "kernel", "data-analysis"],
         ),
+        native(
+            "documents-open",
+            "Open DOCX/PPTX/XLSX/PDF documents in the host's installed editor (LibreOffice, Word, Excel). Detects editors via `which`/`where`; if none is found, recommends `apt install libreoffice` (Linux), `brew install --cask libreoffice` (macOS), or `winget install TheDocumentFoundation.LibreOffice` (Windows) instead of aborting.",
+            "/documents-open",
+            &["documents", "native", "host"],
+        ),
+        native(
+            "documents-convert",
+            "Convert between document formats (md↔docx, docx↔pdf, html↔pdf) via the host's pandoc. If pandoc is missing, the skill recommends installation and returns the input unchanged rather than aborting the agent run.",
+            "/documents-convert",
+            &["documents", "native", "pandoc"],
+        ),
     ]
 }
 
@@ -367,8 +379,8 @@ mod tests {
             .filter(|e| e.source == CatalogSource::Native)
             .count();
         assert!(
-            native_count >= 13,
-            "expected at least 13 native entries, got {native_count}"
+            native_count >= 15,
+            "expected at least 15 native entries, got {native_count}"
         );
     }
 
@@ -378,8 +390,8 @@ mod tests {
         let client = SkillCatalogClient::new(Arc::new(StaticFetch(manifest_json())))
             .with_cache_dir(tmp.path());
         let entries = client.list_skills().await.expect("list");
-        // 13 native + 2 skills × 2 upstreams = 17
-        assert_eq!(entries.len(), 17);
+        // 15 native + 2 skills × 2 upstreams = 19
+        assert_eq!(entries.len(), 19);
         let brainstorming = entries
             .iter()
             .find(|e| e.name == "brainstorming")
@@ -406,8 +418,24 @@ mod tests {
         let client2 = SkillCatalogClient::new(http_bad).with_cache_dir(tmp.path());
         let second = client2.list_skills().await.expect("list");
         assert_eq!(first.len(), second.len());
-        // 13 native + 2 × 2 upstream = 17
-        assert_eq!(first.len(), 17);
+        // 15 native + 2 × 2 upstream = 19
+        assert_eq!(first.len(), 19);
+    }
+
+    #[tokio::test]
+    async fn exposes_documents_skills() {
+        let client = SkillCatalogClient::new(Arc::new(StaticFetch("{}".to_string())));
+        let entries = client.list_skills().await.expect("list");
+        let docs_open = entries
+            .iter()
+            .find(|e| e.name == "documents-open")
+            .expect("documents-open skill missing");
+        assert!(docs_open.tags.contains(&"documents".to_string()));
+        let docs_convert = entries
+            .iter()
+            .find(|e| e.name == "documents-convert")
+            .expect("documents-convert skill missing");
+        assert!(docs_convert.tags.contains(&"documents".to_string()));
     }
 
     #[tokio::test]

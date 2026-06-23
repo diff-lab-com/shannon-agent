@@ -84,4 +84,20 @@ describe('AdvancedSettings', () => {
     fireEvent.click(screen.getAllByText('Manage API Keys')[0])
     expect(screen.getByText('Go to Model Settings')).toBeInTheDocument()
   })
+
+  // Skill loop toggle tests
+  it('renders skill extraction section', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Skill Extraction')).toBeInTheDocument()
+  })
+
+  it('renders enable skill extraction toggle', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText('Enable skill extraction')).toBeInTheDocument()
+  })
+
+  it('renders skill extraction description', () => {
+    render(wrap(<AdvancedSettings />))
+    expect(screen.getByText(/After complex tasks, Shannon evaluates/)).toBeInTheDocument()
+  })
 })

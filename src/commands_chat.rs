@@ -13,6 +13,7 @@ use crate::commands::{AppState, ChatMessage, ModelInfo, StatusResponse, ToolInfo
 
 /// Get all conversation messages.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn get_conversation(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ChatMessage>, String> {

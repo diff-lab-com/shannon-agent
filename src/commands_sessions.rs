@@ -71,6 +71,7 @@ pub async fn new_session(
 
 /// List all sessions.
 #[tauri::command]
+#[tracing::instrument(skip_all)]
 pub async fn list_sessions(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<events::SessionInfo>, String> {

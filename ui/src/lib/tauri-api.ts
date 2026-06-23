@@ -1235,3 +1235,22 @@ export async function getMemoryStats(): Promise<MemoryStats> {
   return invoke('get_memory_stats')
 }
 
+// --- Skill Loop (E2) ---
+
+export const skillLoop = {
+  evaluate: (evaluation: import('@/types').TaskEvaluation) =>
+    invoke<import('@/types').EvaluationResult>('skill_loop_evaluate', { evaluation }),
+
+  generate: (evaluation: import('@/types').TaskEvaluation) =>
+    invoke<import('@/types').SkillProposal>('skill_loop_generate', { evaluation }),
+
+  listProposals: () =>
+    invoke<import('@/types').SkillProposal[]>('skill_loop_list_proposals'),
+
+  approve: (proposalId: string) =>
+    invoke<string>('skill_loop_approve', { proposalId }),
+
+  reject: (proposalId: string) =>
+    invoke<void>('skill_loop_reject', { proposalId }),
+}
+

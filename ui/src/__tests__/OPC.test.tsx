@@ -7,6 +7,7 @@ const ctx = vi.hoisted(() => ({
   agents: [] as any[],
   tasks: [] as any[],
   config: null as any,
+  refreshTasks: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/context/AppContext', () => ({
@@ -17,6 +18,7 @@ function resetCtx() {
   ctx.agents = []
   ctx.tasks = []
   ctx.config = null
+  ctx.refreshTasks = vi.fn().mockResolvedValue(undefined)
 }
 
 function renderOPC() {
