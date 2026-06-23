@@ -29,8 +29,8 @@
 //! assert_eq!(metrics.api_calls, 1);
 //! ```
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -105,8 +105,8 @@ impl TelemetryConfig {
         let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
             .unwrap_or_else(|_| "http://localhost:4317".to_string());
 
-        let service_name = std::env::var("OTEL_SERVICE_NAME")
-            .unwrap_or_else(|_| "shannon-code".to_string());
+        let service_name =
+            std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "shannon-code".to_string());
 
         Self {
             enabled,
@@ -240,13 +240,7 @@ impl TelemetryManager {
     }
 
     /// Record an API call to an upstream LLM provider.
-    pub fn record_api_call(
-        &self,
-        provider: &str,
-        model: &str,
-        tokens: u64,
-        latency: Duration,
-    ) {
+    pub fn record_api_call(&self, provider: &str, model: &str, tokens: u64, latency: Duration) {
         if !self.is_enabled() {
             return;
         }
@@ -459,7 +453,12 @@ mod tests {
         mgr.record_query_start("q1", "test-model");
         mgr.record_query_end("q1", Duration::from_millis(100), 256);
         mgr.record_tool_call("bash", true, Duration::from_millis(50));
-        mgr.record_api_call("anthropic", "claude-sonnet", 128, Duration::from_millis(200));
+        mgr.record_api_call(
+            "anthropic",
+            "claude-sonnet",
+            128,
+            Duration::from_millis(200),
+        );
         mgr.record_error("api", "timeout");
 
         let m = mgr.metrics();
@@ -516,7 +515,12 @@ mod tests {
     #[test]
     fn test_record_api_call() {
         let mgr = enabled_manager();
-        mgr.record_api_call("anthropic", "claude-sonnet", 256, Duration::from_millis(200));
+        mgr.record_api_call(
+            "anthropic",
+            "claude-sonnet",
+            256,
+            Duration::from_millis(200),
+        );
         let m = mgr.metrics();
         assert_eq!(m.api_calls, 1);
         assert_eq!(m.tokens_used, 256);
@@ -549,8 +553,8 @@ mod tests {
         // tool_call   -> 1 tool_call + 1 event
         // api_call    -> 1 api_call + 50 tokens + 1 event
         // error       -> 1 error + 1 event
-        assert_eq!(m.api_calls, 2);       // query_start + api_call
-        assert_eq!(m.tokens_used, 150);   // 100 + 50
+        assert_eq!(m.api_calls, 2); // query_start + api_call
+        assert_eq!(m.tokens_used, 150); // 100 + 50
         assert_eq!(m.tool_calls, 1);
         assert_eq!(m.errors_reported, 1);
         assert_eq!(m.events_emitted, 5);
@@ -618,7 +622,8 @@ mod tests {
 
         tracing::subscriber::with_default(subscriber, || {
             // Spans are counted regardless of target.
-            let _span = tracing::span!(target: "shannon::test", tracing::Level::INFO, "test_span").entered();
+            let _span = tracing::span!(target: "shannon::test", tracing::Level::INFO, "test_span")
+                .entered();
         });
 
         let m = mgr.metrics();
