@@ -1,28 +1,47 @@
 # Shannon Code - Implementation Roadmap
 
-> Updated: 2026-04-23
+> Updated: 2026-06-18 — status sync after code audit
 > Priority: P0 features referencing Claude Code's implementation approach
 > Goal: Claude Code MCP/Skill/Agent ecosystem compatibility
 
+> **Status sync (2026-06-18).** A code-level audit against the crates shows
+> that **all P0 items (#1–#7) and all P0.5 Agent Teams items (AT-1 through
+> AT-7) listed below have shipped.** The earlier "What's Missing" column was
+> stale. The remaining genuinely-pending engine work is in
+> [Future Considerations](#future-considerations-p1-p3) — PTY terminal,
+> RepoMap, Computer Use, Surface-agnostic protocol, Guardian Agent, etc.
+> The next major effort lives in `shannon-desktop` (Scheduled Sprint 2-3 +
+> Triage queue) per `shannon-desktop/SCHEDULED-FIX-PLAN.md`.
+
 ## Current Infrastructure Status
 
-Shannon already has significant foundational code. The work is primarily **integration and compatibility**, not greenfield development.
+All modules listed below are **fully implemented and integrated**. The
+"missing" items from the 2026-04-23 draft have been closed.
 
-| Module | Files | Status | What's Missing |
-|--------|-------|--------|----------------|
-| MCP Protocol | `shannon-mcp/src/protocol.rs` | Complete | Config file loader (settings.json/.mcp.json) |
-| MCP Transport | `shannon-mcp/src/transport.rs` | Stdio/SSE/HTTP/WS | Environment variable expansion in config |
-| MCP Client | `shannon-mcp/src/client.rs` | Working | Server lifecycle management from config |
-| Skills | `shannon-skills/` | Working | Already reads `.claude/skills/*/SKILL.md` |
-| Compaction | `shannon-core/src/compact.rs` | 5 strategies | Query engine integration, LLM summarizer, re-injection |
-| Hooks | `shannon-core/src/hooks.rs` | Types + config | Tool execution pipeline integration |
-| Project Memory | `shannon-core/src/project_instructions.rs` | Loads CLAUDE.md | Session lifecycle integration, auto-memory |
-| Project Memory | `shannon-core/src/project_memory.rs` | Types defined | Merge + inject into system prompt |
-| Agent Teams | `shannon-agents/` | Coordinator + TaskBoard + Teammate | See gap analysis below |
+| Module | Files | Status | Notes |
+|--------|-------|--------|-------|
+| MCP Protocol | `shannon-mcp/src/protocol.rs` | ✅ Complete | — |
+| MCP Transport | `shannon-mcp/src/transport.rs` | ✅ Stdio/SSE/HTTP/WS | — |
+| MCP Client | `shannon-mcp/src/client.rs` | ✅ Working | — |
+| MCP Config Loader | `shannon-mcp/src/config.rs` | ✅ Complete (2026-06) | `discover_config` + `expand_env_vars` (`$VAR`, `${VAR}`, `${VAR:-default}`, `${VAR:?error}`) + 6 search paths (`.mcp.json`, `~/.claude/settings.json`, `~/.shannon/settings.json`, etc.) |
+| Skills | `shannon-skills/` | ✅ Complete | Reads `.claude/skills/*/SKILL.md` + `agent_loader.rs` parses `.claude/agents/*.md` frontmatter (`allowed_tools` / `disallowed_tools`) |
+| Compaction | `shannon-core/src/compact/` | ✅ Integrated | `CompactEngine` + `LlmSummarizer`; auto-compact in `query_engine/engine.rs`; REPL `pending_auto_compact` + `do_auto_compact` |
+| Hooks | `shannon-core/src/hooks/` | ✅ Integrated | `PreToolUse` / `PostToolUse` / `SessionStart` / `UserPromptSubmit` / `PostToolUseFailure`; `settings.json` format; exit_code=2 deny; wired through `tool_execution.rs::set_hook_manager` |
+| Project Memory | `shannon-core/src/project_instructions.rs` (1631 LOC) | ✅ Complete | `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` hierarchy, `@import` (depth/size/circular guards), `InstructionWatcher`, full file context loader |
+| Auto-Memory | `shannon-core/src/extract_memories.rs` + `memory/` + `auto_dream_consolidation.rs` | ✅ Complete | Memory extraction, consolidator, AutoDream service |
+| Session Persist | `shannon-core/src/session_persist.rs` + `session_recovery.rs` | ✅ Complete | `save_session` / `load_session` / resume |
+| Sandbox | `shannon-core/src/sandbox.rs` | ✅ Complete | `BwrapSandbox` (Linux) + Seatbelt (macOS) |
+| Agent Teams | `shannon-agents/` | ✅ Complete | See P0.5 below for AT-1 – AT-7 status |
+| Agent Persistence | `shannon-agents/src/persistence.rs` (2337 LOC) | ✅ Complete | `flock`-based team/task/inbox files, `.highwatermark`, JSONL inboxes |
+| Agent Process Spawn | `shannon-agents/src/process_manager.rs` (2547 LOC) | ✅ Complete | Separate-OS-process teammate spawning with stdin/stdout pipes + health checks |
 
 ---
 
-## Agent Teams: Claude Code Gap Analysis
+## Agent Teams: Claude Code Gap Analysis (Historical — 2026-04)
+
+> **Note (2026-06-18):** All "Critical Gaps" below have since been closed.
+> See the P0.5 section for shipped implementations. This section is kept
+> for reference only.
 
 > Comparison against Claude Code's agent teams system (v2.1.32+, Feb 2026)
 
@@ -84,7 +103,10 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ## P0 - Approved for Implementation
 
-### 1. Project Memory (CLAUDE.md Compatible)
+> **Status (2026-06-18):** All items #1–#7 below are **shipped**. Detail
+> kept for historical reference.
+
+### 1. Project Memory (CLAUDE.md Compatible) ✅ SHIPPED
 
 **Reference**: Claude Code's CLAUDE.md hierarchy + auto-memory system
 
@@ -102,7 +124,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### 2. Hook System (Claude Code Compatible)
+### 2. Hook System (Claude Code Compatible) ✅ SHIPPED
 
 **Reference**: Claude Code's hook JSON format with stdin/stdout protocol
 
@@ -130,7 +152,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### 3. Context Compaction (3-Tier, Claude Code Approach)
+### 3. Context Compaction (3-Tier, Claude Code Approach) ✅ SHIPPED
 
 **Reference**: Claude Code's auto-compaction with smart re-injection
 
@@ -148,7 +170,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### 4. MCP Ecosystem Compatibility (Claude Code Compatible)
+### 4. MCP Ecosystem Compatibility (Claude Code Compatible) ✅ SHIPPED
 
 **Reference**: Claude Code's settings.json / .mcp.json configuration format
 
@@ -175,7 +197,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### 5. Skill System Compatibility (Claude Code Compatible)
+### 5. Skill System Compatibility (Claude Code Compatible) ✅ SHIPPED
 
 **Reference**: Claude Code's SKILL.md format with YAML frontmatter
 
@@ -195,7 +217,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### 6. Sandboxed Tool Execution
+### 6. Sandboxed Tool Execution ✅ SHIPPED
 
 **Reference**: Codex CLI's Seatbelt/bubblewrap approach; Claude Code's permission modes
 
@@ -212,7 +234,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### 7. Multi-Session Architecture
+### 7. Multi-Session Architecture ✅ SHIPPED
 
 **Reference**: Open Code's multi-session design; Claude Code's session continuity
 
@@ -228,13 +250,20 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-## P0.5 - Agent Teams Enhancements
+## P0.5 - Agent Teams Enhancements ✅ ALL SHIPPED
+
+> **Status (2026-06-18):** AT-1 through AT-7 all shipped. See
+> `shannon-agents/src/persistence.rs` (file-based state), `coordinator.rs`
+> (self-claim + P2P + broadcast + TeammateIdle hook), `agent_defs.rs`
+> (`.claude/agents/*.md` loader), `process_manager.rs` (separate-process
+> spawn), `context.rs` (`SHANNON_AGENT_TEAMS` env var + permission
+> inheritance).
 
 > These are specific gaps identified against Claude Code's agent teams implementation.
 > The foundation is in place (coordinator, task board, teammate, executor, tools).
 > These items close the functional gaps.
 
-### AT-1. File-Based Team & Task Persistence
+### AT-1. File-Based Team & Task Persistence ✅ SHIPPED
 
 **Reference**: Claude Code stores all team state as flat files (`~/.claude/teams/`, `~/.claude/tasks/`)
 
@@ -252,7 +281,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### AT-2. Separate-Process Agent Spawning
+### AT-2. Separate-Process Agent Spawning ✅ SHIPPED
 
 **Reference**: Claude Code spawns teammates as separate `claude` CLI processes (tmux pane or in-process)
 
@@ -270,7 +299,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### AT-3. Idle Notification + Self-Claim Task Loop
+### AT-3. Idle Notification + Self-Claim Task Loop ✅ SHIPPED
 
 **Reference**: Claude Code teammates auto-send `idle_notification` after every LLM turn and self-claim tasks
 
@@ -287,7 +316,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### AT-4. Custom Agent Definitions (`.claude/agents/`)
+### AT-4. Custom Agent Definitions (`.claude/agents/`) ✅ SHIPPED
 
 **Reference**: Claude Code reads `.claude/agents/{name}.md` with YAML frontmatter for agent configs
 
@@ -306,7 +335,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### AT-5. Peer-to-Peer + Broadcast Messaging
+### AT-5. Peer-to-Peer + Broadcast Messaging ✅ SHIPPED
 
 **Reference**: Claude Code supports direct teammate-to-teammate DMs and `type: "broadcast"` messages
 
@@ -323,7 +352,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### AT-6. Team Feature Flag + Permission Inheritance
+### AT-6. Team Feature Flag + Permission Inheritance ✅ SHIPPED
 
 **Reference**: Claude Code requires `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` and teammates inherit lead's permissions
 
@@ -339,7 +368,7 @@ Shannon already has significant foundational code. The work is primarily **integ
 
 ---
 
-### AT-7. Team Hooks (Quality Gates)
+### AT-7. Team Hooks (Quality Gates) ✅ SHIPPED
 
 **Reference**: Claude Code has `SubagentStart`, `SubagentStop`, `TeammateIdle`, `TaskCreated`, `TaskCompleted` hooks
 
