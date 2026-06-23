@@ -114,3 +114,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check Linux x86_64 musl
         run: cargo check --workspace --target x86_64-unknown-linux-musl
+
+  semver-check:
+    name: Semver Advisory
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - name: Run semver checks (advisory)
+        run: cargo semver-checks --workspace --verbose || true
+      - name: Note
+        run: |
+          echo "Semver failures are advisory only. See docs/STABILITY.md for the policy."
+          echo "Promote a failure to a hard block only after the affected API is marked #[stable]."
