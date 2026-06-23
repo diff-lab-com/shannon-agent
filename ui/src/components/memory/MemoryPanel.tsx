@@ -240,7 +240,7 @@ export default function MemoryPanel() {
         </div>
 
         <div className="text-label-sm text-on-surface-variant mb-md">
-          {t('memory.listCount', { count: filteredCount })}
+          {intl.formatMessage({ id: 'memory.listCount' }, { count: filteredCount })}
         </div>
 
         {loading ? (
