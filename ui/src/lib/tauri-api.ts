@@ -1134,3 +1134,31 @@ export interface SeedReport {
 export async function seedSampleData(): Promise<SeedReport> {
   return invoke('seed_sample_data')
 }
+
+// --- Routine templates (P1.4) ---
+
+export interface RoutineTemplate {
+  id: string
+  name: string
+  description: string
+  category: string
+  prompt: string
+  trigger_type: string
+  cron_expr?: string | null
+  interval_secs?: number | null
+  timezone?: string | null
+}
+
+export async function listRoutineTemplates(): Promise<RoutineTemplate[]> {
+  return invoke('list_routine_templates')
+}
+
+export async function instantiateRoutineTemplate(
+  templateId: string,
+  nameOverride?: string | null,
+): Promise<ScheduledRoutine> {
+  return invoke('instantiate_routine_template', {
+    templateId,
+    nameOverride: nameOverride ?? null,
+  })
+}

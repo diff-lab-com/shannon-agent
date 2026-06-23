@@ -18,6 +18,7 @@ fn main() {
     use shannon_desktop::commands_outbound;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
+    use shannon_desktop::commands_routine_templates;
     use shannon_desktop::commands_sessions;
     use shannon_desktop::commands_tasks;
     use shannon_desktop::extensions_commands;
@@ -158,6 +159,9 @@ fn main() {
             // Scheduled tasks, triage, history, triggered routines (Sprint 2)
             shannon_desktop::scheduled_commands::list_scheduled_tasks,
             shannon_desktop::scheduled_commands::create_scheduled_task,
+            // Routine templates library (P1.4)
+            commands_routine_templates::list_routine_templates,
+            commands_routine_templates::instantiate_routine_template,
             shannon_desktop::scheduled_commands::update_scheduled_task,
             shannon_desktop::scheduled_commands::delete_scheduled_task,
             shannon_desktop::scheduled_commands::toggle_scheduled_task,

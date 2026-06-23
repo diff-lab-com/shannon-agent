@@ -1,0 +1,10 @@
+id = "cost-anomaly-detection"
+name = "Cost anomaly detection"
+description = "Scan billing data for spikes every 6 hours."
+category = "finops"
+trigger_type = "interval"
+interval_secs = 21600
+prompt = """
+Compare the last 24h of cost data to the trailing 30-day baseline.
+Flag any line item whose daily total exceeds 1.5x the rolling average.
+"""

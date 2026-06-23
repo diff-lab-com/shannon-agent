@@ -140,4 +140,6 @@ vi.mock('@/lib/tauri-api', () => ({
   listDataSourceCatalog: vi.fn().mockResolvedValue([]),
   listInstalledDataSources: vi.fn().mockResolvedValue([]),
   queryDataSource: vi.fn().mockResolvedValue({ items: [], total: 0, has_more: false }),
+  listRoutineTemplates: vi.fn().mockResolvedValue([]),
+  instantiateRoutineTemplate: vi.fn().mockResolvedValue({ id: 'test', name: 'Test' }),
 }))
