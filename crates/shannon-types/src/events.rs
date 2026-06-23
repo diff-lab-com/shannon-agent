@@ -289,6 +289,7 @@ pub mod event_names {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn event_names_use_colon_separator() {
@@ -346,5 +347,52 @@ mod tests {
         assert!(!json.contains("working_dir"));
         assert!(!json.contains("parent_id"));
         assert!(!json.contains("branch_point"));
+    }
+
+    #[test]
+    fn event_envelope_validates_against_schema() {
+        // Load the generated JSON Schema
+        let schema_path = concat!(env!("CARGO_MANIFEST_DIR"), "/schema/events.schema.json");
+        let schema_content = fs::read_to_string(schema_path).expect("Failed to read schema file");
+
+        let schemas: serde_json::Value =
+            serde_json::from_str(&schema_content).expect("Failed to parse schema JSON");
+
+        // Get the EventEnvelope schema
+        let envelope_schema = schemas
+            .get("EventEnvelope")
+            .expect("EventEnvelope schema not found");
+
+        // Create a sample envelope
+        let payload = QueryTextPayload {
+            query_id: "test-q123".into(),
+            content: "Hello, world!".into(),
+        };
+        let envelope = EventEnvelope::new("query:text", payload);
+
+        // Serialize to JSON
+        let envelope_json = serde_json::to_value(envelope).expect("Failed to serialize envelope");
+
+        // Verify the JSON matches the schema structure
+        let obj = envelope_json.as_object().expect("Not an object");
+        assert!(obj.contains_key("schema_version"));
+        assert!(obj.contains_key("event"));
+        assert!(obj.contains_key("payload"));
+
+        // Verify against schema properties
+        let schema_props = envelope_schema
+            .get("properties")
+            .and_then(|p| p.as_object())
+            .expect("Schema has no properties");
+
+        assert!(schema_props.contains_key("schema_version"));
+        assert!(schema_props.contains_key("event"));
+        assert!(schema_props.contains_key("payload"));
+
+        // Verify the schema_version matches current version
+        assert_eq!(
+            obj.get("schema_version").and_then(|v| v.as_u64()),
+            Some(EVENT_SCHEMA_VERSION as u64)
+        );
     }
 }
