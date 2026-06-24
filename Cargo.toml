@@ -14,6 +14,7 @@ members = [
     "crates/shannon-tool-interface",
     "crates/shannon-codegen",
     "crates/shannon-stability-attr",
+    "crates/shannon-engine",
 ]
 
 [workspace.package]
@@ -94,6 +95,7 @@ proc-macro2 = "1"
 quote = "1"
 syn = "2"
 shannon-stability-attr = { path = "crates/shannon-stability-attr" }
+shannon-engine = { path = "crates/shannon-engine" }
 
 [profile.release]
 opt-level = 3

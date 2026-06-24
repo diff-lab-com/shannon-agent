@@ -3982,6 +3982,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shannon-engine"
+version = "0.5.5"
+dependencies = [
+ "proptest",
+ "serde_json",
+ "shannon-core",
+ "tokio",
+]
+
+[[package]]
 name = "shannon-mcp"
 version = "0.5.5"
 dependencies = [
