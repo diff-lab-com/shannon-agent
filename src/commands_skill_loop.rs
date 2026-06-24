@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
 use crate::commands::AppState;
-use shannon_core::api::client::LlmClient;
+use shannon_engine::api::client::LlmClient;
 use shannon_core::skill_loop::{
     self,
 };

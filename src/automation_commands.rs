@@ -71,11 +71,11 @@ pub struct ProfilesList {
 
 /// All 30 hook events the Shannon engine can fire, with metadata.
 ///
-/// Keep this list in sync with `shannon_core::hooks::events::HookEventType`.
+/// Keep this list in sync with `shannon_engine::hooks::events::HookEventType`.
 /// Order is stable (defined by the engine variant order) so the UI can
 /// render the catalog deterministically.
 fn hook_event_catalog() -> Vec<HookEventInfo> {
-    use shannon_core::hooks::HookEventType as E;
+    use shannon_engine::hooks::HookEventType as E;
     let describe = |e: &E| -> (String, String, Vec<String>) {
         match e {
             E::PreToolUse => (
@@ -285,7 +285,7 @@ pub async fn list_hook_events() -> Result<Vec<HookEventInfo>, String> {
 // ─── profiles ───────────────────────────────────────────────────────────────
 
 fn builtin_profile_infos() -> Vec<BuiltinProfileInfo> {
-    use shannon_core::permission_profile::PermissionProfile::*;
+    use shannon_engine::permission_profile::PermissionProfile::*;
     [Strict, Balanced, Permissive]
         .into_iter()
         .map(|p| {
@@ -316,7 +316,7 @@ fn builtin_profile_infos() -> Vec<BuiltinProfileInfo> {
 /// files show up immediately in the UI.
 #[tauri::command]
 pub async fn list_permission_profiles(_state: State<'_, AppState>) -> Result<ProfilesList, String> {
-    let registry = shannon_core::custom_profiles::CustomProfileRegistry::load_from_dirs();
+    let registry = shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs();
     let custom = registry
         .all()
         .values()

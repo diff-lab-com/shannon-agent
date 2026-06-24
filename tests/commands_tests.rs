@@ -7,7 +7,7 @@
 //! The types and logic here mirror `src/commands.rs`. When the production code
 //! changes, these tests must be updated to match.
 
-use shannon_core::state::StateManager;
+use shannon_engine::state::StateManager;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock, oneshot};
@@ -396,7 +396,7 @@ async fn new_session(state: &AppState) -> Result<String, String> {
 
     // Persist empty session to state_manager
     let uuid = uuid::Uuid::parse_str(&id).map_err(|e| e.to_string())?;
-    let metadata = shannon_core::state::SessionPersistMetadata {
+    let metadata = shannon_engine::state::SessionPersistMetadata {
         model: "test".to_string(),
         turn_count: 0,
         title: Some(title),
@@ -412,16 +412,16 @@ async fn new_session(state: &AppState) -> Result<String, String> {
         let current_id = state.current_session_id.lock().await;
         if let Some(ref old_id) = *current_id {
             let messages = state.messages.lock().await;
-            let core_messages: Vec<shannon_core::api::Message> = messages
+            let core_messages: Vec<shannon_engine::api::Message> = messages
                 .iter()
-                .map(|m| shannon_core::api::Message {
+                .map(|m| shannon_engine::api::Message {
                     role: m.role.clone(),
-                    content: shannon_core::api::MessageContent::Text(m.content.clone()),
+                    content: shannon_engine::api::MessageContent::Text(m.content.clone()),
                 })
                 .collect();
             if let Ok(old_uuid) = uuid::Uuid::parse_str(old_id) {
                 let model = state.model.lock().await;
-                let md = shannon_core::state::SessionPersistMetadata {
+                let md = shannon_engine::state::SessionPersistMetadata {
                     model: model.clone(),
                     turn_count: core_messages.len() / 2,
                     title: None,
@@ -476,11 +476,11 @@ async fn load_session(state: &AppState, id: &str) -> Result<Vec<ChatMessage>, St
                 .map(|m| ChatMessage {
                     role: m.role,
                     content: match m.content {
-                        shannon_core::api::MessageContent::Text(t) => t,
-                        shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                        shannon_engine::api::MessageContent::Text(t) => t,
+                        shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                             .into_iter()
                             .filter_map(|b| match b {
-                                shannon_core::api::ContentBlock::Text { text } => Some(text),
+                                shannon_engine::api::ContentBlock::Text { text } => Some(text),
                                 _ => None,
                             })
                             .collect::<Vec<_>>()
@@ -543,17 +543,17 @@ async fn switch_session(state: &AppState, target_id: &str) -> Result<Vec<ChatMes
         let current_id = state.current_session_id.lock().await;
         if let Some(ref id) = *current_id {
             let messages = state.messages.lock().await;
-            let core_messages: Vec<shannon_core::api::Message> = messages
+            let core_messages: Vec<shannon_engine::api::Message> = messages
                 .iter()
-                .map(|m| shannon_core::api::Message {
+                .map(|m| shannon_engine::api::Message {
                     role: m.role.clone(),
-                    content: shannon_core::api::MessageContent::Text(m.content.clone()),
+                    content: shannon_engine::api::MessageContent::Text(m.content.clone()),
                 })
                 .collect();
 
             if let Ok(uuid) = uuid::Uuid::parse_str(id) {
                 let model = state.model.lock().await;
-                let metadata = shannon_core::state::SessionPersistMetadata {
+                let metadata = shannon_engine::state::SessionPersistMetadata {
                     model: model.clone(),
                     turn_count: core_messages.len() / 2,
                     title: None,
@@ -1218,17 +1218,17 @@ async fn session_persistence_loads_messages() {
 
     // Save some messages to the session
     let messages = vec![
-        shannon_core::api::Message {
+        shannon_engine::api::Message {
             role: "user".to_string(),
-            content: shannon_core::api::MessageContent::Text("Hello".to_string()),
+            content: shannon_engine::api::MessageContent::Text("Hello".to_string()),
         },
-        shannon_core::api::Message {
+        shannon_engine::api::Message {
             role: "assistant".to_string(),
-            content: shannon_core::api::MessageContent::Text("Hi there!".to_string()),
+            content: shannon_engine::api::MessageContent::Text("Hi there!".to_string()),
         },
     ];
 
-    let metadata = shannon_core::state::SessionPersistMetadata {
+    let metadata = shannon_engine::state::SessionPersistMetadata {
         model: "test-model".to_string(),
         turn_count: 1,
         title: Some("Test Session".to_string()),
