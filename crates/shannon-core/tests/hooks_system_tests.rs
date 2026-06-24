@@ -12,7 +12,7 @@
 //!   configured_event_types(), resolve_results()
 
 use serde_json::json;
-use shannon_core::hooks::*;
+use shannon_engine::hooks::*;
 use std::path::PathBuf;
 
 // ============================================================================

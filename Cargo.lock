@@ -3987,15 +3987,18 @@ name = "shannon-engine"
 version = "0.5.5"
 dependencies = [
  "base64",
+ "dirs 5.0.1",
  "futures",
  "hmac",
  "mockito",
  "proptest",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "shannon-types",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",

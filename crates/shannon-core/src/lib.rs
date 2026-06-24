@@ -56,7 +56,13 @@ pub mod context_pressure;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
-pub mod hooks;
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::hooks` directly"
+)]
+pub mod hooks {
+    pub use ::shannon_engine::hooks::*;
+}
 pub mod internal_logging;
 pub mod magic_docs;
 pub mod mcp_advanced;
@@ -140,6 +146,7 @@ pub mod triggered_routines;
 
 // Domain 1: Hooks - Hook event system, permission classification, profiles, policy limits
 pub mod hooks_domain {
+    #[allow(deprecated)]
     pub use super::hooks::*;
     pub use super::permission_classifier::*;
     pub use super::permission_profile::*;
