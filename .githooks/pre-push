@@ -1,0 +1,18 @@
+#!/bin/bash
+# Pre-push hook: run local checks before pushing.
+# Install: git config core.hooksPath .githooks
+# Bypass:  git push --no-verify
+
+# Read stdin (list of refs being pushed) but ignore — we always run checks
+while read -r _oldrev _newrev _refname; do
+    :
+done
+
+# Allow --quick via env var: PRE_PUSH_QUICK=1 git push
+QUICK_FLAG=""
+if [ -n "${PRE_PUSH_QUICK:-}" ]; then
+    QUICK_FLAG="--quick"
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+exec "${repo_root}/scripts/local-check.sh" ${QUICK_FLAG}
