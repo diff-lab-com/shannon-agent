@@ -60,17 +60,21 @@ Everything else is `unstable` until explicitly promoted.
 
 ## cargo-semver-checks
 
-CI runs `cargo-semver-checks --baseline-rev v0.5.5` as an **advisory**
-step. Failures do not block PRs yet.
+CI runs `cargo-semver-checks --baseline-rev v0.5.5` as a **blocking**
+step. Failures block PRs.
 
 Baseline is pinned to the `v0.5.5` git tag because the default
 crates.io lookup hits an unrelated `shannon-cli` package squatting the
 name. Bump the baseline only when cutting a new release tag and the
 workspace version has moved.
 
-Promotion to blocking requires:
-1. One full CI run with zero drift against `v0.5.5`.
-2. Remove `continue-on-error: true` and `|| true` from the semver job.
+Promoted to blocking 2026-06-24 after PR #52 confirmed zero drift
+against `v0.5.5`. If a semver failure appears, either:
+1. Bump the workspace minor version and document the break in the
+   PR description, or
+2. Fix the API to preserve compatibility, or
+3. Add `#[doc(hidden)]` to move the offending item off the public
+   surface.
 
 To run locally:
 
