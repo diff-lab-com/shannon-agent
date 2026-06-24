@@ -249,7 +249,7 @@ impl HookManager {
             ));
         }
         // Warn about potentially dangerous patterns in hook commands
-        crate::sandbox::audit_shell_command(command);
+        audit_shell_command(command);
         for pattern in &["rm -rf /", "mkfs", "dd if=", "> /dev/sd", "chmod 777"] {
             if command.contains(pattern) {
                 return Err(HookError::InvalidMatcher(format!(
@@ -764,6 +764,33 @@ Do not include any other text, explanation, or formatting.";
     /// Set the LLM client used for evaluating LLM-type hooks
     pub fn set_llm_client(&mut self, client: crate::api::client::LlmClient) {
         self.llm_client = Some(client);
+    }
+}
+
+/// Advisory-only audit of shell commands (inlined from `shannon_core::sandbox`
+/// to keep this crate a leaf with no reverse dependency on shannon-core).
+fn audit_shell_command(command: &str) {
+    const SHELL_AUDIT_PATTERNS: &[(&str, &str)] = &[
+        ("rm -rf /", "recursive delete of root filesystem"),
+        ("rm -rf /*", "recursive delete of all top-level files"),
+        ("mkfs.", "filesystem format command"),
+        ("dd if=", "raw disk copy (potential disk destruction)"),
+        (":(){ :|:& };:", "fork bomb"),
+        ("> /dev/sd", "direct write to block device"),
+        ("chmod -R 777 /", "open permissions on root filesystem"),
+        (
+            "chmod -r 777 /",
+            "open permissions on root filesystem (lowercase flag)",
+        ),
+    ];
+    for &(pattern, description) in SHELL_AUDIT_PATTERNS {
+        if command.contains(pattern) {
+            tracing::warn!(
+                pattern = pattern,
+                description = description,
+                "Potentially dangerous shell command pattern detected"
+            );
+        }
     }
 }
 
