@@ -3,11 +3,11 @@
 
 #[cfg(test)]
 mod context_budget_tests {
-    use shannon_core::api::ToolDefinition;
-    use shannon_core::context_budget::{
+    use shannon_engine::api::ToolDefinition;
+    use shannon_engine::context_budget::{
         CONVERSATION_FRACTION, ContextBudget, SYSTEM_PROMPT_FRACTION, TOOL_SCHEMA_FRACTION,
     };
-    use shannon_core::context_pressure::PressureLevel;
+    use shannon_engine::context_pressure::PressureLevel;
 
     // -- Helpers --
 
@@ -24,7 +24,7 @@ mod context_budget_tests {
     }
 
     /// Sum of all priority allocation fields.
-    fn priority_sum(alloc: &shannon_core::context_budget::PriorityAllocation) -> usize {
+    fn priority_sum(alloc: &shannon_engine::context_budget::PriorityAllocation) -> usize {
         alloc.critical + alloc.high + alloc.normal + alloc.low
     }
 

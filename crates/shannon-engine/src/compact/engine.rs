@@ -20,7 +20,7 @@ use super::types::{
 
 /// Main compression engine for conversation context management
 pub struct CompactEngine {
-    pub(crate) config: CompactConfig,
+    pub config: CompactConfig,
     summarizer: Box<dyn Summarizer>,
     pub(crate) compacting: bool,
     /// Optional hook manager for firing PreCompact/PostCompact events

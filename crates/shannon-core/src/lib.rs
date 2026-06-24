@@ -50,9 +50,27 @@ pub mod api_services;
 pub mod away_summary;
 pub mod bridge_service;
 pub mod checkpoint;
-pub mod compact;
-pub mod context_budget;
-pub mod context_pressure;
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::compact` directly"
+)]
+pub mod compact {
+    pub use ::shannon_engine::compact::*;
+}
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::context_budget` directly"
+)]
+pub mod context_budget {
+    pub use ::shannon_engine::context_budget::*;
+}
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::context_pressure` directly"
+)]
+pub mod context_pressure {
+    pub use ::shannon_engine::context_pressure::*;
+}
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
