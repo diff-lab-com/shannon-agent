@@ -1,27 +1,10 @@
 name: Benchmark Regression
 
 on:
-  pull_request:
-    branches: [main, dev]
-    paths:
-      # Hot paths that could cause performance regressions
-      - 'crates/shannon-core/src/query_engine/**'
-      - 'crates/shannon-core/src/tools.rs'
-      - 'crates/shannon-core/src/tool_*.rs'
-      - 'crates/shannon-core/src/tool_*/**'
-      - 'crates/shannon-core/src/compact/**'
-      - 'crates/shannon-core/src/context_budget.rs'
-      - 'crates/shannon-core/src/context_pressure.rs'
-      - 'crates/shannon-core/src/streaming_tool_executor.rs'
-      - 'crates/shannon-core/src/session_persist.rs'
-      - 'crates/shannon-core/src/token_estimation.rs'
-      # Bench harness itself
-      - 'benches/**'
-      # Dependency changes
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      # This workflow
-      - '.github/workflows/bench-regression.yml'
+  schedule:
+    # 03:00 UTC every Monday
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always

@@ -437,7 +437,7 @@ pub enum RuleCheckDecision {
 
 /// Checks tool/command access using deny > ask > allow priority rules.
 ///
-/// Rules are loaded from settings (`PermissionRules`) and compiled into
+/// Rules are loaded from settings and compiled into
 /// glob-based matchers. The evaluation order guarantees:
 /// 1. If any **deny** pattern matches, the result is `Denied`.
 /// 2. If any **ask** pattern matches (and no deny matched), the result is `Ask`.
@@ -457,15 +457,21 @@ pub struct PermissionRuleChecker {
 }
 
 impl PermissionRuleChecker {
-    /// Build a checker from `PermissionRules` (from settings).
-    pub fn from_rules(rules: &crate::settings::PermissionRules) -> Self {
+    /// Build a checker from raw rule string lists (deny, ask, allow).
+    ///
+    /// This is the engine-level constructor that avoids coupling to the
+    /// `settings::PermissionRules` type (which remains in `shannon-core`).
+    /// Callers in `shannon-core` can use the
+    /// [`PermissionRuleCheckerExt::from_rules`] extension trait method which
+    /// bridges from `settings::PermissionRules` for backward compatibility.
+    pub fn from_rule_strings(deny: &[String], ask: &[String], allow: &[String]) -> Self {
         Self {
-            deny_globset: build_globset(&rules.deny),
-            ask_globset: build_globset(&rules.ask),
-            allow_globset: build_globset(&rules.allow),
-            deny_raw: rules.deny.clone(),
-            ask_raw: rules.ask.clone(),
-            allow_raw: rules.allow.clone(),
+            deny_globset: build_globset(deny),
+            ask_globset: build_globset(ask),
+            allow_globset: build_globset(allow),
+            deny_raw: deny.to_vec(),
+            ask_raw: ask.to_vec(),
+            allow_raw: allow.to_vec(),
         }
     }
 
@@ -1202,7 +1208,7 @@ impl PermissionManager {
         self.approval_mode = mode;
     }
 
-    /// Set the permission rule checker (built from settings PermissionRules).
+    /// Set the permission rule checker (built from rule strings).
     pub fn set_rule_checker(&mut self, checker: PermissionRuleChecker) {
         self.rule_checker = checker;
     }
@@ -3122,13 +3128,9 @@ mod tests {
 
     #[test]
     fn test_rule_checker_deny_overrides_allow() {
-        use crate::settings::PermissionRules;
-        let rules = PermissionRules {
-            deny: vec!["Bash(rm -rf /)".to_string()],
-            allow: vec!["Bash(*)".to_string()],
-            ..Default::default()
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let deny = vec!["Bash(rm -rf /)".to_string()];
+        let allow = vec!["Bash(*)".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&deny, &[], &allow);
         // deny wins even though allow matches too
         assert_eq!(checker.check("Bash", "rm -rf /"), RuleCheckDecision::Denied);
         // non-denied bash command is allowed
@@ -3137,13 +3139,9 @@ mod tests {
 
     #[test]
     fn test_rule_checker_deny_overrides_ask() {
-        use crate::settings::PermissionRules;
-        let rules = PermissionRules {
-            deny: vec!["Bash(rm *)".to_string()],
-            ask: vec!["Bash(*)".to_string()],
-            ..Default::default()
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let deny = vec!["Bash(rm *)".to_string()];
+        let ask = vec!["Bash(*)".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&deny, &ask, &[]);
         // deny wins
         assert_eq!(
             checker.check("Bash", "rm file.txt"),
@@ -3155,25 +3153,17 @@ mod tests {
 
     #[test]
     fn test_rule_checker_ask_overrides_allow() {
-        use crate::settings::PermissionRules;
-        let rules = PermissionRules {
-            ask: vec!["Bash(*)".to_string()],
-            allow: vec!["Bash(git *)".to_string()],
-            ..Default::default()
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let ask = vec!["Bash(*)".to_string()];
+        let allow = vec!["Bash(git *)".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&[], &ask, &allow);
         // ask wins
         assert_eq!(checker.check("Bash", "git status"), RuleCheckDecision::Ask);
     }
 
     #[test]
     fn test_rule_checker_no_match_returns_no_match() {
-        use crate::settings::PermissionRules;
-        let rules = PermissionRules {
-            allow: vec!["Read(*)".to_string()],
-            ..Default::default()
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let allow = vec!["Read(*)".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&[], &[], &allow);
         assert_eq!(checker.check("Bash", "ls"), RuleCheckDecision::NoMatch);
     }
 
@@ -3185,24 +3175,16 @@ mod tests {
 
     #[test]
     fn test_rule_checker_non_empty_is_not_empty() {
-        use crate::settings::PermissionRules;
-        let rules = PermissionRules {
-            deny: vec!["Bash(*)".to_string()],
-            ..Default::default()
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let deny = vec!["Bash(*)".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&deny, &[], &[]);
         assert!(!checker.is_empty());
     }
 
     #[test]
     fn test_rule_checker_glob_pattern_matching() {
-        use crate::settings::PermissionRules;
-        let rules = PermissionRules {
-            allow: vec!["mcp__github__*".to_string()],
-            deny: vec!["mcp__*__delete_*".to_string()],
-            ..Default::default()
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let allow = vec!["mcp__github__*".to_string()];
+        let deny = vec!["mcp__*__delete_*".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&deny, &[], &allow);
         // glob allow
         assert_eq!(
             checker.check("mcp__github__list_prs", ""),
@@ -3219,12 +3201,8 @@ mod tests {
 
     #[test]
     fn test_rule_checker_tool_name_pattern() {
-        use crate::settings::PermissionRules;
-        let rules = PermissionRules {
-            allow: vec!["Read".to_string()],
-            ..Default::default()
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let allow = vec!["Read".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&[], &[], &allow);
         assert_eq!(
             checker.check("Read", "any file"),
             RuleCheckDecision::Allowed
@@ -3237,12 +3215,8 @@ mod tests {
 
     #[test]
     fn test_rule_checker_bare_star_allows_all() {
-        use crate::settings::PermissionRules;
-        let rules = PermissionRules {
-            allow: vec!["*".to_string()],
-            ..Default::default()
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let allow = vec!["*".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&[], &[], &allow);
         assert_eq!(
             checker.check("Bash", "anything"),
             RuleCheckDecision::Allowed
@@ -3255,14 +3229,10 @@ mod tests {
 
     #[test]
     fn test_rule_checker_integration_with_manager() {
-        use crate::settings::PermissionRules;
         let mut mgr = PermissionManager::new();
-        let rules = PermissionRules {
-            deny: vec!["Bash(rm -rf /)".to_string()],
-            allow: vec!["Bash(git *)".to_string()],
-            ..Default::default()
-        };
-        mgr.set_rule_checker(PermissionRuleChecker::from_rules(&rules));
+        let deny = vec!["Bash(rm -rf /)".to_string()];
+        let allow = vec!["Bash(git *)".to_string()];
+        mgr.set_rule_checker(PermissionRuleChecker::from_rule_strings(&deny, &[], &allow));
 
         let sid = Uuid::new_v4();
         // denied command
@@ -3333,8 +3303,7 @@ mod tests {
 
     #[test]
     fn test_error_boundary_rule_checker_empty_rules_returns_no_match() {
-        let rules = crate::settings::PermissionRules::default();
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let checker = PermissionRuleChecker::from_rule_strings(&[], &[], &[]);
         assert!(checker.is_empty());
         let decision = checker.check("Bash", "ls -la");
         assert_eq!(decision, RuleCheckDecision::NoMatch);
@@ -3344,12 +3313,8 @@ mod tests {
     fn test_error_boundary_rule_checker_invalid_glob_no_panic() {
         // Invalid glob patterns should be logged but not cause a panic.
         // The globset crate rejects patterns like "[" (unclosed bracket).
-        let rules = crate::settings::PermissionRules {
-            deny: vec!["[".to_string()],
-            ask: vec![],
-            allow: vec![],
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let deny = vec!["[".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&deny, &[], &[]);
         // Should not panic; invalid glob is skipped
         let decision = checker.check("[", "anything");
         // The raw pattern "[" doesn't match tool name "[" in the structured
@@ -3398,12 +3363,9 @@ mod tests {
     #[test]
     fn test_error_boundary_deny_rule_wins_over_identical_allow() {
         // Deny and allow on exact same pattern: deny must win
-        let rules = crate::settings::PermissionRules {
-            deny: vec!["Bash(rm -rf /)".to_string()],
-            ask: vec![],
-            allow: vec!["Bash(rm -rf /)".to_string()],
-        };
-        let checker = PermissionRuleChecker::from_rules(&rules);
+        let deny = vec!["Bash(rm -rf /)".to_string()];
+        let allow = vec!["Bash(rm -rf /)".to_string()];
+        let checker = PermissionRuleChecker::from_rule_strings(&deny, &[], &allow);
         assert_eq!(
             checker.check("Bash", "rm -rf /"),
             RuleCheckDecision::Denied,
