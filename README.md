@@ -358,6 +358,20 @@ cargo fmt                          # Format
 
 Install tooling: `cargo install just cargo-nextest`.
 
+### Git hooks (pre-push checks)
+
+One-time setup per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This enables:
+- **pre-commit**: auto-format staged `.rs` files with `cargo fmt`.
+- **pre-push**: run `scripts/local-check.sh` — `cargo fmt --check`, `cargo build --workspace`, `cargo clippy`. Catches issues CI would reject (like the landlock rustdoc failure that blocked semver-checks in PR #60).
+
+Bypass for WIP pushes: `git push --no-verify` or `PRE_PUSH_QUICK=1 git push` (fmt + build only, skip clippy).
+
 ### Testing
 
 | Command | What | Needs API key? |
