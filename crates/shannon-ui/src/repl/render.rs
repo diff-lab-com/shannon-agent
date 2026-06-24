@@ -616,7 +616,7 @@ pub fn draw_frame(
 pub fn render_permission_dialog(
     frame: &mut ratatui::Frame,
     area: Rect,
-    dialog: &shannon_core::permissions::PermissionPrompt,
+    dialog: &shannon_engine::permissions::PermissionPrompt,
     theme: &Theme,
 ) {
     // Calculate dialog area (centered) — taller if diff preview present
@@ -643,19 +643,19 @@ pub fn render_permission_dialog(
 
     // Build dialog content
     let risk_indicator = match dialog.risk_level {
-        shannon_core::permissions::RiskLevel::Safe => "✓",
-        shannon_core::permissions::RiskLevel::Low => "⚠",
-        shannon_core::permissions::RiskLevel::Medium => "⚡",
-        shannon_core::permissions::RiskLevel::High => "🔥",
-        shannon_core::permissions::RiskLevel::Critical => "☢️",
+        shannon_engine::permissions::RiskLevel::Safe => "✓",
+        shannon_engine::permissions::RiskLevel::Low => "⚠",
+        shannon_engine::permissions::RiskLevel::Medium => "⚡",
+        shannon_engine::permissions::RiskLevel::High => "🔥",
+        shannon_engine::permissions::RiskLevel::Critical => "☢️",
     };
 
     let risk_color = match dialog.risk_level {
-        shannon_core::permissions::RiskLevel::Safe => theme.success,
-        shannon_core::permissions::RiskLevel::Low => theme.warning,
-        shannon_core::permissions::RiskLevel::Medium => theme.accent,
-        shannon_core::permissions::RiskLevel::High => theme.error,
-        shannon_core::permissions::RiskLevel::Critical => theme.error,
+        shannon_engine::permissions::RiskLevel::Safe => theme.success,
+        shannon_engine::permissions::RiskLevel::Low => theme.warning,
+        shannon_engine::permissions::RiskLevel::Medium => theme.accent,
+        shannon_engine::permissions::RiskLevel::High => theme.error,
+        shannon_engine::permissions::RiskLevel::Critical => theme.error,
     };
 
     let mut content_lines = vec![

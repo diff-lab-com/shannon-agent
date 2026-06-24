@@ -286,7 +286,7 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 pub(crate) fn handle_mode(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_core::permissions::ApprovalMode;
+    use shannon_engine::permissions::ApprovalMode;
 
     let trimmed = args.trim();
 

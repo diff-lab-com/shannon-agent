@@ -3047,13 +3047,13 @@ fn test_compression_preserves_story_details_for_followup_questions() {
 #[cfg(test)]
 mod integration_tests {
     use mockito::{Server, ServerGuard};
-    use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::{
         QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
     };
     use shannon_core::tools::ToolRegistry;
     use shannon_engine::api::LlmClientConfig;
     use shannon_engine::api::LlmProvider;
+    use shannon_engine::permissions::PermissionManager;
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;

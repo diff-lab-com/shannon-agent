@@ -6,7 +6,7 @@
 //! - Risk level ordering is correct
 //! - Permission rule precedence is consistent
 
-use shannon_core::permissions::{
+use shannon_engine::permissions::{
     ApprovalMode, PermissionRule, PermissionRuleDecision, PermissionRuleSource, RiskLevel,
 };
 

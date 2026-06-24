@@ -4,7 +4,6 @@
 //! instances can interact with Shannon over the network.
 
 use crate::VERSION;
-use crate::permissions::PermissionManager;
 use crate::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
 use crate::tools::ToolRegistry;
 use axum::Json;
@@ -17,6 +16,7 @@ use axum::routing::{get, post};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use shannon_engine::api::{LlmClient, LlmClientConfig, Message};
+use shannon_engine::permissions::PermissionManager;
 use shannon_engine::state::StateManager;
 use std::collections::HashMap;
 use std::convert::Infallible;

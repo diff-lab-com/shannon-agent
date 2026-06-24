@@ -887,7 +887,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_tool_execution_with_permission_checks() {
-        use crate::permissions::{PermissionPrompt, RiskLevel};
+        use shannon_engine::permissions::{PermissionPrompt, RiskLevel};
 
         let registry = ToolRegistry::new();
         let tool = Box::new(AsyncTool {

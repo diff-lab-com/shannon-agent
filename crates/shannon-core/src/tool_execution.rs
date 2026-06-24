@@ -26,7 +26,7 @@
 //! ```rust,ignore
 //! use shannon_core::tool_execution::ToolExecutionService;
 //! use shannon_core::tools::ToolRegistry;
-//! use shannon_core::permissions::PermissionManager;
+//! use shannon_engine::permissions::PermissionManager;
 //! use std::sync::Arc;
 //!
 //! let registry = Arc::new(ToolRegistry::new());
@@ -52,9 +52,9 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::checkpoint::CheckpointManager;
-use crate::permissions::{PermissionError, PermissionManager};
 use crate::tools::{ToolError, ToolOutput, ToolRegistry};
 use shannon_engine::hooks::{HookDecision, HookEvent, HookManager};
+use shannon_engine::permissions::{PermissionError, PermissionManager};
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -893,7 +893,7 @@ impl ToolExecutionService {
         session_id: Uuid,
         tool_name: &str,
         tool_input: &Value,
-    ) -> Option<crate::permissions::PermissionPrompt> {
+    ) -> Option<shannon_engine::permissions::PermissionPrompt> {
         self.permission_manager
             .create_permission_prompt(tool_name, tool_input, session_id)
     }
@@ -902,14 +902,14 @@ impl ToolExecutionService {
     pub fn process_permission_choice(
         &self,
         _session_id: Uuid,
-        prompt: &crate::permissions::PermissionPrompt,
-        choice: crate::permissions::PermissionChoice,
+        prompt: &shannon_engine::permissions::PermissionPrompt,
+        choice: shannon_engine::permissions::PermissionChoice,
     ) -> Result<(), ToolExecutionError> {
         // We need interior mutability for this, but since PermissionManager
         // is behind Arc, we return a descriptive error for the synchronous API.
         // In practice, callers would use the PermissionManager directly.
         match choice {
-            crate::permissions::PermissionChoice::Deny => {
+            shannon_engine::permissions::PermissionChoice::Deny => {
                 Err(ToolExecutionError::PermissionDenied {
                     tool_name: prompt.tool_name.clone(),
                     reason: format!("User denied: {}", prompt.description),
@@ -1066,10 +1066,10 @@ impl ToolExecutionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permissions::Permission;
-    use crate::permissions::PermissionLevel;
-    use crate::permissions::PermissionPrompt;
     use crate::tools::Tool;
+    use shannon_engine::permissions::Permission;
+    use shannon_engine::permissions::PermissionLevel;
+    use shannon_engine::permissions::PermissionPrompt;
 
     /// A simple test tool that echoes its input.
     struct EchoTool;
@@ -2970,7 +2970,7 @@ mod tests {
             id: Uuid::new_v4(),
             tool_name: "Bash".to_string(),
             tool_input: serde_json::json!({"command": "rm -rf /"}),
-            risk_level: crate::permissions::RiskLevel::Critical,
+            risk_level: shannon_engine::permissions::RiskLevel::Critical,
             description: "Dangerous command".to_string(),
             is_confirmation: false,
             diff_preview: None,
@@ -2981,7 +2981,7 @@ mod tests {
         let result = service.process_permission_choice(
             Uuid::new_v4(),
             &prompt,
-            crate::permissions::PermissionChoice::Deny,
+            shannon_engine::permissions::PermissionChoice::Deny,
         );
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -3002,7 +3002,7 @@ mod tests {
             id: Uuid::new_v4(),
             tool_name: "Read".to_string(),
             tool_input: serde_json::json!({"file_path": "/tmp/test.txt"}),
-            risk_level: crate::permissions::RiskLevel::Low,
+            risk_level: shannon_engine::permissions::RiskLevel::Low,
             description: "Read file".to_string(),
             is_confirmation: false,
             diff_preview: None,
@@ -3013,7 +3013,7 @@ mod tests {
         let result = service.process_permission_choice(
             Uuid::new_v4(),
             &prompt,
-            crate::permissions::PermissionChoice::AllowOnce,
+            shannon_engine::permissions::PermissionChoice::AllowOnce,
         );
         assert!(result.is_ok());
     }
@@ -3027,7 +3027,7 @@ mod tests {
             id: Uuid::new_v4(),
             tool_name: "Read".to_string(),
             tool_input: serde_json::json!({}),
-            risk_level: crate::permissions::RiskLevel::Low,
+            risk_level: shannon_engine::permissions::RiskLevel::Low,
             description: "Read".to_string(),
             is_confirmation: false,
             diff_preview: None,
@@ -3038,7 +3038,7 @@ mod tests {
         let result = service.process_permission_choice(
             Uuid::new_v4(),
             &prompt,
-            crate::permissions::PermissionChoice::AlwaysAllow,
+            shannon_engine::permissions::PermissionChoice::AlwaysAllow,
         );
         assert!(result.is_ok());
     }
@@ -3052,7 +3052,7 @@ mod tests {
             id: Uuid::new_v4(),
             tool_name: "Bash".to_string(),
             tool_input: serde_json::json!({}),
-            risk_level: crate::permissions::RiskLevel::Medium,
+            risk_level: shannon_engine::permissions::RiskLevel::Medium,
             description: "Bash".to_string(),
             is_confirmation: false,
             diff_preview: None,
@@ -3063,7 +3063,7 @@ mod tests {
         let result = service.process_permission_choice(
             Uuid::new_v4(),
             &prompt,
-            crate::permissions::PermissionChoice::EditAndRun,
+            shannon_engine::permissions::PermissionChoice::EditAndRun,
         );
         assert!(result.is_ok());
     }

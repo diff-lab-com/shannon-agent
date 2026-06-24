@@ -494,7 +494,7 @@ pub(crate) fn handle_project(repl: &mut Repl, args: &str) -> Result<()> {
             let mode = perms
                 .read()
                 .map(|p| p.approval_mode())
-                .unwrap_or(shannon_core::permissions::ApprovalMode::Suggest);
+                .unwrap_or(shannon_engine::permissions::ApprovalMode::Suggest);
             msg.push_str(&format!("\n  Permission mode: {mode:?}"));
         }
 
@@ -626,10 +626,10 @@ mode = \"suggest\"    # suggest | auto-edit | full-auto | readonly\n\
             }
             "permissions" => {
                 let mode = match value {
-                    "auto-edit" => shannon_core::permissions::ApprovalMode::AutoEdit,
-                    "full-auto" => shannon_core::permissions::ApprovalMode::FullAuto,
-                    "readonly" => shannon_core::permissions::ApprovalMode::Readonly,
-                    _ => shannon_core::permissions::ApprovalMode::Suggest,
+                    "auto-edit" => shannon_engine::permissions::ApprovalMode::AutoEdit,
+                    "full-auto" => shannon_engine::permissions::ApprovalMode::FullAuto,
+                    "readonly" => shannon_engine::permissions::ApprovalMode::Readonly,
+                    _ => shannon_engine::permissions::ApprovalMode::Suggest,
                 };
                 if let Some(ref engine) = repl.query_engine {
                     if let Ok(mut perms) = engine.permissions().write() {

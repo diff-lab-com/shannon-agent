@@ -8,7 +8,7 @@ impl super::Repl {
     /// Cycles through 4 core modes: ASK → EDIT → PLAN → AUTO → ASK.
     /// Other modes (FULL, etc.) are set explicitly via /mode.
     pub fn cycle_approval_mode(&mut self) {
-        use shannon_core::permissions::ApprovalMode;
+        use shannon_engine::permissions::ApprovalMode;
 
         let current = if let Some(ref query_engine) = self.query_engine {
             let perms = recover_lock(query_engine.permissions().read());

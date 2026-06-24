@@ -2,9 +2,9 @@
 //!
 //! Tests the full pipeline: load from dirs → resolve by name → apply to PermissionManager.
 
-use shannon_core::custom_profiles::{CustomProfileDef, CustomProfileRegistry};
-use shannon_core::permission_profile::PermissionProfile;
-use shannon_core::permissions::{ApprovalMode, PermissionManager};
+use shannon_engine::custom_profiles::{CustomProfileDef, CustomProfileRegistry};
+use shannon_engine::permission_profile::PermissionProfile;
+use shannon_engine::permissions::{ApprovalMode, PermissionManager};
 use std::fs;
 
 fn write_profile(dir: &std::path::Path, name: &str, content: &str) {

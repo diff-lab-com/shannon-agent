@@ -1306,7 +1306,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     perms.approval_mode().short_label().to_string()
                 };
                 if engine_label != repl.state.approval_mode_label {
-                    if let Some(mode) = shannon_core::permissions::ApprovalMode::from_label(
+                    if let Some(mode) = shannon_engine::permissions::ApprovalMode::from_label(
                         &repl.state.approval_mode_label,
                     ) {
                         let mut perms = shannon_types::recover_lock(engine.permissions().write());
@@ -1517,7 +1517,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         perms.approval_mode().short_label().to_string()
                     };
                     if engine_label != repl.state.approval_mode_label {
-                        if let Some(mode) = shannon_core::permissions::ApprovalMode::from_label(
+                        if let Some(mode) = shannon_engine::permissions::ApprovalMode::from_label(
                             &repl.state.approval_mode_label,
                         ) {
                             let mut perms =
@@ -1747,11 +1747,11 @@ mod tests {
     //! Fix: Changed the error type from `String` to `(Option<QueryEngine>, String)`
     //! so the engine is carried back to the caller even on error paths.
 
-    use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::QueryEngine;
     use shannon_core::tools::ToolRegistry;
     use shannon_engine::api::LlmClientConfig;
     use shannon_engine::api::LlmProvider;
+    use shannon_engine::permissions::PermissionManager;
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
 

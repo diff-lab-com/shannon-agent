@@ -55,31 +55,6 @@ pub mod model_registry;
 pub mod notifier;
 pub mod oauth;
 pub mod output_format;
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::permissions` directly"
-)]
-pub mod permissions {
-    pub use ::shannon_engine::permissions::*;
-
-    /// Extension trait providing backward-compatible construction of
-    /// [`PermissionRuleChecker`] from `settings::PermissionRules`.
-    ///
-    /// Since `PermissionRuleChecker` moved to `shannon-engine` (which does not
-    /// depend on `shannon-core`), the `from_rules(&PermissionRules)` constructor
-    /// was replaced by `from_rule_strings(&[String], &[String], &[String])`.
-    /// This trait bridges the gap for callers that still have a
-    /// `settings::PermissionRules` value.
-    pub trait PermissionRuleCheckerExt {
-        fn from_rules(rules: &crate::settings::PermissionRules) -> Self;
-    }
-
-    impl PermissionRuleCheckerExt for PermissionRuleChecker {
-        fn from_rules(rules: &crate::settings::PermissionRules) -> Self {
-            Self::from_rule_strings(&rules.deny, &rules.ask, &rules.allow)
-        }
-    }
-}
 pub mod policy_limits;
 pub mod prevent_sleep;
 pub mod progressive_loader;
@@ -111,40 +86,12 @@ pub mod api_server;
 pub mod auto_dream_consolidation;
 pub mod billing;
 pub mod credential_manager;
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::custom_profiles` directly"
-)]
-pub mod custom_profiles {
-    pub use ::shannon_engine::custom_profiles::*;
-}
 pub mod doctor;
 pub mod enhanced_suggestions;
 pub mod feature_flags;
 pub mod housekeeping;
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::llm_classifier` directly"
-)]
-pub mod llm_classifier {
-    pub use ::shannon_engine::llm_classifier::*;
-}
 pub mod lsp;
 pub mod mcp_server_approval;
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::permission_classifier` directly"
-)]
-pub mod permission_classifier {
-    pub use ::shannon_engine::permission_classifier::*;
-}
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::permission_profile` directly"
-)]
-pub mod permission_profile {
-    pub use ::shannon_engine::permission_profile::*;
-}
 pub mod plugin;
 pub mod preference_memory;
 pub mod recording;
@@ -217,7 +164,6 @@ pub use notifier::{
 };
 pub use oauth::{OAuthClient, OAuthError, OAuthService, OAuthToken, TokenEncryption};
 pub use output_format::{OutputEvent, StructuredOutputConfig, StructuredOutputError};
-pub use permissions::{ApprovalMode, Permission, PermissionLevel, PermissionManager};
 pub use policy_limits::{PolicyCheckResult, PolicyError, PolicyLimits, PolicyLimitsManager};
 pub use query_engine::{
     QueryContext, QueryEngine, QueryEvent, browser_control_prompt, teammate_instructions,
@@ -273,6 +219,9 @@ pub use shannon_engine::context_pressure::{
 pub use shannon_engine::hooks::{
     HookDecision, HookError, HookEvent, HookEventType, HookManager, HookResult,
 };
+pub use shannon_engine::permissions::{
+    ApprovalMode, Permission, PermissionLevel, PermissionManager,
+};
 pub use shannon_engine::state::{
     SessionData, SessionInfo, SessionPersistMetadata, SessionState, StateManager,
 };
@@ -307,7 +256,6 @@ pub use credential_manager::{
     Credential, CredentialError, CredentialFileDescriptor, CredentialFileFormat, CredentialManager,
     CredentialSummary, ImportResult, PortableCredential, PortableCredentialBundle,
 };
-pub use custom_profiles::{CustomProfileDef, CustomProfileError, CustomProfileRegistry};
 pub use housekeeping::{
     CacheRefreshTask, Housekeeper, HousekeepingConfig, HousekeepingError, HousekeepingTask,
     LogRotationTask, OldSessionPruneTask, TaskResult, TempFileCleanupTask,
@@ -320,17 +268,20 @@ pub use mcp_server_approval::{
     ApprovalDecision, McpApprovalError, McpApprovalManager, McpApprovalPolicy,
     McpServerApprovalRequest, McpTransportType, RiskAssessment,
 };
-pub use permission_classifier::{
-    ClassificationResult, ClassificationResultBuilder, DangerousPattern, PermissionClassifier,
-    PermissionClassifierError, PermissionRule, PermissionRuleParser, RiskLevel, RuleDecision,
-    RuleSource,
-};
-pub use permission_profile::{PermissionProfile, ProfileRules};
 pub use progressive_loader::{ProgressiveLoaderConfig, lines_for_token_budget, truncate_content};
 pub use session_transcript::{
     GlobalTranscriptStats, SessionTranscriptStats, ToolCallRecord, TranscriptEntry,
     TranscriptError, TranscriptQuery, TranscriptRole, TranscriptStore,
 };
+pub use shannon_engine::custom_profiles::{
+    CustomProfileDef, CustomProfileError, CustomProfileRegistry,
+};
+pub use shannon_engine::permission_classifier::{
+    ClassificationResult, ClassificationResultBuilder, DangerousPattern, PermissionClassifier,
+    PermissionClassifierError, PermissionRule, PermissionRuleParser, RiskLevel, RuleDecision,
+    RuleSource,
+};
+pub use shannon_engine::permission_profile::{PermissionProfile, ProfileRules};
 pub use team_memory_sync::{
     SecretMatch, SecretRule, SecretScanner, SyncResult, TeamMemoryConfig, TeamMemoryGuard,
     TeamMemorySync, TeamMemorySyncError,
@@ -374,8 +325,6 @@ pub mod error {
     pub use crate::memory::MemoryError;
     pub use crate::notifier::NotifierError;
     pub use crate::oauth::OAuthError;
-    pub use crate::permission_classifier::PermissionClassifierError;
-    pub use crate::permissions::PermissionError;
     pub use crate::policy_limits::PolicyError;
     pub use crate::project_memory::ProjectMemoryError;
     pub use crate::remote_settings::RemoteSettingsError;
@@ -395,6 +344,8 @@ pub mod error {
     pub use shannon_engine::api::ApiError;
     pub use shannon_engine::compact::CompactError;
     pub use shannon_engine::hooks::HookError;
+    pub use shannon_engine::permission_classifier::PermissionClassifierError;
+    pub use shannon_engine::permissions::PermissionError;
     pub use shannon_engine::state::StateError;
     pub use shannon_engine::streaming_tool_executor::ExecutorError;
 }

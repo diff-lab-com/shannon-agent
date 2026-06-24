@@ -507,7 +507,7 @@ pub(crate) fn extract_plan_steps(description: &str) -> Vec<String> {
 }
 
 pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_core::permissions::RiskLevel;
+    use shannon_engine::permissions::RiskLevel;
 
     let parts: Vec<&str> = args.split_whitespace().collect();
 
@@ -622,7 +622,7 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     if let Some(ref engine) = repl.query_engine {
                         if let Ok(mut perms) = engine.permissions().write() {
                             perms.set_approval_mode(
-                                shannon_core::permissions::ApprovalMode::Suggest,
+                                shannon_engine::permissions::ApprovalMode::Suggest,
                             );
                         }
                     }
@@ -638,7 +638,7 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     if let Some(ref engine) = repl.query_engine {
                         if let Ok(mut perms) = engine.permissions().write() {
                             perms.set_approval_mode(
-                                shannon_core::permissions::ApprovalMode::FullAuto,
+                                shannon_engine::permissions::ApprovalMode::FullAuto,
                             );
                         }
                     }
@@ -654,7 +654,7 @@ pub(crate) fn handle_permissions(repl: &mut Repl, args: &str) -> Result<()> {
                     if let Some(ref engine) = repl.query_engine {
                         if let Ok(mut perms) = engine.permissions().write() {
                             perms.set_approval_mode(
-                                shannon_core::permissions::ApprovalMode::Readonly,
+                                shannon_engine::permissions::ApprovalMode::Readonly,
                             );
                         }
                     }
