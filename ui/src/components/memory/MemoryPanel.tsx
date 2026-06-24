@@ -195,7 +195,7 @@ export default function MemoryPanel() {
           <select
             value={projectFilter}
             onChange={(e) => setProjectFilter(e.target.value)}
-            className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md"
+            className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md transition-colors hover:border-primary/30 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none cursor-pointer"
           >
             <option value="all">{t('memory.filter.allProjects')}</option>
             {projects.map((p) => (
@@ -208,7 +208,7 @@ export default function MemoryPanel() {
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
-            className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md"
+            className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md transition-colors hover:border-primary/30 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none cursor-pointer"
           >
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>
@@ -226,7 +226,7 @@ export default function MemoryPanel() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={t('memory.searchPlaceholder')}
-              className="w-full pl-[40px] pr-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md"
+              className="w-full pl-[40px] pr-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md transition-colors hover:border-primary/30 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none"
             />
           </div>
 
@@ -311,6 +311,7 @@ function MemoryCard({
   onDelete: () => void
 }) {
   const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const fmtDate = (iso: string) => {
     const d = new Date(iso)
     if (Number.isNaN(d.getTime())) return iso
@@ -360,14 +361,14 @@ function MemoryCard({
           <button
             onClick={onEdit}
             className="p-xs rounded-lg hover:bg-surface-container-high cursor-pointer"
-            aria-label="Edit"
+            aria-label={t('memory.action.edit')}
           >
             <span className="material-symbols-outlined text-[18px] text-on-surface-variant">edit</span>
           </button>
           <button
             onClick={onDelete}
             className="p-xs rounded-lg hover:bg-error/10 cursor-pointer"
-            aria-label="Delete"
+            aria-label={t('memory.action.delete')}
           >
             <span className="material-symbols-outlined text-[18px] text-error/70">delete</span>
           </button>
@@ -442,7 +443,7 @@ function MemoryEditor({
             type="button"
             onClick={onCancel}
             className="p-xs rounded hover:bg-surface-container-high cursor-pointer"
-            aria-label="Close"
+            aria-label={t('memory.action.close')}
           >
             <span className="material-symbols-outlined text-[20px] text-on-surface-variant">close</span>
           </button>

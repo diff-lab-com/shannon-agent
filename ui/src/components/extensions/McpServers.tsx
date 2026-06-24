@@ -10,6 +10,41 @@ import { safeErrorMessage } from "@/lib/packageValidation";
 import type { McpServerInfo } from "@/types";
 import McpAddServerDialog from "./McpAddServerDialog";
 
+/** Semantic icon per known MCP server. Falls back to a hub/storage icon. */
+const MCP_SERVER_ICONS: Record<string, string> = {
+  filesystem: 'folder',
+  fs: 'folder',
+  github: 'hub',
+  gitlab: 'hub',
+  playwright: 'theater_comedy',
+  puppeteer: 'web',
+  sqlite: 'database',
+  postgres: 'database',
+  postgresql: 'database',
+  mysql: 'database',
+  redis: 'bolt',
+  memory: 'psychology',
+  fetch: 'cloud_download',
+  slack: 'tag',
+  linear: 'linear_scale',
+  notion: 'description',
+  obsidian: 'book',
+  imap: 'mail',
+  smtp: 'mail',
+  brave: 'shield',
+  google: 'travel_explore',
+  sequential: 'route',
+  time: 'schedule',
+};
+
+function mcpServerIcon(name: string): string {
+  const key = name.toLowerCase().trim();
+  for (const [k, v] of Object.entries(MCP_SERVER_ICONS)) {
+    if (key.includes(k)) return v;
+  }
+  return 'cloud';
+}
+
 /**
  * MCP Servers page — Cursor-style click-install UX.
  *
@@ -170,8 +205,8 @@ function InstalledSection({
                     : "border-b border-outline-variant/15"
                 }`}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]">
-                  cloud
+                <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">
+                  {mcpServerIcon(srv.name)}
                 </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-xs">

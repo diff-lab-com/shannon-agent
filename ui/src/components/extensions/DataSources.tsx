@@ -12,6 +12,30 @@ import {
 } from "@/lib/tauri-api";
 import DataSourcesQuery from "./DataSourcesQuery";
 
+const DATASOURCE_ICONS: Record<string, string> = {
+  obsidian: 'book',
+  imap: 'mail',
+  smtp: 'mail',
+  gmail: 'mail',
+  notion: 'description',
+  git: 'hub',
+  github: 'hub',
+  sqlite: 'database',
+  postgres: 'database',
+  apple_notes: 'sticky_note_2',
+  apple_mail: 'mail',
+  files: 'folder',
+  filesystem: 'folder',
+};
+
+function datasourceIcon(slug: string): string {
+  const key = slug.toLowerCase();
+  for (const [k, v] of Object.entries(DATASOURCE_ICONS)) {
+    if (key.includes(k)) return v;
+  }
+  return 'database';
+}
+
 /**
  * P5 Data Sources tab — Tier-1 native Rust adapters.
  *
@@ -235,7 +259,7 @@ export default function DataSources() {
                 key={row.slug}
                 className={`flex items-center gap-md px-md py-sm ${i === installed.length - 1 ? "" : "border-b border-outline-variant/15"}`}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]">database</span>
+                <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">{datasourceIcon(row.slug)}</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-label-md text-on-surface truncate">{row.name}</div>
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">
