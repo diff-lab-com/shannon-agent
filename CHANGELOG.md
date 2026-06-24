@@ -6,6 +6,13 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
 
 ### Changes
 
+- **Engine pin bumped to `d49e7f5`.** Picks up the D1 Phase 3 cleanup
+  (shannon-code PRs #58–#64): `shannon-engine` is now a direct dep,
+  and all desktop imports of the migrated modules (`api`, `state`,
+  `permissions`, `hooks`, `compact`, `context_pressure`, etc.) go
+  through `shannon_engine::*` instead of the removed deprecated shims
+  in `shannon-core`.
+
 - **Engine pin bumped to `ff02637`.** Picks up shannon-code PRs #49
   (D1 phase 1 internal reorg), #50 (B3 JSON Schema emit for events),
   #51 (C4+T5 `#[stable_api]` macro), #52 (C5 semver baseline pinned

@@ -4,11 +4,11 @@
 //! JavaScript as `invoke("command_name", { args })`.
 
 use serde::{Deserialize, Serialize};
-use shannon_core::api::client::LlmClient;
-use shannon_core::api::types::LlmClientConfig;
-use shannon_core::permissions::{ApprovalMode, PermissionManager};
+use shannon_engine::api::client::LlmClient;
+use shannon_engine::api::types::LlmClientConfig;
+use shannon_engine::permissions::{ApprovalMode, PermissionManager};
 use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent};
-use shannon_core::state::StateManager;
+use shannon_engine::state::StateManager;
 use shannon_core::tools::ToolRegistry;
 use shannon_mcp::McpProcessPool;
 use shannon_skills::SkillRegistry;
@@ -623,16 +623,16 @@ pub async fn send_message(
                                 let msgs = messages_arc.lock().await.clone();
                                 let model = model_arc.lock().await.clone();
                                 if let Ok(session_uuid) = uuid::Uuid::parse_str(&sid) {
-                                    let core_msgs: Vec<shannon_core::api::Message> = msgs
+                                    let core_msgs: Vec<shannon_engine::api::Message> = msgs
                                         .iter()
-                                        .map(|m| shannon_core::api::Message {
+                                        .map(|m| shannon_engine::api::Message {
                                             role: m.role.clone(),
-                                            content: shannon_core::api::MessageContent::Text(
+                                            content: shannon_engine::api::MessageContent::Text(
                                                 m.content.clone(),
                                             ),
                                         })
                                         .collect();
-                                    let meta = shannon_core::state::SessionPersistMetadata {
+                                    let meta = shannon_engine::state::SessionPersistMetadata {
                                         model,
                                         turn_count: core_msgs.len() / 2,
                                         ..Default::default()
@@ -688,7 +688,7 @@ pub async fn send_message(
                                             let state_guard = app_clone.state::<AppState>();
                                             state_guard.client_config.read().await.clone()
                                         };
-                                        let client = shannon_core::api::client::LlmClient::new(client_config);
+                                        let client = shannon_engine::api::client::LlmClient::new(client_config);
 
                                         match shannon_core::skill_loop::evaluate_task(&client, evaluation).await {
                                             Ok(result) if result.suggest => {
@@ -782,8 +782,8 @@ pub(crate) fn chrono_timestamp() -> i64 {
         .as_millis() as i64
 }
 
-fn provider_from_str(s: &str) -> shannon_core::api::types::LlmProvider {
-    use shannon_core::api::types::LlmProvider;
+fn provider_from_str(s: &str) -> shannon_engine::api::types::LlmProvider {
+    use shannon_engine::api::types::LlmProvider;
     match s {
         "anthropic" => LlmProvider::Anthropic,
         "openai" => LlmProvider::OpenAI,
@@ -1146,25 +1146,25 @@ mod tests {
         let parent_id = uuid::Uuid::new_v4();
         let parent_id_str = parent_id.to_string();
         let messages = vec![
-            shannon_core::api::Message {
+            shannon_engine::api::Message {
                 role: "user".into(),
-                content: shannon_core::api::MessageContent::Text("msg 1".into()),
+                content: shannon_engine::api::MessageContent::Text("msg 1".into()),
             },
-            shannon_core::api::Message {
+            shannon_engine::api::Message {
                 role: "assistant".into(),
-                content: shannon_core::api::MessageContent::Text("resp 1".into()),
+                content: shannon_engine::api::MessageContent::Text("resp 1".into()),
             },
-            shannon_core::api::Message {
+            shannon_engine::api::Message {
                 role: "user".into(),
-                content: shannon_core::api::MessageContent::Text("msg 2".into()),
+                content: shannon_engine::api::MessageContent::Text("msg 2".into()),
             },
-            shannon_core::api::Message {
+            shannon_engine::api::Message {
                 role: "assistant".into(),
-                content: shannon_core::api::MessageContent::Text("resp 2".into()),
+                content: shannon_engine::api::MessageContent::Text("resp 2".into()),
             },
         ];
 
-        let parent_metadata = shannon_core::state::SessionPersistMetadata {
+        let parent_metadata = shannon_engine::state::SessionPersistMetadata {
             model: "claude-3".into(),
             turn_count: 2,
             title: Some("Parent Session".into()),
@@ -1220,12 +1220,12 @@ mod tests {
         // Create parent session with working dir
         let parent_id = uuid::Uuid::new_v4();
         let parent_id_str = parent_id.to_string();
-        let messages = vec![shannon_core::api::Message {
+        let messages = vec![shannon_engine::api::Message {
             role: "user".into(),
-            content: shannon_core::api::MessageContent::Text("single message".into()),
+            content: shannon_engine::api::MessageContent::Text("single message".into()),
         }];
 
-        let parent_metadata = shannon_core::state::SessionPersistMetadata {
+        let parent_metadata = shannon_engine::state::SessionPersistMetadata {
             model: "claude-3".into(),
             turn_count: 0,
             title: Some("Parent".into()),
@@ -1264,9 +1264,9 @@ mod tests {
 
         let parent_id = uuid::Uuid::new_v4();
         let parent_id_str = parent_id.to_string();
-        let messages = vec![shannon_core::api::Message {
+        let messages = vec![shannon_engine::api::Message {
             role: "user".into(),
-            content: shannon_core::api::MessageContent::Text("only message".into()),
+            content: shannon_engine::api::MessageContent::Text("only message".into()),
         }];
 
         state
@@ -1274,7 +1274,7 @@ mod tests {
             .save_session(
                 &parent_id,
                 &messages,
-                &shannon_core::state::SessionPersistMetadata {
+                &shannon_engine::state::SessionPersistMetadata {
                     model: "claude-3".into(),
                     turn_count: 0,
                     title: Some("Parent".into()),
@@ -1328,12 +1328,12 @@ mod tests {
 
         let parent_id = uuid::Uuid::new_v4();
         let parent_id_str = parent_id.to_string();
-        let messages = vec![shannon_core::api::Message {
+        let messages = vec![shannon_engine::api::Message {
             role: "user".into(),
-            content: shannon_core::api::MessageContent::Text("message".into()),
+            content: shannon_engine::api::MessageContent::Text("message".into()),
         }];
 
-        let metadata = shannon_core::state::SessionPersistMetadata {
+        let metadata = shannon_engine::state::SessionPersistMetadata {
             model: "claude-3".into(),
             turn_count: 0,
             title: Some("Parent".into()),
@@ -1449,7 +1449,7 @@ mod pure_function_tests {
 
     #[test]
     fn parse_approval_mode_maps_every_documented_alias() {
-        use shannon_core::permissions::ApprovalMode;
+        use shannon_engine::permissions::ApprovalMode;
         assert_eq!(parse_approval_mode("suggest"), ApprovalMode::Suggest);
         assert_eq!(parse_approval_mode("default"), ApprovalMode::Suggest);
         assert_eq!(parse_approval_mode("plan"), ApprovalMode::Plan);
@@ -1481,7 +1481,7 @@ mod pure_function_tests {
 
     #[test]
     fn parse_approval_mode_is_case_insensitive() {
-        use shannon_core::permissions::ApprovalMode;
+        use shannon_engine::permissions::ApprovalMode;
         assert_eq!(parse_approval_mode("SUGGEST"), ApprovalMode::Suggest);
         assert_eq!(parse_approval_mode("Plan"), ApprovalMode::Plan);
         assert_eq!(parse_approval_mode("FULL_AUTO"), ApprovalMode::FullAuto);
@@ -1489,7 +1489,7 @@ mod pure_function_tests {
 
     #[test]
     fn parse_approval_mode_unknown_falls_back_to_suggest() {
-        use shannon_core::permissions::ApprovalMode;
+        use shannon_engine::permissions::ApprovalMode;
         assert_eq!(parse_approval_mode(""), ApprovalMode::Suggest);
         assert_eq!(parse_approval_mode("yolo"), ApprovalMode::Suggest);
         assert_eq!(parse_approval_mode("sudo"), ApprovalMode::Suggest);
@@ -1540,7 +1540,7 @@ mod pure_function_tests {
 
     #[test]
     fn provider_from_str_maps_known_providers() {
-        use shannon_core::api::types::LlmProvider;
+        use shannon_engine::api::types::LlmProvider;
         assert_eq!(provider_from_str("anthropic"), LlmProvider::Anthropic);
         assert_eq!(provider_from_str("openai"), LlmProvider::OpenAI);
         assert_eq!(provider_from_str("ollama"), LlmProvider::Ollama);
