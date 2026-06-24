@@ -180,7 +180,7 @@ export default function DataSources() {
       ) : (
         <section>
           <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-            Adapters · {filtered.length}
+            {t('extensions.datasources.adapters')} · {filtered.length}
           </h3>
           {filtered.length === 0 ? (
             <div className="text-center py-md text-on-surface-variant text-label-md">
@@ -220,7 +220,7 @@ export default function DataSources() {
 
       <section>
         <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-          Installed · {installed.length}
+          {t('extensions.datasources.installedSection')} · {installed.length}
         </h3>
         {installedLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.datasources.loadingInstalled')}</div>

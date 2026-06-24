@@ -8,6 +8,13 @@ import { MOCK_TRIAGE_ITEMS, MOCK_TRIAGE_STATS, MOCK_OPC_METRICS, MOCK_BILLING_PL
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS } from './data/config'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
+import {
+  MOCK_SKILL_CATALOG,
+  MOCK_AGENT_CATALOG,
+  MOCK_INSTALLED_SKILLS,
+  MOCK_INSTALLED_AGENTS,
+  MOCK_INSTALLED_ADDONS,
+} from './data/catalog'
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random() * 40))
@@ -371,6 +378,21 @@ export const handlers: Record<string, MockHandler> = {
 
   // --- Extensions Hub: Featured ---
   async list_featured_vendors() { await delay(); return clone(MOCK_FEATURED_VENDORS) },
+
+  // --- Extensions Hub: Skill / Agent catalogs (B1-B3 from design review) ---
+  async list_skill_catalog() { await delay(); return clone(MOCK_SKILL_CATALOG) },
+  async list_installed_skill_plugins() { await delay(); return clone(MOCK_INSTALLED_SKILLS) },
+  async uninstall_skill_plugin() { await delay(60); return undefined },
+  async install_skill_from_repo() { await delay(800); return { success: true, message: 'Skill installed (mock)' } },
+  async install_native_skill() { await delay(400); return { success: true, message: 'Skill installed (mock)' } },
+
+  async list_agent_catalog() { await delay(); return clone(MOCK_AGENT_CATALOG) },
+  async list_installed_agent_plugins() { await delay(); return clone(MOCK_INSTALLED_AGENTS) },
+  async uninstall_agent_plugin() { await delay(60); return undefined },
+  async install_agent_from_repo() { await delay(800); return { success: true, message: 'Agent installed (mock)' } },
+  async install_native_agent() { await delay(400); return { success: true, message: 'Agent installed (mock)' } },
+
+  async list_installed_addons() { await delay(); return clone(MOCK_INSTALLED_ADDONS) },
 }
 
 export const mockDiagnostics = MOCK_DIAGNOSTICS
