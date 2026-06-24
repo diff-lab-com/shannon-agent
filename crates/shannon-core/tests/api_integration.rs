@@ -1413,10 +1413,10 @@ mod query_pipeline_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
     use serde_json::json;
-    use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
     use shannon_core::tools::ToolRegistry;
     use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider};
+    use shannon_engine::permissions::PermissionManager;
     use shannon_engine::state::StateManager;
     use uuid::Uuid;
 
@@ -2335,12 +2335,12 @@ mod conversation_export_tests {
 mod permission_flow_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
-    use shannon_core::permissions::{PermissionChoice, PermissionManager};
     use shannon_core::query_engine::{
         PermissionRequest, QueryContext, QueryEngine, QueryEvent, QueryMetadata,
     };
     use shannon_core::tools::ToolRegistry;
     use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider};
+    use shannon_engine::permissions::{PermissionChoice, PermissionManager};
     use shannon_engine::state::StateManager;
     use uuid::Uuid;
 

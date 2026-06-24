@@ -255,14 +255,14 @@ fn scene_permission() -> SceneData {
         "I will modify src/main.rs to add proper error handling.".to_string(),
     );
 
-    state.permission_dialog = Some(shannon_core::permissions::PermissionPrompt {
+    state.permission_dialog = Some(shannon_engine::permissions::PermissionPrompt {
         id: uuid::Uuid::new_v4(),
         tool_name: "write_file".to_string(),
         tool_input: serde_json::json!({
             "path": "src/main.rs",
             "content": "fn main() -> anyhow::Result<()> { ... }"
         }),
-        risk_level: shannon_core::permissions::RiskLevel::Low,
+        risk_level: shannon_engine::permissions::RiskLevel::Low,
         description: "Write to src/main.rs".to_string(),
         is_confirmation: false,
         diff_preview: Some(

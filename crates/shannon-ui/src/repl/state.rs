@@ -64,10 +64,10 @@ pub struct ReplState {
     /// Working directory for the session
     pub working_directory: String,
     /// Active permission dialog (if any)
-    pub permission_dialog: Option<shannon_core::permissions::PermissionPrompt>,
+    pub permission_dialog: Option<shannon_engine::permissions::PermissionPrompt>,
     /// Permission response channel sender (if dialog is active)
     pub permission_response_tx:
-        Option<tokio::sync::mpsc::UnboundedSender<shannon_core::permissions::PermissionChoice>>,
+        Option<tokio::sync::mpsc::UnboundedSender<shannon_engine::permissions::PermissionChoice>>,
     /// Active confirm/alert dialog (if any)
     pub active_dialog: Option<crate::widgets::dialog::DialogWidget>,
     /// Pending action to execute when dialog is confirmed

@@ -11,11 +11,11 @@
 mod engine_recovery_tests {
     use mockito::{Server, ServerGuard};
     use serde_json::{Value, json};
-    use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEngineConfig, QueryMetadata};
     use shannon_core::tools::ToolRegistry;
     use shannon_engine::api::LlmClientConfig;
     use shannon_engine::api::LlmProvider;
+    use shannon_engine::permissions::PermissionManager;
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;

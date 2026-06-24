@@ -139,10 +139,10 @@ impl ShannonConfig {
     /// Returns `None` if the field is unset or contains an unrecognised value.
     pub fn resolve_permission_profile(
         &self,
-    ) -> Option<crate::permission_profile::PermissionProfile> {
+    ) -> Option<shannon_engine::permission_profile::PermissionProfile> {
         self.permission_profile
             .as_deref()
-            .and_then(crate::permission_profile::PermissionProfile::from_str_lossy)
+            .and_then(shannon_engine::permission_profile::PermissionProfile::from_str_lossy)
     }
 
     /// Resolve the API key for a given provider from config + env.

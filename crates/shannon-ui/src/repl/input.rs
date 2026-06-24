@@ -1400,7 +1400,7 @@ pub(crate) fn extract_completion_word(input: &str, _repl: &Repl) -> (String, usi
 // ── Dialog Input Handlers ──────────────────────────────────────────
 
 fn handle_permission_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
-    use shannon_core::permissions::PermissionChoice;
+    use shannon_engine::permissions::PermissionChoice;
 
     match key.code {
         KeyCode::Enter => {
@@ -1420,7 +1420,10 @@ fn handle_permission_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> 
     Ok(())
 }
 
-fn send_permission_response(repl: &mut Repl, choice: shannon_core::permissions::PermissionChoice) {
+fn send_permission_response(
+    repl: &mut Repl,
+    choice: shannon_engine::permissions::PermissionChoice,
+) {
     if let Some(tx) = repl.state.permission_response_tx.take() {
         let _ = tx.send(choice);
     }
@@ -1669,7 +1672,7 @@ fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             repl.state.tool_approval.dismiss();
             // Forward to permission system
             if let Some(ref tx) = repl.state.permission_response_tx.take() {
-                let _ = tx.send(shannon_core::permissions::PermissionChoice::AllowOnce);
+                let _ = tx.send(shannon_engine::permissions::PermissionChoice::AllowOnce);
             }
             repl.state.permission_dialog = None;
         }
@@ -1689,14 +1692,14 @@ fn handle_tool_approval_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
             }
             repl.state.tool_approval.dismiss();
             if let Some(ref tx) = repl.state.permission_response_tx.take() {
-                let _ = tx.send(shannon_core::permissions::PermissionChoice::AlwaysAllow);
+                let _ = tx.send(shannon_engine::permissions::PermissionChoice::AlwaysAllow);
             }
             repl.state.permission_dialog = None;
         }
         Some(crate::widgets::tool_approval::ApprovalDecision::Deny) => {
             repl.state.tool_approval.dismiss();
             if let Some(ref tx) = repl.state.permission_response_tx.take() {
-                let _ = tx.send(shannon_core::permissions::PermissionChoice::Deny);
+                let _ = tx.send(shannon_engine::permissions::PermissionChoice::Deny);
             }
             repl.state.permission_dialog = None;
         }

@@ -11,12 +11,12 @@ mod tool_use_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
     use serde_json::{Value, json};
-    use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::{
         QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
     };
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
     use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_engine::permissions::PermissionManager;
     use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;

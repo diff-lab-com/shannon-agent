@@ -616,7 +616,7 @@ mod config_tests {
 // ============================================================================
 
 mod permissions_tests {
-    use shannon_core::permissions::{PermissionLevel, PermissionManager};
+    use shannon_engine::permissions::{PermissionLevel, PermissionManager};
 
     #[test]
     fn test_permission_manager_creation() {

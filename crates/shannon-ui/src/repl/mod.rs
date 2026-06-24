@@ -56,10 +56,9 @@ use shannon_commands::{
     SharedExecutor, builtin_commands,
 };
 use shannon_core::{
-    PromptInfo, permissions::PermissionManager, query_engine::QueryEngine,
-    recording::SessionRecorder, tools::ToolRegistry,
+    PromptInfo, query_engine::QueryEngine, recording::SessionRecorder, tools::ToolRegistry,
 };
-use shannon_engine::{api::LlmClientConfig, state::StateManager};
+use shannon_engine::{api::LlmClientConfig, permissions::PermissionManager, state::StateManager};
 
 // Tool registration
 use crate::skill_bridge::register_skills_as_tools;
@@ -1547,15 +1546,15 @@ impl Repl {
 
                     // Also populate the tool approval widget for enhanced display
                     let risk = match permission_req.prompt.risk_level {
-                        shannon_core::permissions::RiskLevel::Safe
-                        | shannon_core::permissions::RiskLevel::Low => {
+                        shannon_engine::permissions::RiskLevel::Safe
+                        | shannon_engine::permissions::RiskLevel::Low => {
                             crate::widgets::tool_approval::RiskLevel::Low
                         }
-                        shannon_core::permissions::RiskLevel::Medium => {
+                        shannon_engine::permissions::RiskLevel::Medium => {
                             crate::widgets::tool_approval::RiskLevel::Medium
                         }
-                        shannon_core::permissions::RiskLevel::High
-                        | shannon_core::permissions::RiskLevel::Critical => {
+                        shannon_engine::permissions::RiskLevel::High
+                        | shannon_engine::permissions::RiskLevel::Critical => {
                             crate::widgets::tool_approval::RiskLevel::High
                         }
                     };

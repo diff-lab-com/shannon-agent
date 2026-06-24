@@ -18,7 +18,6 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use mockito::{Server, ServerGuard};
 use serde_json::json;
-use shannon_core::permissions::{PermissionChoice, PermissionManager};
 use shannon_core::query_engine::CostTracker;
 use shannon_core::query_engine::{
     QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
@@ -28,6 +27,7 @@ use shannon_engine::api::{
     ContentBlock, ContentDelta, LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
     RetryConfig, StreamEvent,
 };
+use shannon_engine::permissions::{PermissionChoice, PermissionManager};
 use shannon_engine::state::StateManager;
 use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus};
 use uuid::Uuid;

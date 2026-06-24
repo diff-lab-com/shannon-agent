@@ -6,9 +6,9 @@
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-use crate::permissions::ApprovalMode;
 use crate::tools::Tool;
 use shannon_engine::api::{LlmClientConfig, LlmProvider, RetryConfig};
+use shannon_engine::permissions::ApprovalMode;
 use shannon_engine::state::StateManager;
 
 use crate::testing::mock_dsl::MockResponse;

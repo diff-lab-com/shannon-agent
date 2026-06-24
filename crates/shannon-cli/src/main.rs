@@ -876,13 +876,13 @@ fn run_noninteractive_query(
             shannon_engine::api::LlmClient::new_unauthenticated(client_config)
         };
 
-        let mut permissions = shannon_core::permissions::PermissionManager::new();
+        let mut permissions = shannon_engine::permissions::PermissionManager::new();
         // Non-interactive mode: use FullAuto by default (allows all non-critical tools),
         // or BypassPermissions with --yes flag (allows everything including critical).
         if bypass_all {
-            permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
+            permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::BypassPermissions);
         } else {
-            permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
+            permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
         }
         let state = StateManager::new();
 
@@ -1200,8 +1200,8 @@ fn run_headless_query(
         };
 
         // Permissions: FullAuto in headless mode (auto-approve non-critical, deny critical)
-        let mut permissions = shannon_core::permissions::PermissionManager::new();
-        permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
+        let mut permissions = shannon_engine::permissions::PermissionManager::new();
+        permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
         let state = StateManager::new();
 
         let mut engine = QueryEngine::with_defaults(client, tools, permissions, state)
@@ -1941,14 +1941,14 @@ fn run_team_agent_mode(
             shannon_engine::api::LlmClient::new_unauthenticated(client_config)
         };
 
-        let mut permissions = shannon_core::permissions::PermissionManager::new();
+        let mut permissions = shannon_engine::permissions::PermissionManager::new();
         let approval_mode = match permission_mode {
-            Some("auto") => shannon_core::permissions::ApprovalMode::AutoEdit,
-            Some("plan") => shannon_core::permissions::ApprovalMode::Plan,
-            Some("full-auto") => shannon_core::permissions::ApprovalMode::FullAuto,
-            Some("dontAsk") => shannon_core::permissions::ApprovalMode::DontAsk,
-            Some("readonly") => shannon_core::permissions::ApprovalMode::Readonly,
-            _ => shannon_core::permissions::ApprovalMode::FullAuto,
+            Some("auto") => shannon_engine::permissions::ApprovalMode::AutoEdit,
+            Some("plan") => shannon_engine::permissions::ApprovalMode::Plan,
+            Some("full-auto") => shannon_engine::permissions::ApprovalMode::FullAuto,
+            Some("dontAsk") => shannon_engine::permissions::ApprovalMode::DontAsk,
+            Some("readonly") => shannon_engine::permissions::ApprovalMode::Readonly,
+            _ => shannon_engine::permissions::ApprovalMode::FullAuto,
         };
         permissions.set_approval_mode(approval_mode);
         let state = StateManager::new();

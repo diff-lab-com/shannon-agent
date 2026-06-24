@@ -637,7 +637,9 @@ pub fn execute_pending_action(repl: &mut Repl, action: &str) -> Result<()> {
         "set_bypass_mode" => {
             if let Some(ref query_engine) = repl.query_engine {
                 let mut perms = recover_lock(query_engine.permissions().write());
-                perms.set_approval_mode(shannon_core::permissions::ApprovalMode::BypassPermissions);
+                perms.set_approval_mode(
+                    shannon_engine::permissions::ApprovalMode::BypassPermissions,
+                );
                 drop(perms);
                 repl.state.approval_mode_label = "FULL".to_string();
                 repl.state.status = "Mode: FULL".to_string();

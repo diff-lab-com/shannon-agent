@@ -3084,7 +3084,7 @@ fn test_rewind_then_rewind_again() {
 
 #[test]
 fn test_approval_mode_cycle_sequence() {
-    use shannon_core::permissions::ApprovalMode;
+    use shannon_engine::permissions::ApprovalMode;
 
     // Verify the cycle order: Suggest → AutoEdit → Plan → FullAuto → Suggest
     let mode = ApprovalMode::Suggest;
@@ -3109,7 +3109,7 @@ fn test_approval_mode_cycle_sequence() {
 
 #[test]
 fn test_approval_mode_short_labels() {
-    use shannon_core::permissions::ApprovalMode;
+    use shannon_engine::permissions::ApprovalMode;
 
     assert_eq!(ApprovalMode::Suggest.short_label(), "ASK");
     assert_eq!(ApprovalMode::Plan.short_label(), "PLAN");
@@ -3122,7 +3122,7 @@ fn test_approval_mode_short_labels() {
 
 #[test]
 fn test_approval_mode_default_is_auto() {
-    use shannon_core::permissions::ApprovalMode;
+    use shannon_engine::permissions::ApprovalMode;
 
     // The default ApprovalMode is AutoEdit (which shows as "EDIT")
     assert_eq!(ApprovalMode::default(), ApprovalMode::AutoEdit);
@@ -3152,7 +3152,7 @@ fn test_repl_set_bypass_pending_action() {
         let perms = engine.permissions().read().unwrap();
         assert_eq!(
             perms.approval_mode(),
-            shannon_core::permissions::ApprovalMode::BypassPermissions
+            shannon_engine::permissions::ApprovalMode::BypassPermissions
         );
     }
 }
@@ -3302,7 +3302,7 @@ fn test_approval_mode_label_syncs_with_permissions() {
 
 #[test]
 fn test_permission_mode_bypass_not_in_cycle() {
-    use shannon_core::permissions::ApprovalMode;
+    use shannon_engine::permissions::ApprovalMode;
 
     // Verify BypassPermissions is NOT reachable via cycle_next from any safe mode.
     // It can only be set via /mode or the confirmation dialog.

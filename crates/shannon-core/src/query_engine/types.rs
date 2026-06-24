@@ -1,8 +1,8 @@
 //! Types and data structures for the query engine.
 
-use crate::permissions::{PermissionChoice, PermissionPrompt};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+use shannon_engine::permissions::{PermissionChoice, PermissionPrompt};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
 use uuid::Uuid;

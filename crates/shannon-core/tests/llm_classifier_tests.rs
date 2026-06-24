@@ -7,8 +7,8 @@
 //! - Risk levels assigned to different command types and file paths
 
 use serde_json::json;
-use shannon_core::llm_classifier::{LlmClassificationResult, LlmPermissionClassifier, LlmTier};
-use shannon_core::permission_classifier::{
+use shannon_engine::llm_classifier::{LlmClassificationResult, LlmPermissionClassifier, LlmTier};
+use shannon_engine::permission_classifier::{
     ClassificationResult, PermissionClassifier, RiskLevel, RuleDecision,
 };
 

@@ -5,7 +5,7 @@
 
 use shannon_core::HookEventType;
 use shannon_core::TriggeredRoutineRegistry;
-use shannon_core::custom_profiles::{CustomProfileDef, CustomProfileRegistry};
+use shannon_engine::custom_profiles::{CustomProfileDef, CustomProfileRegistry};
 
 // ============================================================================
 // Triggered Routines Integration Tests

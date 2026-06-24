@@ -1537,7 +1537,7 @@ SHANNON_THEME='dark'"#;
         /// ClassificationResult builder always clamps confidence to [0, 1].
         #[test]
         fn proptest_confidence_clamp(conf in -10.0f32..10.0f32) {
-            use crate::permission_classifier::ClassificationResult;
+            use shannon_engine::permission_classifier::ClassificationResult;
             let r = ClassificationResult::builder().confidence(conf).build();
             assert!((0.0..=1.0).contains(&r.confidence));
         }

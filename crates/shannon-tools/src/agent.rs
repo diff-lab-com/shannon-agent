@@ -431,8 +431,8 @@ impl AgentTool {
         // Create sub-agent engine with FullAuto permissions
         let model_name = client_config.model.clone();
         let client = shannon_engine::api::LlmClient::new(client_config);
-        let mut permissions = shannon_core::permissions::PermissionManager::new();
-        permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
+        let mut permissions = shannon_engine::permissions::PermissionManager::new();
+        permissions.set_approval_mode(shannon_engine::permissions::ApprovalMode::FullAuto);
         let state = shannon_engine::state::StateManager::new();
 
         let engine = shannon_core::query_engine::QueryEngine::with_defaults(

@@ -41,7 +41,6 @@
 
 use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
-use crate::permissions::PermissionManager;
 use crate::query_engine::context_injector::ContextInjector;
 use crate::query_engine::streaming::ConversationState;
 use crate::query_engine::types::{
@@ -53,6 +52,7 @@ use shannon_engine::api::{
     ContentBlock, ContentDelta, ImageSource, LlmClient, LlmProvider, Message, MessageContent,
     StreamEvent, SystemContentBlock, ToolResultContent,
 };
+use shannon_engine::permissions::PermissionManager;
 use shannon_engine::state::StateManager;
 
 /// Minimal system prompt for local/small models that cannot handle tool definitions.
@@ -285,7 +285,7 @@ pub struct QueryEngine {
     pub(crate) effective_max_context_tokens: usize,
     /// Custom permission profiles loaded from `.shannon/profiles/*.toml` and `.claude/profiles/*.toml`.
     pub(crate) custom_profiles:
-        Arc<tokio::sync::RwLock<crate::custom_profiles::CustomProfileRegistry>>,
+        Arc<tokio::sync::RwLock<shannon_engine::custom_profiles::CustomProfileRegistry>>,
 }
 
 impl QueryEngine {
@@ -433,7 +433,7 @@ impl QueryEngine {
             ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
-                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+                shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
         }
     }
@@ -485,7 +485,7 @@ impl QueryEngine {
             ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
-                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+                shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
         }
     }
@@ -526,7 +526,7 @@ impl QueryEngine {
             ),
             effective_max_context_tokens,
             custom_profiles: Arc::new(tokio::sync::RwLock::new(
-                crate::custom_profiles::CustomProfileRegistry::load_from_dirs(),
+                shannon_engine::custom_profiles::CustomProfileRegistry::load_from_dirs(),
             )),
         }
     }
@@ -669,7 +669,7 @@ impl QueryEngine {
     /// Access the custom permission profiles registry.
     pub fn custom_profiles(
         &self,
-    ) -> &Arc<tokio::sync::RwLock<crate::custom_profiles::CustomProfileRegistry>> {
+    ) -> &Arc<tokio::sync::RwLock<shannon_engine::custom_profiles::CustomProfileRegistry>> {
         &self.custom_profiles
     }
 
@@ -1914,7 +1914,7 @@ impl QueryEngine {
                                                         Ok(Some(mut prompt)) => {
                                                             // Check if already denied
                                                             if prompt.risk_level
-                                                                == crate::permissions::RiskLevel::Critical
+                                                                == shannon_engine::permissions::RiskLevel::Critical
                                                             {
                                                                 let error_msg = format!(
                                                                     "Tool denied: {}",
@@ -2011,7 +2011,7 @@ impl QueryEngine {
                                                                 // Wait for user response
                                                                 match response_rx.recv().await {
                                                                     Some(
-                                                                        crate::permissions::PermissionChoice::Deny,
+                                                                        shannon_engine::permissions::PermissionChoice::Deny,
                                                                     ) => {
                                                                         consecutive_denials += 1;
                                                                         let denied_msg = format!(
@@ -2036,27 +2036,27 @@ impl QueryEngine {
                                                                         continue;
                                                                     }
                                                                     Some(
-                                                                        crate::permissions::PermissionChoice::AllowOnce,
+                                                                        shannon_engine::permissions::PermissionChoice::AllowOnce,
                                                                     ) => {}
                                                                     Some(
-                                                                        crate::permissions::PermissionChoice::AlwaysAllow,
+                                                                        shannon_engine::permissions::PermissionChoice::AlwaysAllow,
                                                                     ) => {
                                                                         let _ = recover_lock(permissions.write())
                                                                             .process_permission_choice(
                                                                                 session_id_for_permissions,
                                                                                 &prompt_for_choice,
-                                                                                crate::permissions::PermissionChoice::AlwaysAllow,
+                                                                                shannon_engine::permissions::PermissionChoice::AlwaysAllow,
                                                                             );
                                                                     }
                                                                     Some(
-                                                                        crate::permissions::PermissionChoice::EditAndRun,
+                                                                        shannon_engine::permissions::PermissionChoice::EditAndRun,
                                                                     ) => {
                                                                         // User edited the command; treat as allow-once
                                                                         let _ = recover_lock(permissions.write())
                                                                             .process_permission_choice(
                                                                                 session_id_for_permissions,
                                                                                 &prompt_for_choice,
-                                                                                crate::permissions::PermissionChoice::EditAndRun,
+                                                                                shannon_engine::permissions::PermissionChoice::EditAndRun,
                                                                             );
                                                                     }
                                                                     None => {
@@ -3535,9 +3535,9 @@ fn save_conversation_to_disk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permissions::PermissionManager;
     use crate::tools::ToolRegistry;
     use shannon_engine::api::{LlmClient, LlmClientConfig, MessageContent};
+    use shannon_engine::permissions::PermissionManager;
     use std::env;
     use std::fs;
     use uuid::Uuid;

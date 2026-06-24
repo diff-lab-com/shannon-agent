@@ -12,7 +12,7 @@
 //! - Edge cases: empty classifier, no matching rules, regex patterns, priority ordering
 
 use serde_json::json;
-use shannon_core::permission_classifier::*;
+use shannon_engine::permission_classifier::*;
 
 // ============================================================================
 // RuleDecision
