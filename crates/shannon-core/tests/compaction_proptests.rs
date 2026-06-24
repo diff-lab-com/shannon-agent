@@ -4,8 +4,8 @@
 //! regardless of input message sequences.
 
 use proptest::prelude::*;
-use shannon_core::api::{Message, MessageContent};
-use shannon_core::compact::{CompactionStrategy, compact_messages};
+use shannon_engine::api::{Message, MessageContent};
+use shannon_engine::compact::{CompactionStrategy, compact_messages};
 
 // ── Strategy generators ─────────────────────────────────────────────────────
 
@@ -190,7 +190,7 @@ fn all_system_messages_no_compact() {
 
 #[test]
 fn tool_pairs_preserved_after_compact() {
-    use shannon_core::api::ContentBlock;
+    use shannon_engine::api::ContentBlock;
 
     let messages = vec![
         Message {
@@ -213,7 +213,7 @@ fn tool_pairs_preserved_after_compact() {
             role: "user".to_string(),
             content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
                 tool_use_id: "tu_1".to_string(),
-                content: Some(shannon_core::api::ToolResultContent::Single(
+                content: Some(shannon_engine::api::ToolResultContent::Single(
                     "file.txt".to_string(),
                 )),
                 is_error: Some(false),

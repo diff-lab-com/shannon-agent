@@ -755,7 +755,8 @@ impl ReasoningEffort {
             Self::XHigh => 0.7,
             Self::Max => 0.8,
         };
-        (max_context as f64 * fraction) as usize
+        let budget = (max_context as f64 * fraction) as usize;
+        budget.max(1)
     }
 
     /// Convert to the OpenAI API `reasoning_effort` string value.

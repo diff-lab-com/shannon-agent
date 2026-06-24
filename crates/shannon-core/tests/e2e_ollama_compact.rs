@@ -10,10 +10,10 @@
 //!   - A model pulled (e.g. `ollama pull qwen3:4b`)
 //!   - `OLLAMA_E2E=1` and `OLLAMA_MODEL=<model>` set
 
-use shannon_core::api::{
+use shannon_core::compact::{CompactConfig, CompactEngine};
+use shannon_engine::api::{
     ContentBlock, LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
 };
-use shannon_core::compact::{CompactConfig, CompactEngine};
 use std::time::Instant;
 
 /// Build an ollama-backed LLM client from env, skipping if unavailable.
@@ -111,7 +111,7 @@ fn generate_tool_conversation(turns: usize) -> Vec<Message> {
             content: MessageContent::Blocks(vec![
                 ContentBlock::ToolResult {
                     tool_use_id: format!("tool_{i}"),
-                    content: Some(shannon_core::api::ToolResultContent::Single(format!(
+                    content: Some(shannon_engine::api::ToolResultContent::Single(format!(
                         "fn main() {{\n    println!(\"Hello, world!\");\n    // Turn {i} file content\n    let x = 42;\n}}"
                     ))),
                     is_error: Some(false),
