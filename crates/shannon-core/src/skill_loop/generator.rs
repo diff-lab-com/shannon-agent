@@ -159,7 +159,7 @@ pub(crate) async fn generate_internal(
     // Extract and parse TOML
     let toml_content = extract_toml_block(&response_text)?;
     let parsed: toml::Value =
-        toml::from_str(&toml_content).map_err(|e| format!("Failed to parse TOML: {}", e))?;
+        toml::from_str(&toml_content).map_err(|e| format!("Failed to parse TOML: {e}"))?;
 
     // Extract fields from TOML
     let name = parsed["name"]

@@ -116,7 +116,7 @@ pub(crate) async fn evaluate_internal(
 
     // Parse JSON response
     let parsed: Value = serde_json::from_str(&response_text)
-        .map_err(|e| format!("Invalid JSON from evaluation LLM: {}", e))?;
+        .map_err(|e| format!("Invalid JSON from evaluation LLM: {e}"))?;
 
     let suggest = parsed["suggest"]
         .as_bool()

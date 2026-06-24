@@ -91,7 +91,7 @@ pub fn load_proposals(dir: &Path) -> Result<Vec<SkillProposal>, Box<dyn std::err
 /// Returns IO errors if file cannot be deleted
 #[instrument(skip(dir))]
 pub fn delete_proposal(dir: &Path, id: uuid::Uuid) -> Result<(), Box<dyn std::error::Error>> {
-    let proposal_path = dir.join(format!("{id}.json", id = id));
+    let proposal_path = dir.join(format!("{id}.json"));
 
     if proposal_path.exists() {
         fs::remove_file(&proposal_path)?;
@@ -142,7 +142,7 @@ fn generate_skill_toml(proposal: &SkillProposal) -> Result<String, Box<dyn std::
     // Triggers
     output.push_str("[triggers]\npatterns = [\n");
     for pattern in &proposal.trigger_patterns {
-        output.push_str(&format!("  \"{pattern}\",\n", pattern = pattern));
+        output.push_str(&format!("  \"{pattern}\",\n"));
     }
     output.push_str("]\n\n");
 
@@ -158,19 +158,19 @@ fn generate_skill_toml(proposal: &SkillProposal) -> Result<String, Box<dyn std::
         if !meta.aliases.is_empty() {
             output.push_str("aliases = [\n");
             for alias in &meta.aliases {
-                output.push_str(&format!("  \"{alias}\",\n", alias = alias));
+                output.push_str(&format!("  \"{alias}\",\n"));
             }
             output.push_str("]\n");
         }
 
         if let Some(ref hint) = meta.argument_hint {
-            output.push_str(&format!("argument_hint = \"{hint}\"\n", hint = hint));
+            output.push_str(&format!("argument_hint = \"{hint}\"\n"));
         }
 
         if !meta.allowed_tools.is_empty() {
             output.push_str("allowed_tools = [\n");
             for tool in &meta.allowed_tools {
-                output.push_str(&format!("  \"{tool}\",\n", tool = tool));
+                output.push_str(&format!("  \"{tool}\",\n"));
             }
             output.push_str("]\n");
         }
