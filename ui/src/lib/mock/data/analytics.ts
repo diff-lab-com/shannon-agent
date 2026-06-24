@@ -112,14 +112,16 @@ export const MOCK_TRIAGE_ITEMS: TriageItem[] = [
 ]
 
 export const MOCK_TRIAGE_STATS: TriageStats = {
-  total_open: 6,
-  critical: 2,
-  high: 2,
-  normal: 2,
-  low: 1,
+  total: 7,
   unread: 4,
   archived: 1,
-} as unknown as TriageStats
+  by_kind: {
+    alert: 3,
+    mention: 2,
+    deadline: 1,
+    review: 1,
+  },
+}
 
 export const MOCK_OPC_METRICS: OpcMetrics = {
   total: 16,
