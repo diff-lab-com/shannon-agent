@@ -141,10 +141,10 @@ export default function Triage() {
   const { items, loading, markRead, archive, refresh } = useTriageItems(filter)
 
   const availableKinds = useMemo(() => {
-    return Object.entries(stats.by_kind)
+    return Object.entries(stats?.by_kind ?? {})
       .sort((a, b) => b[1] - a[1])
       .map(([k]) => k)
-  }, [stats.by_kind])
+  }, [stats?.by_kind])
 
   // Client-side read filter + sort on top of the server-side kind/archived filter.
   const visibleItems = useMemo(() => {

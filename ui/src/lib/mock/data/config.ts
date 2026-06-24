@@ -14,7 +14,7 @@ export const MOCK_CONFIG: DesktopConfig = {
   working_dir: '/Users/demo/workspace/my-startup',
   theme: 'system',
   approval_mode: 'standard',
-  version: '0.4.2',
+  version: __APP_VERSION__,
   strategic_focus: 'Build a consumer AI agent desktop',
   performance_strategy: 'balanced',
   memory_enabled: true,

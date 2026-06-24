@@ -7,6 +7,7 @@ import { MOCK_TRIAGE_ITEMS, MOCK_TRIAGE_STATS, MOCK_OPC_METRICS, MOCK_BILLING_PL
   MOCK_COST_HISTORY, MOCK_BILLING_HISTORY, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
 import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS } from './data/config'
+import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v))
 const delay = (ms = 80) => new Promise<void>(r => setTimeout(r, ms + Math.random() * 40))
@@ -331,6 +332,45 @@ export const handlers: Record<string, MockHandler> = {
       language_id: 'rust',
     }
   },
+
+  // --- Memory ---
+  async list_memories(args?: { project?: string | null; category?: string | null; query?: string | null }) {
+    await delay()
+    const all = MOCK_MEMORIES
+    return clone(all.filter(m => {
+      if (args?.project && m.project !== args.project) return false
+      if (args?.category && m.category !== args.category) return false
+      if (args?.query) {
+        const q = args.query.toLowerCase()
+        return m.content.toLowerCase().includes(q) || m.tags.some(t => t.toLowerCase().includes(q))
+      }
+      return true
+    }))
+  },
+  async list_memory_projects() { await delay(); return clone(MOCK_MEMORY_PROJECTS) },
+  async get_memory_stats() { await delay(); return clone(MOCK_MEMORY_STATS) },
+  async create_memory(args: { project: string; category: string; content: string; tags?: string[] }) {
+    await delay()
+    return {
+      id: `mem-${Date.now()}`,
+      project: args.project,
+      category: args.category,
+      content: args.content,
+      tags: args.tags ?? [],
+      confidence: 0.8,
+      created_at: new Date().toISOString(),
+      accessed_at: new Date().toISOString(),
+      access_count: 0,
+    }
+  },
+  async update_memory() { await delay() },
+  async delete_memory() { await delay() },
+  async search_memories(args: { query: string; project?: string | null }) {
+    return handlers.list_memories({ query: args.query, project: args.project })
+  },
+
+  // --- Extensions Hub: Featured ---
+  async list_featured_vendors() { await delay(); return clone(MOCK_FEATURED_VENDORS) },
 }
 
 export const mockDiagnostics = MOCK_DIAGNOSTICS

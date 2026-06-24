@@ -9,19 +9,24 @@ import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
 
 const TITLE_MAP: [string, string][] = [
-  ['/opc/task', 'OPC Task'],
-  ['/opc', 'One Person Company'],
-  ['/settings', 'Settings'],
-  ['/tasks', 'Scheduled'],
-  ['/extensions', 'Extensions'],
-  ['/chat', 'Chat'],
+  ['/opc/task', 'header.title.opcTask'],
+  ['/opc', 'header.title.opc'],
+  ['/settings', 'header.title.settings'],
+  ['/tasks', 'header.title.tasks'],
+  ['/extensions', 'header.title.extensions'],
+  ['/memory', 'header.title.memory'],
+  ['/triage', 'header.title.triage'],
+  ['/editor', 'header.title.editor'],
+  ['/quickfix', 'header.title.quickfix'],
+  ['/welcome', 'header.title.welcome'],
+  ['/chat', 'header.title.chat'],
 ]
 
-function getTitle(pathname: string): string {
-  for (const [prefix, title] of TITLE_MAP) {
-    if (pathname.includes(prefix)) return title
+function getTitleKey(pathname: string): string {
+  for (const [prefix, key] of TITLE_MAP) {
+    if (pathname.includes(prefix)) return key
   }
-  return 'Chat'
+  return 'header.title.chat'
 }
 
 export function Header() {
@@ -34,7 +39,7 @@ export function Header() {
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
 
-  const title = getTitle(location.pathname);
+  const title = t(getTitleKey(location.pathname));
   const isOpc = location.pathname.includes('/opc') && !location.pathname.includes('/opc/task');
   const isOpcTask = location.pathname.includes('/opc/task');
 
