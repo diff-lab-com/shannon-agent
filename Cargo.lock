@@ -3987,8 +3987,11 @@ name = "shannon-engine"
 version = "0.5.5"
 dependencies = [
  "base64",
+ "chrono",
+ "dashmap",
  "dirs 5.0.1",
  "futures",
+ "globset",
  "hmac",
  "mockito",
  "proptest",
@@ -3997,6 +4000,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shannon-tool-interface",
  "shannon-types",
  "tempfile",
  "thiserror 2.0.18",
@@ -4004,7 +4008,9 @@ dependencies = [
  "tokio-stream",
  "tokio-test",
  "tokio-util",
+ "toml",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

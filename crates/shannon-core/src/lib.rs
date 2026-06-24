@@ -90,7 +90,31 @@ pub mod model_registry;
 pub mod notifier;
 pub mod oauth;
 pub mod output_format;
-pub mod permissions;
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::permissions` directly"
+)]
+pub mod permissions {
+    pub use ::shannon_engine::permissions::*;
+
+    /// Extension trait providing backward-compatible construction of
+    /// [`PermissionRuleChecker`] from `settings::PermissionRules`.
+    ///
+    /// Since `PermissionRuleChecker` moved to `shannon-engine` (which does not
+    /// depend on `shannon-core`), the `from_rules(&PermissionRules)` constructor
+    /// was replaced by `from_rule_strings(&[String], &[String], &[String])`.
+    /// This trait bridges the gap for callers that still have a
+    /// `settings::PermissionRules` value.
+    pub trait PermissionRuleCheckerExt {
+        fn from_rules(rules: &crate::settings::PermissionRules) -> Self;
+    }
+
+    impl PermissionRuleCheckerExt for PermissionRuleChecker {
+        fn from_rules(rules: &crate::settings::PermissionRules) -> Self {
+            Self::from_rule_strings(&rules.deny, &rules.ask, &rules.allow)
+        }
+    }
+}
 pub mod policy_limits;
 pub mod prevent_sleep;
 pub mod progressive_loader;
@@ -104,8 +128,20 @@ pub mod session_history;
 pub mod settings;
 pub mod settings_sync;
 pub mod smart_context;
-pub mod state;
-pub mod streaming_tool_executor;
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::state` directly"
+)]
+pub mod state {
+    pub use ::shannon_engine::state::*;
+}
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::streaming_tool_executor` directly"
+)]
+pub mod streaming_tool_executor {
+    pub use ::shannon_engine::streaming_tool_executor::*;
+}
 pub mod suggestions;
 pub mod tips;
 pub mod token_estimation;
@@ -124,16 +160,40 @@ pub mod api_server;
 pub mod auto_dream_consolidation;
 pub mod billing;
 pub mod credential_manager;
-pub mod custom_profiles;
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::custom_profiles` directly"
+)]
+pub mod custom_profiles {
+    pub use ::shannon_engine::custom_profiles::*;
+}
 pub mod doctor;
 pub mod enhanced_suggestions;
 pub mod feature_flags;
 pub mod housekeeping;
-pub mod llm_classifier;
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::llm_classifier` directly"
+)]
+pub mod llm_classifier {
+    pub use ::shannon_engine::llm_classifier::*;
+}
 pub mod lsp;
 pub mod mcp_server_approval;
-pub mod permission_classifier;
-pub mod permission_profile;
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::permission_classifier` directly"
+)]
+pub mod permission_classifier {
+    pub use ::shannon_engine::permission_classifier::*;
+}
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::permission_profile` directly"
+)]
+pub mod permission_profile {
+    pub use ::shannon_engine::permission_profile::*;
+}
 pub mod plugin;
 pub mod preference_memory;
 pub mod recording;
@@ -166,7 +226,9 @@ pub mod triggered_routines;
 pub mod hooks_domain {
     #[allow(deprecated)]
     pub use super::hooks::*;
+    #[allow(deprecated)]
     pub use super::permission_classifier::*;
+    #[allow(deprecated)]
     pub use super::permission_profile::*;
     pub use super::policy_limits::*;
 }

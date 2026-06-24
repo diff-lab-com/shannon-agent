@@ -4,7 +4,7 @@
 //! utilities extracted from `shannon-core` as part of the D1 Phase 2
 //! reorganization (see `docs/architecture/D1-PHASE1.md`).
 //!
-//! ## Current state (PR-D)
+//! ## Current state (PR-E)
 //!
 //! The `api` module (client, adapter, types, streaming, retry, error) was
 //! physically moved here from `shannon-core/src/api/` (PR-B). It is a
@@ -26,6 +26,19 @@
 //! All three only depend on `api` (already here) and each other, so they
 //! could be extracted together now that the cycle with `shannon-core` is broken.
 //!
+//! The `permissions`, `permission_profile`, and `permission_classifier`
+//! modules were moved here (PR-E). They form a tightly coupled cluster:
+//! - `permissions` depends on `permission_profile` (PermissionProfile, ProfileRules)
+//! - `permission_classifier` is standalone (no `crate::` imports)
+//! - `permission_profile` is standalone (no `crate::` imports)
+//!
+//! The `permissions` module had one production dependency on
+//! `settings::PermissionRules` — resolved by decoupling
+//! `PermissionRuleChecker::from_rules(&PermissionRules)` to
+//! `PermissionRuleChecker::from_rule_strings(&[String], &[String], &[String])`.
+//! A backward-compatible bridge is provided in `shannon-core` via the
+//! `PermissionRuleCheckerExt` trait.
+//!
 //! This crate does NOT depend on `shannon-core`.
 //!
 //! ## Usage
@@ -39,5 +52,12 @@ pub mod api;
 pub mod compact;
 pub mod context_budget;
 pub mod context_pressure;
+pub mod custom_profiles;
 pub mod hooks;
+pub mod llm_classifier;
+pub mod permission_classifier;
+pub mod permission_profile;
+pub mod permissions;
+pub mod state;
+pub mod streaming_tool_executor;
 pub mod testing;
