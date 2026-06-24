@@ -471,16 +471,7 @@ export default function Chat() {
         {/* Message Area */}
         <ScrollArea className="flex-1 px-xl pt-lg space-y-lg pb-32">
           {messages.length === 0 && !streamingText && (
-            sessions.length === 0 ? (
-              <WelcomeState onSelectPrompt={setInput} />
-            ) : (
-              <div className="flex items-center justify-center h-full opacity-40">
-                <div className="text-center space-y-sm">
-                  <span className="material-symbols-outlined text-[48px] text-primary">chat_bubble</span>
-                  <p className="font-body-lg text-on-surface-variant">{t('chat.empty.start')}</p>
-                </div>
-              </div>
-            )
+            <WelcomeState onSelectPrompt={setInput} />
           )}
 
           {messages.map((msg, i) => (

@@ -318,7 +318,7 @@ function MemoryCard({
   }
 
   return (
-    <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 hover:border-primary/30 transition-colors">
+    <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 shadow-sm hover:shadow-md hover:border-primary/30 transition-all">
       <div className="flex items-start gap-md">
         <span
           className={`material-symbols-outlined text-[20px] mt-[2px] px-sm py-xs rounded-lg ${CATEGORY_COLOR[entry.category]}`}
@@ -336,15 +336,15 @@ function MemoryCard({
             </span>
             {entry.access_count > 0 && (
               <span className="text-label-xs text-on-surface-variant/60">
-                · Used {entry.access_count}×
+                · {intl.formatMessage({ id: 'memory.used' }, { count: entry.access_count })}
               </span>
             )}
           </div>
-          <p className="text-body-md text-on-surface whitespace-pre-wrap break-words mb-xs">
+          <p className="text-body-md text-on-surface whitespace-pre-wrap break-words mb-md">
             {entry.content}
           </p>
           {entry.tags.length > 0 && (
-            <div className="flex flex-wrap gap-xs mt-xs">
+            <div className="flex flex-wrap gap-xs mt-sm">
               {entry.tags.map((tag) => (
                 <span
                   key={tag}
