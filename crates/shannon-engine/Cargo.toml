@@ -6,16 +6,36 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# shannon-engine is the future home of the query engine, state, permissions,
-# and compact modules (D1 Phase 2). For PR-A, only `compact` is exposed.
-# The code physically remains in shannon-core until its dependency on
-# shannon-core's `api`, `hooks`, and `context_budget` modules is resolved
-# (either by extracting those modules too, or by stubbing them behind
-# traits in shannon-types). This crate re-exports compact now so external
-# consumers can begin migrating to the `shannon_engine::compact` path.
-shannon-core = { path = "../shannon-core" }
+# Shannon shared types
+shannon-types = { path = "../shannon-types" }
+
+# HTTP client
+reqwest = { workspace = true }
+
+# Async runtime + streaming
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = "0.3"
+tokio-stream = "0.1"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Crypto (Zhipu JWT auth + base64 image encoding)
+hmac = "0.12"
+sha2 = "0.10"
+base64 = { workspace = true }
 
 [dev-dependencies]
+tokio-test = "0.4"
+mockito = "1.6"
 proptest = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

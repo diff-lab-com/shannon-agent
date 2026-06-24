@@ -812,12 +812,15 @@ impl LlmClient {
     }
 
     /// Switch to a different model/provider combo, resolving the API key from
-    /// the given [`ShannonConfig`] (which may include `[providers.*]` overrides).
+    /// the given config (which may include `[providers.*]` overrides).
+    ///
+    /// Accepts any type implementing [`ApiKeyResolver`] to avoid a cyclic
+    /// dependency on `shannon-core`'s `ShannonConfig`.
     pub fn set_model_for_provider_with_config(
         &mut self,
         model: String,
         provider: LlmProvider,
-        config: &crate::unified_config::ShannonConfig,
+        config: &impl super::types::ApiKeyResolver,
     ) {
         let base_url = provider.default_base_url().to_string();
         let api_key = config.resolve_api_key_for_provider(&provider);

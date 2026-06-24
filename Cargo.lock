@@ -3963,6 +3963,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "shannon-engine",
  "shannon-tool-interface",
  "shannon-types",
  "sys-locale",
@@ -3985,10 +3986,22 @@ dependencies = [
 name = "shannon-engine"
 version = "0.5.5"
 dependencies = [
+ "base64",
+ "futures",
+ "hmac",
+ "mockito",
  "proptest",
+ "reqwest",
+ "serde",
  "serde_json",
- "shannon-core",
+ "sha2",
+ "shannon-types",
+ "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

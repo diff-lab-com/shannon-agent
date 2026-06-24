@@ -39,7 +39,13 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod ai_limits;
 pub mod analytics;
-pub mod api;
+#[deprecated(
+    since = "0.5.6",
+    note = "moved to shannon-engine; use `shannon_engine::api` directly"
+)]
+pub mod api {
+    pub use ::shannon_engine::api::*;
+}
 pub mod api_services;
 pub mod away_summary;
 pub mod bridge_service;
