@@ -26,6 +26,9 @@ shannon-tool-interface = { path = "../shannon-tool-interface" }
 # Shared types
 shannon-types = { path = "../shannon-types" }
 
+# Engine (extracted modules — api/, testing/record_replay)
+shannon-engine = { path = "../shannon-engine" }
+
 # HTTP client for Claude API
 reqwest = { workspace = true }
 

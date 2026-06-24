@@ -1,32 +1,29 @@
 //! # Shannon Engine
 //!
-//! Context compression and conversation management for Shannon Code.
+//! LLM API client, streaming adapter, and testing utilities extracted from
+//! `shannon-core` as part of the D1 Phase 2 reorganization
+//! (see `docs/architecture/D1-PHASE1.md`).
 //!
-//! This crate is the future home of the query engine, state, permissions,
-//! and compact modules (D1 Phase 2 — see `docs/architecture/D1-PHASE1.md`).
+//! ## Current state (PR-B)
 //!
-//! ## Current state (PR-A)
+//! The `api` module (client, adapter, types, streaming, retry, error) has been
+//! physically moved here from `shannon-core/src/api/`. It is a near-leaf module:
+//! the only non-leaf dependency (`ShannonConfig` from `unified_config`) was
+//! resolved by moving the `From<ShannonConfig> for LlmClientConfig` impl into
+//! `shannon-core`, where both types are visible.
 //!
-//! Only the `compact` module is exposed. The code physically remains in
-//! `shannon-core` because `compact/` has compile-time dependencies on
-//! `shannon-core`'s `api`, `hooks`, and `context_budget` modules. Moving
-//! the source files into this crate would create a cyclic dependency
-//! (`shannon-core → shannon-engine` for the backward-compat shim, and
-//! `shannon-engine → shannon-core` for the three dep modules).
+//! The `testing::record_replay` module was also moved here because `api::client`
+//! depends on it at runtime for fixture record/replay. It is a true leaf module
+//! (only depends on serde + std).
 //!
-//! To break the cycle, the extraction is staged:
-//! 1. **PR-A (this PR)**: establish `shannon-engine` as the canonical
-//!    import path for `compact`, re-exported from `shannon-core`. External
-//!    consumers can begin migrating to `shannon_engine::compact`.
-//! 2. **PR-B+**: once `hooks/`, `api/`, and `context_budget` are extracted
-//!    into `shannon-engine` (or stubbed via traits in `shannon-types`),
-//!    physically move `compact/` source into this crate.
+//! This crate does NOT depend on `shannon-core`, breaking the cycle that
+//! blocked PR-A's physical move of `compact/`.
 //!
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use shannon_engine::compact::{CompactEngine, CompactConfig};
+//! use shannon_engine::api::{LlmClient, LlmClientConfig};
 //! ```
 
-pub use shannon_core::compact;
-pub use shannon_core::compact::*;
+pub mod api;
+pub mod testing;

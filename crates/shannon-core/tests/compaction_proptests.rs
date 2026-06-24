@@ -5,7 +5,7 @@
 
 use proptest::prelude::*;
 use shannon_core::api::{Message, MessageContent};
-use shannon_engine::compact::{CompactionStrategy, compact_messages};
+use shannon_core::compact::{CompactionStrategy, compact_messages};
 
 // ── Strategy generators ─────────────────────────────────────────────────────
 

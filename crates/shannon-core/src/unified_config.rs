@@ -351,6 +351,163 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
     config
 }
 
+// Implement `ApiKeyResolver` (defined in `shannon-engine::api::types`) for
+// `ShannonConfig` so `LlmClient::set_model_for_provider_with_config` can
+// accept a `ShannonConfig` without `shannon-engine` depending on
+// `shannon-core`.
+impl crate::api::types::ApiKeyResolver for ShannonConfig {
+    fn resolve_api_key_for_provider(&self, provider: &crate::api::LlmProvider) -> String {
+        ShannonConfig::resolve_api_key_for_provider(self, provider)
+    }
+}
+
+// Moved from `api/types.rs` during D1 Phase 2 PR-B extraction.
+// `ShannonConfig` is defined here in `shannon-core`, and `LlmClientConfig`
+// now lives in `shannon-engine`. Rust permits a `From` impl in either the
+// type's crate or the trait's crate. Keeping it here avoids a cyclic
+// dependency (`shannon-engine → shannon-core` for `ShannonConfig`).
+impl From<ShannonConfig> for crate::api::LlmClientConfig {
+    fn from(cfg: ShannonConfig) -> Self {
+        use crate::api::{LlmProvider, RetryConfig};
+        use std::collections::HashMap;
+
+        let has_explicit_base_url = cfg.base_url.is_some();
+        let has_explicit_model = cfg.model.is_some();
+
+        let shannon_base_url = std::env::var("SHANNON_BASE_URL").ok();
+        let anthropic_base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
+        let openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
+        let has_explicit_base_url_env = shannon_base_url.is_some();
+
+        let base_url = cfg
+            .base_url
+            .clone()
+            .or(shannon_base_url)
+            .or(anthropic_base_url.clone())
+            .or(openai_base_url.clone())
+            .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+
+        let model = cfg
+            .model
+            .clone()
+            .or_else(|| std::env::var("SHANNON_MODEL").ok())
+            .or_else(|| std::env::var("ANTHROPIC_MODEL").ok())
+            .or_else(|| std::env::var("OPENAI_MODEL").ok())
+            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
+
+        let provider = if let Some(ref p) = cfg.provider {
+            match p.to_lowercase().as_str() {
+                "anthropic" => LlmProvider::Anthropic,
+                "openai" => LlmProvider::OpenAI,
+                "ollama" => LlmProvider::Ollama,
+                "gemini" | "google" => LlmProvider::Gemini,
+                "azure" | "azure-openai" => LlmProvider::Azure,
+                "bedrock" | "aws" => LlmProvider::Bedrock,
+                "mistral" | "mistral-ai" => LlmProvider::Mistral,
+                "deepseek" => LlmProvider::DeepSeek,
+                "groq" => LlmProvider::Groq,
+                "together" | "together-ai" => LlmProvider::Together,
+                "openrouter" => LlmProvider::OpenRouter,
+                "cohere" => LlmProvider::Cohere,
+                "fireworks" => LlmProvider::Fireworks,
+                "perplexity" => LlmProvider::Perplexity,
+                "xai" => LlmProvider::Xai,
+                "ai21" => LlmProvider::Ai21,
+                "siliconflow" => LlmProvider::SiliconFlow,
+                "zhipu" | "zhipu-cn" => LlmProvider::Zhipu,
+                "zhipu-international" | "zhipu-intl" => LlmProvider::ZhipuInternational,
+                "zhipu-coding" | "zhipu-anthropic" => LlmProvider::ZhipuCoding,
+                "moonshot" | "kimi" => LlmProvider::Moonshot,
+                "minimax" => LlmProvider::Minimax,
+                "dashscope" | "qwen" => LlmProvider::DashScope,
+                "cloudflare" => LlmProvider::Cloudflare,
+                "replicate" => LlmProvider::Replicate,
+                _ => LlmProvider::from_base_url(&base_url),
+            }
+        } else {
+            LlmProvider::from_base_url(&base_url)
+        };
+
+        let base_url = if !has_explicit_base_url && !has_explicit_base_url_env {
+            let provider_default = provider.default_base_url().to_string();
+            let came_from_anthropic = anthropic_base_url.as_deref() == Some(&base_url);
+            let came_from_openai = openai_base_url.as_deref() == Some(&base_url);
+            let is_anthropic_provider = matches!(provider, LlmProvider::Anthropic);
+            let is_openai_provider = matches!(provider, LlmProvider::OpenAI);
+            let no_env_base_url = anthropic_base_url.is_none() && openai_base_url.is_none();
+            if (came_from_anthropic && !is_anthropic_provider)
+                || (came_from_openai && !is_openai_provider)
+                || (no_env_base_url && base_url != provider_default)
+            {
+                provider_default
+            } else {
+                base_url
+            }
+        } else {
+            base_url
+        };
+
+        let api_key = cfg
+            .api_key
+            .clone()
+            .unwrap_or_else(|| cfg.resolve_api_key_for_provider(&provider));
+
+        let has_explicit_provider = cfg.provider.is_some();
+        let (api_key, base_url, model, provider) = if api_key.is_empty()
+            && provider.requires_auth()
+            && !has_explicit_base_url
+            && std::env::var("SHANNON_BASE_URL").is_err()
+            && !has_explicit_provider
+        {
+            tracing::info!("No API key configured, defaulting to Ollama (localhost:11434)");
+            let ollama_model = if has_explicit_model {
+                model
+            } else {
+                std::env::var("SHANNON_MODEL").unwrap_or_else(|_| "llama3".to_string())
+            };
+            (
+                String::new(),
+                "http://localhost:11434".to_string(),
+                ollama_model,
+                LlmProvider::Ollama,
+            )
+        } else {
+            (api_key, base_url, model, provider)
+        };
+
+        let api_version = match provider {
+            LlmProvider::Anthropic => {
+                std::env::var("ANTHROPIC_API_VERSION").unwrap_or_else(|_| "2023-06-01".to_string())
+            }
+            _ => String::new(),
+        };
+
+        let max_tokens = cfg.max_tokens.unwrap_or(4096) as u32;
+        let timeout_seconds = cfg.timeout.unwrap_or(if provider == LlmProvider::Ollama {
+            300
+        } else {
+            120
+        });
+
+        Self {
+            api_key,
+            base_url,
+            model,
+            max_tokens,
+            timeout_seconds,
+            api_version,
+            provider,
+            extra_headers: HashMap::new(),
+            retry_config: RetryConfig::default(),
+            fallback_provider: None,
+            fallback_base_url: None,
+            max_stream_reconnects: 3,
+            budget_tokens: None,
+            reasoning_effort: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

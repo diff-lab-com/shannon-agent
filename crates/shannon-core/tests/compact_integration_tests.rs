@@ -8,10 +8,10 @@ mod compact_integration_tests {
     use std::sync::{Arc, Mutex};
 
     use shannon_core::api::{ContentBlock, Message, MessageContent, ToolResultContent};
-    use shannon_engine::compact::engine::CompactEngine;
-    use shannon_engine::compact::helpers::estimate_tokens;
-    use shannon_engine::compact::summarizer::RuleBasedSummarizer;
-    use shannon_engine::compact::types::{CompactConfig, CompactError, Summarizer};
+    use shannon_core::compact::engine::CompactEngine;
+    use shannon_core::compact::helpers::estimate_tokens;
+    use shannon_core::compact::summarizer::RuleBasedSummarizer;
+    use shannon_core::compact::types::{CompactConfig, CompactError, Summarizer};
 
     // -- Helpers --
 

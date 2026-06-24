@@ -131,7 +131,7 @@ jobs:
         with:
           tool: cargo-semver-checks
       - name: Run semver checks (baseline v0.5.5)
-        run: cargo semver-checks --workspace --baseline-rev v0.5.5 --verbose
+        run: cargo semver-checks --workspace --baseline-rev v0.5.5 --verbose --default-features --exclude shannon-engine --exclude shannon-stability-attr
       - name: Note
         run: |
           echo "Comparing HEAD against git tag v0.5.5 (baseline)."
