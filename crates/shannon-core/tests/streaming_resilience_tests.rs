@@ -14,11 +14,11 @@
 
 use futures::StreamExt;
 use mockito::{Server, ServerGuard};
-use shannon_core::api::error::ApiError;
-use shannon_core::api::retry::{RetryConfig, retry_request};
-use shannon_core::api::streaming::{LastEventId, SseStream};
-use shannon_core::api::{ContentDelta, LlmProvider, StreamEvent};
 use shannon_core::testing::mock_dsl::*;
+use shannon_engine::api::error::ApiError;
+use shannon_engine::api::retry::{RetryConfig, retry_request};
+use shannon_engine::api::streaming::{LastEventId, SseStream};
+use shannon_engine::api::{ContentDelta, LlmProvider, StreamEvent};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

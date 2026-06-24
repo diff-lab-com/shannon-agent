@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 # Workspace dependencies
 shannon-core = { path = "../shannon-core" }
+shannon-engine = { path = "../shannon-engine" }
 shannon-tool-interface = { path = "../shannon-tool-interface" }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -159,7 +159,7 @@ impl super::Repl {
         let usage_ratio = actual_tokens as f64 / context_window as f64;
 
         // Derive pressure tiers from CompactConfig so thresholds are configurable in one place.
-        let trigger = shannon_core::compact::CompactConfig::default().trigger_threshold as f64;
+        let trigger = shannon_engine::compact::CompactConfig::default().trigger_threshold as f64;
         let moderate = (trigger - 0.15).max(0.0);
 
         if usage_ratio > trigger {
@@ -308,7 +308,7 @@ impl super::Repl {
     /// - Critical (critical–emergency%): Micro-compact large messages + prune
     /// - Emergency (emergency%+): Full summarization + micro-compact
     pub(crate) fn do_auto_compact(&mut self) {
-        use shannon_core::compact::CompactEngine;
+        use shannon_engine::compact::CompactEngine;
 
         let Some(engine) = self.query_engine.as_mut() else {
             return;
@@ -328,7 +328,7 @@ impl super::Repl {
         };
 
         // Derive pressure tiers from CompactConfig
-        let trigger = shannon_core::compact::CompactConfig::default().trigger_threshold as f64;
+        let trigger = shannon_engine::compact::CompactConfig::default().trigger_threshold as f64;
         let critical = (trigger + 0.10).min(1.0);
         let emergency = (trigger + 0.20).min(1.0);
 

@@ -11,9 +11,9 @@
 //! the write is considered complete. In the event of a crash, at most the
 //! last message may be lost (partial line at the end of the JSONL file).
 
-use crate::api::Message;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use shannon_engine::api::Message;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -677,7 +677,7 @@ fn default_sessions_base_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::MessageContent;
+    use shannon_engine::api::MessageContent;
 
     // -- helpers --
 

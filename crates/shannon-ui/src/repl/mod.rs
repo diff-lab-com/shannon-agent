@@ -56,9 +56,10 @@ use shannon_commands::{
     SharedExecutor, builtin_commands,
 };
 use shannon_core::{
-    PromptInfo, api::LlmClientConfig, permissions::PermissionManager, query_engine::QueryEngine,
-    recording::SessionRecorder, state::StateManager, tools::ToolRegistry,
+    PromptInfo, permissions::PermissionManager, query_engine::QueryEngine,
+    recording::SessionRecorder, tools::ToolRegistry,
 };
+use shannon_engine::{api::LlmClientConfig, state::StateManager};
 
 // Tool registration
 use crate::skill_bridge::register_skills_as_tools;
@@ -111,7 +112,7 @@ pub struct Repl {
     pub(crate) permission_req_tx:
         tokio::sync::mpsc::UnboundedSender<shannon_core::query_engine::PermissionRequest>,
     /// Last session listing cache (for /resume by number)
-    pub(crate) last_session_list: Vec<shannon_core::state::SessionInfo>,
+    pub(crate) last_session_list: Vec<shannon_engine::state::SessionInfo>,
     /// Command history with cursor navigation
     pub(crate) command_history: ReplHistory,
     /// Saved input before history navigation (to restore on down-to-bottom)
@@ -318,7 +319,7 @@ impl Repl {
         };
 
         let client_config = LlmClientConfig::default();
-        let client = shannon_core::api::LlmClient::new_unauthenticated(client_config);
+        let client = shannon_engine::api::LlmClient::new_unauthenticated(client_config);
         let permission_manager = PermissionManager::new();
         let state_manager = StateManager::new();
         let query_engine = QueryEngine::with_defaults_arc(
@@ -762,7 +763,7 @@ impl Repl {
                     // Inject shared LLM executor so teammates can make real LLM calls
                     let ctx = {
                         let llm_client =
-                            shannon_core::api::LlmClient::new(ctx.client_config.clone());
+                            shannon_engine::api::LlmClient::new(ctx.client_config.clone());
                         let executor = shannon_agents::shared_executor(llm_client);
                         ctx.with_executor(executor)
                     };
@@ -792,9 +793,9 @@ impl Repl {
         let config_model = client_config.model.clone();
 
         let client = if client_config.provider.requires_auth() {
-            shannon_core::api::LlmClient::new(client_config)
+            shannon_engine::api::LlmClient::new(client_config)
         } else {
-            shannon_core::api::LlmClient::new_unauthenticated(client_config)
+            shannon_engine::api::LlmClient::new_unauthenticated(client_config)
         };
 
         // Wrap tool registry in Arc so it can be shared with MCP callbacks
@@ -1451,7 +1452,7 @@ impl Repl {
         if let Some(ref engine) = self.query_engine {
             let session_id = engine.session_id().to_string();
             let hook_mgr = engine.hook_manager();
-            let event = shannon_core::hooks::HookEvent::SessionStart { session_id };
+            let event = shannon_engine::hooks::HookEvent::SessionStart { session_id };
             self.runtime.block_on(async {
                 let mgr = hook_mgr.read().await;
                 if let Err(e) = mgr.run_hooks(&event).await {
@@ -1752,7 +1753,7 @@ impl Repl {
         if let Some(ref engine) = self.query_engine {
             let session_id = engine.session_id().to_string();
             let hook_mgr = engine.hook_manager();
-            let event = shannon_core::hooks::HookEvent::SessionEnd { session_id };
+            let event = shannon_engine::hooks::HookEvent::SessionEnd { session_id };
             self.runtime.block_on(async {
                 let mgr = hook_mgr.read().await;
                 if let Err(e) = mgr.run_hooks(&event).await {
@@ -1763,7 +1764,7 @@ impl Repl {
             // Auto-save session for --resume support
             if self.current_turn > 0 {
                 let messages = engine.conversation_history();
-                let metadata = shannon_core::state::SessionPersistMetadata {
+                let metadata = shannon_engine::state::SessionPersistMetadata {
                     model: self.state.model.clone().unwrap_or_default(),
                     created_at: self.session_started_at.unwrap_or_else(chrono::Utc::now),
                     updated_at: chrono::Utc::now(),

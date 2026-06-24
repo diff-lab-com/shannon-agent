@@ -52,9 +52,9 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use crate::checkpoint::CheckpointManager;
-use crate::hooks::{HookDecision, HookEvent, HookManager};
 use crate::permissions::{PermissionError, PermissionManager};
 use crate::tools::{ToolError, ToolOutput, ToolRegistry};
+use shannon_engine::hooks::{HookDecision, HookEvent, HookManager};
 
 // ---------------------------------------------------------------------------
 // Error types

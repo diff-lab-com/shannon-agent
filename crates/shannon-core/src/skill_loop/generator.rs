@@ -3,10 +3,10 @@
 //! This module generates skill proposals by calling an LLM to extract reusable
 //! patterns from completed tasks.
 
-use crate::api::LlmClient;
-use crate::api::types::{ContentBlock, Message, MessageContent};
 use crate::skill_loop::types::{ProposalStatus, SkillMetadataDraft, SkillProposal, TaskEvaluation};
 use chrono::Utc;
+use shannon_engine::api::LlmClient;
+use shannon_engine::api::types::{ContentBlock, Message, MessageContent};
 use tracing::{instrument, trace};
 use uuid::Uuid;
 

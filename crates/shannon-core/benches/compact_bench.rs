@@ -7,8 +7,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde_json::json;
 
-use shannon_core::api::{ContentBlock, Message, MessageContent, ToolResultContent};
-use shannon_core::compact::{CompactConfig, CompactEngine, RuleBasedSummarizer};
+use shannon_engine::api::{ContentBlock, Message, MessageContent, ToolResultContent};
+use shannon_engine::compact::{CompactConfig, CompactEngine, RuleBasedSummarizer};
 
 // ---------------------------------------------------------------------------
 // Helpers

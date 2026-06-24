@@ -9,8 +9,8 @@
 mod streaming_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
-    use shannon_core::api::LlmProvider;
-    use shannon_core::api::streaming::{LastEventId, SseStream};
+    use shannon_engine::api::LlmProvider;
+    use shannon_engine::api::streaming::{LastEventId, SseStream};
 
     // ── Helpers ──
 
@@ -84,7 +84,7 @@ mod streaming_tests {
         server_url: &str,
         _body: &str,
         provider: LlmProvider,
-    ) -> Vec<shannon_core::api::StreamEvent> {
+    ) -> Vec<shannon_engine::api::StreamEvent> {
         let client = reqwest::Client::new();
         let response = client
             .post(format!("{server_url}/v1/messages"))
@@ -117,7 +117,7 @@ mod streaming_tests {
         let events = collect_stream_events(&mock_url, "", LlmProvider::Anthropic).await;
 
         // Verify event sequence
-        use shannon_core::api::StreamEvent;
+        use shannon_engine::api::StreamEvent;
         assert!(
             events
                 .iter()
@@ -158,7 +158,7 @@ mod streaming_tests {
             .iter()
             .filter_map(|e| match e {
                 StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
+                    shannon_engine::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
                     _ => None,
                 },
                 _ => None,
@@ -178,13 +178,13 @@ mod streaming_tests {
 
         let events = collect_stream_events(&mock_url, "", LlmProvider::Anthropic).await;
 
-        use shannon_core::api::StreamEvent;
+        use shannon_engine::api::StreamEvent;
         // Should have thinking delta events
         let thinking: String = events
             .iter()
             .filter_map(|e| match e {
                 StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    shannon_core::api::ContentDelta::ThinkingDelta { thinking } => {
+                    shannon_engine::api::ContentDelta::ThinkingDelta { thinking } => {
                         Some(thinking.as_str())
                     }
                     _ => None,
@@ -199,7 +199,7 @@ mod streaming_tests {
             .iter()
             .filter_map(|e| match e {
                 StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
+                    shannon_engine::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
                     _ => None,
                 },
                 _ => None,
@@ -224,7 +224,7 @@ mod streaming_tests {
 
         let events = collect_stream_events(&mock_url, "", LlmProvider::Anthropic).await;
 
-        use shannon_core::api::{ContentBlock, StreamEvent};
+        use shannon_engine::api::{ContentBlock, StreamEvent};
 
         // Should have tool_use content block
         let has_tool_use = events.iter().any(|e| {
@@ -243,7 +243,7 @@ mod streaming_tests {
             matches!(
                 e,
                 StreamEvent::ContentBlockDelta {
-                    delta: shannon_core::api::ContentDelta::InputJsonDelta { .. },
+                    delta: shannon_engine::api::ContentDelta::InputJsonDelta { .. },
                     ..
                 }
             )
@@ -255,7 +255,7 @@ mod streaming_tests {
             .iter()
             .filter_map(|e| match e {
                 StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
+                    shannon_engine::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
                     _ => None,
                 },
                 _ => None,
@@ -285,8 +285,8 @@ mod streaming_tests {
         let text: String = events
             .iter()
             .filter_map(|e| match e {
-                shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
+                shannon_engine::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
+                    shannon_engine::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
                     _ => None,
                 },
                 _ => None,
@@ -315,8 +315,8 @@ mod streaming_tests {
         let text: String = events
             .iter()
             .filter_map(|e| match e {
-                shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    shannon_core::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
+                shannon_engine::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
+                    shannon_engine::api::ContentDelta::TextDelta { text } => Some(text.as_str()),
                     _ => None,
                 },
                 _ => None,
@@ -350,8 +350,8 @@ mod streaming_tests {
         let text_deltas: Vec<String> = events
             .iter()
             .filter_map(|e| match e {
-                shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
-                    shannon_core::api::ContentDelta::TextDelta { text } => Some(text.clone()),
+                shannon_engine::api::StreamEvent::ContentBlockDelta { delta, .. } => match delta {
+                    shannon_engine::api::ContentDelta::TextDelta { text } => Some(text.clone()),
                     _ => None,
                 },
                 _ => None,

@@ -39,10 +39,6 @@
 //! # }
 //! ```
 
-use crate::api::{
-    ContentBlock, ContentDelta, ImageSource, LlmClient, LlmProvider, Message, MessageContent,
-    StreamEvent, SystemContentBlock, ToolResultContent,
-};
 use crate::memory::AutoDreamService;
 use crate::memory::MemoryStore;
 use crate::permissions::PermissionManager;
@@ -52,8 +48,12 @@ use crate::query_engine::types::{
     ConversationStats, CostTracker, QueryContext, QueryEngineConfig, QueryError, QueryEvent,
     QueryStream,
 };
-use crate::state::StateManager;
 use crate::tools::ToolRegistry;
+use shannon_engine::api::{
+    ContentBlock, ContentDelta, ImageSource, LlmClient, LlmProvider, Message, MessageContent,
+    StreamEvent, SystemContentBlock, ToolResultContent,
+};
+use shannon_engine::state::StateManager;
 
 /// Minimal system prompt for local/small models that cannot handle tool definitions.
 const LOCAL_MODEL_SYSTEM_PROMPT: &str =
@@ -269,7 +269,7 @@ pub struct QueryEngine {
     /// Session ID for conversation persistence
     pub(crate) session_id: Uuid,
     /// Hook manager for lifecycle events (pre/post tool use, session start/end)
-    pub(crate) hook_manager: Arc<tokio::sync::RwLock<crate::hooks::HookManager>>,
+    pub(crate) hook_manager: Arc<tokio::sync::RwLock<shannon_engine::hooks::HookManager>>,
     /// Triggered routines registry for hook-event-driven automation
     pub(crate) triggered_routines:
         Arc<tokio::sync::RwLock<crate::triggered_routines::TriggeredRoutineRegistry>>,
@@ -307,7 +307,7 @@ impl QueryEngine {
         if self.config.max_context_tokens.is_some() {
             return self.effective_max_context_tokens;
         }
-        if *self.client.provider() == crate::api::LlmProvider::Ollama {
+        if *self.client.provider() == shannon_engine::api::LlmProvider::Ollama {
             if let Some(info) = self.client.cached_ollama_info() {
                 if info.num_ctx > 0 {
                     return info.num_ctx;
@@ -323,7 +323,7 @@ impl QueryEngine {
     /// before the first user query, so tool-disable decisions are correct
     /// from the start.  Safe to call multiple times — results are cached.
     pub async fn pre_resolve_context(&mut self) {
-        if *self.client.provider() == crate::api::LlmProvider::Ollama
+        if *self.client.provider() == shannon_engine::api::LlmProvider::Ollama
             && self.config.max_context_tokens.is_none()
         {
             if let Some(info) = self.client.check_ollama_capabilities().await {
@@ -341,8 +341,8 @@ impl QueryEngine {
 }
 
 /// Helper to create a loaded HookManager
-fn hook_mgr() -> crate::hooks::HookManager {
-    let mut mgr = crate::hooks::HookManager::new();
+fn hook_mgr() -> shannon_engine::hooks::HookManager {
+    let mut mgr = shannon_engine::hooks::HookManager::new();
     if let Err(e) = mgr.load() {
         tracing::warn!("Failed to load hooks configuration: {e}");
     }
@@ -629,7 +629,7 @@ impl QueryEngine {
     }
 
     /// Access the hook manager for firing lifecycle events (SessionStart, SessionEnd, etc.)
-    pub fn hook_manager(&self) -> Arc<tokio::sync::RwLock<crate::hooks::HookManager>> {
+    pub fn hook_manager(&self) -> Arc<tokio::sync::RwLock<shannon_engine::hooks::HookManager>> {
         self.hook_manager.clone()
     }
 
@@ -675,25 +675,29 @@ impl QueryEngine {
 
     /// Add a user message to the conversation
     pub fn add_user_message(&mut self, content: String) {
-        use crate::api::MessageContent;
-        self.conversation.messages.push(crate::api::Message {
-            role: "user".to_string(),
-            content: MessageContent::Text(content),
-        });
+        use shannon_engine::api::MessageContent;
+        self.conversation
+            .messages
+            .push(shannon_engine::api::Message {
+                role: "user".to_string(),
+                content: MessageContent::Text(content),
+            });
     }
 
     /// Add a user message with content blocks (e.g., text + image)
-    pub fn add_user_message_blocks(&mut self, blocks: Vec<crate::api::ContentBlock>) {
-        use crate::api::MessageContent;
-        self.conversation.messages.push(crate::api::Message {
-            role: "user".to_string(),
-            content: MessageContent::Blocks(blocks),
-        });
+    pub fn add_user_message_blocks(&mut self, blocks: Vec<shannon_engine::api::ContentBlock>) {
+        use shannon_engine::api::MessageContent;
+        self.conversation
+            .messages
+            .push(shannon_engine::api::Message {
+                role: "user".to_string(),
+                content: MessageContent::Blocks(blocks),
+            });
     }
 
     /// Add an assistant message to the conversation
-    pub fn add_assistant_message(&mut self, content: Vec<crate::api::ContentBlock>) {
-        use crate::api::{ContentBlock, Message, MessageContent};
+    pub fn add_assistant_message(&mut self, content: Vec<shannon_engine::api::ContentBlock>) {
+        use shannon_engine::api::{ContentBlock, Message, MessageContent};
         let blocks: Vec<ContentBlock> = content;
         self.conversation.messages.push(Message {
             role: "assistant".to_string(),
@@ -747,7 +751,7 @@ impl QueryEngine {
 
     /// Restore conversation messages from a completed query (syncs background task state back).
     /// Logs a warning if the restored messages look incomplete (e.g., missing the assistant response).
-    pub fn restore_messages(&mut self, messages: Vec<crate::api::Message>) {
+    pub fn restore_messages(&mut self, messages: Vec<shannon_engine::api::Message>) {
         let msg_count = messages.len();
         let last_role = messages.last().map(|m| m.role.as_str()).unwrap_or("none");
         let prev_count = self.conversation.messages.len();
@@ -775,7 +779,7 @@ impl QueryEngine {
     }
 
     /// Get the current conversation messages (for session persistence).
-    pub fn conversation_messages(&self) -> &[crate::api::Message] {
+    pub fn conversation_messages(&self) -> &[shannon_engine::api::Message] {
         &self.conversation.messages
     }
 
@@ -788,7 +792,7 @@ impl QueryEngine {
     pub fn set_model(&mut self, model: String) {
         self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
         // Clear stale Ollama cache so pre_resolve_context() re-queries
-        if *self.client.provider() == crate::api::LlmProvider::Ollama {
+        if *self.client.provider() == shannon_engine::api::LlmProvider::Ollama {
             self.client.clear_ollama_cache();
         }
         let mut tracker = self.cost_tracker.write().unwrap_or_else(|e| e.into_inner());
@@ -800,7 +804,7 @@ impl QueryEngine {
     pub fn set_model_for_provider(&mut self, model: String, provider: LlmProvider) {
         self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
         // Clear stale Ollama cache so pre_resolve_context() re-queries
-        if provider == crate::api::LlmProvider::Ollama {
+        if provider == shannon_engine::api::LlmProvider::Ollama {
             self.client.clear_ollama_cache();
         }
         let mut tracker = self.cost_tracker.write().unwrap_or_else(|e| e.into_inner());
@@ -899,9 +903,9 @@ impl QueryEngine {
         let mut system_blocks: Vec<SystemContentBlock> = Vec::new();
         let use_cache = matches!(
             client_provider,
-            crate::api::LlmProvider::Anthropic
-                | crate::api::LlmProvider::Bedrock
-                | crate::api::LlmProvider::Custom
+            shannon_engine::api::LlmProvider::Anthropic
+                | shannon_engine::api::LlmProvider::Bedrock
+                | shannon_engine::api::LlmProvider::Custom
         );
 
         // Base system prompt — always cache the system prompt prefix for Anthropic,
@@ -1015,7 +1019,7 @@ impl QueryEngine {
         };
         let mut system_prompt = if context.metadata.tools_allowed {
             config.system_prompt.clone()
-        } else if client_provider == crate::api::LlmProvider::Ollama {
+        } else if client_provider == shannon_engine::api::LlmProvider::Ollama {
             // Ollama models use their own chat templates; a system prompt
             // confuses small/unstable models causing malformed output.
             None
@@ -1030,7 +1034,9 @@ impl QueryEngine {
                 prompt.push_str(&cwd_text);
             }
             if let Some(ref mut blocks) = system_blocks_opt {
-                blocks.push(crate::api::types::SystemContentBlock::text(cwd_text));
+                blocks.push(shannon_engine::api::types::SystemContentBlock::text(
+                    cwd_text,
+                ));
             }
         }
 
@@ -1060,7 +1066,7 @@ impl QueryEngine {
 
             // Fire UserPromptSubmit hook
             {
-                let prompt_event = crate::hooks::HookEvent::UserPromptSubmit {
+                let prompt_event = shannon_engine::hooks::HookEvent::UserPromptSubmit {
                     prompt: user_message.clone(),
                 };
                 let hm = hook_manager.read().await;
@@ -1071,7 +1077,8 @@ impl QueryEngine {
             let client_config = {
                 // For Ollama models with tiny context (< 4096), cap num_predict
                 // to half the context so the model has room for input tokens.
-                let capped_max_tokens = if client_provider == crate::api::LlmProvider::Ollama
+                let capped_max_tokens = if client_provider
+                    == shannon_engine::api::LlmProvider::Ollama
                     && effective_max_context_tokens < 4096
                     && client_max_tokens as usize > effective_max_context_tokens / 2
                 {
@@ -1083,7 +1090,7 @@ impl QueryEngine {
                 } else {
                     client_max_tokens
                 };
-                let mut cfg = crate::api::LlmClientConfig {
+                let mut cfg = shannon_engine::api::LlmClientConfig {
                     api_key: client_api_key,
                     base_url: client_base_url,
                     model: client_model.clone(),
@@ -1098,18 +1105,18 @@ impl QueryEngine {
                 // Map effort_level from /effort command to provider-specific parameters
                 if let Some(ref effort) = config.effort_level {
                     let reasoning_effort = match effort.as_str() {
-                        "low" => crate::api::types::ReasoningEffort::Low,
-                        "medium" => crate::api::types::ReasoningEffort::Medium,
-                        "high" => crate::api::types::ReasoningEffort::High,
-                        _ => crate::api::types::ReasoningEffort::Medium,
+                        "low" => shannon_engine::api::types::ReasoningEffort::Low,
+                        "medium" => shannon_engine::api::types::ReasoningEffort::Medium,
+                        "high" => shannon_engine::api::types::ReasoningEffort::High,
+                        _ => shannon_engine::api::types::ReasoningEffort::Medium,
                     };
                     cfg.reasoning_effort = Some(reasoning_effort);
                     // For Anthropic: also set budget_tokens based on effort level
                     if matches!(
                         cfg.provider,
-                        crate::api::LlmProvider::Anthropic
-                            | crate::api::LlmProvider::Bedrock
-                            | crate::api::LlmProvider::Custom
+                        shannon_engine::api::LlmProvider::Anthropic
+                            | shannon_engine::api::LlmProvider::Bedrock
+                            | shannon_engine::api::LlmProvider::Custom
                     ) {
                         let budget = reasoning_effort.to_anthropic_budget(200_000);
                         cfg.budget_tokens = Some(budget as u32);
@@ -1209,7 +1216,7 @@ impl QueryEngine {
                 // Run every turn — check_ollama_capabilities() caches results after the first
                 // HTTP call, so subsequent turns just read the cache with zero overhead.
                 let mut effective_max_context = effective_max_context_tokens;
-                if client_provider == crate::api::LlmProvider::Ollama
+                if client_provider == shannon_engine::api::LlmProvider::Ollama
                     && config.max_context_tokens.is_none()
                 {
                     if let Some(info) = client.check_ollama_capabilities().await {
@@ -1232,7 +1239,7 @@ impl QueryEngine {
                 // context for actual conversation.
                 let mut tools_schema = if context.metadata.tools_allowed {
                     let tool_defs = tools.to_tool_definitions();
-                    if client_provider == crate::api::LlmProvider::Ollama
+                    if client_provider == shannon_engine::api::LlmProvider::Ollama
                         && effective_max_context < 8192
                     {
                         tracing::info!(
@@ -1259,12 +1266,15 @@ impl QueryEngine {
 
                 // Auto-compress conversation if it exceeds the threshold
                 {
-                    let estimated_tokens = crate::compact::helpers::estimate_tokens(&messages)
-                        + config
-                            .system_prompt
-                            .as_ref()
-                            .map(|sp| crate::compact::helpers::estimate_text_tokens(sp))
-                            .unwrap_or(0);
+                    let estimated_tokens =
+                        shannon_engine::compact::helpers::estimate_tokens(&messages)
+                            + config
+                                .system_prompt
+                                .as_ref()
+                                .map(|sp| {
+                                    shannon_engine::compact::helpers::estimate_text_tokens(sp)
+                                })
+                                .unwrap_or(0);
                     let max_context = effective_max_context.max(1); // Guard against division by zero
                     let usage_ratio = estimated_tokens as f32 / max_context as f32;
 
@@ -1297,8 +1307,9 @@ impl QueryEngine {
                                 message: "Compaction skipped (too many failures), truncating old messages".to_string(),
                             });
                         } else {
-                            match crate::compact::CompactEngine::with_llm_summarizer(client.clone())
-                            {
+                            match shannon_engine::compact::CompactEngine::with_llm_summarizer(
+                                client.clone(),
+                            ) {
                                 Ok(mut compact_engine) => {
                                     // Sync compact engine's context limit with our effective limit
                                     compact_engine.config.max_context_tokens =
@@ -1319,13 +1330,14 @@ impl QueryEngine {
                                             // the model retains project instructions, MEMORY.md,
                                             // and preference memory across the compaction boundary.
                                             if !reinjection.is_empty() && !messages.is_empty() {
-                                                let ctx_msg = crate::api::Message {
+                                                let ctx_msg = shannon_engine::api::Message {
                                                     role: "system".to_string(),
-                                                    content: crate::api::MessageContent::Text(
-                                                        format!(
-                                                            "[Re-injected context after compaction]\n\n{reinjection}"
+                                                    content:
+                                                        shannon_engine::api::MessageContent::Text(
+                                                            format!(
+                                                                "[Re-injected context after compaction]\n\n{reinjection}"
+                                                            ),
                                                         ),
-                                                    ),
                                                 };
                                                 messages.insert(0, ctx_msg);
                                             }
@@ -1404,7 +1416,7 @@ impl QueryEngine {
                 // Diagnostic: log conversation state before API call
                 tracing::info!(
                     msg_count = messages.len(),
-                    estimated_tokens = crate::compact::helpers::estimate_tokens(&messages),
+                    estimated_tokens = shannon_engine::compact::helpers::estimate_tokens(&messages),
                     turn = turn + 1,
                     max_turns = config.max_turns,
                     "Sending API request"
@@ -1422,13 +1434,16 @@ impl QueryEngine {
                             json_len / 4
                         })
                         .unwrap_or(0);
-                    let mut pre_send_estimate = crate::compact::helpers::estimate_tokens(&messages)
-                        + config
-                            .system_prompt
-                            .as_ref()
-                            .map(|sp| crate::compact::helpers::estimate_text_tokens(sp))
-                            .unwrap_or(0)
-                        + tools_tokens;
+                    let mut pre_send_estimate =
+                        shannon_engine::compact::helpers::estimate_tokens(&messages)
+                            + config
+                                .system_prompt
+                                .as_ref()
+                                .map(|sp| {
+                                    shannon_engine::compact::helpers::estimate_text_tokens(sp)
+                                })
+                                .unwrap_or(0)
+                            + tools_tokens;
                     let mut pre_send_ratio =
                         pre_send_estimate as f32 / effective_max_context as f32;
                     if pre_send_ratio > 0.9 {
@@ -1452,7 +1467,7 @@ impl QueryEngine {
                         );
                         // Auto-strip tools for Ollama when context overflow detected —
                         // preserving conversation history is more important than tool support.
-                        if client_provider == crate::api::LlmProvider::Ollama
+                        if client_provider == shannon_engine::api::LlmProvider::Ollama
                             && tools_schema.is_some()
                             && tools_tokens > 0
                         {
@@ -1475,7 +1490,7 @@ impl QueryEngine {
                         // For Ollama still over limit: strip system prompt/blocks
                         // to free context for conversation history.
                         if pre_send_ratio > 0.95
-                            && client_provider == crate::api::LlmProvider::Ollama
+                            && client_provider == shannon_engine::api::LlmProvider::Ollama
                         {
                             if system_blocks_opt.is_some() {
                                 tracing::info!(
@@ -1501,7 +1516,7 @@ impl QueryEngine {
                         // to fit within context. Keep the most recent turns.
                         if pre_send_ratio > 1.0 && messages.len() > 2 {
                             let target_tokens = (effective_max_context as f32 * 0.8) as usize;
-                            while crate::compact::helpers::estimate_tokens(&messages)
+                            while shannon_engine::compact::helpers::estimate_tokens(&messages)
                                 > target_tokens
                                 && messages.len() > 2
                             {
@@ -1514,7 +1529,8 @@ impl QueryEngine {
                                     break;
                                 }
                             }
-                            let new_estimate = crate::compact::helpers::estimate_tokens(&messages);
+                            let new_estimate =
+                                shannon_engine::compact::helpers::estimate_tokens(&messages);
                             tracing::info!(
                                 truncated_to = messages.len(),
                                 new_estimate,
@@ -2073,24 +2089,24 @@ impl QueryEngine {
 
                                                     // Run PreToolUse hooks
                                                     let hook_event =
-                                                        crate::hooks::HookEvent::PreToolUse {
+                                                        shannon_engine::hooks::HookEvent::PreToolUse {
                                                             tool_name: tool_name.clone(),
                                                             input: tool_input.clone(),
                                                         };
                                                     let pre_hook_decision = {
                                                         let hm = hook_manager.read().await;
                                                         match hm.run_hooks(&hook_event).await {
-                                                            Ok(results) => crate::hooks::HookManager::resolve_results(&results),
+                                                            Ok(results) => shannon_engine::hooks::HookManager::resolve_results(&results),
                                                             Err(e) => {
                                                                 tracing::warn!("PreToolUse hook error: {e}");
-                                                                crate::hooks::HookDecision::Allow
+                                                                shannon_engine::hooks::HookDecision::Allow
                                                             }
                                                         }
                                                     };
 
                                                     let mut effective_input = tool_input.clone();
                                                     match &pre_hook_decision {
-                                                        crate::hooks::HookDecision::Deny {
+                                                        shannon_engine::hooks::HookDecision::Deny {
                                                             reason,
                                                         } => {
                                                             let error_msg =
@@ -2113,7 +2129,7 @@ impl QueryEngine {
                                                             });
                                                             continue;
                                                         }
-                                                        crate::hooks::HookDecision::Modify {
+                                                        shannon_engine::hooks::HookDecision::Modify {
                                                             modified_input,
                                                             ..
                                                         } => {
@@ -2126,7 +2142,7 @@ impl QueryEngine {
                                                                 effective_input = new_input.clone();
                                                             }
                                                         }
-                                                        crate::hooks::HookDecision::Allow => {}
+                                                        shannon_engine::hooks::HookDecision::Allow => {}
                                                     }
 
                                                     approved_tools.push((
@@ -2233,7 +2249,7 @@ impl QueryEngine {
                                                                                     Ok(o) => serde_json::Value::String(o.content.clone()),
                                                                                     Err(e) => serde_json::Value::String(format!("Error: {e}")),
                                                                                 };
-                                                                                let post_event = crate::hooks::HookEvent::PostToolUse {
+                                                                                let post_event = shannon_engine::hooks::HookEvent::PostToolUse {
                                                                                     tool_name: tool_name.clone(),
                                                                                     input: effective_input,
                                                                                     output: output_val,
@@ -2416,7 +2432,7 @@ impl QueryEngine {
                                                                         Ok(o) => serde_json::Value::String(o.content.clone()),
                                                                         Err(e) => serde_json::Value::String(format!("Error: {e}")),
                                                                     };
-                                                                    let post_event = crate::hooks::HookEvent::PostToolUse {
+                                                                    let post_event = shannon_engine::hooks::HookEvent::PostToolUse {
                                                                         tool_name: tool_name.clone(),
                                                                         input: effective_input,
                                                                         output: output_val,
@@ -2775,8 +2791,9 @@ impl QueryEngine {
                                                 message: "Retrying without tools...".to_string(),
                                             }
                                         );
-                                        let no_tools: Option<Vec<crate::api::ToolDefinition>> =
-                                            None;
+                                        let no_tools: Option<
+                                            Vec<shannon_engine::api::ToolDefinition>,
+                                        > = None;
                                         let no_system: Option<String> = None;
                                         match tokio::time::timeout(
                                             std::time::Duration::from_secs(60),
@@ -3064,9 +3081,9 @@ impl QueryEngine {
                                     if !sp.is_empty() {
                                         messages.insert(
                                             0,
-                                            crate::api::Message {
+                                            shannon_engine::api::Message {
                                                 role: "system".to_string(),
-                                                content: crate::api::MessageContent::Text(
+                                                content: shannon_engine::api::MessageContent::Text(
                                                     sp.clone(),
                                                 ),
                                             },
@@ -3239,7 +3256,7 @@ impl QueryEngine {
                                     message: "Retrying without tools...".to_string(),
                                 }
                             );
-                            let no_tools: Option<Vec<crate::api::ToolDefinition>> = None;
+                            let no_tools: Option<Vec<shannon_engine::api::ToolDefinition>> = None;
                             let no_system: Option<String> = None;
                             match tokio::time::timeout(
                                 std::time::Duration::from_secs(60),
@@ -3466,8 +3483,8 @@ fn save_conversation_to_disk(
     messages: &[Message],
     model: &str,
 ) -> Result<(), String> {
-    use crate::api::{ContentBlock, MessageContent};
-    use crate::state::SessionPersistMetadata;
+    use shannon_engine::api::{ContentBlock, MessageContent};
+    use shannon_engine::state::SessionPersistMetadata;
 
     // Generate title from first user message
     let title = messages
@@ -3518,9 +3535,9 @@ fn save_conversation_to_disk(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{LlmClient, LlmClientConfig, MessageContent};
     use crate::permissions::PermissionManager;
     use crate::tools::ToolRegistry;
+    use shannon_engine::api::{LlmClient, LlmClientConfig, MessageContent};
     use std::env;
     use std::fs;
     use uuid::Uuid;
@@ -3579,11 +3596,11 @@ mod tests {
 
         // Create some test messages
         let messages = vec![
-            crate::api::Message {
+            shannon_engine::api::Message {
                 role: "user".to_string(),
                 content: MessageContent::Text("Hello, how are you?".to_string()),
             },
-            crate::api::Message {
+            shannon_engine::api::Message {
                 role: "assistant".to_string(),
                 content: MessageContent::Text("I'm doing well, thanks!".to_string()),
             },
@@ -3628,7 +3645,7 @@ mod tests {
 
         // Create a message with long text (100 chars)
         let long_text = "A".repeat(100);
-        let messages = vec![crate::api::Message {
+        let messages = vec![shannon_engine::api::Message {
             role: "user".to_string(),
             content: MessageContent::Text(long_text),
         }];
@@ -3668,11 +3685,11 @@ mod tests {
     fn test_rewind_conversation_single_turn() {
         let mut engine = create_test_engine();
         engine.add_user_message("Hello".to_string());
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "Hi there".to_string(),
         }]);
         engine.add_user_message("How are you?".to_string());
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "Fine".to_string(),
         }]);
         assert_eq!(engine.conversation.messages.len(), 4);
@@ -3688,15 +3705,15 @@ mod tests {
     fn test_rewind_conversation_multiple_turns() {
         let mut engine = create_test_engine();
         engine.add_user_message("Q1".to_string());
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "A1".to_string(),
         }]);
         engine.add_user_message("Q2".to_string());
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "A2".to_string(),
         }]);
         engine.add_user_message("Q3".to_string());
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "A3".to_string(),
         }]);
         assert_eq!(engine.conversation.messages.len(), 6);
@@ -3710,7 +3727,7 @@ mod tests {
     fn test_rewind_conversation_all() {
         let mut engine = create_test_engine();
         engine.add_user_message("Q1".to_string());
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "A1".to_string(),
         }]);
 
@@ -3741,14 +3758,14 @@ mod tests {
         let mut engine = create_test_engine();
         engine.add_user_message("Run tests".to_string());
         // Simulate tool result as assistant messages
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "I'll run the tests".to_string(),
         }]);
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "All tests passed".to_string(),
         }]);
         engine.add_user_message("Now commit".to_string());
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "Committed".to_string(),
         }]);
         // Total: 5 messages (1 user + 2 asst + 1 user + 1 asst)
@@ -3769,10 +3786,10 @@ mod tests {
     fn test_rewind_conversation_no_user_messages() {
         let mut engine = create_test_engine();
         // Only assistant messages, no user message to anchor a turn
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "Hello".to_string(),
         }]);
-        engine.add_assistant_message(vec![crate::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "World".to_string(),
         }]);
 
@@ -4055,7 +4072,7 @@ mod tests {
     /// cache_read_input_tokens which Anthropic only sends in that event.
     #[test]
     fn test_cache_tokens_from_message_start_are_used() {
-        use crate::api::{MessageResponse, StreamEvent, Usage};
+        use shannon_engine::api::{MessageResponse, StreamEvent, Usage};
 
         // Simulate Anthropic's message_start event with cache tokens
         let start_event = StreamEvent::MessageStart {
@@ -4165,7 +4182,7 @@ mod tests {
             api_key: "test".to_string(),
             base_url: "http://localhost:11434".to_string(),
             model: "llama3:8b".to_string(),
-            provider: crate::api::LlmProvider::Ollama,
+            provider: shannon_engine::api::LlmProvider::Ollama,
             ..Default::default()
         };
         let client = LlmClient::new(config);
@@ -4191,7 +4208,7 @@ mod tests {
 
     #[test]
     fn test_cache_hit_rate_accumulation_across_usage_events() {
-        use crate::api::{MessageResponse, StreamEvent, Usage};
+        use shannon_engine::api::{MessageResponse, StreamEvent, Usage};
 
         // Simulate multiple turns with different cache profiles
         let turns = vec![

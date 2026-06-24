@@ -7,9 +7,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use serde_json::json;
 
-use shannon_core::api::ToolDefinition;
-use shannon_core::context_budget::{ContextBudget, PriorityBudget};
-use shannon_core::context_pressure::PressureLevel;
+use shannon_engine::api::ToolDefinition;
+use shannon_engine::context_budget::{ContextBudget, PriorityBudget};
+use shannon_engine::context_pressure::PressureLevel;
 
 // ---------------------------------------------------------------------------
 // Helpers

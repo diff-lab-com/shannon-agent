@@ -3,10 +3,10 @@
 //! This module evaluates whether a completed task is worth extracting as a reusable skill.
 //! It uses an LLM to analyze task characteristics (duration, complexity, clarity, success).
 
-use crate::api::LlmClient;
-use crate::api::types::{ContentBlock, Message, MessageContent};
 use crate::skill_loop::types::{EvaluationResult, EvaluationScores, TaskEvaluation};
 use serde_json::Value;
+use shannon_engine::api::LlmClient;
+use shannon_engine::api::types::{ContentBlock, Message, MessageContent};
 use tracing::{instrument, trace};
 
 /// System prompt for the evaluation LLM

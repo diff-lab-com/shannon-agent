@@ -6,8 +6,8 @@
 #[cfg(test)]
 mod provider_serialization_tests {
     use serde_json::json;
-    use shannon_core::api::adapter::serialize_request;
-    use shannon_core::api::types::{
+    use shannon_engine::api::adapter::serialize_request;
+    use shannon_engine::api::types::{
         ContentBlock, LlmProvider, Message, MessageContent, MessageRequest, ToolDefinition,
         ToolResultContent,
     };

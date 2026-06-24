@@ -10,11 +10,11 @@
 //! or explicitly with `cargo test -- --ignored`.
 
 use serde_json::json;
-use shannon_core::api::{ContentBlock, Message, MessageContent, ToolResultContent};
-use shannon_core::compact::helpers::estimate_tokens;
 use shannon_core::query_engine::{CompressionStrategy, QueryEngineConfig};
 use shannon_core::testing::mock_dsl::*;
 use shannon_core::testing::snapshot::*;
+use shannon_engine::api::{ContentBlock, Message, MessageContent, ToolResultContent};
+use shannon_engine::compact::helpers::estimate_tokens;
 
 // ── Message helpers ──────────────────────────────────────────────────
 

@@ -242,9 +242,9 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             timestamp: chrono::Utc::now(),
             tools_allowed: {
                 let is_ollama = repl.state.selected_provider
-                    == Some(shannon_core::api::LlmProvider::Ollama)
+                    == Some(shannon_engine::api::LlmProvider::Ollama)
                     || repl.query_engine.as_ref().is_some_and(|qe| {
-                        *qe.client().provider() == shannon_core::api::LlmProvider::Ollama
+                        *qe.client().provider() == shannon_engine::api::LlmProvider::Ollama
                     });
                 if is_ollama {
                     false
@@ -304,7 +304,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
         let mut stats_summary: Option<String> = None;
         let mut accumulated_thinking = String::new();
         let mut thinking_duration_secs: Option<f64> = None;
-        let mut conversation_messages: Option<Vec<shannon_core::api::Message>> = None;
+        let mut conversation_messages: Option<Vec<shannon_engine::api::Message>> = None;
         let mut tokens_in_turn = 0u64;
         let mut tool_calls: Vec<String> = Vec::new();
         let mut tool_start_times: HashMap<String, Instant> = HashMap::new();
@@ -700,7 +700,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             }
         }
 
-        Ok::<(shannon_core::query_engine::QueryEngine, String, String, Option<f64>, Option<Vec<shannon_core::api::Message>>, u64, usize, TurnDiff, String, usize, Option<String>), (Option<shannon_core::query_engine::QueryEngine>, String)>(
+        Ok::<(shannon_core::query_engine::QueryEngine, String, String, Option<f64>, Option<Vec<shannon_engine::api::Message>>, u64, usize, TurnDiff, String, usize, Option<String>), (Option<shannon_core::query_engine::QueryEngine>, String)>(
             (query_engine, response_text, accumulated_thinking, thinking_duration_secs, conversation_messages, tokens_in_turn, _tools_in_session, turn_diff, progress_status, steps_done, stats_summary)
         )
     });
@@ -1292,7 +1292,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                         "ConversationUpdate not received — adding user+assistant as fallback"
                     );
                     engine.add_user_message(input_text);
-                    engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+                    engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
                         text: response.clone(),
                     }]);
                 }
@@ -1413,7 +1413,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
             // Auto-save session state after each turn
             if let Some(ref engine) = repl.query_engine {
                 let messages = engine.conversation_history();
-                let metadata = shannon_core::state::SessionPersistMetadata {
+                let metadata = shannon_engine::state::SessionPersistMetadata {
                     model: repl.state.model.clone().unwrap_or_default(),
                     created_at: repl.session_started_at.unwrap_or_else(chrono::Utc::now),
                     updated_at: chrono::Utc::now(),
@@ -1747,12 +1747,12 @@ mod tests {
     //! Fix: Changed the error type from `String` to `(Option<QueryEngine>, String)`
     //! so the engine is carried back to the caller even on error paths.
 
-    use shannon_core::api::LlmClientConfig;
-    use shannon_core::api::LlmProvider;
     use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::QueryEngine;
-    use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
+    use shannon_engine::api::LlmClientConfig;
+    use shannon_engine::api::LlmProvider;
+    use shannon_engine::state::StateManager;
     use std::collections::HashMap;
 
     fn create_test_engine() -> QueryEngine {
@@ -1765,14 +1765,14 @@ mod tests {
             api_version: String::new(),
             provider: LlmProvider::Anthropic,
             extra_headers: HashMap::new(),
-            retry_config: shannon_core::api::RetryConfig::default(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
         };
-        let client = shannon_core::api::LlmClient::new(config);
+        let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();
         let permissions = PermissionManager::new();
         let state = StateManager::new();

@@ -2903,11 +2903,11 @@ fn test_rewind_command_default() {
     // Also add to engine
     if let Some(ref mut engine) = repl.query_engine {
         engine.add_user_message("Hello".to_string());
-        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "Hi".to_string(),
         }]);
         engine.add_user_message("How are you?".to_string());
-        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "Fine".to_string(),
         }]);
     }
@@ -3032,11 +3032,11 @@ fn test_rewind_syncs_engine_history() {
     // Add messages to both chat widget and engine
     if let Some(ref mut engine) = repl.query_engine {
         engine.add_user_message("Q1".to_string());
-        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "A1".to_string(),
         }]);
         engine.add_user_message("Q2".to_string());
-        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "A2".to_string(),
         }]);
     }
@@ -3814,7 +3814,7 @@ fn test_repl_compact_with_focus_instructions() {
 
     // Seed the query engine with some conversation history so compact has something to work with
     if let Some(engine) = repl.query_engine.as_mut() {
-        use shannon_core::api::{Message, MessageContent};
+        use shannon_engine::api::{Message, MessageContent};
         let messages = vec![
             Message {
                 role: "user".to_string(),

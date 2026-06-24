@@ -1,4 +1,4 @@
-use crate::api::{ContentBlock, Message, MessageContent};
+use shannon_engine::api::{ContentBlock, Message, MessageContent};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
@@ -447,7 +447,7 @@ impl AutoDreamService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{ContentBlock, Message, MessageContent};
+    use shannon_engine::api::{ContentBlock, Message, MessageContent};
     use std::sync::{Arc, RwLock};
     use tempfile::TempDir;
 

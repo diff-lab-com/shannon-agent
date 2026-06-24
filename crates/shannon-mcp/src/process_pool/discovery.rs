@@ -25,7 +25,7 @@ pub struct PooledDiscoveryResult {
 // Sampling provider bridge
 // ---------------------------------------------------------------------------
 
-/// Create a sampling provider that delegates to an [`shannon_core::api::client::LlmClient`].
+/// Create a sampling provider that delegates to an [`shannon_engine::api::client::LlmClient`].
 ///
 /// This wires MCP `sampling/createMessage` requests through to Shannon's LLM
 /// backend. The provider:
@@ -36,10 +36,10 @@ pub struct PooledDiscoveryResult {
 ///
 /// Returns a `SamplingProvider` suitable for [`McpProcessPool::set_sampling_provider`].
 pub fn make_sampling_provider(
-    client: std::sync::Arc<shannon_core::api::client::LlmClient>,
+    client: std::sync::Arc<shannon_engine::api::client::LlmClient>,
 ) -> SamplingProvider {
     use crate::{CreateMessageRequest, CreateMessageResult, SamplingContent, SamplingMessageRole};
-    use shannon_core::api::types::{ContentBlock, Message, MessageContent};
+    use shannon_engine::api::types::{ContentBlock, Message, MessageContent};
 
     Arc::new(move |req: CreateMessageRequest| {
         let client = client.clone();
@@ -63,7 +63,7 @@ pub fn make_sampling_provider(
                         SamplingContent::Text { text } => MessageContent::Text(text),
                         SamplingContent::Image { data, mime_type } => {
                             MessageContent::Blocks(vec![ContentBlock::Image {
-                                source: shannon_core::api::types::ImageSource::base64(
+                                source: shannon_engine::api::types::ImageSource::base64(
                                     mime_type, data,
                                 ),
                             }])

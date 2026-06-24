@@ -7,10 +7,10 @@
 //! - QueryError variants have correct string representations
 //! - Provider-specific error parsing (Anthropic, OpenAI, Ollama)
 
-use shannon_core::api::error::ApiError;
-use shannon_core::api::types::LlmProvider;
 use shannon_core::error::{PermissionError, ToolError, ToolExecutionError};
 use shannon_core::query_engine::QueryError;
+use shannon_engine::api::error::ApiError;
+use shannon_engine::api::types::LlmProvider;
 
 // ── ApiError Variants ───────────────────────────────────────────────────
 

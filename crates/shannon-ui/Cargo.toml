@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 shannon-core = { path = "../shannon-core" }
+shannon-engine = { path = "../shannon-engine" }
 shannon-agents = { path = "../shannon-agents" }
 shannon-commands = { path = "../shannon-commands" }
 shannon-tools = { path = "../shannon-tools" }

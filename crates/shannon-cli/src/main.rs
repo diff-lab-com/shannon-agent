@@ -7,14 +7,13 @@ mod mcp_install;
 mod notifications;
 use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
-    api::LlmClientConfig,
     i18n,
     model_registry::resolve_model,
     query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
-    state::StateManager,
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
 };
+use shannon_engine::{api::LlmClientConfig, state::StateManager};
 use shannon_tools::register_default_tools_with_project_dir_ex;
 use shannon_ui::Repl;
 use similar::{ChangeTag, TextDiff};
@@ -637,8 +636,8 @@ fn build_cli_config(
 ///
 /// Check whether tools should be enabled for the given provider.
 /// Ollama/local models default to no tools; all others default to yes.
-fn should_enable_tools(provider: shannon_core::api::LlmProvider) -> bool {
-    !matches!(provider, shannon_core::api::LlmProvider::Ollama)
+fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
+    !matches!(provider, shannon_engine::api::LlmProvider::Ollama)
 }
 
 /// Priority (highest → lowest):
@@ -682,8 +681,8 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
 /// Otherwise, loads the most recent session from the sessions directory.
 ///
 /// Returns the loaded `SessionData` on success.
-fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_core::state::SessionData> {
-    use shannon_core::state::StateManager;
+fn load_resume_session(session_id_str: Option<&str>) -> Result<shannon_engine::state::SessionData> {
+    use shannon_engine::state::StateManager;
     let state_mgr = StateManager::new();
 
     if let Some(id_str) = session_id_str {
@@ -720,7 +719,7 @@ fn run_noninteractive_query(
     stream: bool,
     config: &CliConfig,
     bypass_all: bool,
-    resume_session: Option<shannon_core::state::SessionData>,
+    resume_session: Option<shannon_engine::state::SessionData>,
 ) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -872,9 +871,9 @@ fn run_noninteractive_query(
 
         let llm_provider = client_config.provider.clone();
         let client = if client_config.provider.requires_auth() {
-            shannon_core::api::LlmClient::new(client_config)
+            shannon_engine::api::LlmClient::new(client_config)
         } else {
-            shannon_core::api::LlmClient::new_unauthenticated(client_config)
+            shannon_engine::api::LlmClient::new_unauthenticated(client_config)
         };
 
         let mut permissions = shannon_core::permissions::PermissionManager::new();
@@ -1099,7 +1098,7 @@ fn run_headless_query(
     exit_on_error: bool,
     quiet: bool,
     diff_only: bool,
-    resume_session: Option<shannon_core::state::SessionData>,
+    resume_session: Option<shannon_engine::state::SessionData>,
     schema_config: Option<&shannon_core::StructuredOutputConfig>,
     notify: bool,
 ) -> Result<()> {
@@ -1195,9 +1194,9 @@ fn run_headless_query(
 
         let llm_provider = client_config.provider.clone();
         let client = if client_config.provider.requires_auth() {
-            shannon_core::api::LlmClient::new(client_config)
+            shannon_engine::api::LlmClient::new(client_config)
         } else {
-            shannon_core::api::LlmClient::new_unauthenticated(client_config)
+            shannon_engine::api::LlmClient::new_unauthenticated(client_config)
         };
 
         // Permissions: FullAuto in headless mode (auto-approve non-critical, deny critical)
@@ -1937,9 +1936,9 @@ fn run_team_agent_mode(
 
         let llm_provider = client_config.provider.clone();
         let client = if client_config.provider.requires_auth() {
-            shannon_core::api::LlmClient::new(client_config)
+            shannon_engine::api::LlmClient::new(client_config)
         } else {
-            shannon_core::api::LlmClient::new_unauthenticated(client_config)
+            shannon_engine::api::LlmClient::new_unauthenticated(client_config)
         };
 
         let mut permissions = shannon_core::permissions::PermissionManager::new();

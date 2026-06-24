@@ -173,11 +173,11 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
                     _ => ChatRole::System,
                 };
                 let content = match &msg.content {
-                    shannon_core::api::MessageContent::Text(t) => t.clone(),
-                    shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                    shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                    shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                         .iter()
                         .filter_map(|b| match b {
-                            shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                            shannon_engine::api::ContentBlock::Text { text } => Some(text.as_str()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()
@@ -746,7 +746,7 @@ pub(crate) fn handle_plan(repl: &mut Repl, args: &str) -> Result<()> {
 }
 
 pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_core::compact::{CompactEngine, CompactStrategy};
+    use shannon_engine::compact::{CompactEngine, CompactStrategy};
 
     let Some(ref engine) = repl.query_engine else {
         repl.chat
@@ -831,12 +831,12 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
             for (i, msg) in history.iter().take(preview_count).enumerate() {
                 let role = &msg.role;
                 let preview_text: String = match &msg.content {
-                    shannon_core::api::MessageContent::Text(t) => t.chars().take(60).collect(),
-                    shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                    shannon_engine::api::MessageContent::Text(t) => t.chars().take(60).collect(),
+                    shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                         .iter()
                         .take(1)
                         .filter_map(|b| match b {
-                            shannon_core::api::ContentBlock::Text { text } => {
+                            shannon_engine::api::ContentBlock::Text { text } => {
                                 Some(text.chars().take(60).collect::<String>())
                             }
                             _ => None,
@@ -907,15 +907,15 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
 
     let (messages, compact_result) = if let Some(ref keywords) = focus_keywords {
         // For focus mode, compact only non-matching messages
-        let mut to_compact: Vec<shannon_core::api::Message> = Vec::new();
-        let mut to_keep: Vec<shannon_core::api::Message> = Vec::new();
+        let mut to_compact: Vec<shannon_engine::api::Message> = Vec::new();
+        let mut to_keep: Vec<shannon_engine::api::Message> = Vec::new();
         for msg in history {
             let text = match &msg.content {
-                shannon_core::api::MessageContent::Text(t) => t.to_lowercase(),
-                shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                shannon_engine::api::MessageContent::Text(t) => t.to_lowercase(),
+                shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                     .iter()
                     .filter_map(|b| match b {
-                        shannon_core::api::ContentBlock::Text { text } => Some(text.clone()),
+                        shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -983,19 +983,19 @@ pub(crate) fn handle_compact(repl: &mut Repl, args: &str) -> Result<()> {
 fn handle_compact_with_focus(
     repl: &mut Repl,
     keywords: Vec<&str>,
-    history: Vec<shannon_core::api::Message>,
-    compact_engine: shannon_core::compact::CompactEngine,
+    history: Vec<shannon_engine::api::Message>,
+    compact_engine: shannon_engine::compact::CompactEngine,
 ) -> Result<()> {
     let keyword_strings: Vec<String> = keywords.iter().map(|s| s.to_string()).collect();
-    let mut to_compact: Vec<shannon_core::api::Message> = Vec::new();
-    let mut to_keep: Vec<shannon_core::api::Message> = Vec::new();
+    let mut to_compact: Vec<shannon_engine::api::Message> = Vec::new();
+    let mut to_keep: Vec<shannon_engine::api::Message> = Vec::new();
     for msg in history {
         let text = match &msg.content {
-            shannon_core::api::MessageContent::Text(t) => t.to_lowercase(),
-            shannon_core::api::MessageContent::Blocks(blocks) => blocks
+            shannon_engine::api::MessageContent::Text(t) => t.to_lowercase(),
+            shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|b| match b {
-                    shannon_core::api::ContentBlock::Text { text } => Some(text.clone()),
+                    shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -1125,11 +1125,11 @@ pub(crate) fn handle_session(repl: &mut Repl, args: &str) -> Result<()> {
                     _ => "## Message",
                 };
                 let text = match &msg.content {
-                    shannon_core::api::MessageContent::Text(t) => t.clone(),
-                    shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                    shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                    shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                         .iter()
                         .filter_map(|b| match b {
-                            shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                            shannon_engine::api::ContentBlock::Text { text } => Some(text.as_str()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()

@@ -109,13 +109,13 @@ mod tests {
     #[test]
     fn test_conversation_token_estimation() {
         let mut conv = ConversationState::default();
-        conv.messages.push(crate::api::Message {
+        conv.messages.push(shannon_engine::api::Message {
             role: "user".to_string(),
-            content: crate::api::MessageContent::Text("Hello world".to_string()),
+            content: shannon_engine::api::MessageContent::Text("Hello world".to_string()),
         });
-        conv.messages.push(crate::api::Message {
+        conv.messages.push(shannon_engine::api::Message {
             role: "assistant".to_string(),
-            content: crate::api::MessageContent::Text("Hi there!".to_string()),
+            content: shannon_engine::api::MessageContent::Text("Hi there!".to_string()),
         });
 
         let tokens = conv.estimate_tokens();
@@ -136,9 +136,9 @@ mod tests {
         let mut conv = ConversationState::default();
         // Add small messages - under threshold
         for _ in 0..5 {
-            conv.messages.push(crate::api::Message {
+            conv.messages.push(shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text("Hi".to_string()),
+                content: shannon_engine::api::MessageContent::Text("Hi".to_string()),
             });
         }
 
@@ -146,9 +146,9 @@ mod tests {
 
         // Add many messages - over threshold
         for _ in 0..50 {
-            conv.messages.push(crate::api::Message {
+            conv.messages.push(shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text(
+                content: shannon_engine::api::MessageContent::Text(
                     "This is a longer message to increase token count".to_string(),
                 ),
             });
@@ -166,9 +166,9 @@ mod tests {
 
         let mut conv = ConversationState::default();
         for i in 0..8 {
-            conv.messages.push(crate::api::Message {
+            conv.messages.push(shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text(format!("Message {i}")),
+                content: shannon_engine::api::MessageContent::Text(format!("Message {i}")),
             });
         }
 
@@ -181,7 +181,7 @@ mod tests {
 
         // First two messages are preserved cache prefix
         match &conv.messages[0].content {
-            crate::api::MessageContent::Text(text) => {
+            shannon_engine::api::MessageContent::Text(text) => {
                 assert_eq!(text, "Message 0");
             }
             _ => panic!("First message should be preserved cache prefix"),
@@ -189,7 +189,7 @@ mod tests {
 
         // Summary inserted after cache prefix
         match &conv.messages[2].content {
-            crate::api::MessageContent::Text(text) => {
+            shannon_engine::api::MessageContent::Text(text) => {
                 assert!(text.contains("[Previous conversation summary]"));
                 assert!(text.contains("Summary of"));
             }
@@ -198,7 +198,7 @@ mod tests {
 
         // Last message is the most recent
         match &conv.messages[4].content {
-            crate::api::MessageContent::Text(text) => {
+            shannon_engine::api::MessageContent::Text(text) => {
                 assert_eq!(text, "Message 7");
             }
             _ => panic!("Last message should be the most recent"),
@@ -609,7 +609,7 @@ mod tests {
     fn test_usage_cache_tokens_deserialize() {
         // Simulate Anthropic API response with cache tokens
         let json = r#"{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":500}"#;
-        let usage: crate::api::Usage = serde_json::from_str(json).unwrap();
+        let usage: shannon_engine::api::Usage = serde_json::from_str(json).unwrap();
         assert_eq!(usage.input_tokens, 100);
         assert_eq!(usage.output_tokens, 50);
         assert_eq!(usage.cache_creation_input_tokens, 200);
@@ -620,7 +620,7 @@ mod tests {
     fn test_usage_cache_tokens_default() {
         // API response without cache tokens should default to 0
         let json = r#"{"input_tokens":100,"output_tokens":50}"#;
-        let usage: crate::api::Usage = serde_json::from_str(json).unwrap();
+        let usage: shannon_engine::api::Usage = serde_json::from_str(json).unwrap();
         assert_eq!(usage.cache_creation_input_tokens, 0);
         assert_eq!(usage.cache_read_input_tokens, 0);
     }
@@ -723,10 +723,10 @@ mod tests {
 
     #[test]
     fn test_conversation_estimate_tokens_blocks_content() {
-        use crate::api::{ContentBlock, MessageContent};
+        use shannon_engine::api::{ContentBlock, MessageContent};
         let mut conv = ConversationState::default();
 
-        conv.messages.push(crate::api::Message {
+        conv.messages.push(shannon_engine::api::Message {
             role: "assistant".to_string(),
             content: MessageContent::Blocks(vec![ContentBlock::Text {
                 text: "Hello from block".to_string(),
@@ -739,10 +739,10 @@ mod tests {
 
     #[test]
     fn test_conversation_estimate_tokens_tool_use_block() {
-        use crate::api::{ContentBlock, MessageContent};
+        use shannon_engine::api::{ContentBlock, MessageContent};
         let mut conv = ConversationState::default();
 
-        conv.messages.push(crate::api::Message {
+        conv.messages.push(shannon_engine::api::Message {
             role: "assistant".to_string(),
             content: MessageContent::Blocks(vec![ContentBlock::ToolUse {
                 id: "tu_1".to_string(),
@@ -771,9 +771,9 @@ mod tests {
         };
         let mut conv = ConversationState::default();
         for i in 0..4 {
-            conv.messages.push(crate::api::Message {
+            conv.messages.push(shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text(format!("Msg {i}")),
+                content: shannon_engine::api::MessageContent::Text(format!("Msg {i}")),
             });
         }
         conv.compress(&config);
@@ -789,9 +789,9 @@ mod tests {
         let mut conv = ConversationState::default();
         // Need enough messages that split_point > min_preserve (2)
         for i in 0..6 {
-            conv.messages.push(crate::api::Message {
+            conv.messages.push(shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text(format!("Message {i}")),
+                content: shannon_engine::api::MessageContent::Text(format!("Message {i}")),
             });
         }
         conv.compress(&config);
@@ -800,21 +800,21 @@ mod tests {
         assert_eq!(conv.messages.len(), 5);
         // First 2 preserved for cache prefix
         match &conv.messages[0].content {
-            crate::api::MessageContent::Text(text) => {
+            shannon_engine::api::MessageContent::Text(text) => {
                 assert_eq!(text, "Message 0");
             }
             _ => panic!("Expected text content"),
         }
         // Summary inserted after cache prefix
         match &conv.messages[2].content {
-            crate::api::MessageContent::Text(text) => {
+            shannon_engine::api::MessageContent::Text(text) => {
                 assert!(text.contains("[Previous conversation summary]"));
             }
             _ => panic!("Expected text content"),
         }
         // Recent messages preserved at the tail
         match &conv.messages[4].content {
-            crate::api::MessageContent::Text(text) => {
+            shannon_engine::api::MessageContent::Text(text) => {
                 assert_eq!(text, "Message 5");
             }
             _ => panic!("Expected text content"),
@@ -829,9 +829,11 @@ mod tests {
         };
         let mut conv = ConversationState::default();
         for _ in 0..1000 {
-            conv.messages.push(crate::api::Message {
+            conv.messages.push(shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Text("A very long message".repeat(100)),
+                content: shannon_engine::api::MessageContent::Text(
+                    "A very long message".repeat(100),
+                ),
             });
         }
         assert!(!conv.needs_compression(&config));
@@ -845,9 +847,9 @@ mod tests {
             ..Default::default()
         };
         let mut conv = ConversationState::default();
-        conv.messages.push(crate::api::Message {
+        conv.messages.push(shannon_engine::api::Message {
             role: "user".to_string(),
-            content: crate::api::MessageContent::Text("Hi".to_string()),
+            content: shannon_engine::api::MessageContent::Text("Hi".to_string()),
         });
         assert!(!conv.needs_compression(&config));
     }
@@ -999,11 +1001,13 @@ mod tests {
 
         // Need enough messages that split_point > min_preserve (2)
         for i in 0..8 {
-            state.messages.push(crate::api::Message {
+            state.messages.push(shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Blocks(vec![crate::api::ContentBlock::Text {
-                    text: format!("Message number {i}"),
-                }]),
+                content: shannon_engine::api::MessageContent::Blocks(vec![
+                    shannon_engine::api::ContentBlock::Text {
+                        text: format!("Message number {i}"),
+                    },
+                ]),
             });
         }
 
@@ -1021,24 +1025,30 @@ mod tests {
         };
 
         for i in 0..4 {
-            state.messages.push(crate::api::Message {
+            state.messages.push(shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: crate::api::MessageContent::Blocks(vec![crate::api::ContentBlock::Text {
-                    text: format!("Msg {i}"),
-                }]),
+                content: shannon_engine::api::MessageContent::Blocks(vec![
+                    shannon_engine::api::ContentBlock::Text {
+                        text: format!("Msg {i}"),
+                    },
+                ]),
             });
         }
 
         state.compress(&config);
 
         let len = state.messages.len();
-        if let crate::api::MessageContent::Blocks(blocks) = &state.messages[len - 2].content {
-            if let crate::api::ContentBlock::Text { text: t1 } = &blocks[0] {
+        if let shannon_engine::api::MessageContent::Blocks(blocks) =
+            &state.messages[len - 2].content
+        {
+            if let shannon_engine::api::ContentBlock::Text { text: t1 } = &blocks[0] {
                 assert!(t1.contains("Msg 2"));
             }
         }
-        if let crate::api::MessageContent::Blocks(blocks) = &state.messages[len - 1].content {
-            if let crate::api::ContentBlock::Text { text: t2 } = &blocks[0] {
+        if let shannon_engine::api::MessageContent::Blocks(blocks) =
+            &state.messages[len - 1].content
+        {
+            if let shannon_engine::api::ContentBlock::Text { text: t2 } = &blocks[0] {
                 assert!(t2.contains("Msg 3"));
             }
         }
@@ -1047,13 +1057,13 @@ mod tests {
     #[test]
     fn test_conversation_state_estimate_tokens_with_tool_use() {
         let mut state = ConversationState::default();
-        state.messages.push(crate::api::Message {
+        state.messages.push(shannon_engine::api::Message {
             role: "assistant".to_string(),
-            content: crate::api::MessageContent::Blocks(vec![
-                crate::api::ContentBlock::Text {
+            content: shannon_engine::api::MessageContent::Blocks(vec![
+                shannon_engine::api::ContentBlock::Text {
                     text: "Running bash command".to_string(),
                 },
-                crate::api::ContentBlock::ToolUse {
+                shannon_engine::api::ContentBlock::ToolUse {
                     id: "tu_1".to_string(),
                     name: "bash".to_string(),
                     input: serde_json::json!({"command": "ls -la"}),

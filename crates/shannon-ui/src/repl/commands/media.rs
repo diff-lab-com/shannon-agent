@@ -11,7 +11,7 @@ pub fn handle_image_paste_from_input(repl: &mut Repl) -> Result<()> {
 
 pub(crate) fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<()> {
     use base64::Engine;
-    use shannon_core::api::{ContentBlock, ImageSource};
+    use shannon_engine::api::{ContentBlock, ImageSource};
 
     let prompt = if prompt_args.is_empty() {
         "Describe this image.".to_string()
@@ -123,7 +123,7 @@ pub(crate) fn handle_image_paste(repl: &mut Repl, prompt_args: &str) -> Result<(
 /// Handle `/image url <url>` — fetch image from URL and send to API.
 pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
     use base64::Engine;
-    use shannon_core::api::{ContentBlock, ImageSource};
+    use shannon_engine::api::{ContentBlock, ImageSource};
 
     // Split URL from optional prompt
     let (url, prompt) = if input.starts_with("http://") || input.starts_with("https://") {
@@ -250,7 +250,7 @@ pub(crate) fn handle_image_url(repl: &mut Repl, input: &str) -> Result<()> {
 
 pub(crate) fn handle_image(repl: &mut Repl, args: &str) -> Result<()> {
     use base64::Engine;
-    use shannon_core::api::{ContentBlock, ImageSource};
+    use shannon_engine::api::{ContentBlock, ImageSource};
 
     let input = args.trim();
     if input.is_empty() {

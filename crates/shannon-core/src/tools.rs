@@ -152,7 +152,7 @@ pub struct ToolRegistry {
     /// Schema cache: (version, JSON schema Value). Invalidated on register/unregister.
     schema_cache: std::sync::RwLock<Option<(u64, Value)>>,
     /// Tool definitions cache: (version, Vec<ToolDefinition>). Invalidated on register/unregister.
-    defs_cache: std::sync::RwLock<Option<(u64, Vec<crate::api::ToolDefinition>)>>,
+    defs_cache: std::sync::RwLock<Option<(u64, Vec<shannon_engine::api::ToolDefinition>)>>,
     /// Version counter for cache invalidation.
     version: std::sync::atomic::AtomicU64,
     /// Concurrent TTL-based cache for streaming tool results.
@@ -709,7 +709,7 @@ impl ToolRegistry {
 
     /// Get all tools as ToolDefinition for Claude API (respects the allowed_tools filter
     /// and excludes deferred tools). Results are cached and invalidated on register/unregister.
-    pub fn to_tool_definitions(&self) -> Vec<crate::api::ToolDefinition> {
+    pub fn to_tool_definitions(&self) -> Vec<shannon_engine::api::ToolDefinition> {
         let ver = self.version.load(std::sync::atomic::Ordering::Relaxed);
         {
             let cache = Self::recover_lock(self.defs_cache.read());
@@ -721,10 +721,10 @@ impl ToolRegistry {
         }
         // Cache miss — rebuild
         let deferred = Self::recover_lock(self.deferred.read());
-        let defs: Vec<crate::api::ToolDefinition> = Self::recover_lock(self.tools.read())
+        let defs: Vec<shannon_engine::api::ToolDefinition> = Self::recover_lock(self.tools.read())
             .values()
             .filter(|t| self.is_allowed(t.name()) && !deferred.contains(t.name()))
-            .map(|tool| crate::api::ToolDefinition {
+            .map(|tool| shannon_engine::api::ToolDefinition {
                 name: tool.name().to_string(),
                 description: tool.description().to_string(),
                 input_schema: tool.input_schema(),

@@ -80,7 +80,7 @@ pub(crate) fn reload_custom_commands(repl: &mut Repl) {
 }
 
 pub(crate) fn handle_hooks(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_core::hooks::HookManager;
+    use shannon_engine::hooks::HookManager;
 
     let mut mgr = HookManager::new();
     if let Err(e) = mgr.load() {

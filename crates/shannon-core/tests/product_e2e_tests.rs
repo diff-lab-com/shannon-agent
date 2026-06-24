@@ -18,18 +18,18 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use mockito::{Server, ServerGuard};
 use serde_json::json;
-use shannon_core::api::{
-    ContentBlock, ContentDelta, LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
-    RetryConfig, StreamEvent,
-};
 use shannon_core::permissions::{PermissionChoice, PermissionManager};
 use shannon_core::query_engine::CostTracker;
 use shannon_core::query_engine::{
     QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
 };
-use shannon_core::state::StateManager;
-use shannon_core::streaming_tool_executor::{StreamingToolExecutor, ToolStatus};
 use shannon_core::tools::{Tool, ToolError, ToolOutput, ToolRegistry, ToolResult};
+use shannon_engine::api::{
+    ContentBlock, ContentDelta, LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
+    RetryConfig, StreamEvent,
+};
+use shannon_engine::state::StateManager;
+use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus};
 use uuid::Uuid;
 
 // ============================================================================
@@ -794,7 +794,7 @@ fn test_session_persistence_round_trip() {
         },
     ];
 
-    let metadata = shannon_core::state::SessionPersistMetadata {
+    let metadata = shannon_engine::state::SessionPersistMetadata {
         model: "claude-sonnet-4".to_string(),
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
@@ -1160,7 +1160,7 @@ async fn test_e2e_openai_streaming_assembles_text() {
 
 #[test]
 fn test_is_ollama_malformed_message_patterns() {
-    use shannon_core::api::error::is_ollama_malformed_message;
+    use shannon_engine::api::error::is_ollama_malformed_message;
 
     // Original patterns
     assert!(is_ollama_malformed_message("can't find closing '}' symbol"));

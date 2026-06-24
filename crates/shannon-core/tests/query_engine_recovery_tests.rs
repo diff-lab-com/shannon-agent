@@ -11,12 +11,12 @@
 mod engine_recovery_tests {
     use mockito::{Server, ServerGuard};
     use serde_json::{Value, json};
-    use shannon_core::api::LlmClientConfig;
-    use shannon_core::api::LlmProvider;
     use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEngineConfig, QueryMetadata};
-    use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
+    use shannon_engine::api::LlmClientConfig;
+    use shannon_engine::api::LlmProvider;
+    use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;
 
@@ -31,14 +31,14 @@ mod engine_recovery_tests {
             api_version: "2023-06-01".to_string(),
             provider: LlmProvider::Anthropic,
             extra_headers: HashMap::new(),
-            retry_config: shannon_core::api::RetryConfig::default(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 0, // No retries in tests
             budget_tokens: None,
             reasoning_effort: None,
         };
-        let client = shannon_core::api::LlmClient::new(config);
+        let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();
         let permissions = PermissionManager::new();
         let state = StateManager::new();
@@ -113,7 +113,7 @@ mod engine_recovery_tests {
 
         // Add initial conversation state
         engine.add_user_message("First message".to_string());
-        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "First response".to_string(),
         }]);
 
@@ -552,7 +552,7 @@ mod engine_recovery_tests {
         // First message should be the user's clean input
         assert_eq!(messages[0].role, "user");
         match &messages[0].content {
-            shannon_core::api::MessageContent::Text(t) => {
+            shannon_engine::api::MessageContent::Text(t) => {
                 assert_eq!(
                     t, "Write a short story",
                     "User message should be the clean input, not display-formatted"
@@ -564,7 +564,7 @@ mod engine_recovery_tests {
         // Second message should be the assistant's clean response
         assert_eq!(messages[1].role, "assistant");
         match &messages[1].content {
-            shannon_core::api::MessageContent::Text(t) => {
+            shannon_engine::api::MessageContent::Text(t) => {
                 assert_eq!(
                     t, story_text,
                     "Assistant message should be clean AI text, not display-formatted"
@@ -575,11 +575,11 @@ mod engine_recovery_tests {
 
         // The assistant message must NOT contain display artifacts
         let assistant_text = match &messages[1].content {
-            shannon_core::api::MessageContent::Text(t) => t.clone(),
-            shannon_core::api::MessageContent::Blocks(blocks) => blocks
+            shannon_engine::api::MessageContent::Text(t) => t.clone(),
+            shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|b| match b {
-                    shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                    shannon_engine::api::ContentBlock::Text { text } => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -702,7 +702,7 @@ mod engine_recovery_tests {
 
         // CRITICAL: Verify turn 1 content is preserved in the history
         let user1_text = match &turn2_messages[0].content {
-            shannon_core::api::MessageContent::Text(t) => t.clone(),
+            shannon_engine::api::MessageContent::Text(t) => t.clone(),
             _ => panic!("Expected text"),
         };
         assert!(
@@ -711,7 +711,7 @@ mod engine_recovery_tests {
         );
 
         let assistant1_text = match &turn2_messages[1].content {
-            shannon_core::api::MessageContent::Text(t) => t.clone(),
+            shannon_engine::api::MessageContent::Text(t) => t.clone(),
             _ => panic!("Expected text"),
         };
         assert!(
@@ -720,7 +720,7 @@ mod engine_recovery_tests {
         );
 
         let user2_text = match &turn2_messages[2].content {
-            shannon_core::api::MessageContent::Text(t) => t.clone(),
+            shannon_engine::api::MessageContent::Text(t) => t.clone(),
             _ => panic!("Expected text"),
         };
         assert!(
@@ -738,21 +738,21 @@ mod engine_recovery_tests {
 
         // Simulate conversation from ConversationUpdate
         let messages = vec![
-            shannon_core::api::Message {
+            shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: shannon_core::api::MessageContent::Text("Write a poem".to_string()),
+                content: shannon_engine::api::MessageContent::Text("Write a poem".to_string()),
             },
-            shannon_core::api::Message {
+            shannon_engine::api::Message {
                 role: "assistant".to_string(),
-                content: shannon_core::api::MessageContent::Text("Roses are red...".to_string()),
+                content: shannon_engine::api::MessageContent::Text("Roses are red...".to_string()),
             },
-            shannon_core::api::Message {
+            shannon_engine::api::Message {
                 role: "user".to_string(),
-                content: shannon_core::api::MessageContent::Text("Make it longer".to_string()),
+                content: shannon_engine::api::MessageContent::Text("Make it longer".to_string()),
             },
-            shannon_core::api::Message {
+            shannon_engine::api::Message {
                 role: "assistant".to_string(),
-                content: shannon_core::api::MessageContent::Text(
+                content: shannon_engine::api::MessageContent::Text(
                     "Roses are red, violets are blue...".to_string(),
                 ),
             },
@@ -769,7 +769,7 @@ mod engine_recovery_tests {
 
         // Verify content preserved exactly
         match &history[1].content {
-            shannon_core::api::MessageContent::Text(t) => {
+            shannon_engine::api::MessageContent::Text(t) => {
                 assert_eq!(t, "Roses are red...");
             }
             _ => panic!("Expected text content"),
@@ -792,14 +792,14 @@ mod engine_recovery_tests {
             api_version: String::new(),
             provider: LlmProvider::Ollama,
             extra_headers: HashMap::new(),
-            retry_config: shannon_core::api::RetryConfig::new(0, 0, 0),
+            retry_config: shannon_engine::api::RetryConfig::new(0, 0, 0),
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
         };
-        let client = shannon_core::api::LlmClient::new(config);
+        let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();
         let permissions = PermissionManager::new();
         let state = StateManager::new();

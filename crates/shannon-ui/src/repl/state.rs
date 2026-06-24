@@ -46,7 +46,7 @@ pub struct ReplState {
     /// Model name being used
     pub model: Option<String>,
     /// Provider associated with the selected model (synced to QueryEngine)
-    pub selected_provider: Option<shannon_core::api::LlmProvider>,
+    pub selected_provider: Option<shannon_engine::api::LlmProvider>,
     /// Resolved context window size (from engine: Ollama num_ctx > model registry)
     pub context_window: usize,
     /// Total tokens used

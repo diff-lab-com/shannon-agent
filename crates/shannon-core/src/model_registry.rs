@@ -7,8 +7,8 @@
 //! Also provides [`ModelRouter`] for intelligent model selection based on
 //! task type, cost, and speed requirements.
 
-use crate::api::LlmProvider;
 use serde::{Deserialize, Serialize};
+use shannon_engine::api::LlmProvider;
 
 /// Model capability flags for routing decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1000,7 +1000,7 @@ impl ModelRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::types::WireFormat;
+    use shannon_engine::api::types::WireFormat;
 
     #[test]
     fn test_models_for_provider_anthropic() {

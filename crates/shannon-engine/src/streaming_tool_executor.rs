@@ -18,7 +18,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use shannon_core::streaming_tool_executor::StreamingToolExecutor;
+//! use shannon_engine::streaming_tool_executor::StreamingToolExecutor;
 //!
 //! let executor = StreamingToolExecutor::new(32);
 //! let tool_id = executor.submit_tool("Bash", serde_json::json!({"command": "ls"}), false);

@@ -10,7 +10,7 @@ impl super::Repl {
     /// query engine so the next user message continues the prior conversation.
     /// Also populates the chat widget so the user can see the restored history.
     /// Returns the number of messages restored.
-    pub fn restore_session(&mut self, session_data: shannon_core::state::SessionData) -> usize {
+    pub fn restore_session(&mut self, session_data: shannon_engine::state::SessionData) -> usize {
         let msg_count = session_data.messages.len();
         if msg_count == 0 {
             return 0;

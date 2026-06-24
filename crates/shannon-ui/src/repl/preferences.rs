@@ -3,7 +3,7 @@
 //! Stored at `~/.shannon/preferences.json`. Loaded on startup, saved whenever
 //! the user changes model or provider via `/model`, model picker, or input dialog.
 
-use shannon_core::api::LlmProvider;
+use shannon_engine::api::LlmProvider;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
