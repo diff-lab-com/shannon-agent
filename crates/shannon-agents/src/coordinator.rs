@@ -13,7 +13,7 @@ use crate::{
     worktree::{WorktreeConfig, WorktreeManager},
 };
 use serde::{Deserialize, Serialize};
-use shannon_core::hooks::{HookEvent, HookManager};
+use shannon_engine::hooks::{HookEvent, HookManager};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -3139,7 +3139,7 @@ mod tests {
         };
         assert_eq!(
             event.event_type(),
-            shannon_core::hooks::HookEventType::TaskCreated
+            shannon_engine::hooks::HookEventType::TaskCreated
         );
         assert_eq!(event.match_subject(), "implement auth");
         // Verify JSON roundtrip
@@ -3155,7 +3155,7 @@ mod tests {
         };
         assert_eq!(
             event.event_type(),
-            shannon_core::hooks::HookEventType::TaskCompleted
+            shannon_engine::hooks::HookEventType::TaskCompleted
         );
         assert_eq!(event.match_subject(), "fix bug");
         let json = serde_json::to_vec(&event).unwrap();
@@ -3170,7 +3170,7 @@ mod tests {
         };
         assert_eq!(
             event.event_type(),
-            shannon_core::hooks::HookEventType::SubagentStart
+            shannon_engine::hooks::HookEventType::SubagentStart
         );
         assert_eq!(event.match_subject(), "agent-007");
     }
@@ -3183,7 +3183,7 @@ mod tests {
         };
         assert_eq!(
             event.event_type(),
-            shannon_core::hooks::HookEventType::SubagentStop
+            shannon_engine::hooks::HookEventType::SubagentStop
         );
         assert_eq!(event.match_subject(), "agent-007");
     }
@@ -3196,7 +3196,7 @@ mod tests {
         };
         assert_eq!(
             event.event_type(),
-            shannon_core::hooks::HookEventType::WorktreeCreate
+            shannon_engine::hooks::HookEventType::WorktreeCreate
         );
         assert_eq!(event.match_subject(), "/tmp/worktree-1");
     }
@@ -3208,7 +3208,7 @@ mod tests {
         };
         assert_eq!(
             event.event_type(),
-            shannon_core::hooks::HookEventType::WorktreeRemove
+            shannon_engine::hooks::HookEventType::WorktreeRemove
         );
         assert_eq!(event.match_subject(), "/tmp/worktree-1");
     }

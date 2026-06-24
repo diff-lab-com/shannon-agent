@@ -744,7 +744,7 @@ data: {"type":"message_stop"}
     /// Verify system prompt with cache_control marker is sent correctly
     #[tokio::test]
     async fn test_anthropic_request_with_cache_control_system() {
-        use shannon_core::api::types::{CacheControl, SystemContentBlock};
+        use shannon_engine::api::types::{CacheControl, SystemContentBlock};
 
         let block = SystemContentBlock {
             block_type: "text".to_string(),
@@ -843,8 +843,8 @@ mod e2e_client_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
     use serde_json::json;
-    use shannon_core::api::{LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent};
     use shannon_core::error::ApiKeyGuard;
+    use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent};
 
     /// Create an LlmClient pointing at the mock server.
     fn make_client(server: &ServerGuard, provider: LlmProvider) -> LlmClient {
@@ -857,7 +857,7 @@ mod e2e_client_tests {
             api_version: "2023-06-01".to_string(),
             provider,
             extra_headers: Default::default(),
-            retry_config: shannon_core::api::RetryConfig::default(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
@@ -1032,8 +1032,8 @@ mod e2e_client_tests {
         let mut text = String::new();
         while let Some(result) = stream.next().await {
             let event = result.unwrap();
-            if let shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
-                if let shannon_core::api::ContentDelta::TextDelta { text: t } = delta {
+            if let shannon_engine::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
+                if let shannon_engine::api::ContentDelta::TextDelta { text: t } = delta {
                     text.push_str(&t);
                 }
             }
@@ -1072,12 +1072,12 @@ mod e2e_client_tests {
         let mut tool_starts = Vec::new();
         while let Some(result) = stream.next().await {
             let event = result.unwrap();
-            if let shannon_core::api::StreamEvent::ContentBlockStart {
+            if let shannon_engine::api::StreamEvent::ContentBlockStart {
                 index,
                 content_block,
             } = event
             {
-                if let shannon_core::api::ContentBlock::ToolUse { name, .. } = content_block {
+                if let shannon_engine::api::ContentBlock::ToolUse { name, .. } = content_block {
                     tool_starts.push((index, name));
                 }
             }
@@ -1118,8 +1118,8 @@ mod e2e_client_tests {
         let mut text = String::new();
         while let Some(result) = stream.next().await {
             let event = result.unwrap();
-            if let shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
-                if let shannon_core::api::ContentDelta::TextDelta { text: t } = delta {
+            if let shannon_engine::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
+                if let shannon_engine::api::ContentDelta::TextDelta { text: t } = delta {
                     text.push_str(&t);
                 }
             }
@@ -1134,7 +1134,7 @@ mod retry_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
     use serde_json::json;
-    use shannon_core::api::{
+    use shannon_engine::api::{
         LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent, RetryConfig,
     };
 
@@ -1396,8 +1396,8 @@ mod retry_tests {
         let mut text = String::new();
         while let Some(result) = stream.next().await {
             let event = result.unwrap();
-            if let shannon_core::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
-                if let shannon_core::api::ContentDelta::TextDelta { text: t } = delta {
+            if let shannon_engine::api::StreamEvent::ContentBlockDelta { delta, .. } = event {
+                if let shannon_engine::api::ContentDelta::TextDelta { text: t } = delta {
                     text.push_str(&t);
                 }
             }
@@ -1413,11 +1413,11 @@ mod query_pipeline_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
     use serde_json::json;
-    use shannon_core::api::{LlmClient, LlmClientConfig, LlmProvider};
     use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
-    use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
+    use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider};
+    use shannon_engine::state::StateManager;
     use uuid::Uuid;
 
     /// Guard to set ANTHROPIC_API_KEY for pipeline tests so that the
@@ -1455,7 +1455,7 @@ mod query_pipeline_tests {
             api_version: "2023-06-01".to_string(),
             provider: LlmProvider::Anthropic,
             extra_headers: Default::default(),
-            retry_config: shannon_core::api::RetryConfig::default(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,
@@ -1762,7 +1762,7 @@ mod query_pipeline_tests {
 
         // Add messages to conversation history
         engine.add_user_message("First message".to_string());
-        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "Turn 1 response".to_string(),
         }]);
 
@@ -2042,7 +2042,7 @@ mod query_pipeline_tests {
         assert_eq!(turn1_read, 0);
 
         engine.add_user_message("First".to_string());
-        engine.add_assistant_message(vec![shannon_core::api::ContentBlock::Text {
+        engine.add_assistant_message(vec![shannon_engine::api::ContentBlock::Text {
             text: "Turn 1".to_string(),
         }]);
 
@@ -2084,8 +2084,8 @@ mod query_pipeline_tests {
 
 #[cfg(test)]
 mod conversation_export_tests {
-    use shannon_core::api::{ContentBlock, Message, MessageContent};
-    use shannon_core::state::{SessionData, SessionPersistMetadata, StateManager};
+    use shannon_engine::api::{ContentBlock, Message, MessageContent};
+    use shannon_engine::state::{SessionData, SessionPersistMetadata, StateManager};
     use uuid::Uuid;
 
     /// Helper to create SessionPersistMetadata with sensible defaults.
@@ -2312,7 +2312,7 @@ mod conversation_export_tests {
                 role: "user".to_string(),
                 content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
                     tool_use_id: "toolu_123".to_string(),
-                    content: Some(shannon_core::api::ToolResultContent::Single(
+                    content: Some(shannon_engine::api::ToolResultContent::Single(
                         "file1.txt\nfile2.txt".to_string(),
                     )),
                     is_error: Some(false),
@@ -2335,13 +2335,13 @@ mod conversation_export_tests {
 mod permission_flow_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
-    use shannon_core::api::{LlmClient, LlmClientConfig, LlmProvider};
     use shannon_core::permissions::{PermissionChoice, PermissionManager};
     use shannon_core::query_engine::{
         PermissionRequest, QueryContext, QueryEngine, QueryEvent, QueryMetadata,
     };
-    use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
+    use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider};
+    use shannon_engine::state::StateManager;
     use uuid::Uuid;
 
     struct AnthropicKeyGuard(Option<std::ffi::OsString>);
@@ -2377,7 +2377,7 @@ mod permission_flow_tests {
             api_version: "2023-06-01".to_string(),
             provider: LlmProvider::Anthropic,
             extra_headers: Default::default(),
-            retry_config: shannon_core::api::RetryConfig::default(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 3,

@@ -5,8 +5,8 @@
 //! `shannon_core::LlmClient`.
 
 use async_trait::async_trait;
-use shannon_core::api::{ContentBlock, LlmClient, Message, MessageContent};
 use shannon_core::tools::ToolOutput;
+use shannon_engine::api::{ContentBlock, LlmClient, Message, MessageContent};
 use std::collections::HashMap;
 use std::sync::Arc;
 

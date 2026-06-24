@@ -6,15 +6,15 @@
 
 #[cfg(test)]
 mod compaction_quality_tests {
-    use shannon_core::compact::protection::{MessageProtector, compact_messages_with_protection};
-    use shannon_core::compact::summarizer::RuleBasedSummarizer;
-    use shannon_core::compact::types::CompactConfig;
     use shannon_engine::api::{ContentBlock, Message, MessageContent, ToolResultContent};
     use shannon_engine::compact::compact_messages::CompactionStrategy;
     use shannon_engine::compact::engine::CompactEngine;
     use shannon_engine::compact::helpers::{
         estimate_message_tokens, estimate_tokens, extract_text_content,
     };
+    use shannon_engine::compact::protection::{MessageProtector, compact_messages_with_protection};
+    use shannon_engine::compact::summarizer::RuleBasedSummarizer;
+    use shannon_engine::compact::types::CompactConfig;
 
     // -- Helpers ---------------------------------------------------------------
 

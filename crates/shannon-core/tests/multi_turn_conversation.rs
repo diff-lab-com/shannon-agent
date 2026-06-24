@@ -1,8 +1,8 @@
 //! Multi-turn conversation tests: history accumulation, context compaction,
 //! and message interleaving.
 
-use shannon_core::api::{ContentBlock, Message, MessageContent, ToolResultContent};
 use shannon_core::query_engine::{CompressionStrategy, QueryEngineConfig};
+use shannon_engine::api::{ContentBlock, Message, MessageContent, ToolResultContent};
 
 /// Re-implementation of TestConversation for testing since the module is private.
 /// Mirrors `query_engine::streaming::TestConversation` exactly.
@@ -998,7 +998,7 @@ fn test_conversation_operations_performance() {
 // rule-based summarizer (no LLM API calls), which is the default
 // mode used by the /compact command.
 
-use shannon_core::compact::CompactEngine;
+use shannon_engine::compact::CompactEngine;
 
 fn build_conversation(turns: usize) -> Vec<Message> {
     let mut messages = Vec::new();
@@ -1032,7 +1032,7 @@ fn test_compact_engine_empty_history() {
     assert!(result.is_err(), "Should error on empty messages");
     assert!(matches!(
         result.unwrap_err(),
-        shannon_core::compact::CompactError::NoMessagesToCompact
+        shannon_engine::compact::CompactError::NoMessagesToCompact
     ));
 }
 
@@ -1055,7 +1055,7 @@ fn test_compact_engine_normal_conversation() {
     let mut engine = CompactEngine::with_defaults().unwrap();
     let mut messages = build_conversation(20);
     let original_len = messages.len();
-    let _original_tokens = shannon_core::compact::estimate_tokens(&messages);
+    let _original_tokens = shannon_engine::compact::estimate_tokens(&messages);
 
     let result = engine.compact(&mut messages);
     assert!(
@@ -2008,10 +2008,10 @@ fn test_error_path_does_not_lose_prior_context() {
 /// `"end_turn"` so the engine's finalization code path always triggers.
 #[test]
 fn test_openai_stop_reason_normalized_to_end_turn() {
-    use shannon_core::api::adapter::normalize_sse_event;
-    use shannon_core::api::{LlmProvider, StreamEvent};
+    use shannon_engine::api::adapter::normalize_sse_event;
+    use shannon_engine::api::{LlmProvider, StreamEvent};
 
-    let mut state = shannon_core::api::adapter::OpenaiStreamState::new();
+    let mut state = shannon_engine::api::adapter::OpenaiStreamState::new();
 
     // Simulate the final OpenAI streaming chunk with finish_reason "stop"
     let chunk = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}]}"#;
@@ -2034,10 +2034,10 @@ fn test_openai_stop_reason_normalized_to_end_turn() {
 /// should normalize the stop reason in the usage-bearing MessageDelta.
 #[test]
 fn test_openai_usage_chunk_with_stop_reason_normalized() {
-    use shannon_core::api::adapter::normalize_sse_event;
-    use shannon_core::api::{LlmProvider, StreamEvent};
+    use shannon_engine::api::adapter::normalize_sse_event;
+    use shannon_engine::api::{LlmProvider, StreamEvent};
 
-    let mut state = shannon_core::api::adapter::OpenaiStreamState::new();
+    let mut state = shannon_engine::api::adapter::OpenaiStreamState::new();
 
     // OpenAI can send usage + finish_reason in the same chunk
     let chunk = r#"{"choices":[{"delta":{},"finish_reason":"stop","index":0}],"usage":{"prompt_tokens":10,"completion_tokens":5}}"#;
@@ -2062,8 +2062,8 @@ fn test_openai_usage_chunk_with_stop_reason_normalized() {
 /// must also normalize to "end_turn".
 #[test]
 fn test_openai_non_streaming_stop_reason_normalized() {
-    use shannon_core::api::LlmProvider;
-    use shannon_core::api::adapter::normalize_response;
+    use shannon_engine::api::LlmProvider;
+    use shannon_engine::api::adapter::normalize_response;
 
     let resp = r#"{"id":"chatcmpl-1","choices":[{"index":0,"message":{"role":"assistant","content":"Hello!"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}"#;
     let result = normalize_response(resp, &LlmProvider::OpenAI).unwrap();
@@ -3047,14 +3047,14 @@ fn test_compression_preserves_story_details_for_followup_questions() {
 #[cfg(test)]
 mod integration_tests {
     use mockito::{Server, ServerGuard};
-    use shannon_core::api::LlmClientConfig;
-    use shannon_core::api::LlmProvider;
     use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::{
         QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
     };
-    use shannon_core::state::StateManager;
     use shannon_core::tools::ToolRegistry;
+    use shannon_engine::api::LlmClientConfig;
+    use shannon_engine::api::LlmProvider;
+    use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;
 
@@ -3068,14 +3068,14 @@ mod integration_tests {
             api_version: "2023-06-01".to_string(),
             provider: LlmProvider::Anthropic,
             extra_headers: HashMap::new(),
-            retry_config: shannon_core::api::RetryConfig::default(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
         };
-        let client = shannon_core::api::LlmClient::new(config);
+        let client = shannon_engine::api::LlmClient::new(config);
         let tools = ToolRegistry::new();
         let permissions = PermissionManager::new();
         let state = StateManager::new();
@@ -3146,7 +3146,7 @@ mod integration_tests {
     /// Extract the first ConversationUpdate's messages from events.
     fn extract_conversation_update(
         events: &[QueryEvent],
-    ) -> Option<Vec<shannon_core::api::Message>> {
+    ) -> Option<Vec<shannon_engine::api::Message>> {
         events.iter().find_map(|e| match e {
             QueryEvent::ConversationUpdate { messages, .. } => Some(messages.clone()),
             _ => None,
@@ -3165,13 +3165,13 @@ mod integration_tests {
     }
 
     /// Helper: get text content from a Message.
-    fn message_text(msg: &shannon_core::api::Message) -> String {
+    fn message_text(msg: &shannon_engine::api::Message) -> String {
         match &msg.content {
-            shannon_core::api::MessageContent::Text(t) => t.clone(),
-            shannon_core::api::MessageContent::Blocks(blocks) => blocks
+            shannon_engine::api::MessageContent::Text(t) => t.clone(),
+            shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                 .iter()
                 .filter_map(|b| match b {
-                    shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                    shannon_engine::api::ContentBlock::Text { text } => Some(text.as_str()),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

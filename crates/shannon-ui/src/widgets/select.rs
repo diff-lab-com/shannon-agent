@@ -755,10 +755,10 @@ mod tests {
 
 // ── Model Picker Widget ────────────────────────────────────────────
 
-use shannon_core::api::LlmProvider;
 use shannon_core::model_registry::{
     ModelInfo, all_providers, detect_local_models, models_for_provider, provider_display_name,
 };
+use shannon_engine::api::LlmProvider;
 
 const MAX_VISIBLE_MODELS: usize = 10;
 

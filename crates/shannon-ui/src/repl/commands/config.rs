@@ -1,8 +1,8 @@
 use super::super::Repl;
 use crate::{Result, widgets::ChatRole};
 use rust_i18n::t;
-use shannon_core::api::LlmProvider;
 use shannon_core::model_registry;
+use shannon_engine::api::LlmProvider;
 use shannon_types::recover_lock;
 
 pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {

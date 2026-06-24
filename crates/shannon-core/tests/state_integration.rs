@@ -11,8 +11,8 @@
 
 #[cfg(test)]
 mod state_tests {
-    use shannon_core::api::{Message, MessageContent};
-    use shannon_core::state::{SessionData, SessionPersistMetadata, StateManager};
+    use shannon_engine::api::{Message, MessageContent};
+    use shannon_engine::state::{SessionData, SessionPersistMetadata, StateManager};
     use tempfile::TempDir;
     use uuid::Uuid;
 

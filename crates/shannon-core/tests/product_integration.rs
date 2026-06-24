@@ -588,7 +588,7 @@ mod tool_registry_tests {
 // ============================================================================
 
 mod config_tests {
-    use shannon_core::api::LlmClientConfig;
+    use shannon_engine::api::LlmClientConfig;
 
     #[test]
     fn test_default_config_has_provider() {
@@ -644,8 +644,8 @@ mod permissions_tests {
 // ============================================================================
 
 mod state_extra_tests {
-    use shannon_core::api::{Message, MessageContent};
-    use shannon_core::state::StateManager;
+    use shannon_engine::api::{Message, MessageContent};
+    use shannon_engine::state::StateManager;
     use uuid::Uuid;
 
     fn make_mgr() -> (StateManager, tempfile::TempDir) {

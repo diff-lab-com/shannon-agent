@@ -11,13 +11,13 @@ mod tool_use_tests {
     use futures::StreamExt;
     use mockito::{Server, ServerGuard};
     use serde_json::{Value, json};
-    use shannon_core::api::{LlmClientConfig, LlmProvider};
     use shannon_core::permissions::PermissionManager;
     use shannon_core::query_engine::{
         QueryContext, QueryEngine, QueryEngineConfig, QueryEvent, QueryMetadata,
     };
-    use shannon_core::state::StateManager;
     use shannon_core::tools::{Tool, ToolOutput, ToolRegistry, ToolResult};
+    use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_engine::state::StateManager;
     use std::collections::HashMap;
     use uuid::Uuid;
 
@@ -128,14 +128,14 @@ mod tool_use_tests {
             api_version: "2023-06-01".to_string(),
             provider: LlmProvider::Anthropic,
             extra_headers: HashMap::new(),
-            retry_config: shannon_core::api::RetryConfig::default(),
+            retry_config: shannon_engine::api::RetryConfig::default(),
             fallback_provider: None,
             fallback_base_url: None,
             max_stream_reconnects: 0,
             budget_tokens: None,
             reasoning_effort: None,
         };
-        let client = shannon_core::api::LlmClient::new(config);
+        let client = shannon_engine::api::LlmClient::new(config);
         QueryEngine::new(
             client,
             registry,
@@ -568,11 +568,11 @@ mod tool_use_tests {
         let all_text: String = update2
             .iter()
             .map(|m| match &m.content {
-                shannon_core::api::MessageContent::Text(t) => t.clone(),
-                shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                     .iter()
                     .filter_map(|b| match b {
-                        shannon_core::api::ContentBlock::Text { text } => Some(text.as_str()),
+                        shannon_engine::api::ContentBlock::Text { text } => Some(text.as_str()),
                         _ => None,
                     })
                     .collect(),

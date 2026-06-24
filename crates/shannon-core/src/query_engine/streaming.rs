@@ -1,7 +1,7 @@
 //! Streaming response handling and conversation state management.
 
-use crate::api::Message;
 use crate::query_engine::types::QueryEngineConfig;
+use shannon_engine::api::Message;
 
 /// Conversation state for tracking messages
 #[derive(Debug, Clone)]
@@ -27,36 +27,37 @@ impl ConversationState {
     /// Estimate the token count of the current conversation.
     /// Uses CJK-aware token estimation for better accuracy with mixed-language content.
     pub fn estimate_tokens(&self) -> usize {
-        use crate::compact::helpers::estimate_text_tokens;
+        use shannon_engine::compact::helpers::estimate_text_tokens;
         let mut total: usize = 0;
         for msg in &self.messages {
             total += match &msg.content {
-                crate::api::MessageContent::Text(text) => estimate_text_tokens(text),
-                crate::api::MessageContent::Blocks(blocks) => {
+                shannon_engine::api::MessageContent::Text(text) => estimate_text_tokens(text),
+                shannon_engine::api::MessageContent::Blocks(blocks) => {
                     let mut block_tokens = 0;
                     for block in blocks {
                         match block {
-                            crate::api::ContentBlock::Text { text } => {
+                            shannon_engine::api::ContentBlock::Text { text } => {
                                 block_tokens += estimate_text_tokens(text)
                             }
-                            crate::api::ContentBlock::ToolUse { name, input, .. } => {
+                            shannon_engine::api::ContentBlock::ToolUse { name, input, .. } => {
                                 block_tokens += estimate_text_tokens(name);
                                 block_tokens += serde_json::to_string(input)
                                     .map_or(0, |s| estimate_text_tokens(&s));
                             }
-                            crate::api::ContentBlock::ToolResult {
-                                content: Some(c), ..
+                            shannon_engine::api::ContentBlock::ToolResult {
+                                content: Some(c),
+                                ..
                             } => match c {
-                                crate::api::ToolResultContent::Single(s) => {
+                                shannon_engine::api::ToolResultContent::Single(s) => {
                                     block_tokens += estimate_text_tokens(s)
                                 }
-                                crate::api::ToolResultContent::Multiple(blocks) => {
+                                shannon_engine::api::ToolResultContent::Multiple(blocks) => {
                                     for b in blocks {
                                         match b {
-                                            crate::api::ContentBlock::Text { text } => {
+                                            shannon_engine::api::ContentBlock::Text { text } => {
                                                 block_tokens += estimate_text_tokens(text)
                                             }
-                                            crate::api::ContentBlock::ToolUse {
+                                            shannon_engine::api::ContentBlock::ToolUse {
                                                 name,
                                                 input,
                                                 ..
@@ -70,8 +71,10 @@ impl ConversationState {
                                     }
                                 }
                             },
-                            crate::api::ContentBlock::ToolResult { content: None, .. } => {}
-                            crate::api::ContentBlock::Image { .. } => block_tokens += 100,
+                            shannon_engine::api::ContentBlock::ToolResult {
+                                content: None, ..
+                            } => {}
+                            shannon_engine::api::ContentBlock::Image { .. } => block_tokens += 100,
                             _ => {}
                         }
                     }
@@ -85,7 +88,7 @@ impl ConversationState {
     /// Estimate tokens including an optional system prompt.
     /// This gives a more accurate picture of total context usage.
     pub fn estimate_tokens_with_system_prompt(&self, system_prompt: Option<&str>) -> usize {
-        use crate::compact::helpers::estimate_text_tokens;
+        use shannon_engine::compact::helpers::estimate_text_tokens;
         let msg_tokens = self.estimate_tokens();
         let system_tokens = system_prompt.map(estimate_text_tokens).unwrap_or(0);
         msg_tokens + system_tokens
@@ -135,9 +138,9 @@ impl ConversationState {
                 let summary = Self::summarize_messages(&old_messages);
 
                 // Create a summary message as a system message
-                let summary_msg = crate::api::Message {
+                let summary_msg = shannon_engine::api::Message {
                     role: "system".to_string(),
-                    content: crate::api::MessageContent::Text(format!(
+                    content: shannon_engine::api::MessageContent::Text(format!(
                         "[Previous conversation summary]\n\n{summary}"
                     )),
                 };
@@ -162,9 +165,9 @@ impl ConversationState {
         // Build tool_use_id -> tool_name map for context-aware summarization
         let mut tool_names: HashMap<String, String> = HashMap::new();
         for msg in messages {
-            if let crate::api::MessageContent::Blocks(blocks) = &msg.content {
+            if let shannon_engine::api::MessageContent::Blocks(blocks) = &msg.content {
                 for block in blocks {
-                    if let crate::api::ContentBlock::ToolUse { id, name, .. } = block {
+                    if let shannon_engine::api::ContentBlock::ToolUse { id, name, .. } = block {
                         tool_names.insert(id.clone(), name.clone());
                     }
                 }
@@ -173,7 +176,7 @@ impl ConversationState {
 
         for msg in messages {
             match &msg.content {
-                crate::api::MessageContent::Text(text) => {
+                shannon_engine::api::MessageContent::Text(text) => {
                     let role = if msg.role == "user" {
                         "User"
                     } else {
@@ -183,16 +186,16 @@ impl ConversationState {
                     summary_parts.push(format!("{role}: {preview}"));
                     turn_count += 1;
                 }
-                crate::api::MessageContent::Blocks(blocks) => {
+                shannon_engine::api::MessageContent::Blocks(blocks) => {
                     for block in blocks {
                         match block {
-                            crate::api::ContentBlock::ToolUse { name, input, .. } => {
+                            shannon_engine::api::ContentBlock::ToolUse { name, input, .. } => {
                                 let input_json = serde_json::to_string(input).unwrap_or_default();
                                 let input_preview = truncate_summary(&input_json, 80);
                                 summary_parts.push(format!("Tool: {name}({input_preview})"));
                                 turn_count += 1;
                             }
-                            crate::api::ContentBlock::ToolResult {
+                            shannon_engine::api::ContentBlock::ToolResult {
                                 tool_use_id,
                                 content,
                                 is_error,
@@ -209,16 +212,18 @@ impl ConversationState {
                                     ""
                                 };
                                 let result_text = match content {
-                                    Some(crate::api::ToolResultContent::Single(s)) => {
+                                    Some(shannon_engine::api::ToolResultContent::Single(s)) => {
                                         truncate_summary(s, limit)
                                     }
-                                    Some(crate::api::ToolResultContent::Multiple(results)) => {
+                                    Some(shannon_engine::api::ToolResultContent::Multiple(
+                                        results,
+                                    )) => {
                                         let text: String = results
                                             .iter()
                                             .filter_map(|b| match b {
-                                                crate::api::ContentBlock::Text { text } => {
-                                                    Some(text.as_str())
-                                                }
+                                                shannon_engine::api::ContentBlock::Text {
+                                                    text,
+                                                } => Some(text.as_str()),
                                                 _ => None,
                                             })
                                             .collect::<Vec<_>>()
@@ -230,7 +235,7 @@ impl ConversationState {
                                 summary_parts
                                     .push(format!("Result{err_tag} [{tool_name}]: {result_text}"));
                             }
-                            crate::api::ContentBlock::Text { text } => {
+                            shannon_engine::api::ContentBlock::Text { text } => {
                                 summary_parts
                                     .push(format!("Text: {}", truncate_summary(text, 100)));
                                 turn_count += 1;
@@ -299,8 +304,10 @@ fn content_rich_limit(tool_name: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{ContentBlock, ImageSource, Message, MessageContent, ToolResultContent};
     use crate::query_engine::types::CompressionStrategy;
+    use shannon_engine::api::{
+        ContentBlock, ImageSource, Message, MessageContent, ToolResultContent,
+    };
 
     fn text_msg(role: &str, text: &str) -> Message {
         Message {

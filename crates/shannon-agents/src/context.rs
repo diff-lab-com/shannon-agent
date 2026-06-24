@@ -9,7 +9,7 @@ use crate::coordinator::{AgentCoordinator, CoordinatorConfig};
 use crate::executor::AgentExecutor;
 use crate::persistence::FilePersistence;
 use crate::sub_agent::SubAgentRegistry;
-use shannon_core::api::LlmClientConfig;
+use shannon_engine::api::LlmClientConfig;
 use std::sync::Arc;
 
 /// Environment variable name for enabling agent teams feature.
@@ -239,7 +239,7 @@ mod tests {
             std::env::set_var(TEAMS_ENV_VAR, "0");
         }
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let config = shannon_core::api::LlmClientConfig::default();
+        let config = shannon_engine::api::LlmClientConfig::default();
         let result = rt.block_on(TeamContext::new(config));
         unsafe {
             std::env::remove_var(TEAMS_ENV_VAR);
@@ -259,7 +259,7 @@ mod tests {
             std::env::set_var(TEAMS_ENV_VAR, "1");
         }
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let config = shannon_core::api::LlmClientConfig::default();
+        let config = shannon_engine::api::LlmClientConfig::default();
         let ctx = match rt.block_on(TeamContext::new(config)) {
             Ok(ctx) => ctx,
             Err(_) => {

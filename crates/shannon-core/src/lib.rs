@@ -39,48 +39,13 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 pub mod ai_limits;
 pub mod analytics;
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::api` directly"
-)]
-pub mod api {
-    pub use ::shannon_engine::api::*;
-}
 pub mod api_services;
 pub mod away_summary;
 pub mod bridge_service;
 pub mod checkpoint;
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::compact` directly"
-)]
-pub mod compact {
-    pub use ::shannon_engine::compact::*;
-}
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::context_budget` directly"
-)]
-pub mod context_budget {
-    pub use ::shannon_engine::context_budget::*;
-}
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::context_pressure` directly"
-)]
-pub mod context_pressure {
-    pub use ::shannon_engine::context_pressure::*;
-}
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::hooks` directly"
-)]
-pub mod hooks {
-    pub use ::shannon_engine::hooks::*;
-}
 pub mod internal_logging;
 pub mod magic_docs;
 pub mod mcp_advanced;
@@ -128,20 +93,6 @@ pub mod session_history;
 pub mod settings;
 pub mod settings_sync;
 pub mod smart_context;
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::state` directly"
-)]
-pub mod state {
-    pub use ::shannon_engine::state::*;
-}
-#[deprecated(
-    since = "0.5.6",
-    note = "moved to shannon-engine; use `shannon_engine::streaming_tool_executor` directly"
-)]
-pub mod streaming_tool_executor {
-    pub use ::shannon_engine::streaming_tool_executor::*;
-}
 pub mod suggestions;
 pub mod tips;
 pub mod token_estimation;
@@ -222,28 +173,6 @@ pub use analytics::{
     AnalyticsError, AnalyticsEvent, AnalyticsEventType, AnalyticsStore, AnalyticsSummary,
     DailyStats, SessionStats, ToolStats,
 };
-pub use api::{
-    ApiError,
-    // Backward-compatible aliases
-    ClaudeClient,
-    ClaudeClientConfig,
-    ContentBlock,
-    ContentDelta,
-    ImageSource,
-    LlmClient,
-    LlmClientConfig,
-    LlmProvider,
-    Message,
-    MessageContent,
-    MessageRequest,
-    MessageResponse,
-    MessageStream,
-    RetryConfig,
-    RetryPolicy,
-    StreamEvent,
-    ToolDefinition,
-    Usage,
-};
 pub use api_services::{
     ApiManager, ApiRequest, ApiResponse, ApiServiceError, ModelUsage, RateLimitInfo, UsageStats,
     UsageTracker,
@@ -255,13 +184,6 @@ pub use bridge_service::{
 pub use checkpoint::{
     Checkpoint, CheckpointManager, FileChangePreview, RestoreMode, RevertPreview, TurnCheckpoint,
 };
-pub use compact::{
-    CompactConfig, CompactEngine, CompactError, CompactResult, CompactStrategy, MessageGroup,
-    RuleBasedSummarizer, Summarizer,
-};
-pub use context_pressure::{
-    ContextPressureMonitor, PressureLevel, PressureMetrics, PressureRecommendation,
-};
 pub use diagnostics::{
     DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker,
     ErrorPattern,
@@ -271,7 +193,6 @@ pub use extract_memories::{
     MemoryExtractor, MessageSummary,
 };
 pub use git_operation_tracking::{GitOperation, GitOperationTracker};
-pub use hooks::{HookDecision, HookError, HookEvent, HookEventType, HookManager, HookResult};
 pub use internal_logging::{InternalLogEntry, InternalLogLevel, InternalLogger};
 pub use magic_docs::{
     DocGenerationRequest, DocLevel, DocMetadata, DocOutput, DocOutputFormat, DocSection,
@@ -320,8 +241,42 @@ pub use settings::{Settings, SettingsError, SettingsManager};
 pub use settings_sync::{
     DeviceInfo, DeviceRegistry, SettingsSyncService, SyncError, SyncRecord, SyncStatus,
 };
-pub use state::{SessionData, SessionInfo, SessionPersistMetadata, SessionState, StateManager};
-pub use streaming_tool_executor::{StreamingToolExecutor, ToolStatus, TrackedTool};
+pub use shannon_engine::api::{
+    ApiError,
+    // Backward-compatible aliases
+    ClaudeClient,
+    ClaudeClientConfig,
+    ContentBlock,
+    ContentDelta,
+    ImageSource,
+    LlmClient,
+    LlmClientConfig,
+    LlmProvider,
+    Message,
+    MessageContent,
+    MessageRequest,
+    MessageResponse,
+    MessageStream,
+    RetryConfig,
+    RetryPolicy,
+    StreamEvent,
+    ToolDefinition,
+    Usage,
+};
+pub use shannon_engine::compact::{
+    CompactConfig, CompactEngine, CompactError, CompactResult, CompactStrategy, MessageGroup,
+    RuleBasedSummarizer, Summarizer,
+};
+pub use shannon_engine::context_pressure::{
+    ContextPressureMonitor, PressureLevel, PressureMetrics, PressureRecommendation,
+};
+pub use shannon_engine::hooks::{
+    HookDecision, HookError, HookEvent, HookEventType, HookManager, HookResult,
+};
+pub use shannon_engine::state::{
+    SessionData, SessionInfo, SessionPersistMetadata, SessionState, StateManager,
+};
+pub use shannon_engine::streaming_tool_executor::{StreamingToolExecutor, ToolStatus, TrackedTool};
 pub use suggestions::{
     Suggestion, SuggestionCategory, SuggestionContext, SuggestionEngine, SuggestionRule,
 };
@@ -403,18 +358,15 @@ pub use project_memory::{
 pub mod error {
     pub use crate::activity_manager::ActivityError;
     pub use crate::analytics::AnalyticsError;
-    pub use crate::api::ApiError;
     pub use crate::api_services::ApiServiceError;
     pub use crate::auto_dream_consolidation::ConsolidationError;
     pub use crate::billing::BillingError;
     pub use crate::bridge_service::BridgeError;
-    pub use crate::compact::CompactError;
     pub use crate::credential_manager::CredentialError;
     pub use crate::doctor::DoctorError;
     pub use crate::doctor::{ApiKeyGuard, HomeGuard};
     pub use crate::enhanced_suggestions::SuggestionError;
     pub use crate::extract_memories::ExtractionError;
-    pub use crate::hooks::HookError;
     pub use crate::housekeeping::HousekeepingError;
     pub use crate::magic_docs::MagicDocsError;
     pub use crate::mcp_advanced::McpAdvancedError;
@@ -432,8 +384,6 @@ pub mod error {
     pub use crate::session_transcript::TranscriptError;
     pub use crate::settings::SettingsError;
     pub use crate::settings_sync::SyncError;
-    pub use crate::state::StateError;
-    pub use crate::streaming_tool_executor::ExecutorError;
     pub use crate::team_memory_sync::TeamMemorySyncError;
     pub use crate::tips::TipError;
     pub use crate::tool_execution::ToolExecutionError;
@@ -442,6 +392,11 @@ pub mod error {
     pub use crate::updater::UpdateError;
     pub use crate::vcr::VcrError;
     pub use crate::voice_mode::VoiceError;
+    pub use shannon_engine::api::ApiError;
+    pub use shannon_engine::compact::CompactError;
+    pub use shannon_engine::hooks::HookError;
+    pub use shannon_engine::state::StateError;
+    pub use shannon_engine::streaming_tool_executor::ExecutorError;
 }
 
 /// Version information

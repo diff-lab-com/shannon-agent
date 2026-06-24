@@ -12,7 +12,7 @@ use shannon_agents::{
     AgentIdleParams, AgentReadyParams, ExecuteTaskParams, JsonRpcError, JsonRpcMessage,
     TaskCompleteParams, TaskProgressParams, frame_message, parse_message,
 };
-use shannon_core::api::{ContentDelta, LlmClient, Message, MessageContent, StreamEvent};
+use shannon_engine::api::{ContentDelta, LlmClient, Message, MessageContent, StreamEvent};
 use std::io;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 

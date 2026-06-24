@@ -10,10 +10,10 @@
 //!   - A model pulled (e.g. `ollama pull qwen3:4b`)
 //!   - `OLLAMA_E2E=1` and `OLLAMA_MODEL=<model>` set
 
-use shannon_core::compact::{CompactConfig, CompactEngine};
 use shannon_engine::api::{
     ContentBlock, LlmClient, LlmClientConfig, LlmProvider, Message, MessageContent,
 };
+use shannon_engine::compact::{CompactConfig, CompactEngine};
 use std::time::Instant;
 
 /// Build an ollama-backed LLM client from env, skipping if unavailable.
@@ -237,7 +237,7 @@ fn e2e_ollama_micro_compact() {
 
     let engine = CompactEngine::new(
         config,
-        Box::new(shannon_core::compact::LlmSummarizer::with_handle(
+        Box::new(shannon_engine::compact::LlmSummarizer::with_handle(
             client, handle,
         )),
     )
@@ -285,7 +285,7 @@ fn e2e_ollama_compact_preserves_recent_messages() {
 
     let mut engine = CompactEngine::new(
         config,
-        Box::new(shannon_core::compact::LlmSummarizer::with_handle(
+        Box::new(shannon_engine::compact::LlmSummarizer::with_handle(
             client, handle,
         )),
     )

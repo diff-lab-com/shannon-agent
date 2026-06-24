@@ -14,7 +14,7 @@
 //! ## Usage
 //!
 //! ```rust,no_run
-//! use shannon_core::api::LlmClient;
+//! use shannon_engine::api::LlmClient;
 //! use shannon_core::skill_loop::{evaluate_task, generate_skill_proposal};
 //! use shannon_core::skill_loop::types::{TaskEvaluation, TaskOutcome};
 //! use std::collections::HashSet;
@@ -72,7 +72,7 @@ pub use types::{
     TaskEvaluation, TaskOutcome,
 };
 
-use crate::api::LlmClient;
+use shannon_engine::api::LlmClient;
 
 /// Evaluate whether a completed task is worth extracting as a skill
 ///
@@ -90,7 +90,7 @@ use crate::api::LlmClient;
 ///
 /// # Example
 /// ```rust,no_run
-/// # use shannon_core::api::LlmClient;
+/// # use shannon_engine::api::LlmClient;
 /// # use shannon_core::skill_loop::{evaluate_task, types::TaskEvaluation};
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// # let client = LlmClient::from_env();
@@ -130,7 +130,7 @@ pub async fn evaluate_task(
 ///
 /// # Example
 /// ```rust,no_run
-/// # use shannon_core::api::LlmClient;
+/// # use shannon_engine::api::LlmClient;
 /// # use shannon_core::skill_loop::{generate_skill_proposal, types::TaskEvaluation};
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// # let client = LlmClient::from_env();

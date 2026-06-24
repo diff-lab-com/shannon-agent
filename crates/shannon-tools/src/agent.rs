@@ -410,7 +410,7 @@ impl AgentTool {
         agent_id: String,
         agent_type: String,
         input: AgentSpawnInput,
-        client_config: shannon_core::api::LlmClientConfig,
+        client_config: shannon_engine::api::LlmClientConfig,
         resolved_system_prompt: Option<String>,
     ) -> Result<AgentSpawnOutput, ToolError> {
         use shannon_core::query_engine::{QueryContext, QueryEvent, QueryMetadata};
@@ -430,10 +430,10 @@ impl AgentTool {
 
         // Create sub-agent engine with FullAuto permissions
         let model_name = client_config.model.clone();
-        let client = shannon_core::api::LlmClient::new(client_config);
+        let client = shannon_engine::api::LlmClient::new(client_config);
         let mut permissions = shannon_core::permissions::PermissionManager::new();
         permissions.set_approval_mode(shannon_core::permissions::ApprovalMode::FullAuto);
-        let state = shannon_core::state::StateManager::new();
+        let state = shannon_engine::state::StateManager::new();
 
         let engine = shannon_core::query_engine::QueryEngine::with_defaults(
             client,

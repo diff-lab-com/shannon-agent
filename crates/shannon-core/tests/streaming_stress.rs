@@ -9,9 +9,9 @@
 
 use futures::StreamExt;
 use mockito::{Server, ServerGuard};
-use shannon_core::api::streaming::{LastEventId, SseStream};
-use shannon_core::api::{ContentBlock, ContentDelta, LlmProvider, StreamEvent};
 use shannon_core::testing::mock_dsl::*;
+use shannon_engine::api::streaming::{LastEventId, SseStream};
+use shannon_engine::api::{ContentBlock, ContentDelta, LlmProvider, StreamEvent};
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

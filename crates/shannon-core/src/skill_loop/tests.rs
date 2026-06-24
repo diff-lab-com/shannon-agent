@@ -2,7 +2,7 @@
 //!
 //! These tests verify the end-to-end workflow of the skill loop system.
 
-use crate::api::{LlmClient, LlmClientConfig, LlmProvider};
+use shannon_engine::api::{LlmClient, LlmClientConfig, LlmProvider};
 use crate::skill_loop::{
     evaluate_task, generate_skill_proposal, jaccard_similarity, save_proposal,
 };

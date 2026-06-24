@@ -756,7 +756,7 @@ pub enum QueryEvent {
     /// Updated conversation state (sent before Completed so UI can persist proper messages)
     ConversationUpdate {
         query_id: Uuid,
-        messages: Vec<crate::api::Message>,
+        messages: Vec<shannon_engine::api::Message>,
     },
 
     /// Rate limit info from API response headers

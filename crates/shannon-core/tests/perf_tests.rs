@@ -7,12 +7,12 @@ use std::time::Instant;
 
 use serde_json::json;
 
-use shannon_core::api::{ContentBlock, Message, MessageContent, ToolResultContent};
-use shannon_core::compact::{CompactConfig, CompactEngine, RuleBasedSummarizer};
 use shannon_core::recording::RecordingEntry;
 use shannon_core::testing::mock_dsl::{anthropic_sse, text_response, tool_call_response};
 use shannon_core::testing::snapshot::{RenderMode, render_request_snapshot};
 use shannon_core::token_estimation::{ConversationMessageSummary, TokenEstimator};
+use shannon_engine::api::{ContentBlock, Message, MessageContent, ToolResultContent};
+use shannon_engine::compact::{CompactConfig, CompactEngine, RuleBasedSummarizer};
 
 // ---------------------------------------------------------------------------
 // Helpers

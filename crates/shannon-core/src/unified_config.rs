@@ -10,8 +10,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::api::types::LlmProvider;
 use crate::notifier::NotificationsConfig;
+use shannon_engine::api::types::LlmProvider;
 
 /// A conversation preset with pre-configured settings.
 /// Duplicated here to avoid a circular dependency on shannon-commands.
@@ -355,8 +355,8 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
 // `ShannonConfig` so `LlmClient::set_model_for_provider_with_config` can
 // accept a `ShannonConfig` without `shannon-engine` depending on
 // `shannon-core`.
-impl crate::api::types::ApiKeyResolver for ShannonConfig {
-    fn resolve_api_key_for_provider(&self, provider: &crate::api::LlmProvider) -> String {
+impl shannon_engine::api::types::ApiKeyResolver for ShannonConfig {
+    fn resolve_api_key_for_provider(&self, provider: &shannon_engine::api::LlmProvider) -> String {
         ShannonConfig::resolve_api_key_for_provider(self, provider)
     }
 }
@@ -366,9 +366,9 @@ impl crate::api::types::ApiKeyResolver for ShannonConfig {
 // now lives in `shannon-engine`. Rust permits a `From` impl in either the
 // type's crate or the trait's crate. Keeping it here avoids a cyclic
 // dependency (`shannon-engine → shannon-core` for `ShannonConfig`).
-impl From<ShannonConfig> for crate::api::LlmClientConfig {
+impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
     fn from(cfg: ShannonConfig) -> Self {
-        use crate::api::{LlmProvider, RetryConfig};
+        use shannon_engine::api::{LlmProvider, RetryConfig};
         use std::collections::HashMap;
 
         let has_explicit_base_url = cfg.base_url.is_some();

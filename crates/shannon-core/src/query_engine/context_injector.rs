@@ -4,7 +4,7 @@
 //! survive context compaction — namely project instructions (CLAUDE.md etc.),
 //! user preference memory, and any other session-critical context anchors.
 
-use crate::api::SystemContentBlock;
+use shannon_engine::api::SystemContentBlock;
 use std::path::PathBuf;
 use std::sync::RwLock;
 

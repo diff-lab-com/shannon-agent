@@ -6,10 +6,10 @@
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-use crate::api::{LlmClientConfig, LlmProvider, RetryConfig};
 use crate::permissions::ApprovalMode;
-use crate::state::StateManager;
 use crate::tools::Tool;
+use shannon_engine::api::{LlmClientConfig, LlmProvider, RetryConfig};
+use shannon_engine::state::StateManager;
 
 use crate::testing::mock_dsl::MockResponse;
 #[cfg(test)]

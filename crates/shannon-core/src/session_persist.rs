@@ -4,9 +4,9 @@
 //! session resume. Each session is stored as a single JSON file under a
 //! configurable storage directory (defaulting to `~/.shannon/sessions/`).
 
-use crate::api::Message;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use shannon_engine::api::Message;
 use std::fs;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -395,7 +395,7 @@ fn compute_hash(state: &PersistedSessionState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::MessageContent;
+    use shannon_engine::api::MessageContent;
 
     // -- helpers --
 

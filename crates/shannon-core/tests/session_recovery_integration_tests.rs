@@ -4,8 +4,8 @@
 #[cfg(test)]
 mod session_recovery_tests {
     use chrono::Utc;
-    use shannon_core::api::{ContentBlock, Message, MessageContent};
     use shannon_core::session_recovery::SessionRecovery;
+    use shannon_engine::api::{ContentBlock, Message, MessageContent};
     use std::path::PathBuf;
     use tempfile::TempDir;
 

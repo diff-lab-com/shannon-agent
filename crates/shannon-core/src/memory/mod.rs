@@ -21,7 +21,7 @@
 //! - **Context**: Project-specific context
 
 // Re-export all public types to maintain `crate::memory::*` paths
-pub use crate::api::{Message, MessageContent};
+pub use shannon_engine::api::{Message, MessageContent};
 
 pub use auto_dream::AutoDreamService;
 pub use consolidator::{ConsolidationResult, MemoryConsolidator};

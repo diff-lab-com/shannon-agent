@@ -2,12 +2,12 @@
 //!
 //! Provides session history listing, filtering, searching, archiving, and
 //! resumption capabilities. Builds on top of the persistent session storage
-//! managed by [`crate::state::StateManager`].
+//! managed by [`shannon_engine::state::StateManager`].
 
-use crate::api::{ContentBlock, Message, MessageContent};
 use crate::query_engine::CostTracker;
-use crate::state::SessionData;
 use serde::{Deserialize, Serialize};
+use shannon_engine::api::{ContentBlock, Message, MessageContent};
+use shannon_engine::state::SessionData;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -673,8 +673,8 @@ fn extract_files_accessed(messages: &[Message]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::MessageContent;
-    use crate::state::{SessionPersistMetadata, StateManager};
+    use shannon_engine::api::MessageContent;
+    use shannon_engine::state::{SessionPersistMetadata, StateManager};
 
     // -- helpers --
 
@@ -741,7 +741,9 @@ mod tests {
                 role: "user".into(),
                 content: MessageContent::Blocks(vec![ContentBlock::ToolResult {
                     tool_use_id: "tool_1".into(),
-                    content: Some(crate::api::ToolResultContent::Single("key = value".into())),
+                    content: Some(shannon_engine::api::ToolResultContent::Single(
+                        "key = value".into(),
+                    )),
                     is_error: Some(false),
                 }]),
             },

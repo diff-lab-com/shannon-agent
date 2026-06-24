@@ -781,13 +781,13 @@ fn jaccard_similarity(a: &str, b: &str) -> f64 {
 /// Uses a dedicated tokio runtime to bridge sync calling code with the
 /// async `LlmClient`, avoiding nested-runtime panics.
 pub struct LlmMemoryExtractor {
-    client: crate::api::LlmClient,
+    client: shannon_engine::api::LlmClient,
     inner: MemoryExtractor,
 }
 
 impl LlmMemoryExtractor {
     /// Create a new LLM-backed extractor wrapping the given client and config.
-    pub fn new(client: crate::api::LlmClient, config: ExtractionConfig) -> Self {
+    pub fn new(client: shannon_engine::api::LlmClient, config: ExtractionConfig) -> Self {
         let inner = MemoryExtractor::new(config);
         Self { client, inner }
     }
@@ -934,13 +934,13 @@ impl LlmMemoryExtractor {
             conversation_text.push_str(&format!("[{}] {}\n", msg.role, msg.content));
         }
 
-        let system_msg = crate::api::Message {
+        let system_msg = shannon_engine::api::Message {
             role: "system".to_string(),
-            content: crate::api::MessageContent::Text(prompt),
+            content: shannon_engine::api::MessageContent::Text(prompt),
         };
-        let user_msg = crate::api::Message {
+        let user_msg = shannon_engine::api::Message {
             role: "user".to_string(),
-            content: crate::api::MessageContent::Text(format!(
+            content: shannon_engine::api::MessageContent::Text(format!(
                 "Extract memories from this conversation:\n\n{conversation_text}"
             )),
         };
@@ -962,7 +962,7 @@ impl LlmMemoryExtractor {
         let response_text: String = blocks
             .iter()
             .filter_map(|b| match b {
-                crate::api::ContentBlock::Text { text } => Some(text.as_str()),
+                shannon_engine::api::ContentBlock::Text { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect::<Vec<&str>>()
