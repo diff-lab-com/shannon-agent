@@ -5,7 +5,7 @@
 
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
-import { useTauriEvent } from '@/hooks/useTauriEvent'
+import { useTauriEventValidated } from '@/hooks/useTauriEventValidated'
 import type { SkillProposalCountPayload } from '@/types'
 
 interface SkillProposalsToastProps {
@@ -18,7 +18,7 @@ export default function SkillProposalsToast({ onOpenReview }: SkillProposalsToas
   const [pendingCount, setPendingCount] = useState(0)
   const [visible, setVisible] = useState(false)
 
-  useTauriEvent<SkillProposalCountPayload>('skill-proposal-available', (event) => {
+  useTauriEventValidated<SkillProposalCountPayload>('skill-proposal-available', (event) => {
     setPendingCount(event.payload.pending_count)
     if (event.payload.pending_count > 0) {
       setVisible(true)

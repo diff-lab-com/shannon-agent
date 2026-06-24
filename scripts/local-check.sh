@@ -23,6 +23,9 @@ else
   echo "==> cargo-deny not installed; skipping (install with 'cargo install cargo-deny')"
 fi
 
+echo "==> events.schema.json sync"
+scripts/check-schema-sync.sh || [[ $? -eq 2 ]]
+
 echo "==> UI: pnpm lint + test"
 pnpm --dir ui lint
 pnpm --dir ui test --run

@@ -2,6 +2,28 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — S2 follow-ups] — Engine pin + dev-mode schema validation
+
+### Changes
+
+- **Engine pin bumped to `ff02637`.** Picks up shannon-code PRs #49
+  (D1 phase 1 internal reorg), #50 (B3 JSON Schema emit for events),
+  #51 (C4+T5 `#[stable_api]` macro), #52 (C5 semver baseline pinned
+  to `v0.5.5` git tag, flipped to blocking).
+
+- **Dev-mode JSON Schema validation for Tauri events.** New
+  `useTauriEventValidated` hook wraps `useTauriEvent` with an
+  ajv-based payload check against `ui/src/schema/events.schema.json`
+  (mirrored from `shannon-types`). Mismatches log a `console.warn`
+  in dev only (`import.meta.env.DEV` gate) — production hot path is
+  unchanged. Unmapped event names skip validation. Three unit tests
+  cover the valid/mismatch/unmapped paths.
+
+- **Schema-sync check.** `scripts/check-schema-sync.sh` verifies
+  `ui/src/schema/events.schema.json` matches the canonical copy in
+  `../shannon-code/crates/shannon-types/schema/`. Wired into the
+  `scripts/local-check.sh` pre-push gate so drift fails before push.
+
 ## [Unreleased — D-group + P0 fixes] — Skill loop + events refactor
 
 ### Fixes
