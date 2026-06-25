@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type React from 'react'
 import { useIntl } from 'react-intl'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { toast } from 'sonner'
 import {
   createMemory,
@@ -56,6 +57,7 @@ export default function MemoryPanel() {
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all')
   const [query, setQuery] = useState('')
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
 
   const [editing, setEditing] = useState<MemoryEntry | null>(null)
   const [creating, setCreating] = useState(false)
@@ -87,8 +89,11 @@ export default function MemoryPanel() {
     void fetchAll()
   }, [fetchAll])
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm(t('memory.confirmDelete'))) return
+  const handleDelete = (id: string) => setPendingDeleteId(id)
+
+  const confirmDelete = async () => {
+    const id = pendingDeleteId
+    if (!id) return
     try {
       const ok = await deleteMemory(id)
       if (!ok) {
@@ -99,6 +104,8 @@ export default function MemoryPanel() {
       await fetchAll()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t('memory.toast.failedDelete'))
+    } finally {
+      setPendingDeleteId(null)
     }
   }
 
@@ -285,6 +292,17 @@ export default function MemoryPanel() {
           onSave={handleSave}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        title={t('memory.confirmDelete.title')}
+        message={t('memory.confirmDelete.message')}
+        confirmLabel={t('memory.confirmDelete.confirm')}
+        cancelLabel={t('memory.confirmDelete.cancel')}
+        destructive
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDeleteId(null)}
+      />
     </div>
   )
 }

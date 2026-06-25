@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
 import type { BuiltinProfileInfo, CustomProfileInfo } from '@/types'
 
@@ -57,6 +58,7 @@ export default function Profiles() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const load = async () => {
     try {
@@ -98,8 +100,11 @@ export default function Profiles() {
     setSaving(false)
   }
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(t('profiles.error.deleteConfirm', { name }))) return
+  const handleDelete = (name: string) => setPendingDelete(name)
+
+  const confirmDelete = async () => {
+    const name = pendingDelete
+    if (!name) return
     try {
       await api.deleteCustomProfile(name)
       toast.success(t('profiles.toast.deleted', { name }))
@@ -107,6 +112,8 @@ export default function Profiles() {
     } catch (e) {
       console.warn('Failed to delete profile:', e)
       toast.error(t('profiles.error.delete'))
+    } finally {
+      setPendingDelete(null)
     }
   }
 
@@ -198,6 +205,16 @@ export default function Profiles() {
           </section>
         </>
       )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={t('profiles.confirmDelete.title')}
+        message={t('profiles.confirmDelete.message', { name: pendingDelete ?? '' })}
+        confirmLabel={t('profiles.confirmDelete.confirm')}
+        cancelLabel={t('profiles.confirmDelete.cancel')}
+        destructive
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   )
 }

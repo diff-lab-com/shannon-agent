@@ -18,6 +18,7 @@ import {
   ToolHeader,
   ToolContent,
 } from '@/components/ai-elements'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 
@@ -121,6 +122,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const isUser = message.role === 'user'
   const [liked, setLiked] = useState(false)
   const [isBranching, setIsBranching] = useState(false)
+  const [pendingBranch, setPendingBranch] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
   const { sendMessage, currentSessionId, switchSession, refreshSessions } = useApp()
   const intl = useIntl()
@@ -134,12 +136,14 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
     sendMessage('Regenerate the previous response').catch(() => toast.error(t('chat.toast.regenerateFailed')))
   }
 
-  const handleBranch = async () => {
+  const handleBranch = () => {
     if (!currentSessionId || isBranching) return
+    setPendingBranch(true)
+  }
 
-    const confirmed = window.confirm(t('chat.message.branch.confirm'))
-    if (!confirmed) return
-
+  const confirmBranch = async () => {
+    if (!currentSessionId) return
+    setPendingBranch(false)
     setIsBranching(true)
     try {
       const newSession = await api.branchSession(currentSessionId, messageIndex)
@@ -159,6 +163,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
 
   if (isUser) {
     return (
+      <>
       <Message from="user" className="flex justify-end">
         <MessageContent className="max-w-[80%]">
           {isBranch && (
@@ -192,8 +197,19 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           </ActionToolbar>
         </MessageContent>
       </Message>
-    )
-  }
+      <ConfirmDialog
+        open={pendingBranch}
+        title={t('chat.message.branch.confirm.title')}
+        message={t('chat.message.branch.confirm.message')}
+        confirmLabel={t('chat.message.branch.button')}
+        cancelLabel={t('chat.message.branch.confirm.cancel')}
+        busy={isBranching}
+        onConfirm={() => void confirmBranch()}
+        onCancel={() => setPendingBranch(false)}
+      />
+    </>
+  )
+}
 
   return (
     <Message from="assistant" className="flex gap-md max-w-[90%]">
