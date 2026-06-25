@@ -2,6 +2,36 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [v0.3.7 — DRAFT, pending PR #50 merge] — UI design overhaul
+
+### Tooling
+
+- **Local dev debugging scripts.** `scripts/dev-start.sh` + `dev-stop.sh`
+  orchestrate vite + `cargo run` with PID files, port-readiness polling,
+  and graceful cleanup. Logs land in `${XDG_RUNTIME_DIR:-/tmp}/shannon-dev/`.
+
+### UI (from PR #50 — full list at the PR description)
+
+- **P0 honesty pass:** removed misleading buttons, dirty guards on Memory
+  + OPC approve/rollback, billing demo-mode locks, ConfirmDialog for all
+  destructive ops, floating-branch warning in InstallDialog.
+- **P1 accessibility + shared primitives:** LoadingState, ErrorState,
+  ConfirmDialog, SkeletonLoader (+ variants), focus-visible rings,
+  focus trap on 18 modals, virtualized chat, mod+n, Editor Ask AI.
+- **P2 page redesigns:** Chat / Memory / Extensions / Settings, chart
+  palette tokens, StreamingResponse extraction.
+- **P3 polish:** brand icons, micro-interactions, i18n audit.
+- **Fix:** Tailwind 4 parser bug (stray `)` in `@custom-variant`).
+
+### Documentation
+
+- **PM audit follow-ups.** `docs/product-review/pm-audit-followups.md`
+  lists all items unresolved after PR #50 with a 4-week recommended
+  sequence.
+- **Documents Extension Phase A plan.** `docs/extensions/documents/phase-A.md`
+  scopes the Q4 2026 extension work — pandoc-based DOCX/PDF generation
+  via host tools, no core code.
+
 ## [Unreleased — S2 follow-ups] — Engine pin + dev-mode schema validation
 
 ### Tooling
