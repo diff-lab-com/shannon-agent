@@ -22,19 +22,18 @@ import * as api from '@/lib/tauri-api'
 type ReadFilter = 'all' | 'unread' | 'read'
 type SortOrder = 'newest' | 'oldest'
 
-// Severity heuristic: map a triage `kind` to a color/icon for visual sorting.
-function kindMeta(kind: string): { icon: string; color: string; label: string } {
+function kindMeta(kind: string): { icon: string; color: string; labelKey: string } {
   switch (kind) {
     case 'failed_run':
-      return { icon: 'error', color: 'text-error', label: 'Failed Run' }
+      return { icon: 'error', color: 'text-error', labelKey: 'triage.kind.failed_run' }
     case 'budget_exceeded':
-      return { icon: 'payments', color: 'text-error', label: 'Budget Exceeded' }
+      return { icon: 'payments', color: 'text-error', labelKey: 'triage.kind.budget_exceeded' }
     case 'needs_review':
-      return { icon: 'rate_review', color: 'text-primary', label: 'Needs Review' }
+      return { icon: 'rate_review', color: 'text-primary', labelKey: 'triage.kind.needs_review' }
     case 'timeout':
-      return { icon: 'schedule', color: 'text-secondary', label: 'Timeout' }
+      return { icon: 'schedule', color: 'text-secondary', labelKey: 'triage.kind.timeout' }
     default:
-      return { icon: 'notifications', color: 'text-on-surface-variant', label: kind }
+      return { icon: 'notifications', color: 'text-on-surface-variant', labelKey: '' }
   }
 }
 
@@ -65,7 +64,7 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive }:
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-sm mb-xs">
-              <span className={`font-label-sm text-[11px] font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</span>
+              <span className={`font-label-sm text-[11px] font-bold uppercase tracking-wider ${meta.color}`}>{meta.labelKey ? t(meta.labelKey) : item.kind}</span>
               {!item.read && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title={t('triage.unread.title')} />}
               {item.archived && <span className="font-label-sm text-[11px] text-on-surface-variant">{t('triage.archived.label')}</span>}
             </div>
@@ -244,6 +243,7 @@ export default function Triage() {
           </Button>
           {availableKinds.map(kind => {
             const meta = kindMeta(kind)
+            const label = meta.labelKey ? t(meta.labelKey) : kind
             return (
               <Button
                 key={kind}
@@ -252,7 +252,7 @@ export default function Triage() {
                 aria-pressed={kindFilter === kind}
                 className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${kindFilter === kind ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
               >
-                {meta.label}
+                {label}
               </Button>
             )
           })}

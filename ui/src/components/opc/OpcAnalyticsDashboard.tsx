@@ -156,10 +156,10 @@ export default function OpcAnalyticsDashboard() {
         <div>
           <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
             <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bubble_chart</span>
-            By status
+            {t('opc.analytics.byStatus')}
           </h4>
           {metrics.by_status.length === 0 ? (
-            <p className="font-label-sm text-on-surface-variant italic">No tasks.</p>
+            <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noTasks')}</p>
           ) : (
             <ul className="flex flex-col gap-xs">
               {metrics.by_status.map(s => (
@@ -183,10 +183,10 @@ export default function OpcAnalyticsDashboard() {
         <div>
           <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
             <span className="material-symbols-outlined text-[14px] text-on-surface-variant">priority_high</span>
-            By priority
+            {t('opc.analytics.byPriority')}
           </h4>
           {metrics.by_priority.length === 0 ? (
-            <p className="font-label-sm text-on-surface-variant italic">No priority set on any task.</p>
+            <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noPriority')}</p>
           ) : (
             <ul className="flex flex-col gap-xs">
               {metrics.by_priority.map(p => (
@@ -209,10 +209,10 @@ export default function OpcAnalyticsDashboard() {
       <div>
         <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
           <span className="material-symbols-outlined text-[14px] text-on-surface-variant">group</span>
-          Workload by assignee
+          {t('opc.analytics.workloadByAssignee')}
         </h4>
         {metrics.by_assignee.length === 0 ? (
-          <p className="font-label-sm text-on-surface-variant italic">No assignees yet.</p>
+          <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noAssignees')}</p>
         ) : (
           <ul className="flex flex-col gap-xs">
             {metrics.by_assignee.map(a => (
@@ -220,9 +220,9 @@ export default function OpcAnalyticsDashboard() {
                 <span className="material-symbols-outlined text-[14px] text-on-surface-variant">person</span>
                 <span className="font-label-md text-on-surface flex-1 truncate">{a.assignee}</span>
                 <span className="font-label-sm text-[11px] text-on-surface-variant">
-                  <strong className="text-primary">{a.in_progress}</strong> in progress ·{' '}
-                  <strong className="text-tertiary">{a.done}</strong> done ·{' '}
-                  <strong className="text-on-surface">{a.total}</strong> total
+                  <strong className="text-primary">{a.in_progress}</strong> {t('opc.analytics.inProgressLabel')} ·{' '}
+                  <strong className="text-tertiary">{a.done}</strong> {t('opc.analytics.doneLabel')} ·{' '}
+                  <strong className="text-on-surface">{a.total}</strong> {t('opc.analytics.totalLabel')}
                 </span>
               </li>
             ))}
