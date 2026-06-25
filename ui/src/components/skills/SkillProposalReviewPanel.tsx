@@ -152,7 +152,7 @@ export default function SkillProposalReviewPanel({
           <button
             onClick={onClose}
             className="text-on-surface-variant hover:text-on-surface"
-            aria-label="Close"
+            aria-label={t('skillProposals.review.closeAria')}
           >
             <span className="material-symbols-outlined">close</span>
           </button>

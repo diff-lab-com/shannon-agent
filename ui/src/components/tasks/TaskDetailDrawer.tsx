@@ -147,7 +147,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
               <select
                 value={status}
                 onChange={e => setStatus(e.target.value)}
-                aria-label="Status"
+                aria-label={t('tasks.taskDetailDrawer.status')}
                 className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
               >
                 {STATUSES.map(s => (

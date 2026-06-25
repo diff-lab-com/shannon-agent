@@ -2060,6 +2060,7 @@
   "skillProposals.toast.description": "从最近任务中检测到可复用模式。",
   "skillProposals.toast.viewButton": "查看",
   "skillProposals.toast.closeButton": "关闭",
+  "skillProposals.review.closeAria": "关闭",
   "skillProposals.review.title": "技能提案",
   "skillProposals.review.empty": "暂无建议",
   "skillProposals.review.approveButton": "批准",

@@ -2060,6 +2060,7 @@
   "skillProposals.toast.description": "Reusable pattern detected from recent task.",
   "skillProposals.toast.viewButton": "View",
   "skillProposals.toast.closeButton": "Close",
+  "skillProposals.review.closeAria": "Close",
   "skillProposals.review.title": "Skill Proposals",
   "skillProposals.review.empty": "No suggestions yet",
   "skillProposals.review.approveButton": "Approve",
