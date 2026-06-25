@@ -1904,6 +1904,8 @@
   "extensions.installDialog.endpoint": "端点",
   "extensions.installDialog.install": "安装",
   "extensions.installDialog.installing": "安装中…",
+  "extensions.installDialog.floatingBranch": "浮动分支",
+  "extensions.installDialog.floatingBranchHelp": "此 ref 跟踪分支而非固定 commit —— 实际拉取的代码取决于安装时上游 HEAD。如需可复现安装请固定到 tag 或 commit SHA。",
   "extensions.installDialog.manualHint": "需要手动配置 —— 即将跳转至对应子标签。",
   "extensions.installDialog.oauthComingSoon": "OAuth 流程尚未实现 —— 即将推出",
   "extensions.installDialog.metadata.title": "来源提供的配置",

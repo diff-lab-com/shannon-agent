@@ -1904,6 +1904,8 @@
   "extensions.installDialog.endpoint": "Endpoint",
   "extensions.installDialog.install": "Install",
   "extensions.installDialog.installing": "Installing…",
+  "extensions.installDialog.floatingBranch": "Floating branch",
+  "extensions.installDialog.floatingBranchHelp": "This ref tracks a branch, not a pinned commit — the exact code you get depends on upstream HEAD at install time. Pin to a tag or commit SHA for reproducible installs.",
   "extensions.installDialog.manualHint": "Manual configuration required — routing to dedicated tab.",
   "extensions.installDialog.oauthComingSoon": "OAuth flow not yet implemented — coming soon",
   "extensions.installDialog.metadata.title": "Source-provided configuration",
