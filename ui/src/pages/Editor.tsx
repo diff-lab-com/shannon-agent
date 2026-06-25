@@ -167,14 +167,9 @@ export default function Editor() {
 
   const onToggleEdit = useCallback(() => {
     if (!file) return
-    if (!editMode) {
-      setDraft(file.content)
-      setEditMode(true)
-    } else {
-      setDraft(file.content)
-      setEditMode(false)
-    }
-  }, [editMode, file])
+    setDraft(file.content)
+    setEditMode(v => !v)
+  }, [file])
 
   const onSave = useCallback(async () => {
     if (!file) return
