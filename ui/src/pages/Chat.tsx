@@ -15,6 +15,7 @@ import { MessageBubble, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { useApp } from '@/context/AppContext'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
+import { buildPrintStyles } from '@/lib/printStyles'
 import type { SessionInfo } from '@/types'
 
 // QuickFix and Editor are no longer top-level routes — they are inline
@@ -249,16 +250,7 @@ export default function Chat() {
       const doc = printWindow.document
       doc.title = title
       const style = doc.createElement('style')
-      style.textContent = `
-        body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; color: #111; max-width: 760px; margin: 0 auto; }
-        h1 { font-size: 22px; margin-bottom: 4px; }
-        h3 { font-size: 14px; margin-top: 24px; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
-        hr { border: 0; border-top: 1px solid #ddd; margin: 16px 0; }
-        pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
-        code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 13px; }
-        p { white-space: pre-wrap; }
-        strong { font-weight: 600; }
-      `
+      style.textContent = buildPrintStyles({ variant: 'chat' })
       doc.head.appendChild(style)
       const h1 = doc.createElement('h1')
       h1.textContent = title
