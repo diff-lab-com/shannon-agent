@@ -403,6 +403,19 @@ function MemoryEditor({
   const [tagsInput, setTagsInput] = useState((initial?.tags ?? []).join(', '))
   const [confidence, setConfidence] = useState(initial?.confidence ?? 1.0)
   const [saving, setSaving] = useState(false)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+
+  const isDirty = () =>
+    project !== (initial?.project ?? '.') ||
+    category !== (initial?.category ?? 'context') ||
+    content !== (initial?.content ?? '') ||
+    tagsInput !== (initial?.tags ?? []).join(', ') ||
+    confidence !== (initial?.confidence ?? 1.0)
+
+  const attemptCancel = () => {
+    if (isDirty()) setConfirmDiscard(true)
+    else onCancel()
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -428,7 +441,7 @@ function MemoryEditor({
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-md"
-      onClick={onCancel}
+      onClick={attemptCancel}
     >
       <form
         onClick={(e) => e.stopPropagation()}
@@ -441,7 +454,7 @@ function MemoryEditor({
           </h2>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={attemptCancel}
             className="p-xs rounded hover:bg-surface-container-high cursor-pointer"
             aria-label={t('memory.action.close')}
           >
@@ -514,7 +527,7 @@ function MemoryEditor({
         <footer className="flex justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-lowest">
           <button
             type="button"
-            onClick={onCancel}
+            onClick={attemptCancel}
             className="px-md py-sm rounded-lg bg-surface-container-high text-on-surface text-label-md font-bold"
           >
             {t('memory.editor.cancel')}
@@ -527,6 +540,44 @@ function MemoryEditor({
             {saving ? t('memory.editor.saving') : t('memory.editor.save')}
           </button>
         </footer>
+
+        {confirmDiscard && (
+          <div
+            role="alertdialog"
+            aria-label={t('memory.editor.discard.title')}
+            className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center p-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full">
+              <div className="flex items-center gap-sm mb-md">
+                <span className="material-symbols-outlined text-error text-[24px]">warning</span>
+                <h3 className="font-headline-md text-on-surface">{t('memory.editor.discard.title')}</h3>
+              </div>
+              <p className="text-body-md text-on-surface-variant mb-lg">
+                {t('memory.editor.discard.message')}
+              </p>
+              <div className="flex justify-end gap-sm">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDiscard(false)}
+                  className="px-md py-sm rounded-lg bg-surface-container-high text-on-surface text-label-md font-bold cursor-pointer"
+                >
+                  {t('memory.editor.discard.keep')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmDiscard(false)
+                    onCancel()
+                  }}
+                  className="px-md py-sm rounded-lg bg-error text-on-error text-label-md font-bold cursor-pointer"
+                >
+                  {t('memory.editor.discard.confirm')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </form>
     </div>
   )
