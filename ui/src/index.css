@@ -193,6 +193,14 @@
     outline-offset: 2px;
     border-radius: 4px;
   }
+
+  /* Subtle press feedback on clickable buttons. Skips disabled and
+     elements that already declare their own active: utility. */
+  button:not(:disabled):active,
+  [role="button"]:not([aria-disabled="true"]):active {
+    transform: scale(0.98);
+    transition: transform 80ms ease-out;
+  }
 }
 
 /* shadcn radius tokens only — colors come from MD3 @theme above */
