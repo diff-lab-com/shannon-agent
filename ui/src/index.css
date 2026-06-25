@@ -182,8 +182,12 @@
      because they declare focus-visible:ring-* explicitly on the element. */
   button:focus-visible,
   a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
   [role="button"]:focus-visible,
   [role="menuitem"]:focus-visible,
+  [role="tab"]:focus-visible,
   summary:focus-visible {
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;
