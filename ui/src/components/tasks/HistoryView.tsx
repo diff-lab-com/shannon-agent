@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
 import ErrorState from '@/components/ui/error-state'
-import { CardSkeleton } from '@/components/SkeletonLoader'
+import { RowSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
 import type { TaskExecution, TaskExecutionDetail } from '@/types'
 import { statusBadge, formatUnixDateTime } from './shared'
@@ -80,7 +80,7 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
   if (loading) {
     return (
       <div className="space-y-md">
-        {Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}
+        <RowSkeleton count={4} />
       </div>
     )
   }
