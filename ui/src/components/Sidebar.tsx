@@ -235,7 +235,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
   return (
     <aside data-sidebar className={cn(
-      "fixed left-0 top-0 h-full bg-surface-container-lowest/70 backdrop-blur-[20px] border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_rgba(0,0,0,0.1)] transition-transform duration-300",
+      "fixed left-0 top-0 h-full bg-surface-container-lowest/70 backdrop-blur-[20px] border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-300",
       mobile ? "z-[70] w-[280px]" : "z-50",
     )} style={mobile ? undefined : { width }}>
       {/* Drag handle */}

@@ -144,15 +144,15 @@
 }
 
 @utility glass-panel {
-  background: rgba(255, 255, 255, 0.15);
+  background: color-mix(in srgb, var(--color-surface-container-lowest) 15%, transparent);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
 
 @utility glass-card {
-  background: rgba(255, 255, 255, 0.15);
+  background: color-mix(in srgb, var(--color-surface-container-lowest) 15%, transparent);
   backdrop-filter: blur(16px);
-  border: 1px solid rgba(226, 232, 240, 0.5);
+  border: 1px solid color-mix(in srgb, var(--color-outline-variant) 50%, transparent);
 }
 
 @utility node-connector {
@@ -172,9 +172,9 @@
 }
 
 @keyframes pulse-amber {
-    0% { box-shadow: 0 0 0 0 rgba(167, 101, 0, 0.4); }
-    70% { box-shadow: 0 0 0 10px rgba(167, 101, 0, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(167, 101, 0, 0); }
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-tertiary) 40%, transparent); }
+    70% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--color-tertiary) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-tertiary) 0%, transparent); }
 }
 
 @layer base {
