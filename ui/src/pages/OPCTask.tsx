@@ -5,6 +5,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 export default function OPCTask() {
   const intl = useIntl()
@@ -12,6 +13,7 @@ export default function OPCTask() {
   const { tasks, agents, usage, respondPermission } = useApp()
   const [revisionNote, setRevisionNote] = useState('')
   const [showRevisionInput, setShowRevisionInput] = useState<string | null>(null)
+  const [pendingAction, setPendingAction] = useState<'approve' | 'rollback' | null>(null)
   const { id } = useParams()
 
   // Find the task by URL param, or the first in-progress task
@@ -153,14 +155,14 @@ export default function OPCTask() {
                 <div className="flex flex-col gap-sm">
                   <button
                     className="w-full px-md py-sm rounded-xl bg-primary text-on-primary font-label-md hover:brightness-110 transition-all flex items-center justify-center gap-sm"
-                    onClick={() => { respondPermission(taskId, true); toast.success(t('opcTask.approvedExecution')) }}
+                    onClick={() => setPendingAction('approve')}
                   >
                     <span className="material-symbols-outlined text-[18px]">check_circle</span>
                     {t('opcTask.approveFinalMerge')}
                   </button>
                   <button
                     className="w-full px-md py-sm rounded-xl border border-error/30 text-error font-label-md hover:bg-error/10 transition-all flex items-center justify-center gap-sm"
-                    onClick={() => { respondPermission(taskId, false); toast.info(t('opcTask.rollbackRequested')) }}
+                    onClick={() => setPendingAction('rollback')}
                   >
                     <span className="material-symbols-outlined text-[18px]">undo</span>
                     {t('opcTask.rollback')}
@@ -266,6 +268,28 @@ export default function OPCTask() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingAction !== null}
+        title={pendingAction === 'approve' ? t('opcTask.approveConfirm.title') : t('opcTask.rollbackConfirm.title')}
+        message={pendingAction === 'approve'
+          ? t('opcTask.approveConfirm.message', { title: task?.title ?? '', count: agents.length })
+          : t('opcTask.rollbackConfirm.message', { title: task?.title ?? '' })}
+        confirmLabel={pendingAction === 'approve' ? t('opcTask.approveConfirm.confirm') : t('opcTask.rollbackConfirm.confirm')}
+        cancelLabel={pendingAction === 'approve' ? t('opcTask.approveConfirm.cancel') : t('opcTask.rollbackConfirm.cancel')}
+        destructive={pendingAction === 'rollback'}
+        onConfirm={() => {
+          if (pendingAction === 'approve') {
+            respondPermission(taskId, true)
+            toast.success(t('opcTask.approvedExecution'))
+          } else if (pendingAction === 'rollback') {
+            respondPermission(taskId, false)
+            toast.info(t('opcTask.rollbackRequested'))
+          }
+          setPendingAction(null)
+        }}
+        onCancel={() => setPendingAction(null)}
+      />
     </div>
   )
 }
