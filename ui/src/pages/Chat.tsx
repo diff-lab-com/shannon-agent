@@ -676,7 +676,8 @@ export default function Chat() {
                 </div>
                 {(() => {
                   const total = usage.input_tokens + usage.output_tokens
-                  const max = (usage as any).max_tokens ?? 200000
+                  const max = (usage as any).max_tokens as number | undefined
+                  if (!max) return null
                   const pct = Math.min(100, (total / max) * 100)
                   const barColor = pct > 80 ? 'bg-error' : pct > 50 ? 'bg-secondary' : 'bg-primary'
                   return (
