@@ -489,9 +489,9 @@ export default function Editor() {
                         style={{
                           color:
                             d.severity === 'error'
-                              ? 'var(--color-error, #b3261e)'
+                              ? 'var(--color-error)'
                               : d.severity === 'warning'
-                                ? 'var(--color-warning, #7c5800)'
+                                ? 'var(--color-tertiary)'
                                 : 'var(--color-on-surface-variant)',
                         }}
                       >
