@@ -1,10 +1,19 @@
 import { useState, useRef } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
+
+function isImageFile(path: string): boolean {
+  const dot = path.lastIndexOf('.')
+  if (dot < 0) return false
+  return IMAGE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase())
+}
 
 interface ChatInputProps {
   value: string
@@ -122,7 +131,13 @@ export default function ChatInput({
 
   const handleAttachClick = async () => {
     try {
-      const selected = await open({ multiple: true })
+      const selected = await open({
+        multiple: true,
+        filters: [
+          { name: t('chat.input.attach.filter.images'), extensions: Array.from(IMAGE_EXTENSIONS) },
+          { name: t('chat.input.attach.filter.all'), extensions: ['*'] },
+        ],
+      })
       if (!selected) return
       const paths = (Array.isArray(selected) ? selected : [selected]) as string[]
       if (paths.length > 0) onAttach(paths)
@@ -164,23 +179,39 @@ export default function ChatInput({
       <div className="flex flex-col">
         {attachedFiles.length > 0 && (
           <div className="flex flex-wrap items-center gap-xs px-md pt-md">
-            {attachedFiles.map((path, i) => (
-              <span key={i} className="inline-flex items-center gap-xs px-sm py-xs bg-primary/10 text-primary rounded-lg font-label-sm">
-                <span className="material-symbols-outlined text-[14px]">description</span>
-                {path.split('/').pop()}
-                <button
-                  type="button"
-                  className="hover:text-error cursor-pointer"
-                  aria-label={t('chat.input.attach.remove')}
-                  onClick={() => {
-                    const newFiles = attachedFiles.filter((_, idx) => idx !== i)
-                    onAttach(newFiles)
-                  }}
+            {attachedFiles.map((path, i) => {
+              const name = path.split(/[/\\]/).pop() || path
+              const isImage = isImageFile(path)
+              return (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-xs px-sm py-xs bg-primary/10 text-primary rounded-lg font-label-sm"
                 >
-                  <span className="material-symbols-outlined text-[14px]">close</span>
-                </button>
-              </span>
-            ))}
+                  {isImage ? (
+                    <img
+                      src={convertFileSrc(path)}
+                      alt={name}
+                      className="w-5 h-5 rounded object-cover shrink-0"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span className="material-symbols-outlined text-[14px]">description</span>
+                  )}
+                  {name}
+                  <button
+                    type="button"
+                    className="hover:text-error cursor-pointer"
+                    aria-label={t('chat.input.attach.remove')}
+                    onClick={() => {
+                      const newFiles = attachedFiles.filter((_, idx) => idx !== i)
+                      onAttach(newFiles)
+                    }}
+                  >
+                    <span className="material-symbols-outlined text-[14px]">close</span>
+                  </button>
+                </span>
+              )
+            })}
             {attachedFiles.length > 1 && (
               <button
                 type="button"

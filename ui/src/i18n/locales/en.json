@@ -1338,6 +1338,8 @@
   "chat.input.attach.dropHint": "Drop files to attach",
   "chat.input.attach.detachAll": "Detach all",
   "chat.input.attach.remove": "Remove file",
+  "chat.input.attach.filter.images": "Images",
+  "chat.input.attach.filter.all": "All Files",
   "chat.input.processing": "Processing...",
   "chat.input.placeholder": "Ask Shannon anything...",
   "chat.input.stop.aria": "Stop generation",
