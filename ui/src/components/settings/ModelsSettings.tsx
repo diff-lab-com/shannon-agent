@@ -269,10 +269,12 @@ interface ProviderPreset {
 
 const PROVIDER_PRESETS: ProviderPreset[] = [
   { id: 'openai', label: 'OpenAI', icon: 'bolt', desc: 'GPT-4.1 · o3', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', keyHint: 'sk-...' },
+  { id: 'anthropic', label: 'Anthropic', icon: 'auto_awesome', desc: 'Claude Sonnet 4.6 · Opus', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-6', keyHint: 'sk-ant-...' },
   { id: 'deepseek', label: 'DeepSeek', icon: 'psychology', desc: 'Chat · Reasoner', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', keyHint: 'sk-...' },
   { id: 'glm', label: 'GLM (Zhipu)', icon: 'auto_awesome', desc: 'GLM-4-Plus', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus', keyHint: '<api_key>.<secret>' },
   { id: 'minimax', label: 'MiniMax', icon: 'group', desc: 'abab6.5s', baseUrl: 'https://api.minimax.chat/v1', model: 'abab6.5s-chat', keyHint: '<group_id>.<api_key>' },
   { id: 'kimi', label: 'Kimi (Moonshot)', icon: 'dark_mode', desc: 'Long context', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k', keyHint: 'sk-...' },
+  { id: 'ollama', label: 'Ollama (local)', icon: 'dns', desc: 'Self-hosted models', baseUrl: 'http://localhost:11434/v1', model: 'llama3.2', keyHint: 'not required' },
 ]
 
 function QuickSetupPresets({
