@@ -41,8 +41,13 @@ interface Props {
 export default function ConversationsToday({ sessions, tasks }: Props) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { agents } = useApp()
+  const { agents, switchSession } = useApp()
   const navigate = useNavigate()
+
+  const openSession = async (id: string) => {
+    await switchSession(id)
+    navigate('/chat')
+  }
 
   const todaySessions = useMemo(
     () => sessions.filter(s => isToday(s.created_at)).sort((a, b) => b.created_at - a.created_at),
@@ -145,7 +150,7 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
               {todaySessions.slice(0, 5).map(s => (
                 <li key={s.id}>
                   <button
-                    onClick={() => navigate('/chat')}
+                    onClick={() => openSession(s.id)}
                     className="w-full text-left p-md rounded-xl bg-surface-container-lowest border border-outline-variant/30 hover:border-primary/40 transition-colors cursor-pointer flex items-center gap-md"
                   >
                     <span className="material-symbols-outlined text-on-surface-variant">chat_bubble</span>
