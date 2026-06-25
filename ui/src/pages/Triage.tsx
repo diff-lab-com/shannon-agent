@@ -37,13 +37,12 @@ function kindMeta(kind: string): { icon: string; color: string; label: string } 
   }
 }
 
-function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, onDelete }: {
+function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive }: {
   item: TriageItem
   selected: boolean
   onToggleSelected: (id: string) => void
   onMarkRead: (id: string) => void
   onArchive: (id: string) => void
-  onDelete: (id: string) => void
 }) {
   const intl = useIntl()
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
@@ -107,15 +106,6 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, o
               <span className="material-symbols-outlined text-[18px]">archive</span>
             </Button>
           )}
-          <Button
-            aria-label={t('triage.delete.aria')}
-            variant="ghost"
-            className="p-2 rounded-lg hover:bg-error/10 text-on-surface-variant hover:text-error cursor-pointer"
-            onClick={() => onDelete(item.id)}
-            title={t('triage.delete.title')}
-          >
-            <span className="material-symbols-outlined text-[18px]">delete</span>
-          </Button>
         </div>
       </div>
     </div>
@@ -131,8 +121,6 @@ export default function Triage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkRunning, setBulkRunning] = useState(false)
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
-  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
   const { stats } = useTriageStats()
   const filter = useMemo(() => ({
     kind: kindFilter,
@@ -214,29 +202,10 @@ export default function Triage() {
     clearSelection()
   }, [effectiveSelected, archive, clearSelection, intl])
 
-  // Delete in the UI maps to archive in the backend — the backend doesn't
-  // expose a hard-delete endpoint, so we treat archive as soft removal and
-  // surface it as "Delete" to match the spec's bulk complete/archive/delete
-  // triad. A future backend hard-delete can swap in here without UI changes.
-  const deleteItem = useCallback(async (id: string) => {
-    if (await archive(id)) toast.success(intl.formatMessage({ id: 'triage.toast.deleted' }, { count: 1 }))
-    setDeleteTargetId(null)
-  }, [archive, intl])
-
-  const bulkDelete = useCallback(async () => {
-    setBulkRunning(true)
-    let ok = 0
-    for (const id of effectiveSelected) {
-      if (await archive(id)) ok++
-    }
-    setBulkRunning(false)
-    if (ok > 0) {
-      const key = ok === 1 ? 'triage.toast.deleted' : 'triage.toast.deleted.plural'
-      toast.success(intl.formatMessage({ id: key }, { count: ok }))
-    }
-    setShowBulkDeleteConfirm(false)
-    clearSelection()
-  }, [effectiveSelected, archive, clearSelection, intl])
+  // Delete UI was removed — the backend doesn't expose a hard-delete endpoint,
+  // so the previous "Delete" button was lying to users (it actually archived).
+  // Archive is reversible via "Show archived" toggle; if the backend later
+  // adds hard-delete, re-add a destructive action with explicit copy.
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
@@ -355,15 +324,6 @@ export default function Triage() {
             <Button
               variant="ghost"
               disabled={bulkRunning}
-              onClick={() => setShowBulkDeleteConfirm(true)}
-              className="px-sm py-xs rounded-lg text-label-md text-error hover:bg-error/10 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span className="material-symbols-outlined text-[16px] mr-xs align-middle">delete</span>
-              {t('triage.bulk.delete')}
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={bulkRunning}
               onClick={clearSelection}
               className="ml-auto px-sm py-xs rounded-lg text-label-md text-on-surface-variant hover:text-primary cursor-pointer"
             >
@@ -420,7 +380,6 @@ export default function Triage() {
                     onToggleSelected={toggleSelected}
                     onMarkRead={markRead}
                     onArchive={archive}
-                    onDelete={setDeleteTargetId}
                   />
                 ))}
               </div>
@@ -428,86 +387,6 @@ export default function Triage() {
           </>
         )}
       </div>
-
-      {/* Single-item delete confirmation */}
-      {deleteTargetId && (
-        <div
-          role="dialog"
-          aria-label={t('triage.deleteDialog.title')}
-          className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center"
-          onClick={() => setDeleteTargetId(null)}
-          onKeyDown={e => { if (e.key === 'Escape') setDeleteTargetId(null) }}
-        >
-          <div
-            className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-error text-[24px]">delete</span>
-              <h3 className="font-headline-md text-on-surface">{t('triage.deleteDialog.title')}</h3>
-            </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">
-              {t('triage.deleteDialog.message')}
-            </p>
-            <div className="flex justify-end gap-sm">
-              <Button
-                variant="ghost"
-                className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container cursor-pointer"
-                onClick={() => setDeleteTargetId(null)}
-              >
-                {t('triage.deleteDialog.cancel')}
-              </Button>
-              <Button
-                className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90 cursor-pointer"
-                onClick={() => deleteItem(deleteTargetId)}
-              >
-                {t('triage.deleteDialog.confirm')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bulk delete confirmation */}
-      {showBulkDeleteConfirm && (
-        <div
-          role="dialog"
-          aria-label={t('triage.bulkDeleteDialog.title', { count: effectiveSelected.size })}
-          className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center"
-          onClick={() => setShowBulkDeleteConfirm(false)}
-          onKeyDown={e => { if (e.key === 'Escape') setShowBulkDeleteConfirm(false) }}
-        >
-          <div
-            className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-error text-[24px]">delete</span>
-              <h3 className="font-headline-md text-on-surface">{t('triage.bulkDeleteDialog.title', { count: effectiveSelected.size })}</h3>
-            </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">
-              {t('triage.bulkDeleteDialog.message')}
-            </p>
-            <div className="flex justify-end gap-sm">
-              <Button
-                variant="ghost"
-                disabled={bulkRunning}
-                className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container cursor-pointer"
-                onClick={() => setShowBulkDeleteConfirm(false)}
-              >
-                {t('triage.deleteDialog.cancel')}
-              </Button>
-              <Button
-                disabled={bulkRunning}
-                className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90 cursor-pointer disabled:opacity-50"
-                onClick={bulkDelete}
-              >
-                {bulkRunning ? t('triage.bulkDeleteDialog.deleting') : t('triage.deleteDialog.confirm')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
