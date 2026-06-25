@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import type { TaskItem, BackgroundTaskInfo, UpdateTaskPayload } from '@/types'
 import * as api from '@/lib/tauri-api'
 import { useApp } from '@/context/AppContext'
+import { normalizePriority } from '@/lib/task-status'
 
 type TaskLike = TaskItem | BackgroundTaskInfo
 
@@ -21,7 +22,7 @@ interface TaskDetailDrawerProps {
   onUpdated?: () => void
 }
 
-const PRIORITIES = ['low', 'normal', 'high', 'critical'] as const
+const PRIORITIES = ['low', 'normal', 'medium', 'high', 'critical'] as const
 const STATUSES = ['pending', 'in_progress', 'running', 'completed', 'failed', 'blocked'] as const
 
 function getTitle(task: TaskLike): string {
@@ -183,7 +184,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                 </select>
               ) : (
                 <p className="font-body-md text-on-surface mt-xs capitalize">
-                  {task.priority ?? t('tasks.taskDetailDrawer.none')}
+                  {(task.priority && normalizePriority(task.priority)) ?? t('tasks.taskDetailDrawer.none')}
                 </p>
               )}
             </div>

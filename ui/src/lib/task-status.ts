@@ -90,15 +90,39 @@ export function canonicalStatusFor(family: TaskStatusFamily): string {
 export const PRIORITY_RANK: Record<string, number> = {
   critical: 0,
   high: 1,
+  medium: 2,
   normal: 2,
   low: 3,
+}
+
+export type Priority = 'critical' | 'high' | 'medium' | 'normal' | 'low'
+
+/**
+ * Normalize arbitrary backend priority strings to a canonical Priority.
+ * Handles case variants ("High", "HIGH"), numeric variants ("p1", "P1"),
+ * and common synonyms ("urgent" → critical). Unknown values → 'normal'.
+ */
+export function normalizePriority(raw: string | undefined | null): Priority {
+  if (!raw) return 'normal'
+  const s = String(raw).toLowerCase().trim()
+  if (s === 'critical' || s === 'urgent' || s === 'p0' || s === 'blocker') return 'critical'
+  if (s === 'high' || s === 'p1') return 'high'
+  if (s === 'medium' || s === 'med' || s === 'p2') return 'medium'
+  if (s === 'low' || s === 'p3' || s === 'minor' || s === 'backlog') return 'low'
+  if (s === 'normal' || s === 'default' || s === '') return 'normal'
+  return 'normal'
+}
+
+/** Display rank for a normalized priority. */
+export function priorityRank(p: Priority): number {
+  return PRIORITY_RANK[p] ?? 2
 }
 
 /** Sort tasks within a column: priority desc, then title asc. Stable. */
 export function sortTasksByPriorityThenTitle<T extends { priority?: string; title: string }>(tasks: T[]): T[] {
   return [...tasks].sort((a, b) => {
-    const pa = PRIORITY_RANK[a.priority ?? 'normal'] ?? 2
-    const pb = PRIORITY_RANK[b.priority ?? 'normal'] ?? 2
+    const pa = priorityRank(normalizePriority(a.priority))
+    const pb = priorityRank(normalizePriority(b.priority))
     if (pa !== pb) return pa - pb
     return a.title.localeCompare(b.title)
   })
