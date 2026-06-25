@@ -12,7 +12,7 @@ that PR. Grouped by audit severity, then by page.
 
 | # | Page | Finding | Status |
 |---|------|---------|--------|
-| 1 | Chat | **Attach button has no handler** (US-CHAT-08). Files can only be attached via undocumented drag-and-drop. | Not in PR #50 |
+| 1 | Chat | **Attach button has no handler** (US-CHAT-08). Files can only be attached via undocumented drag-and-drop. | **Resolved.** Click handler shipped in bf8a933 (pre-PR #50, audit was stale). UX polish (image thumbnails + filter presets) shipped in commit 4f5ade4 on `s2/p0-chat-attach-enhancements`. |
 | 2 | Extensions → Skills | **Skill cards not clickable.** No detail drawer, no install flow. Hover state is purely decorative. | Not in PR #50 |
 
 ## Still open — P1 (per-page)
