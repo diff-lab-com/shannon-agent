@@ -29,6 +29,21 @@ vi.mock('@/lib/tauri-api', async () => {
   }
 })
 
+// CodeMirror 6 uses contenteditable + InputEvents that jsdom can't drive
+// via fireEvent.change. Replace it with a plain controlled textarea so
+// tests can edit the draft through the standard change event.
+vi.mock('@/components/editor/CodeEditor', () => ({
+  default: ({ value, onValueChange, readOnly }: any) => (
+    <textarea
+      data-testid="cm-mock"
+      value={value}
+      readOnly={readOnly}
+      onChange={e => onValueChange?.(e.target.value)}
+    />
+  ),
+  EditorDiagnostic: {},
+}))
+
 function renderEditor() {
   return render(
     <I18nProvider>
@@ -323,10 +338,20 @@ describe('Editor page — Phase E1 v2', () => {
     await screen.findByText('rust')
 
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
+
+    // Modify the draft — the previous version of this test clicked Save
+    // without changing anything, which meant it couldn't distinguish a real
+    // save from a no-op. Drive the mocked editor textarea to set new content.
+    const editor = screen.getByTestId('cm-mock') as HTMLTextAreaElement
+    fireEvent.change(editor, { target: { value: 'fn new_content() {}\n' } })
+
     fireEvent.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() => expect(saveTextFile).toHaveBeenCalledTimes(1))
-    expect(saveTextFile).toHaveBeenCalledWith('/tmp/foo.rs', 'let x = 1;\n')
+    expect(saveTextFile).toHaveBeenCalledWith(
+      '/tmp/foo.rs',
+      'fn new_content() {}\n',
+    )
   })
 
   it('navigates to chat with prefilled diagnostic on Ask AI click', async () => {
