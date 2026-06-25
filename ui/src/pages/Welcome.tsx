@@ -427,7 +427,7 @@ export default function Welcome() {
                     type="password"
                     value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
-                    placeholder={envHasKey ? '(loaded from environment)' : 'sk-...'}
+                    placeholder={envHasKey ? intl.formatMessage({ id: 'welcome.model.apiKey.placeholderEnv' }) : intl.formatMessage({ id: 'welcome.model.apiKey.placeholder' })}
                     autoComplete="off"
                     className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
                   />

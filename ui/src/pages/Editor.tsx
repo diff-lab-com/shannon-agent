@@ -272,7 +272,7 @@ export default function Editor() {
               type="text"
               value={filePath}
               onChange={(e) => setFilePath(e.target.value)}
-              placeholder="/abs/path/to/src/lib.rs"
+              placeholder={t('editor.filePath.placeholder')}
               className="flex-1 font-mono font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             />
             <button
@@ -448,7 +448,7 @@ export default function Editor() {
                 >
                   {SEVERITIES.map((s) => (
                     <option key={s} value={s}>
-                      {s}
+                      {t(`editor.severity.${s}`)}
                     </option>
                   ))}
                 </select>
@@ -460,7 +460,7 @@ export default function Editor() {
                 type="text"
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                placeholder="unused variable: `x`"
+                placeholder={t('editor.message.placeholder')}
                 className="font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               />
             </label>
@@ -495,7 +495,7 @@ export default function Editor() {
                                 : 'var(--color-on-surface-variant)',
                         }}
                       >
-                        {d.severity}
+                        {t(`editor.severity.${d.severity}`)}
                       </span>
                       <span className="flex-1 font-label-md">
                         <span className="font-mono text-on-surface-variant">
@@ -508,7 +508,9 @@ export default function Editor() {
                           className="font-label-sm uppercase text-[10px] tracking-wider text-on-surface-variant"
                           title={
                             d.source
-                              ? `source: ${d.source}${d.code ? ` (${d.code})` : ''}`
+                              ? (d.code
+                                  ? intl.formatMessage({ id: 'editor.sourceTitle' }, { source: d.source, code: d.code })
+                                  : intl.formatMessage({ id: 'editor.sourceTitle.noCode' }, { source: d.source }))
                               : t('editor.source')
                           }
                         >
