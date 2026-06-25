@@ -68,7 +68,7 @@ export default function TaskCard({ task, isRunning, onSelect, onRunNow, onCancel
             {isActive ? (
               <Button
                 aria-label={t('tasks.taskCard.cancelAria')}
-                className="p-2 rounded-lg hover:bg-error/10 text-error transition-colors cursor-pointer"
+                className="p-2 rounded-lg hover:bg-error/10 text-error transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/40"
                 onClick={e => { e.stopPropagation(); onCancel() }}
               >
                 <span className="material-symbols-outlined" aria-hidden="true">stop_circle</span>

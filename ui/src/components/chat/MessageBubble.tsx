@@ -187,7 +187,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
               aria-label={t('chat.message.branch.aria')}
               onClick={handleBranch}
               disabled={isBranching || !currentSessionId}
-              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors"
+              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               title={t('chat.message.branch.button')}
             >
               <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
@@ -228,20 +228,20 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           )}
         </div>
         <ActionToolbar>
-          <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
+          <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
           </Button>
-          <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
+          <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
           </Button>
-          <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
+          <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
           </Button>
           {hasReport && (
             <Button
               aria-label={t('chat.message.report.aria')}
               onClick={() => setReportOpen(true)}
-              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors"
+              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <span className="material-symbols-outlined text-[18px]" aria-hidden="true">article</span>
               <span className="text-label-sm">{t('chat.message.report')}</span>
