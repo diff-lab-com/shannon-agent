@@ -81,7 +81,7 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
     if (current === target) return
     const newStatus = canonicalStatusFor(target)
     setOverrides(prev => ({ ...prev, [taskId]: newStatus }))
-    toast.success(intl.formatMessage({ id: 'opc.kanban.movedTo' }, { column: STATUS_FAMILY[target].title }))
+    toast.success(intl.formatMessage({ id: 'opc.kanban.movedTo' }, { column: intl.formatMessage({ id: STATUS_FAMILY[target].titleKey }) }))
     try {
       await api.updateTask({ id: taskId, status: newStatus })
       setOverrides(prev => {

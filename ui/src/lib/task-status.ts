@@ -12,8 +12,8 @@ export type TaskStatusFamily = 'queued' | 'active' | 'blocked' | 'done' | 'faile
 
 export interface StatusFamilyMeta {
   key: TaskStatusFamily
-  /** Canonical English title shown in column headers. */
-  title: string
+  /** i18n key for the column header title. */
+  titleKey: string
   /** Material Symbols icon name. */
   icon: string
   /** All raw backend statuses that map to this family (lowercase compare). */
@@ -27,7 +27,7 @@ export interface StatusFamilyMeta {
 export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   queued: {
     key: 'queued',
-    title: 'Queued',
+    titleKey: 'taskStatus.queued.title',
     icon: 'inbox',
     statuses: ['pending', 'queued', 'ready', 'todo', 'backlog'],
     dotClass: 'bg-outline',
@@ -35,7 +35,7 @@ export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   },
   active: {
     key: 'active',
-    title: 'In Progress',
+    titleKey: 'taskStatus.active.title',
     icon: 'play_circle',
     statuses: ['in_progress', 'running', 'active', 'doing'],
     dotClass: 'bg-primary',
@@ -43,7 +43,7 @@ export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   },
   blocked: {
     key: 'blocked',
-    title: 'Blocked',
+    titleKey: 'taskStatus.blocked.title',
     icon: 'block',
     statuses: ['blocked', 'waiting', 'review', 'pending_review', 'pending'],
     dotClass: 'bg-warning',
@@ -51,7 +51,7 @@ export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   },
   done: {
     key: 'done',
-    title: 'Completed',
+    titleKey: 'taskStatus.done.title',
     icon: 'check_circle',
     statuses: ['completed', 'done', 'succeeded', 'shipped'],
     dotClass: 'bg-tertiary',
@@ -59,7 +59,7 @@ export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   },
   failed: {
     key: 'failed',
-    title: 'Failed',
+    titleKey: 'taskStatus.failed.title',
     icon: 'error',
     statuses: ['failed', 'error', 'canceled', 'cancelled', 'deprecated', 'abandoned'],
     dotClass: 'bg-error',

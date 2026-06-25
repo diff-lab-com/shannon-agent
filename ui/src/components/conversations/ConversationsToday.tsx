@@ -24,12 +24,12 @@ function isWithinDays(epochMs: number, days: number): boolean {
   return Date.now() - epochMs < days * 86_400_000
 }
 
-function relativeTime(epochMs: number): string {
+function relativeTime(epochMs: number, t: (id: string, values?: Record<string, string | number>) => string): string {
   if (!epochMs) return ''
   const diff = Date.now() - epochMs
-  if (diff < 60_000) return 'just now'
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+  if (diff < 60_000) return t('conversations.today.justNow')
+  if (diff < 3_600_000) return t('conversations.today.minutesAgo', { count: Math.floor(diff / 60_000) })
+  if (diff < 86_400_000) return t('conversations.today.hoursAgo', { count: Math.floor(diff / 3_600_000) })
   return new Date(epochMs).toLocaleDateString()
 }
 
@@ -40,7 +40,7 @@ interface Props {
 
 export default function ConversationsToday({ sessions, tasks }: Props) {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
   const { agents, switchSession } = useApp()
   const navigate = useNavigate()
 
@@ -134,17 +134,17 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
           <header className="flex items-center justify-between mb-md">
             <h3 className="font-headline-md text-on-surface flex items-center gap-sm">
               <span className="material-symbols-outlined text-primary">forum</span>
-              Recent chats
+              {t('conversations.today.recentChats')}
             </h3>
             <button
               onClick={() => navigate('/chat')}
               className="font-label-sm text-primary hover:underline cursor-pointer"
             >
-              Open Chat →
+              {t('conversations.today.openChat')}
             </button>
           </header>
           {todaySessions.length === 0 ? (
-            <EmptyHint icon="chat_bubble_outline" text="No chats yet today. Start one in Chat." />
+            <EmptyHint icon="chat_bubble_outline" text={t('conversations.today.noChatsToday')} />
           ) : (
             <ul className="space-y-sm">
               {todaySessions.slice(0, 5).map(s => (
@@ -155,9 +155,9 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
                   >
                     <span className="material-symbols-outlined text-on-surface-variant">chat_bubble</span>
                     <div className="flex-1 min-w-0">
-                      <div className="font-label-md text-on-surface truncate">{s.title || 'Untitled chat'}</div>
+                      <div className="font-label-md text-on-surface truncate">{s.title || t('conversations.today.untitledChat')}</div>
                       <div className="font-label-sm text-on-surface-variant mt-xs">
-                        {s.message_count} message{s.message_count === 1 ? '' : 's'} · {relativeTime(s.created_at)}
+                        {t('conversations.today.messages', { count: s.message_count })} · {relativeTime(s.created_at, t)}
                       </div>
                     </div>
                   </button>
@@ -172,30 +172,30 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
           <header className="flex items-center justify-between mb-md">
             <h3 className="font-headline-md text-on-surface flex items-center gap-sm">
               <span className="material-symbols-outlined text-primary">event</span>
-              Due today
+              {t('conversations.today.dueToday')}
             </h3>
             <button
               onClick={() => navigate('/tasks')}
               className="font-label-sm text-primary hover:underline cursor-pointer"
             >
-              All tasks →
+              {t('conversations.today.allTasks')}
             </button>
           </header>
           {dueToday.length === 0 ? (
-            <EmptyHint icon="event_available" text="Nothing due today." />
+            <EmptyHint icon="event_available" text={t('conversations.today.nothingDue')} />
           ) : (
             <ul className="space-y-sm">
-              {dueToday.map(t => {
-                const fam = classifyStatus(t.status)
+              {dueToday.map(task => {
+                const fam = classifyStatus(task.status)
                 const meta = STATUS_FAMILY[fam]
                 return (
-                  <li key={t.id} className="p-md rounded-xl bg-surface-container-lowest border border-outline-variant/30 flex items-center gap-md">
+                  <li key={task.id} className="p-md rounded-xl bg-surface-container-lowest border border-outline-variant/30 flex items-center gap-md">
                     <span className={`w-2 h-2 rounded-full shrink-0 ${meta.dotClass}`} />
                     <div className="flex-1 min-w-0">
-                      <div className="font-label-md text-on-surface truncate">{t.title}</div>
+                      <div className="font-label-md text-on-surface truncate">{task.title}</div>
                       <div className="font-label-sm text-on-surface-variant mt-xs">
-                        {meta.title}
-                        {t.due_date && <> · due {new Date(t.due_date * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</>}
+                        {t(meta.titleKey)}
+                        {task.due_date && <> · {t('conversations.today.due', { time: new Date(task.due_date * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) })}</>}
                       </div>
                     </div>
                   </li>
@@ -212,13 +212,13 @@ export default function ConversationsToday({ sessions, tasks }: Props) {
           <header className="flex items-center justify-between mb-md">
             <h3 className="font-headline-md text-on-surface flex items-center gap-sm">
               <span className="material-symbols-outlined text-primary">smart_toy</span>
-              Active agents
+              {t('conversations.today.activeAgents')}
             </h3>
             <button
               onClick={() => navigate('/opc')}
               className="font-label-sm text-primary hover:underline cursor-pointer"
             >
-              Open OPC →
+              {t('conversations.today.openOpc')}
             </button>
           </header>
           <ul className="grid grid-cols-1 sm:grid-cols-3 gap-sm">
