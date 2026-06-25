@@ -43,7 +43,7 @@ describe('OPCMissionFocus', () => {
   it('toggles to textarea on Edit click', () => {
     renderFocus()
     fireEvent.click(screen.getByText('Edit'))
-    expect(screen.getByText('Save Focus')).toBeInTheDocument()
+    expect(screen.getByText('Save Mission')).toBeInTheDocument()
     expect(screen.getByLabelText("Edit today's mission")).toBeInTheDocument()
   })
 
