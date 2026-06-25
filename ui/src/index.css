@@ -191,12 +191,12 @@
   summary:focus-visible {
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;
-    border-radius: 4px;
   }
 
-  /* Subtle press feedback on clickable buttons. Skips disabled and
-     elements that already declare their own active: utility. */
-  button:not(:disabled):active,
+  /* Subtle press feedback on clickable buttons. Skips disabled,
+     draggable (DnD handles must not visually shift on drag start),
+     and elements that already declare their own active: utility. */
+  button:not(:disabled):not([draggable]):active,
   [role="button"]:not([aria-disabled="true"]):active {
     transform: scale(0.98);
     transition: transform 80ms ease-out;
@@ -909,17 +909,6 @@
   --color-outline-variant: #c0b292;
   --color-background: #fbf1c7;
   --color-on-background: #3c3836;
-}
-
-/* Focus-visible styles for accessibility */
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
-  border-radius: 4px;
 }
 
 /* Slider thumb for range inputs */
