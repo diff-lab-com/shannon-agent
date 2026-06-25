@@ -11,6 +11,7 @@ import {
   type InstalledAgent,
 } from "@/lib/tauri-api";
 import { SecurityBadge } from "./SecurityBadge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 /**
  * P4 Agents tab — federated catalog + install/remove.
@@ -23,7 +24,7 @@ import { SecurityBadge } from "./SecurityBadge";
  */
 export default function Agents() {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const { search } = useOutletContext<{ search: string }>();
 
@@ -36,6 +37,7 @@ export default function Agents() {
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ id: string; msg: string; ok: boolean } | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -193,7 +195,7 @@ export default function Agents() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleUninstall(agent.name)}
+                  onClick={() => setRemoveTarget(agent.name)}
                   disabled={busyId === `uninstall:${agent.name}`}
                   className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
                 >
@@ -204,6 +206,20 @@ export default function Agents() {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title={t('extensions.agents.removeConfirm.title')}
+        message={t('extensions.agents.removeConfirm.message', { name: removeTarget ?? '' })}
+        confirmLabel={t('extensions.agents.removeConfirm.confirm')}
+        cancelLabel={t('extensions.agents.removeConfirm.cancel')}
+        destructive
+        busy={busyId?.startsWith('uninstall:') ?? false}
+        onConfirm={() => {
+          if (removeTarget) void handleUninstall(removeTarget).finally(() => setRemoveTarget(null))
+        }}
+        onCancel={() => setRemoveTarget(null)}
+      />
     </div>
   );
 }

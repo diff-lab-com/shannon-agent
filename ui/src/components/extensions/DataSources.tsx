@@ -11,6 +11,7 @@ import {
   type InstalledDataSource,
 } from "@/lib/tauri-api";
 import DataSourcesQuery from "./DataSourcesQuery";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 const DATASOURCE_ICONS: Record<string, string> = {
   obsidian: 'book',
@@ -48,7 +49,7 @@ function datasourceIcon(slug: string): string {
  */
 export default function DataSources() {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const { search } = useOutletContext<{ search: string }>();
 
@@ -64,6 +65,7 @@ export default function DataSources() {
   const [installForm, setInstallForm] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<{ slug: string; msg: string; ok: boolean } | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -271,7 +273,7 @@ export default function DataSources() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleUninstall(row.slug)}
+                  onClick={() => setRemoveTarget(row.slug)}
                   disabled={busySlug === `uninstall:${row.slug}`}
                   className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
                 >
@@ -282,6 +284,20 @@ export default function DataSources() {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title={t('extensions.datasources.removeConfirm.title')}
+        message={t('extensions.datasources.removeConfirm.message', { name: removeTarget ?? '' })}
+        confirmLabel={t('extensions.datasources.removeConfirm.confirm')}
+        cancelLabel={t('extensions.datasources.removeConfirm.cancel')}
+        destructive
+        busy={busySlug?.startsWith('uninstall:') ?? false}
+        onConfirm={() => {
+          if (removeTarget) void handleUninstall(removeTarget).finally(() => setRemoveTarget(null))
+        }}
+        onCancel={() => setRemoveTarget(null)}
+      />
     </div>
   );
 }

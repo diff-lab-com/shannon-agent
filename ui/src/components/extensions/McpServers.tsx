@@ -9,6 +9,7 @@ import {
 import { safeErrorMessage } from "@/lib/packageValidation";
 import type { McpServerInfo } from "@/types";
 import McpAddServerDialog from "./McpAddServerDialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 /** Semantic icon per known MCP server. Falls back to a hub/storage icon. */
 const MCP_SERVER_ICONS: Record<string, string> = {
@@ -76,6 +77,7 @@ export default function McpServers() {
   const [installedLoading, setInstalledLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   const refreshInstalled = () => {
     listMcpServers()
@@ -125,7 +127,21 @@ export default function McpServers() {
         servers={installed}
         loading={installedLoading}
         busyId={busyId}
-        onUninstall={handleUninstall}
+        onUninstall={(name) => setRemoveTarget(name)}
+      />
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title={t("extensions.mcp.removeConfirm.title")}
+        message={t("extensions.mcp.removeConfirm.message", { name: removeTarget ?? "" })}
+        confirmLabel={t("extensions.mcp.removeConfirm.confirm")}
+        cancelLabel={t("extensions.mcp.removeConfirm.cancel")}
+        destructive
+        busy={busyId?.startsWith("uninstall:") ?? false}
+        onConfirm={() => {
+          if (removeTarget) void handleUninstall(removeTarget).finally(() => setRemoveTarget(null))
+        }}
+        onCancel={() => setRemoveTarget(null)}
       />
 
       <div className="flex justify-center pt-sm">
