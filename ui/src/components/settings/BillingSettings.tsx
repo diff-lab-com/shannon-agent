@@ -75,6 +75,9 @@ export default function BillingSettings() {
           <p className="font-body-sm text-on-surface-variant mt-xs">
             {t('settings.billing.demoDesc')}
           </p>
+          <p className="font-body-sm text-on-surface-variant mt-xs">
+            {t('settings.billing.demoActionsDisabled')}
+          </p>
         </div>
       </div>
 
@@ -113,8 +116,16 @@ export default function BillingSettings() {
               </div>
             </div>
             <div className="flex gap-3 mt-auto">
-              <Button className="flex-1 py-3 px-4 bg-primary text-on-primary rounded-xl font-bold text-center hover:opacity-90 active:scale-[0.98] transition-all cursor-pointer" onClick={() => setShowChangePlan(true)}>{t('settings.billing.changePlan')}</Button>
-              <Button className="px-4 py-3 border border-outline-variant text-on-surface-variant rounded-xl hover:bg-surface-container-low active:scale-[0.98] transition-all cursor-pointer font-bold" onClick={() => setShowCancelConfirm(true)}>{t('settings.billing.cancel')}</Button>
+              <Button
+                disabled
+                title={t('settings.billing.demoActionsDisabled')}
+                className="flex-1 py-3 px-4 bg-primary text-on-primary rounded-xl font-bold text-center opacity-50 cursor-not-allowed"
+              >{t('settings.billing.changePlan')}</Button>
+              <Button
+                disabled
+                title={t('settings.billing.demoActionsDisabled')}
+                className="px-4 py-3 border border-outline-variant text-on-surface-variant rounded-xl font-bold opacity-50 cursor-not-allowed"
+              >{t('settings.billing.cancel')}</Button>
             </div>
           </section>
 
