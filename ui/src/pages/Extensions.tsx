@@ -86,7 +86,7 @@ export default function Extensions() {
             />
           </div>
           {ctaTextKey && (
-            <Button onClick={ctaAction} className="bg-primary text-on-primary px-lg py-sm rounded-full font-bold text-label-md hover:bg-primary/90 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0">
+            <Button onClick={ctaAction} className="bg-primary text-on-primary px-lg py-sm rounded-lg font-bold text-label-md hover:bg-primary/90 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0">
               <span className="material-symbols-outlined text-[18px]">{ctaIcon}</span>
               {t(ctaTextKey)}
             </Button>
