@@ -144,7 +144,7 @@ export default function MemoryPanel() {
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1100px] mx-auto px-lg py-xl">
         <header className="mb-xl">
-          <h1 className="text-headline-md font-bold text-on-surface mb-xs">
+          <h1 className="text-headline-md font-headline-md text-on-surface mb-xs">
             {t('memory.title')}
           </h1>
           <p className="text-body-md text-on-surface-variant">

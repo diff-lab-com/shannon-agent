@@ -83,7 +83,7 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
   return (
     <div className="p-lg max-w-5xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">
           {t('extensions.datasources.query.title')}
         </h2>
         <p className="text-body-md text-on-surface-variant">

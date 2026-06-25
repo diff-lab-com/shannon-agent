@@ -270,7 +270,7 @@ export default function Plugins() {
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-md">
           <span className="material-symbols-outlined text-primary text-[32px]">workspaces</span>
         </div>
-        <h2 className="text-headline-md font-bold text-on-surface mb-sm">
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-sm">
           {intl.formatMessage({ id: "extensions.plugins.title" })}
         </h2>
         <p className="text-body-md text-on-surface-variant max-w-xl mx-auto">

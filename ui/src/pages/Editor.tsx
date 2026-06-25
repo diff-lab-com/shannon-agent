@@ -256,7 +256,7 @@ export default function Editor() {
   return (
     <div className="max-w-6xl mx-auto p-md flex flex-col gap-md">
       <header>
-        <h2 className="font-headline-md text-on-surface">{t('editor.title')}</h2>
+        <h2 className="text-headline-md font-headline-md text-on-surface">{t('editor.title')}</h2>
         <p className="font-label-sm text-on-surface-variant mt-xs">
           {t('editor.subtitle')}
         </p>
