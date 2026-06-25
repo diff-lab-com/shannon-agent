@@ -22,6 +22,10 @@ export function useKeyboardShortcuts(onTogglePalette?: () => void, onToggleHelp?
       },
       'mod+1': () => navigate('/chat'),
       'mod+2': () => navigate('/tasks'),
+      'mod+3': () => navigate('/extensions'),
+      'mod+4': () => navigate('/memory'),
+      'mod+5': () => navigate('/editor'),
+      'mod+6': () => navigate('/settings'),
       '?': () => onToggleHelp?.(),
       'escape': () => {
         if (isQuerying) cancelQuery()
