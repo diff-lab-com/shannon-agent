@@ -98,13 +98,18 @@ export default function Chat() {
 
   // Pre-fill the composer when navigated from elsewhere (e.g. Editor's
   // "Ask AI about this diagnostic" button passes { prefill } in location.state).
+  // Guard with a ref so the effect doesn't re-fire on every keystroke that
+  // updates `input` — only react to the navigation event itself.
+  const prefillApplied = useRef(false)
   useEffect(() => {
+    if (prefillApplied.current) return
     const prefill = (location.state as { prefill?: string } | null)?.prefill
-    if (prefill && !input) {
+    if (prefill) {
       setInput(prefill)
+      prefillApplied.current = true
       navigate(location.pathname, { replace: true, state: null })
     }
-  }, [location.state, input, navigate, location.pathname])
+  }, [location.state, location.pathname, navigate])
   const [sessionSearch, setSessionSearch] = useState('')
   const [backendSessionHits, setBackendSessionHits] = useState<SessionInfo[] | null>(null)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
