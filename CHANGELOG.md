@@ -4,6 +4,16 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
 
 ## [Unreleased — S2 follow-ups] — Engine pin + dev-mode schema validation
 
+### Tooling
+
+- **Local dev debugging scripts.** `scripts/dev-start.sh` launches
+  vite on :1420, waits for the port to respond (up to 60 s), then
+  starts `cargo run`. `scripts/dev-stop.sh` reads the PID files and
+  kills both processes, with `pkill` and port-free fallbacks for
+  stray children. Logs land in `${XDG_RUNTIME_DIR:-/tmp}/shannon-dev/`.
+  Replaces the two-terminal dance that left tauri caching
+  connection-refused state when vite was slow to bind.
+
 ### Changes
 
 - **Engine pin bumped to `d49e7f5`.** Picks up the D1 Phase 3 cleanup
