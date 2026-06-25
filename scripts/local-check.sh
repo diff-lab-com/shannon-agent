@@ -30,4 +30,11 @@ echo "==> UI: pnpm lint + test"
 pnpm --dir ui lint
 pnpm --dir ui test --run
 
+if command -v shellcheck >/dev/null 2>&1; then
+  echo "==> shellcheck (scripts/)"
+  shellcheck -x scripts/*.sh
+else
+  echo "==> shellcheck not installed; skipping (install with 'apt install shellcheck')"
+fi
+
 echo "ALL OK"

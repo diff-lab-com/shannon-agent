@@ -18,7 +18,9 @@ PORT=1420
 cleanup() {
   echo
   echo "==> cleaning up dev processes"
+  # shellcheck disable=SC2015 # || true is intentional error suppression under set -e
   [[ -f "$TAURI_PID_FILE" ]] && kill "$(cat "$TAURI_PID_FILE")" 2>/dev/null || true
+  # shellcheck disable=SC2015
   [[ -f "$VITE_PID_FILE" ]]  && kill "$(cat "$VITE_PID_FILE")"  2>/dev/null || true
   rm -f "$VITE_PID_FILE" "$TAURI_PID_FILE"
 }
@@ -34,6 +36,7 @@ fi
 EXISTING="$(lsof -ti :$PORT 2>/dev/null || true)"
 if [[ -n "$EXISTING" ]]; then
   echo "==> port :$PORT held by pid $EXISTING; killing"
+  # shellcheck disable=SC2086 # intentional word splitting: lsof returns newline-separated PIDs
   kill $EXISTING 2>/dev/null || true
   sleep 1
 fi

@@ -25,20 +25,26 @@ kill_if_alive tauri "$TAURI_PID_FILE"
 kill_if_alive vite  "$VITE_PID_FILE"
 
 # Fallback: catch orphans (started in another shell, lost PID file, etc.)
+# shellcheck disable=SC2015 # || true is intentional error suppression under set -uo pipefail
 pkill -f "cargo run" 2>/dev/null && echo "==> killed stray 'cargo run'" || true
+# shellcheck disable=SC2015
 pkill -f "shannon-desktop" 2>/dev/null && echo "==> killed stray shannon-desktop binary" || true
+# shellcheck disable=SC2015
 pkill -f "pnpm.*ui.*dev" 2>/dev/null && echo "==> killed stray vite (pnpm dev)" || true
+# shellcheck disable=SC2015
 pkill -f "vite.*--port 1420" 2>/dev/null && echo "==> killed stray vite (port 1420)" || true
 
 # Final sweep: whoever holds the port.
 EXISTING="$(lsof -ti :$PORT 2>/dev/null || true)"
 if [[ -n "$EXISTING" ]]; then
   echo "==> port :$PORT still held by pid $EXISTING; SIGTERM"
+  # shellcheck disable=SC2086 # intentional word splitting: lsof returns newline-separated PIDs
   kill $EXISTING 2>/dev/null || true
   sleep 1
   EXISTING="$(lsof -ti :$PORT 2>/dev/null || true)"
   if [[ -n "$EXISTING" ]]; then
     echo "==> still alive; SIGKILL"
+    # shellcheck disable=SC2086
     kill -9 $EXISTING 2>/dev/null || true
   fi
 fi
