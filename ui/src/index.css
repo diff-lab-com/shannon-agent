@@ -3,7 +3,7 @@
 /* @import "shadcn/tailwind.css"; — broken: package not installed, pre-existing */
 @import "@fontsource-variable/geist";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (&:where([data-theme="tokyo-night"], [data-theme="catppuccin"], [data-theme="nord"], [data-theme="ember"], [data-theme="slate"], [data-theme="solarized"], [data-theme="dracula"], [data-theme="gruvbox"]) *));
 
 @theme {
   --color-primary: #6b38d4;
