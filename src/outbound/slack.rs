@@ -78,7 +78,9 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let err = rt.block_on(send(&reqwest::Client::new(), &cfg, "hi")).unwrap_err();
+        let err = rt
+            .block_on(send(&reqwest::Client::new(), &cfg, "hi"))
+            .unwrap_err();
         assert!(err.contains("bot_token"));
     }
 
@@ -92,7 +94,9 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let err = rt.block_on(send(&reqwest::Client::new(), &cfg, "hi")).unwrap_err();
+        let err = rt
+            .block_on(send(&reqwest::Client::new(), &cfg, "hi"))
+            .unwrap_err();
         assert!(err.contains("channel"));
     }
 

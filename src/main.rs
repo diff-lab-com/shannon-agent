@@ -12,8 +12,8 @@ fn main() {
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
     use shannon_desktop::commands_files;
-    use shannon_desktop::commands_memory;
     use shannon_desktop::commands_mcp;
+    use shannon_desktop::commands_memory;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_outbound;

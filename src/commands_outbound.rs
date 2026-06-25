@@ -74,8 +74,10 @@ async fn load_outbound() -> Result<OutboundConfigDto, String> {
     let Some(outbound) = notif.get("outbound").and_then(|v| v.as_table()) else {
         return Ok(OutboundConfigDto::default());
     };
-    let slack = outbound.get("slack").and_then(|v| v.as_table()).map(|t| {
-        SlackOutboundDto {
+    let slack = outbound
+        .get("slack")
+        .and_then(|v| v.as_table())
+        .map(|t| SlackOutboundDto {
             bot_token: t
                 .get("bot_token")
                 .and_then(|v| v.as_str())
@@ -86,10 +88,11 @@ async fn load_outbound() -> Result<OutboundConfigDto, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string(),
-        }
-    });
-    let telegram = outbound.get("telegram").and_then(|v| v.as_table()).map(|t| {
-        TelegramOutboundDto {
+        });
+    let telegram = outbound
+        .get("telegram")
+        .and_then(|v| v.as_table())
+        .map(|t| TelegramOutboundDto {
             bot_token: t
                 .get("bot_token")
                 .and_then(|v| v.as_str())
@@ -100,8 +103,7 @@ async fn load_outbound() -> Result<OutboundConfigDto, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default()
                 .to_string(),
-        }
-    });
+        });
     Ok(OutboundConfigDto { slack, telegram })
 }
 
@@ -128,7 +130,10 @@ async fn save_outbound(dto: &OutboundConfigDto) -> Result<(), String> {
     }
     if let Some(tg) = dto.telegram.as_ref() {
         let mut t = toml::value::Table::new();
-        t.insert("bot_token".into(), toml::Value::String(tg.bot_token.clone()));
+        t.insert(
+            "bot_token".into(),
+            toml::Value::String(tg.bot_token.clone()),
+        );
         t.insert("chat_id".into(), toml::Value::String(tg.chat_id.clone()));
         outbound.insert("telegram".into(), toml::Value::Table(t));
     }
@@ -166,7 +171,6 @@ async fn clear_outbound() -> Result<(), String> {
 
 // Re-export so callers outside the crate boundary can build an
 // OutboundConfigDto without reaching into the outbound submodule directly.
-
 
 #[cfg(test)]
 mod tests {
