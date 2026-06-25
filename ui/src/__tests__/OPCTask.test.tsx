@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import OPCTask from '@/pages/OPCTask'
@@ -119,6 +119,8 @@ describe('OPCTask', () => {
     ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
     renderOPCTask()
     fireEvent.click(screen.getByText('Approve Final Merge'))
+    const dialog = screen.getByRole('alertdialog', { name: /Approve final merge\?/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve merge$/ }))
     expect(ctx.respondPermission).toHaveBeenCalledWith('1', true)
   })
 
@@ -127,6 +129,8 @@ describe('OPCTask', () => {
     ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
     renderOPCTask()
     fireEvent.click(screen.getByText('Rollback'))
+    const dialog = screen.getByRole('alertdialog', { name: /Rollback task\?/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Rollback$/ }))
     expect(ctx.respondPermission).toHaveBeenCalledWith('1', false)
   })
 
