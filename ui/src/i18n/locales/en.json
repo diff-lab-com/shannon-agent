@@ -1642,6 +1642,7 @@
   "editor.loadFile": "Load file",
   "editor.reRun": "Re-run diagnostics",
   "editor.addSquiggle": "Add manual squiggle",
+  "editor.askAi": "Ask AI",
   "editor.browse": "Browse",
   "editor.cancel": "Cancel",
   "editor.editMode": "Edit",

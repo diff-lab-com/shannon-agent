@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, memo, lazy, Suspense } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
@@ -91,9 +91,20 @@ export default function Chat() {
   } = useApp()
   const intl = useIntl()
   const navigate = useNavigate()
+  const location = useLocation()
   const t = (id: string) => intl.formatMessage({ id })
 
   const [input, setInput] = useState('')
+
+  // Pre-fill the composer when navigated from elsewhere (e.g. Editor's
+  // "Ask AI about this diagnostic" button passes { prefill } in location.state).
+  useEffect(() => {
+    const prefill = (location.state as { prefill?: string } | null)?.prefill
+    if (prefill && !input) {
+      setInput(prefill)
+      navigate(location.pathname, { replace: true, state: null })
+    }
+  }, [location.state, input, navigate, location.pathname])
   const [sessionSearch, setSessionSearch] = useState('')
   const [backendSessionHits, setBackendSessionHits] = useState<SessionInfo[] | null>(null)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)

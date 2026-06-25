@@ -5,7 +5,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import Editor from '@/pages/Editor'
@@ -37,6 +37,19 @@ function renderEditor() {
       </MemoryRouter>
     </I18nProvider>,
   )
+}
+
+function renderEditorWithRouter() {
+  const router = createMemoryRouter(
+    [{ path: '/', element: <Editor /> }, { path: '/chat', element: <div /> }],
+    { initialEntries: ['/'] },
+  )
+  render(
+    <I18nProvider>
+      <RouterProvider router={router} />
+    </I18nProvider>,
+  )
+  return { router }
 }
 
 const RUST_SERVER = { cmd: 'rust-analyzer', args: [] as string[] }
@@ -314,5 +327,38 @@ describe('Editor page — Phase E1 v2', () => {
 
     await waitFor(() => expect(saveTextFile).toHaveBeenCalledTimes(1))
     expect(saveTextFile).toHaveBeenCalledWith('/tmp/foo.rs', 'let x = 1;\n')
+  })
+
+  it('navigates to chat with prefilled diagnostic on Ask AI click', async () => {
+    readSourceFile.mockResolvedValue({
+      path: '/tmp/foo.rs',
+      content: 'let x = 1;\n',
+      language_id: 'rust',
+    })
+    runFileDiagnostics.mockResolvedValue({
+      diagnostics: [
+        {
+          start_line: 0,
+          start_character: 0,
+          end_line: 0,
+          end_character: 3,
+          message: 'unused variable: x',
+          severity: 'warning',
+          source: 'rustc',
+        },
+      ],
+      timed_out: false,
+    })
+    const { router } = renderEditorWithRouter()
+    fireEvent.change(screen.getByPlaceholderText(/abs\/path/i), {
+      target: { value: '/tmp/foo.rs' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /load file/i }))
+    const askBtn = await screen.findAllByRole('button', { name: /ask ai/i })
+    fireEvent.click(askBtn[0])
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat'))
+    expect(router.state.location.state).toEqual({
+      prefill: expect.stringContaining('unused variable: x'),
+    })
   })
 })

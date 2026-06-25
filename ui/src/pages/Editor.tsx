@@ -6,6 +6,7 @@
 // Phase E1 v1: manual squiggle UI.
 
 import { useEffect, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
@@ -57,6 +58,7 @@ function normalizeSeverity(raw: string): EditorDiagnostic['severity'] {
 export default function Editor() {
   const intl = useIntl()
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
+  const navigate = useNavigate()
   const [filePath, setFilePath] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -190,6 +192,18 @@ export default function Editor() {
       setSaving(false)
     }
   }, [file, draft, fetchDiagnostics, t])
+
+  const onAskAi = useCallback(
+    (d: MixedDiagnostic) => {
+      if (!file) return
+      const severity = d.severity.toUpperCase()
+      const loc = `${d.start_line + 1}:${d.start_character + 1}`
+      const sourceTag = d.kind === 'auto' && d.source ? ` [${d.source}]` : ''
+      const msg = `${file.path}:${loc} — ${severity}${sourceTag}\n${d.message}`
+      navigate('/chat', { state: { prefill: msg } })
+    },
+    [file, navigate],
+  )
 
   const onAddSquiggle = (e: React.FormEvent) => {
     e.preventDefault()
@@ -509,6 +523,18 @@ export default function Editor() {
                       <span className="material-symbols-outlined text-[14px] text-primary">
                         build
                       </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onAskAi(d)}
+                      aria-label={t('editor.askAi')}
+                      title={t('editor.askAi')}
+                      className="flex items-center gap-xs px-xs py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[14px] text-primary">
+                        chat
+                      </span>
+                      <span className="font-label-sm">{t('editor.askAi')}</span>
                     </button>
                   </li>
                 ))}

@@ -1642,6 +1642,7 @@
   "editor.loadFile": "加载文件",
   "editor.reRun": "重新运行诊断",
   "editor.addSquiggle": "添加手动标注",
+  "editor.askAi": "问 AI",
   "editor.browse": "浏览",
   "editor.cancel": "取消",
   "editor.editMode": "编辑",
