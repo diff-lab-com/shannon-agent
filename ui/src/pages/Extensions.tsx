@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Outlet, useLocation, useNavigate, NavLink } from "react-router-dom";
+import { Outlet, useLocation, NavLink } from "react-router-dom";
 import { useIntl } from "react-intl";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 const subTabs = [
@@ -16,27 +15,17 @@ const subTabs = [
 
 export default function Extensions() {
   const location = useLocation();
-  const navigate = useNavigate();
   const intl = useIntl();
   const t = (id: string) => intl.formatMessage({ id });
   const path = location.pathname;
   const [search, setSearch] = useState("");
 
   let searchPlaceholderKey = "extensions.search.placeholder";
-  let ctaTextKey = "";
-  let ctaIcon = "";
-  let ctaAction: () => void = () => {};
 
   if (path.includes('agents')) {
     searchPlaceholderKey = "extensions.search.agents";
-    ctaTextKey = "extensions.createAgent";
-    ctaIcon = "add";
-    ctaAction = () => navigate('/extensions/agents');
   } else if (path.includes('datasources')) {
     searchPlaceholderKey = "extensions.search.datasources";
-    ctaTextKey = "extensions.addSource";
-    ctaIcon = "add_circle";
-    ctaAction = () => navigate('/extensions/datasources');
   }
 
   return (
@@ -85,12 +74,6 @@ export default function Extensions() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          {ctaTextKey && (
-            <Button onClick={ctaAction} className="bg-primary text-on-primary px-lg py-sm rounded-lg font-bold text-label-md hover:bg-primary/90 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0">
-              <span className="material-symbols-outlined text-[18px]">{ctaIcon}</span>
-              {t(ctaTextKey)}
-            </Button>
-          )}
         </div>
       </div>
 

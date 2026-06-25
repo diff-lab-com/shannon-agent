@@ -51,12 +51,12 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
     const actions: PaletteItem[] = [
       { id: 'a-new-chat', label: t('palette.action.newChat'), icon: 'add_comment', category: t('palette.category.actions'), action: () => navigate('/chat') },
       { id: 'a-new-task', label: t('palette.action.newTask'), icon: 'add_task', category: t('palette.category.actions'), action: () => navigate('/tasks') },
-      { id: 'a-new-agent', label: t('palette.action.browseAgents'), icon: 'smart_toy', category: t('palette.category.actions'), action: () => navigate('/agents') },
+      { id: 'a-new-agent', label: t('palette.action.browseAgents'), icon: 'smart_toy', category: t('palette.category.actions'), action: () => navigate('/extensions/agents') },
       { id: 'a-toggle-theme', label: t('palette.action.changeTheme'), icon: 'palette', category: t('palette.category.actions'), action: () => navigate('/settings/theme') },
     ]
     const pages: PaletteItem[] = [
       { id: 'p-chat', label: t('nav.chat'), icon: 'chat_bubble', category: t('palette.category.pages'), action: () => navigate('/chat') },
-      { id: 'p-today', label: t('palette.page.today'), icon: 'today', category: t('palette.category.pages'), action: () => navigate('/today') },
+      { id: 'p-today', label: t('palette.page.today'), icon: 'today', category: t('palette.category.pages'), action: () => navigate('/tasks') },
       { id: 'p-tasks', label: t('nav.scheduled'), icon: 'task_alt', category: t('palette.category.pages'), action: () => navigate('/tasks') },
       { id: 'p-ext', label: t('palette.page.extensionsHub'), icon: 'grid_view', category: t('palette.category.pages'), action: () => navigate('/extensions') },
       { id: 'p-editor', label: t('palette.page.codeEditor'), icon: 'code', category: t('palette.category.pages'), action: () => navigate('/editor') },
@@ -77,7 +77,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
       label: a.name,
       icon: 'smart_toy',
       category: t('palette.category.agents'),
-      action: () => navigate('/agents'),
+      action: () => navigate('/extensions/agents'),
     }))
     const sessionItems: PaletteItem[] = sessions.slice(0, 10).map(s => ({
       id: `s-${s.id}`, label: s.title || t('palette.untitled'), icon: 'history', category: t('palette.category.recentChats'), action: () => {
@@ -127,7 +127,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   let lastCategory = ''
   return (
     <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[20vh]" onClick={onClose}>
-      <div className="w-[520px] max-h-[400px] bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl overflow-hidden flex flex-col" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+      <div className="w-[520px] max-h-[400px] bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl overflow-hidden flex flex-col" role="dialog" aria-modal="true" aria-label={t('palette.search.placeholder')} onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-sm px-lg py-md border-b border-outline-variant/10">
           <span className="material-symbols-outlined text-on-surface-variant">search</span>
           <input
@@ -141,7 +141,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
           />
           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono">ESC</kbd>
         </div>
-        <div className="flex-1 overflow-y-auto py-xs">
+        <div className="flex-1 overflow-y-auto py-xs" role="listbox" aria-label={t('palette.search.placeholder')}>
           {filtered.length === 0 && (
             <p className="text-body-sm text-on-surface-variant text-center py-lg opacity-60">{t('palette.noResults')}</p>
           )}
@@ -152,6 +152,8 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
               <div key={item.id}>
                 {showCat && <p className="px-lg pt-sm pb-xs font-label-sm text-on-surface-variant/60 uppercase tracking-wider">{item.category}</p>}
                 <button
+                  role="option"
+                  aria-selected={i === selected}
                   className={`w-full text-left px-lg py-sm flex items-center gap-md transition-colors ${i === selected ? 'bg-primary/10 text-primary' : 'text-on-surface hover:bg-surface-container-low'}`}
                   onClick={() => { item.action(); onClose() }}
                   onMouseEnter={() => setSelected(i)}
