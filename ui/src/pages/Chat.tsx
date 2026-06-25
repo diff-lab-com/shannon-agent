@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -131,6 +132,22 @@ export default function Chat() {
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const scrollParentRef = useRef<HTMLDivElement>(null)
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: () => 200,
+    overscan: 4,
+    measureElement: typeof window !== 'undefined' && 'ResizeObserver' in window
+      ? (el) => el.getBoundingClientRect().height
+      : undefined,
+  })
+
+  // Virtualization only kicks in past the threshold. Below it, the overhead
+  // of measuring/positioning outweighs the win from fewer DOM nodes — and
+  // jsdom can't provide real dimensions, so tests would render zero items.
+  const shouldVirtualize = messages.length > 30
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -482,19 +499,47 @@ export default function Chat() {
           </div>
         )}
 
-        {/* Message Area */}
-        <ScrollArea className="flex-1 px-xl pt-lg space-y-lg pb-32">
+        {/* Message Area — virtualized list for chat history */}
+        <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-32">
           {messages.length === 0 && !streamingText && (
             <WelcomeState onSelectPrompt={setInput} />
           )}
 
-          {messages.map((msg, i) => (
-            <MessageBubble key={`${msg.timestamp}-${i}`} message={msg} messageIndex={i} onViewDiff={setDiffPath} />
-          ))}
+          {messages.length > 0 && shouldVirtualize && (
+            <div
+              style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}
+              aria-label={t('chat.history.aria')}
+            >
+              {virtualizer.getVirtualItems().map(vItem => {
+                const msg = messages[vItem.index]
+                return (
+                  <div
+                    key={`${msg.timestamp}-${vItem.index}`}
+                    data-index={vItem.index}
+                    ref={virtualizer.measureElement}
+                    className="pb-lg"
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
+                  >
+                    <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} />
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {messages.length > 0 && !shouldVirtualize && (
+            <div aria-label={t('chat.history.aria')}>
+              {messages.map((msg, i) => (
+                <div key={`${msg.timestamp}-${i}`} className="pb-lg">
+                  <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} />
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Streaming response */}
           {(streamingText || thinkingText || activeToolCalls.length > 0) && (
-            <div className="flex gap-md max-w-[90%]" aria-live="polite" aria-label={t('chat.streaming.aria')}>
+            <div className="flex gap-md max-w-[90%] pt-lg" aria-live="polite" aria-label={t('chat.streaming.aria')}>
               <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-md">
                 <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>
               </div>
@@ -533,7 +578,7 @@ export default function Chat() {
           )}
 
           <div ref={messagesEndRef} />
-        </ScrollArea>
+        </div>
 
         {/* Input Bar */}
         <div className="absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg transition-colors">

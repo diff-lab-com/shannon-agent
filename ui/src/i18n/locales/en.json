@@ -1385,6 +1385,7 @@
   "chat.time.yesterday": "Yesterday",
   "chat.searchSessions.placeholder": "Search sessions...",
   "chat.empty.sessions": "No sessions yet",
+  "chat.history.aria": "Conversation history",
   "chat.banner.apiKeyMissing.title": "Add your API key to start chatting",
   "chat.banner.apiKeyMissing.body": "Shannon needs a provider API key to send messages. Add one in Settings → Models.",
   "chat.banner.apiKeyMissing.cta": "Open Settings",

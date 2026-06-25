@@ -1385,6 +1385,7 @@
   "chat.time.yesterday": "昨天",
   "chat.searchSessions.placeholder": "搜索会话……",
   "chat.empty.sessions": "暂无会话",
+  "chat.history.aria": "对话历史",
   "chat.banner.apiKeyMissing.title": "添加 API 密钥以开始对话",
   "chat.banner.apiKeyMissing.body": "Shannon 需要供应商 API 密钥才能发送消息。请在 设置 → 模型 中添加。",
   "chat.banner.apiKeyMissing.cta": "打开设置",
