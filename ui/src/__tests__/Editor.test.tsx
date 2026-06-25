@@ -7,11 +7,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import Editor from '@/pages/Editor'
 
 const readSourceFile = vi.hoisted(() => vi.fn())
 const runFileDiagnostics = vi.hoisted(() => vi.fn())
 const defaultDiagnosticsServer = vi.hoisted(() => vi.fn())
+const saveTextFile = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tauri-api')>(
@@ -23,6 +25,7 @@ vi.mock('@/lib/tauri-api', async () => {
     runFileDiagnostics: (...args: unknown[]) => runFileDiagnostics(...args),
     defaultDiagnosticsServer: (...args: unknown[]) =>
       defaultDiagnosticsServer(...args),
+    saveTextFile: (...args: unknown[]) => saveTextFile(...args),
   }
 })
 
@@ -42,9 +45,13 @@ beforeEach(() => {
   readSourceFile.mockReset()
   runFileDiagnostics.mockReset()
   defaultDiagnosticsServer.mockReset()
+  saveTextFile.mockReset()
+  vi.mocked(openDialog).mockReset()
+  vi.mocked(openDialog).mockResolvedValue(null)
   // Most tests load rust files; default to a working server config.
   defaultDiagnosticsServer.mockReturnValue(RUST_SERVER)
   runFileDiagnostics.mockResolvedValue({ diagnostics: [], timed_out: false })
+  saveTextFile.mockResolvedValue(undefined)
 })
 
 describe('Editor page — Phase E1 v2', () => {
@@ -277,5 +284,35 @@ describe('Editor page — Phase E1 v2', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /re-run diagnostics/i }))
     await waitFor(() => expect(runFileDiagnostics).toHaveBeenCalledTimes(2))
+  })
+
+  it('fills the file path from the Browse file picker', async () => {
+    vi.mocked(openDialog).mockResolvedValue('/tmp/from/picker.rs')
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: /browse/i }))
+    await waitFor(() => expect(openDialog).toHaveBeenCalledTimes(1))
+    expect(
+      (screen.getByPlaceholderText(/abs\/path/i) as HTMLInputElement).value,
+    ).toBe('/tmp/from/picker.rs')
+  })
+
+  it('saves edited content via saveTextFile on Save click', async () => {
+    readSourceFile.mockResolvedValue({
+      path: '/tmp/foo.rs',
+      content: 'let x = 1;\n',
+      language_id: 'rust',
+    })
+    renderEditor()
+    fireEvent.change(screen.getByPlaceholderText(/abs\/path/i), {
+      target: { value: '/tmp/foo.rs' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /load file/i }))
+    await screen.findByText('rust')
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }))
+    fireEvent.click(screen.getByRole('button', { name: /save/i }))
+
+    await waitFor(() => expect(saveTextFile).toHaveBeenCalledTimes(1))
+    expect(saveTextFile).toHaveBeenCalledWith('/tmp/foo.rs', 'let x = 1;\n')
   })
 })

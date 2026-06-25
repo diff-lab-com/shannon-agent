@@ -7,6 +7,8 @@
 
 import { useEffect, useState, useCallback } from 'react'
 import { useIntl } from 'react-intl'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { toast } from 'sonner'
 import CodeEditor, {
   type EditorDiagnostic,
 } from '@/components/editor/CodeEditor'
@@ -73,6 +75,11 @@ export default function Editor() {
   const [newSeverity, setNewSeverity] =
     useState<EditorDiagnostic['severity']>('warning')
 
+  // Edit mode
+  const [editMode, setEditMode] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+
   // Side drawer for quick-fix
   const [drawer, setDrawer] = useState<DrawerDiag | null>(null)
 
@@ -126,6 +133,8 @@ export default function Editor() {
       try {
         const dto = await api.readSourceFile(filePath.trim())
         setFile(dto)
+        setDraft(dto.content)
+        setEditMode(false)
         setManualDiags([])
         void fetchDiagnostics(dto)
       } catch (err) {
@@ -139,6 +148,48 @@ export default function Editor() {
     },
     [filePath, fetchDiagnostics],
   )
+
+  const onBrowse = useCallback(async () => {
+    try {
+      const picked = await openDialog({
+        multiple: false,
+        directory: false,
+      })
+      if (typeof picked === 'string' && picked.length > 0) {
+        setFilePath(picked)
+      }
+    } catch (err) {
+      setLoadError(String(err))
+    }
+  }, [])
+
+  const onToggleEdit = useCallback(() => {
+    if (!file) return
+    if (!editMode) {
+      setDraft(file.content)
+      setEditMode(true)
+    } else {
+      setDraft(file.content)
+      setEditMode(false)
+    }
+  }, [editMode, file])
+
+  const onSave = useCallback(async () => {
+    if (!file) return
+    setSaving(true)
+    try {
+      await api.saveTextFile(file.path, draft)
+      const refreshed = { ...file, content: draft }
+      setFile(refreshed)
+      setEditMode(false)
+      void fetchDiagnostics(refreshed)
+      toast.success(t('editor.saveSuccess'))
+    } catch (err) {
+      toast.error(t('editor.saveFailed'), { description: String(err) })
+    } finally {
+      setSaving(false)
+    }
+  }, [file, draft, fetchDiagnostics, t])
 
   const onAddSquiggle = (e: React.FormEvent) => {
     e.preventDefault()
@@ -203,13 +254,26 @@ export default function Editor() {
       >
         <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
           {t('editor.filePath')}
-          <input
-            type="text"
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="/abs/path/to/src/lib.rs"
-            className="font-mono font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-          />
+          <div className="flex gap-xs">
+            <input
+              type="text"
+              value={filePath}
+              onChange={(e) => setFilePath(e.target.value)}
+              placeholder="/abs/path/to/src/lib.rs"
+              className="flex-1 font-mono font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            />
+            <button
+              type="button"
+              onClick={onBrowse}
+              aria-label={t('editor.browse')}
+              className="flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                folder_open
+              </span>
+              <span className="font-label-md">{t('editor.browse')}</span>
+            </button>
+          </div>
         </label>
         <button
           type="submit"
@@ -243,8 +307,8 @@ export default function Editor() {
               type="button"
               onClick={() => void fetchDiagnostics(file)}
               disabled={diagLoading}
-              className="ml-auto flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-              aria-label="Re-run diagnostics"
+              className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              aria-label={t('editor.reRun')}
             >
               <span
                 className={
@@ -257,6 +321,44 @@ export default function Editor() {
               </span>
               <span>{diagLoading ? t('editor.running') : t('editor.reRun')}</span>
             </button>
+            <div className="ml-auto flex items-center gap-xs">
+              {editMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={onSave}
+                    disabled={saving}
+                    className="flex items-center gap-xs px-sm py-0.5 rounded-full bg-primary text-on-primary hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">
+                      {saving ? 'progress_activity' : 'save'}
+                    </span>
+                    <span>{saving ? t('editor.saving') : t('editor.save')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onToggleEdit}
+                    disabled={saving}
+                    className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">
+                      close
+                    </span>
+                    <span>{t('editor.cancel')}</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onToggleEdit}
+                  className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
+                  aria-label={t('editor.editMode')}
+                >
+                  <span className="material-symbols-outlined text-[14px]">edit</span>
+                  <span>{t('editor.editMode')}</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {(diagError || diagTimedOut) && file ? (
@@ -278,11 +380,12 @@ export default function Editor() {
           ) : null}
 
           <CodeEditor
-            value={file.content}
+            value={editMode ? draft : file.content}
+            onValueChange={editMode ? setDraft : undefined}
             language={file.language_id}
             diagnostics={diags}
             onDiagnosticClick={onSquiggleClick}
-            readOnly
+            readOnly={!editMode}
           />
 
           <form
