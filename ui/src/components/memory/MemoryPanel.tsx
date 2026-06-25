@@ -329,7 +329,7 @@ function MemoryCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-sm mb-xs">
             <span className="text-label-xs px-sm py-[2px] rounded-full bg-surface-container-high text-on-surface-variant font-bold uppercase">
-              {entry.category}
+              {t(`memory.category.${entry.category}`)}
             </span>
             <span className="text-label-xs text-on-surface-variant">{entry.project}</span>
             <span className="text-label-xs text-on-surface-variant/60">
@@ -470,7 +470,7 @@ function MemoryEditor({
                 onChange={(e) => setProject(e.target.value)}
                 required
                 className="w-full px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant text-label-md"
-                placeholder="my-project"
+                placeholder={t('memory.editor.project.placeholder')}
               />
             </Field>
             <Field label={t('memory.editor.category')}>
@@ -505,7 +505,7 @@ function MemoryEditor({
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
                 className="w-full px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant text-label-md"
-                placeholder="database, react, frontend"
+                placeholder={t('memory.editor.tags.placeholder')}
               />
             </Field>
             {!initial && (

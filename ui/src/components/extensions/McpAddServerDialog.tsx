@@ -548,15 +548,19 @@ function PasteJsonTab({ onInstalled }: { onInstalled: () => void }) {
     setInstalling(false);
     if (ok > 0) {
       toast.success(
-        t("extensions.mcp.oneClick.installSuccess", { name: `${ok} server(s)` }),
+        intl.formatMessage(
+          { id: "extensions.mcp.oneClick.installSuccessCount" },
+          { count: ok },
+        ),
       );
       onInstalled();
     }
     if (failed > 0) {
       toast.error(
-        t("extensions.mcp.oneClick.installFailed", {
-          error: `${failed} server(s) failed`,
-        }),
+        intl.formatMessage(
+          { id: "extensions.mcp.oneClick.installFailedCount" },
+          { count: failed },
+        ),
       );
     }
   }
@@ -697,7 +701,7 @@ function ManualTab({ onInstalled }: { onInstalled: () => void }) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="filesystem"
+          placeholder={t('extensions.mcp.serverName.placeholder')}
           className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface"
           disabled={busy}
         />
