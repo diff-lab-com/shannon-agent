@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useApp } from '@/context/AppContext';
+import { useModalFocus } from '@/hooks/useModalFocus';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
 
@@ -38,6 +39,9 @@ export function Header() {
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
+
+  const permissionRef = useRef<HTMLDivElement>(null);
+  useModalFocus(!!permissionRequest, permissionRef);
 
   const title = t(getTitleKey(location.pathname));
   const isOpc = location.pathname.includes('/opc') && !location.pathname.includes('/opc/task');
@@ -150,7 +154,7 @@ export function Header() {
       {/* Permission Modal */}
       {permissionRequest && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm" onKeyDown={e => { if (e.key === 'Escape') respondPermission(permissionRequest.request_id, false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/20 p-xl max-w-md w-full mx-md" role="dialog" aria-modal="true">
+          <div ref={permissionRef} className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/20 p-xl max-w-md w-full mx-md" role="dialog" aria-modal="true">
             <div className="flex items-center gap-md mb-lg">
               <div className="h-10 w-10 rounded-full bg-tertiary-container flex items-center justify-center">
                 <span className="material-symbols-outlined text-on-tertiary-container">shield</span>

@@ -5,7 +5,7 @@
 // Phase E1 v2: auto-LSP diagnostics via publishDiagnostics subscription.
 // Phase E1 v1: manual squiggle UI.
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
@@ -14,6 +14,7 @@ import CodeEditor, {
   type EditorDiagnostic,
 } from '@/components/editor/CodeEditor'
 import LspQuickFixPanel from '@/components/lsp/LspQuickFixPanel'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { SourceFile } from '@/lib/tauri-api'
 
@@ -84,6 +85,9 @@ export default function Editor() {
 
   // Side drawer for quick-fix
   const [drawer, setDrawer] = useState<DrawerDiag | null>(null)
+
+  const drawerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(!!drawer, drawerRef)
 
   const fetchDiagnostics = useCallback(async (sourceFile: SourceFile) => {
     const server = api.defaultDiagnosticsServer(sourceFile.language_id)
@@ -551,7 +555,7 @@ export default function Editor() {
             aria-label={t('editor.closeDrawer')}
             className="flex-1 bg-black/30"
           />
-          <aside className="w-[420px] max-w-[90vw] bg-surface-container-lowest h-full overflow-auto p-md border-l border-outline-variant/30 shadow-lg flex flex-col gap-sm">
+          <aside ref={drawerRef} className="w-[420px] max-w-[90vw] bg-surface-container-lowest h-full overflow-auto p-md border-l border-outline-variant/30 shadow-lg flex flex-col gap-sm">
             <LspQuickFixPanel
               diagnostic={drawer}
               onApplied={() => {

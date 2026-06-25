@@ -3,10 +3,11 @@
 // Displays proposal details (name, description, triggers, workflow) with
 // Approve/Reject buttons. Fetches proposals on mount and refreshes after actions.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { skillLoop } from '@/lib/tauri-api'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import type { SkillProposal } from '@/types'
 
 interface SkillProposalReviewPanelProps {
@@ -24,6 +25,9 @@ export default function SkillProposalReviewPanel({
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, containerRef)
 
   useEffect(() => {
     if (!open) return
@@ -134,6 +138,7 @@ export default function SkillProposalReviewPanel({
       onClick={onClose}
     >
       <div
+        ref={containerRef}
         className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
         role="dialog"
         aria-modal="true"

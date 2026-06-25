@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/context/AppContext'
 import { CardSkeleton } from '@/components/SkeletonLoader'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { BillingPlan, CostRecord, BillingHistory } from '@/types'
 
@@ -20,6 +21,13 @@ export default function BillingSettings() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [changingPlan, setChangingPlan] = useState<string | null>(null)
+
+  const cancelConfirmRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showCancelConfirm, cancelConfirmRef)
+  const changePlanRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showChangePlan, changePlanRef)
+  const legalRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showLegal, legalRef)
 
   const handleCancelSubscription = async () => {
     setCancelling(true)
@@ -286,7 +294,7 @@ export default function BillingSettings() {
 
       {/* Cancel Subscription Modal */}
       {showCancelConfirm && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowCancelConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowCancelConfirm(false) }}>
+        <div ref={cancelConfirmRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowCancelConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowCancelConfirm(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-error text-[24px]">warning</span>
@@ -303,7 +311,7 @@ export default function BillingSettings() {
 
       {/* Change Plan Modal */}
       {showChangePlan && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowChangePlan(false)} onKeyDown={e => { if (e.key === 'Escape') setShowChangePlan(false) }}>
+        <div ref={changePlanRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowChangePlan(false)} onKeyDown={e => { if (e.key === 'Escape') setShowChangePlan(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-md w-full mx-lg shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-lg">
               <h3 className="font-headline-md text-on-surface">{t('settings.billing.changePlanTitle')}</h3>
@@ -325,7 +333,7 @@ export default function BillingSettings() {
 
       {/* Legal Modal */}
       {showLegal && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLegal(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLegal(false) }}>
+        <div ref={legalRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLegal(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLegal(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-lg w-full mx-lg shadow-2xl max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-lg">
               <h3 className="font-headline-md text-on-surface">{t('settings.billing.legalPrivacy')}</h3>

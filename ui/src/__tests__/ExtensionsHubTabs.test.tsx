@@ -33,19 +33,22 @@ describe('Extensions hub sub-tabs (P1)', () => {
     expect(screen.getByPlaceholderText('Search extensions...')).toBeInTheDocument()
   })
 
-  it('does not show CTA on featured route', () => {
+  it('does not show dead CTA on featured route', () => {
     renderWithRoute('/extensions/featured')
     expect(screen.queryByText(/Create Agent/)).not.toBeInTheDocument()
     expect(screen.queryByText(/Add Source/)).not.toBeInTheDocument()
   })
 
-  it('preserves agents CTA when on agents route', () => {
+  // P0-5: the "Create Agent" and "Add Source" CTAs used to navigate to the
+  // current page (no-op). They were removed; the install/create flows live
+  // inside each tab's content (e.g. the install dialog in Agents.tsx).
+  it('does not show dead CTA on agents route', () => {
     renderWithRoute('/extensions/agents')
-    expect(screen.getByText('Create Agent')).toBeInTheDocument()
+    expect(screen.queryByText(/Create Agent/)).not.toBeInTheDocument()
   })
 
-  it('preserves datasources CTA when on datasources route', () => {
+  it('does not show dead CTA on datasources route', () => {
     renderWithRoute('/extensions/datasources')
-    expect(screen.getByText('Add Source')).toBeInTheDocument()
+    expect(screen.queryByText(/Add Source/)).not.toBeInTheDocument()
   })
 })

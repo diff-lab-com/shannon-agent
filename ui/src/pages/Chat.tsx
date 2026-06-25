@@ -13,6 +13,7 @@ import ChatInput from '@/components/chat/ChatInput'
 import { Markdown } from '@/components/chat/Markdown'
 import { MessageBubble, ToolCallDisplay } from '@/components/chat/MessageBubble'
 import { useApp } from '@/context/AppContext'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { SessionInfo } from '@/types'
 
@@ -121,6 +122,11 @@ export default function Chat() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [quickFixOpen, setQuickFixOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
+
+  const quickFixRef = useRef<HTMLDivElement>(null)
+  useModalFocus(quickFixOpen, quickFixRef)
+  const editorRef = useRef<HTMLDivElement>(null)
+  useModalFocus(editorOpen, editorRef)
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -606,6 +612,7 @@ export default function Chat() {
       {/* Inline QuickFix panel — opened from the chat input toolbar. */}
       {quickFixOpen && (
         <div
+          ref={quickFixRef}
           role="dialog"
           aria-modal="true"
           aria-label={t('nav.quickFix')}
@@ -635,6 +642,7 @@ export default function Chat() {
       {/* Inline Editor panel — opened from the chat input toolbar. */}
       {editorOpen && (
         <div
+          ref={editorRef}
           role="dialog"
           aria-modal="true"
           aria-label={t('nav.editor')}
