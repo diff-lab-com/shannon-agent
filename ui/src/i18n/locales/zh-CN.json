@@ -722,6 +722,7 @@
   "extensions.datasources.query.searching": "搜索中...",
   "extensions.datasources.query.noResults": "未找到结果",
   "extensions.datasources.query.noDataSourcesInstalled": "未安装数据源。请先安装数据源以使用查询功能。",
+  "extensions.datasources.query.installCta": "浏览适配器",
   "extensions.datasources.query.errorTitle": "查询失败",
   "extensions.datasources.query.resultsCount": "{count} 个结果",
   "extensions.datasources.query.openLink": "打开",

@@ -197,7 +197,7 @@ export default function DataSources() {
       </div>
 
       {activeTab === 'query' ? (
-        <DataSourcesQuery />
+        <DataSourcesQuery onSwitchToAdapters={() => setActiveTab('adapters')} />
       ) : catalogLoading ? (
         <div className="text-center py-lg text-on-surface-variant">
           <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>

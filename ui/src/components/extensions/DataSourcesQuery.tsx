@@ -11,7 +11,7 @@ import type { DataSourceResult, DataSourceItem } from "@/types";
  * Query panel for installed data sources.
  * Allows users to search across their personal data (Obsidian vaults, email, etc.)
  */
-export default function DataSourcesQuery() {
+export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAdapters?: () => void }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
@@ -64,7 +64,17 @@ export default function DataSourcesQuery() {
       <div className="p-lg max-w-5xl mx-auto">
         <div className="text-center py-3xl text-on-surface-variant text-body-md">
           <span className="material-symbols-outlined text-[48px] text-outline mb-md">database_off</span>
-          <p>{t('extensions.datasources.query.noDataSourcesInstalled')}</p>
+          <p className="mb-md">{t('extensions.datasources.query.noDataSourcesInstalled')}</p>
+          {onSwitchToAdapters && (
+            <button
+              type="button"
+              onClick={onSwitchToAdapters}
+              className="inline-flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">addon</span>
+              {t('extensions.datasources.query.installCta')}
+            </button>
+          )}
         </div>
       </div>
     );

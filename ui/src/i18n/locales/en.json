@@ -722,6 +722,7 @@
   "extensions.datasources.query.searching": "Searching...",
   "extensions.datasources.query.noResults": "No results found",
   "extensions.datasources.query.noDataSourcesInstalled": "No data sources installed. Install a data source first to use the query feature.",
+  "extensions.datasources.query.installCta": "Browse adapters",
   "extensions.datasources.query.errorTitle": "Query failed",
   "extensions.datasources.query.resultsCount": "{count} {count, plural, =1 {result} other {results}}",
   "extensions.datasources.query.openLink": "Open",
