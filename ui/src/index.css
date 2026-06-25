@@ -176,6 +176,19 @@
   body {
     @apply bg-background text-on-background font-body-md;
   }
+
+  /* Default keyboard-focus ring for any interactive element that doesn't
+     override it. Authors who need a different ring still win via specificity
+     because they declare focus-visible:ring-* explicitly on the element. */
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible,
+  [role="menuitem"]:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
 }
 
 /* shadcn radius tokens only — colors come from MD3 @theme above */
