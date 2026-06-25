@@ -176,10 +176,10 @@ export default function Triage() {
 
   const bulkMarkRead = useCallback(async () => {
     setBulkRunning(true)
-    let ok = 0
-    for (const id of effectiveSelected) {
-      if (await markRead(id)) ok++
-    }
+    const results = await Promise.allSettled(
+      Array.from(effectiveSelected).map(id => markRead(id)),
+    )
+    const ok = results.filter(r => r.status === 'fulfilled' && r.value).length
     setBulkRunning(false)
     if (ok > 0) {
       const key = ok === 1 ? 'triage.toast.markRead' : 'triage.toast.markRead.plural'
@@ -190,10 +190,10 @@ export default function Triage() {
 
   const bulkArchive = useCallback(async () => {
     setBulkRunning(true)
-    let ok = 0
-    for (const id of effectiveSelected) {
-      if (await archive(id)) ok++
-    }
+    const results = await Promise.allSettled(
+      Array.from(effectiveSelected).map(id => archive(id)),
+    )
+    const ok = results.filter(r => r.status === 'fulfilled' && r.value).length
     setBulkRunning(false)
     if (ok > 0) {
       const key = ok === 1 ? 'triage.toast.archived' : 'triage.toast.archived.plural'
