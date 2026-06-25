@@ -20,6 +20,9 @@ export default function ModelsSettings() {
     api.configure({ key: 'performance_strategy', value: s }).then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s }))).catch(e => { console.warn('ModelsSettings error:', e); toast.error(t('settings.models.strategyFailed')) })
   }
   const [showKey, setShowKey] = useState(false)
+  const [keyDraft, setKeyDraft] = useState<string | null>(null)
+  const [keySaving, setKeySaving] = useState(false)
+  const [keyTesting, setKeyTesting] = useState(false)
 
   const handleModelSwitch = async (modelId: string) => {
     if (!status) return
@@ -30,6 +33,35 @@ export default function ModelsSettings() {
       toast.success(intl.formatMessage({ id: 'settings.models.switched' }, { model: modelId }))
     } catch (e) { console.warn("ModelsSettings error:", e); toast.error(t('settings.models.switchFailed')) }
     setSwitching(null)
+  }
+
+  const handleSaveKey = async () => {
+    const trimmed = (keyDraft ?? '').trim()
+    if (!trimmed) return
+    setKeySaving(true)
+    try {
+      await api.configure({ key: 'api_key', value: trimmed })
+      toast.success(t('settings.models.apiKeySaved'))
+      setKeyDraft(null)
+    } catch (e) {
+      console.warn('handleSaveKey error:', e)
+      toast.error(t('settings.models.apiKeySaveFailed'))
+    } finally {
+      setKeySaving(false)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    setKeyTesting(true)
+    try {
+      await refreshModels()
+      toast.success(t('settings.models.testSuccess'))
+    } catch (e) {
+      console.warn('handleTestConnection error:', e)
+      toast.error(t('settings.models.testFailed'))
+    } finally {
+      setKeyTesting(false)
+    }
   }
 
   const currentModel = status?.model
@@ -173,21 +205,41 @@ export default function ModelsSettings() {
               <span className="material-symbols-outlined text-primary">key</span>
               <h4 className="font-label-md font-bold text-on-surface">{intl.formatMessage({ id: 'settings.models.apiConnection' }, { provider: (config?.provider ?? t('settings.models.providerDefault')) })}</h4>
             </div>
-            <div className="flex gap-md max-w-xl">
+            <div className="flex gap-md max-w-2xl">
               <div className="relative flex-1">
-                <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all font-body-sm pr-10" type={showKey ? 'text' : 'password'} value={config?.api_key ? 'sk-••••••••••••' : ''} readOnly />
-                <Button variant="ghost" className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => setShowKey(v => !v)}>
+                <Input
+                  className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all font-body-sm pr-10 font-mono"
+                  type={showKey ? 'text' : 'password'}
+                  value={keyDraft ?? (config?.api_key ? '••••••••••••••••' : '')}
+                  placeholder={t('settings.models.apiKeyPlaceholder')}
+                  onChange={e => setKeyDraft(e.target.value)}
+                  onFocus={() => { if (!keyDraft && config?.api_key) setKeyDraft('') }}
+                />
+                <Button variant="ghost" className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => setShowKey(v => !v)} aria-label={showKey ? t('settings.models.hideKey') : t('settings.models.showKey')}>
                   <span className="material-symbols-outlined text-[20px]">{showKey ? 'visibility_off' : 'visibility'}</span>
                 </Button>
               </div>
               <Button
-                className="px-lg py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer"
-                onClick={() => refreshModels()}
+                className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer disabled:opacity-50"
+                onClick={handleTestConnection}
+                disabled={keyTesting}
+                aria-label={t('settings.models.testConnection')}
               >
-                <span className="material-symbols-outlined text-[18px]">sync</span>
-                {t('settings.models.refresh')}
+                <span className="material-symbols-outlined text-[18px]">{keyTesting ? 'progress_activity' : 'cable'}</span>
+                {keyTesting ? t('settings.models.testing') : t('settings.models.testConnection')}
+              </Button>
+              <Button
+                className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer disabled:opacity-50"
+                onClick={handleSaveKey}
+                disabled={keySaving || !keyDraft || !keyDraft.trim()}
+              >
+                <span className="material-symbols-outlined text-[18px]">{keySaving ? 'progress_activity' : 'save'}</span>
+                {keySaving ? t('settings.models.saving') : t('settings.models.save')}
               </Button>
             </div>
+            <p className="mt-sm text-label-sm text-on-surface-variant opacity-70">
+              {t('settings.models.apiKeyHelp')}
+            </p>
           </div>
         </section>
 
