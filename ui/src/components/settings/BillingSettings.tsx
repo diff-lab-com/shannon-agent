@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { useApp } from '@/context/AppContext'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 import type { BillingPlan, CostRecord, BillingHistory } from '@/types'
 
 export default function BillingSettings() {
@@ -27,7 +28,7 @@ export default function BillingSettings() {
       await api.configure({ key: 'cancel_subscription', value: 'true' })
       toast.success(t('settings.billing.cancelSuccess'))
       setShowCancelConfirm(false)
-    } catch (e) { console.warn("BillingSettings cancel error:", e); toast.error(t('settings.billing.cancelFailed')) }
+    } catch (e) { toastError(t('settings.billing.cancelFailed'), e) }
     setCancelling(false)
   }
 
@@ -37,15 +38,15 @@ export default function BillingSettings() {
       await api.configure({ key: 'plan', value: planName.toLowerCase() })
       toast.success(intl.formatMessage({ id: 'settings.billing.planSwitched' }, { plan: planName }))
       setShowChangePlan(false)
-    } catch (e) { console.warn("BillingSettings plan error:", e); toast.error(t('settings.billing.planChangeFailed')) }
+    } catch (e) { toastError(t('settings.billing.planChangeFailed'), e) }
     setChangingPlan(null)
   }
 
   useEffect(() => {
     Promise.all([
-      api.getBillingPlan().then(setPlan).catch(() => toast.error(t('settings.billing.loadPlanFailed'))),
-      api.getCostHistory(30).then(setCostHistory).catch(() => toast.error(t('settings.billing.loadCostFailed'))),
-      api.getBillingHistory().then(setBillingHistory).catch(() => toast.error(t('settings.billing.loadHistoryFailed'))),
+      api.getBillingPlan().then(setPlan).catch((e) => toastError(t('settings.billing.loadPlanFailed'), e)),
+      api.getCostHistory(30).then(setCostHistory).catch((e) => toastError(t('settings.billing.loadCostFailed'), e)),
+      api.getBillingHistory().then(setBillingHistory).catch((e) => toastError(t('settings.billing.loadHistoryFailed'), e)),
     ]).finally(() => setLoading(false))
   }, [])
 

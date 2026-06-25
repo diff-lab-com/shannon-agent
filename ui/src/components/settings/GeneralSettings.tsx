@@ -6,6 +6,7 @@ import { useApp } from '@/context/AppContext'
 import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 import type { ApprovalMode } from '@/types'
 import { WELCOME_SEEN_KEY } from '@/pages/Welcome'
 
@@ -45,8 +46,7 @@ export default function GeneralSettings() {
       })
       toast.success(intl.formatMessage({ id: 'settings.notifications.testSent' }))
     } catch (e) {
-      console.warn('Test notification failed:', e)
-      toast.error(intl.formatMessage({ id: 'settings.notifications.testFailed' }))
+      toastError(intl.formatMessage({ id: 'settings.notifications.testFailed' }), e)
     }
     setTestingNotification(false)
   }
@@ -70,7 +70,7 @@ export default function GeneralSettings() {
       await api.configure({ key: 'approval_mode', value: APPROVAL_MODE_KEYS[idx].value })
       await refreshConfig()
       toast.success(intl.formatMessage({ id: 'settings.general.approvalMode.updated' }, { label: t(APPROVAL_MODE_KEYS[idx].labelKey) }))
-    } catch (e) { console.warn("GeneralSettings error:", e); toast.error(t('settings.general.approvalMode.updateFailed')) }
+    } catch (e) { toastError(t('settings.general.approvalMode.updateFailed'), e) }
     setSaving(false)
   }
 
