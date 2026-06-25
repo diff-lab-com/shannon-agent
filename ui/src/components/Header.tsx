@@ -71,7 +71,7 @@ export function Header() {
   return (
     <>
       <header className="fixed top-0 right-0 z-40 flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
-        <Button variant="ghost" aria-label="Toggle sidebar" className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
+        <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
           <span className="material-symbols-outlined text-[24px]">menu</span>
         </Button>
         <div className="flex items-center gap-md relative w-full overflow-hidden">
