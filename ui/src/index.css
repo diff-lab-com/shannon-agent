@@ -209,6 +209,17 @@
   [role="alertdialog"] {
     animation: shannon-dialog-in 160ms ease-out;
   }
+
+  /* Native form controls: inherit the app font + cursor so selects and
+     textareas match the surrounding Tailwind-styled inputs even when
+     authors forget to add font/cursor classes. */
+  select,
+  textarea,
+  input[type="checkbox"],
+  input[type="radio"] {
+    cursor: pointer;
+    font-family: inherit;
+  }
 }
 
 @keyframes shannon-dialog-in {
