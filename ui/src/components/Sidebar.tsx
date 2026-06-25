@@ -8,6 +8,7 @@ import { useApp } from '@/context/AppContext';
 import type { SessionInfo } from '@/types';
 import { useSidebar } from './Layout';
 import { useTriageStats } from '@/hooks/scheduled-tasks';
+import { formatShortcut } from '@/lib/platform';
 
 const MIN_W = 200
 const MAX_W = 400
@@ -289,12 +290,12 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <NavLink to="/chat" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">chat_bubble</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘1</kbd>
+           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">{formatShortcut('1')}</kbd>
         </NavLink>
         <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">task_alt</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
+           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">{formatShortcut('2')}</kbd>
         </NavLink>
         <NavLink to="/memory" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">psychology</span>

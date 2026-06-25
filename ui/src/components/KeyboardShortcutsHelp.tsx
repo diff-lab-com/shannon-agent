@@ -1,17 +1,18 @@
 import { useIntl } from 'react-intl'
+import { formatShortcut } from '@/lib/platform'
 
 const SHORTCUTS = [
-  { keys: '⌘ K', action: 'shortcuts.help.openPalette' },
-  { keys: '⌘ N', action: 'shortcuts.help.newChat' },
-  { keys: '⌘ D', action: 'shortcuts.help.changeWorkingDir' },
-  { keys: '⌘ 1', action: 'shortcuts.help.goChat' },
-  { keys: '⌘ 2', action: 'shortcuts.help.goGoals' },
-  { keys: '⌘ 3', action: 'shortcuts.help.goTasks' },
-  { keys: '⌘ /', action: 'shortcuts.help.toggle' },
-  { keys: 'Enter', action: 'shortcuts.help.send' },
-  { keys: 'Shift + Enter', action: 'shortcuts.help.newline' },
-  { keys: 'Escape', action: 'shortcuts.help.cancel' },
-  { keys: '?', action: 'shortcuts.help.show' },
+  { keys: () => formatShortcut('K'), action: 'shortcuts.help.openPalette' },
+  { keys: () => formatShortcut('N'), action: 'shortcuts.help.newChat' },
+  { keys: () => formatShortcut('D'), action: 'shortcuts.help.changeWorkingDir' },
+  { keys: () => formatShortcut('1'), action: 'shortcuts.help.goChat' },
+  { keys: () => formatShortcut('2'), action: 'shortcuts.help.goGoals' },
+  { keys: () => formatShortcut('3'), action: 'shortcuts.help.goTasks' },
+  { keys: () => formatShortcut('/'), action: 'shortcuts.help.toggle' },
+  { keys: () => 'Enter', action: 'shortcuts.help.send' },
+  { keys: () => 'Shift + Enter', action: 'shortcuts.help.newline' },
+  { keys: () => 'Escape', action: 'shortcuts.help.cancel' },
+  { keys: () => '?', action: 'shortcuts.help.show' },
 ]
 
 export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -29,12 +30,15 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
           </button>
         </div>
         <div className="grid grid-cols-2 gap-sm">
-          {SHORTCUTS.map(s => (
-            <div key={s.keys} className="flex items-center justify-between gap-sm py-xs">
-              <span className="text-body-sm text-on-surface-variant">{t(s.action)}</span>
-              <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{s.keys}</kbd>
-            </div>
-          ))}
+          {SHORTCUTS.map(s => {
+            const keys = s.keys()
+            return (
+              <div key={keys} className="flex items-center justify-between gap-sm py-xs">
+                <span className="text-body-sm text-on-surface-variant">{t(s.action)}</span>
+                <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{keys}</kbd>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>

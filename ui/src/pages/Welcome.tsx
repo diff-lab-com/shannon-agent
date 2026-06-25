@@ -6,6 +6,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { useApp } from '@/context/AppContext'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
+import { formatShortcut } from '@/lib/platform'
 
 // ─── Task taxonomy ──────────────────────────────────────────────────────────
 // Drives Step 0 (primary use case). Each task carries a model recommendation
@@ -75,11 +76,11 @@ const TOOL_CATALOG: Record<string, { labelKey: string; icon: string; descKey: st
 }
 
 const SHORTCUT_ROWS = [
-  { keys: '⌘ K', actionKey: 'shortcuts.openPalette' },
-  { keys: '⌘ N', actionKey: 'shortcuts.newChat' },
-  { keys: '⌘ 1 / 2 / 3', actionKey: 'shortcuts.jumpTabs' },
-  { keys: '?', actionKey: 'shortcuts.showAll' },
-  { keys: 'Esc', actionKey: 'shortcuts.cancel' },
+  { keys: () => `${formatShortcut('K')}`, actionKey: 'shortcuts.openPalette' },
+  { keys: () => `${formatShortcut('N')}`, actionKey: 'shortcuts.newChat' },
+  { keys: () => `${formatShortcut('1')} / ${formatShortcut('2')} / ${formatShortcut('3')}`, actionKey: 'shortcuts.jumpTabs' },
+  { keys: () => '?', actionKey: 'shortcuts.showAll' },
+  { keys: () => 'Esc', actionKey: 'shortcuts.cancel' },
 ] as const
 
 // ─── Documents skill recommendations (P2.4) ─────────────────────────────────
@@ -581,12 +582,15 @@ export default function Welcome() {
               {/* Shortcuts */}
               <div className="space-y-sm">
                 <div className="font-label-md text-on-surface-variant mb-xs">{intl.formatMessage({ id: 'welcome.done.shortcuts.label' })}</div>
-                {SHORTCUT_ROWS.map(s => (
-                  <div key={s.keys} className="flex items-center justify-between py-xs">
+                {SHORTCUT_ROWS.map(s => {
+                  const keys = s.keys()
+                  return (
+                  <div key={s.actionKey} className="flex items-center justify-between py-xs">
                     <span className="font-body-sm text-on-surface-variant">{intl.formatMessage({ id: s.actionKey })}</span>
-                    <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{s.keys}</kbd>
+                    <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{keys}</kbd>
                   </div>
-                ))}
+                  )
+                })}
               </div>
               <p className="font-body-sm text-on-surface-variant mt-md">
                 {intl.formatMessage(
