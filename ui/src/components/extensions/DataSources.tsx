@@ -12,6 +12,7 @@ import {
 } from "@/lib/tauri-api";
 import DataSourcesQuery from "./DataSourcesQuery";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import LoadingState from "@/components/ui/loading-state";
 
 const DATASOURCE_ICONS: Record<string, string> = {
   obsidian: 'book',
@@ -199,10 +200,7 @@ export default function DataSources() {
       {activeTab === 'query' ? (
         <DataSourcesQuery onSwitchToAdapters={() => setActiveTab('adapters')} />
       ) : catalogLoading ? (
-        <div className="text-center py-lg text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          {t('extensions.datasources.loading')}
-        </div>
+        <LoadingState size="sm" label={t('extensions.datasources.loading')} />
       ) : (
         <section>
           <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">

@@ -6,6 +6,7 @@ import {
   type InstalledDataSource,
 } from "@/lib/tauri-api";
 import type { DataSourceResult, DataSourceItem } from "@/types";
+import LoadingState from "@/components/ui/loading-state";
 
 /**
  * Query panel for installed data sources.
@@ -51,10 +52,7 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
   if (installedLoading) {
     return (
       <div className="p-lg max-w-5xl mx-auto">
-        <div className="text-center py-lg text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          {t('extensions.datasources.loadingInstalled')}
-        </div>
+        <LoadingState size="sm" label={t('extensions.datasources.loadingInstalled')} />
       </div>
     );
   }

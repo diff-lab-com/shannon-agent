@@ -11,6 +11,7 @@ import {
   type InstalledSkill,
 } from "@/lib/tauri-api";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import LoadingState from "@/components/ui/loading-state";
 
 /**
  * P3 Skills tab — federated catalog + install/remove.
@@ -129,10 +130,7 @@ export default function Skills() {
       </header>
 
       {catalogLoading && (
-        <div className="text-center py-lg text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          {t('extensions.skills.loading')}
-        </div>
+        <LoadingState size="sm" label={t('extensions.skills.loading')} />
       )}
 
       {catalogError && (

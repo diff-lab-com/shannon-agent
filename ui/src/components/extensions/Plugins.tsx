@@ -4,6 +4,8 @@ import { useOutletContext } from "react-router-dom";
 import * as api from "@/lib/tauri-api";
 import type { CatalogUpstream } from "@/lib/tauri-api";
 import { CardSkeleton } from "@/components/SkeletonLoader";
+import ErrorState from "@/components/ui/error-state";
+import EmptyState from "@/components/ui/empty-state";
 import type { CatalogEntry, CatalogSource, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
 
@@ -382,17 +384,16 @@ export default function Plugins() {
           {Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}
         </div>
       ) : error ? (
-        <div className="text-center py-xl text-on-surface-variant">
-          <span className="material-symbols-outlined text-[32px] mb-sm block">cloud_off</span>
-          <p className="text-label-md">{error}</p>
-        </div>
+        <ErrorState
+          icon="cloud_off"
+          title={t("extensions.plugins.loadFailed")}
+          description={error}
+        />
       ) : filtered.length === 0 ? (
-        <div className="text-center py-xl text-on-surface-variant">
-          <span className="material-symbols-outlined text-[32px] mb-sm block">search_off</span>
-          <p className="text-label-md">
-            {search ? t("extensions.plugins.noMatch") : t("extensions.plugins.empty")}
-          </p>
-        </div>
+        <EmptyState
+          icon="search_off"
+          title={search ? t("extensions.plugins.noMatch") : t("extensions.plugins.empty")}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-md">
           {sorted.map(renderCard)}

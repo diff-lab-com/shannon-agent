@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
+import ErrorState from '@/components/ui/error-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
 import type { TaskExecution, TaskExecutionDetail } from '@/types'
@@ -53,6 +54,14 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
     return () => { cancelled = true }
   }, [taskId, limit])
 
+  const refresh = () => {
+    setLoading(true); setError(null)
+    api.listTaskExecutions(taskId, limit)
+      .then(setRows)
+      .catch(e => setError(e instanceof Error ? e.message : t('tasks.historyView.loadFailed')))
+      .finally(() => setLoading(false))
+  }
+
   const openDetail = async (id: string) => {
     if (expandedId === id) { setExpandedId(null); setDetail(null); return }
     setExpandedId(id); setDetail(null); setDetailLoading(true)
@@ -77,9 +86,12 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
   }
   if (error) {
     return (
-      <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md">
-        <span className="material-symbols-outlined text-[18px]">error</span>
-        {error}
+      <div className="bg-surface-container-lowest/70 border border-outline-variant/20 rounded-xl p-xl">
+        <ErrorState
+          title={t('tasks.historyView.loadFailed')}
+          description={error}
+          action={{ label: t('tasks.historyView.retry'), onClick: refresh }}
+        />
       </div>
     )
   }

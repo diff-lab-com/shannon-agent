@@ -10,6 +10,7 @@ import { safeErrorMessage } from "@/lib/packageValidation";
 import type { McpServerInfo } from "@/types";
 import McpAddServerDialog from "./McpAddServerDialog";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import LoadingState from "@/components/ui/loading-state";
 
 /** Semantic icon per known MCP server. Falls back to a hub/storage icon. */
 const MCP_SERVER_ICONS: Record<string, string> = {
@@ -191,9 +192,7 @@ function InstalledSection({
         {t("extensions.mcp.installedSection")} · {servers.length}
       </h3>
       {loading ? (
-        <div className="text-center py-md text-on-surface-variant text-label-sm">
-          {t("extensions.mcp.loading")}
-        </div>
+        <LoadingState size="sm" label={t("extensions.mcp.loading")} />
       ) : servers.length === 0 ? (
         <div className="border border-dashed border-outline-variant/40 rounded-2xl p-lg text-center bg-surface-container-low/30">
           <span className="material-symbols-outlined text-[32px] text-on-surface-variant mb-xs inline-block">
