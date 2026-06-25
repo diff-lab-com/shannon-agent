@@ -98,7 +98,16 @@ The full table in `03-senior-pm-audit.md` §A is **not yet applied**:
 **Recommendation:** shared error boundary + retry pattern, user-visible error messages with actual cause.
 
 ### C. Empty states
-Most empty states now have CTAs after PR #50 (ConfirmDialog + LoadingState primitives help), but audit identified ~32 empty states. Recommend a dedicated sweep to verify each one has a CTA.
+Audited 11 `EmptyState` usages; 5 already had CTAs, 6 lacked them. The 6 gaps are now wired:
+
+- `WorktreePanel` → "Refresh workspaces" (reloads via `useTaskWorktrees.refresh`)
+- `Goals` → "Ask AI to suggest tasks" (sends a starter prompt via `sendMessage`)
+- `Triage` (no-match) → "Clear filters" (resets kind/read/archived filters)
+- `OPCAgentSwarm` → "Spawn agent" (opens the existing `SpawnAgentModal`)
+- `ExtensionsHub/MyAgents` → "Create first agent" (toggles the inline create form)
+- `ExtensionsHub` → "Clear search" / "Reload" (depends on whether a query is active)
+
+`AgentMessagesPanel` intentionally left without a CTA — the empty state is purely informational (no actionable next step until the user records a test message via the button already rendered above).
 
 ### D. Mobile / small-screen
 App is still desktop-only. No sidebar overlay pattern for <768px. Tauri targets desktop but Windows tablets and small laptops exist.
