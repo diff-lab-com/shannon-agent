@@ -1045,6 +1045,7 @@
   "opc.analytics.title": "7-Day Analytics",
   "opc.analytics.refresh.aria": "Refresh analytics",
   "opc.analytics.refresh": "Refresh",
+  "opc.analytics.loadFailed": "Could not load analytics",
   "opc.analytics.loading": "Loading analytics…",
   "opc.analytics.retry": "Retry",
   "opc.analytics.totalTasks": "Total tasks",

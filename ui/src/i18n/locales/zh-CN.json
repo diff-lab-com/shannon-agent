@@ -1045,6 +1045,7 @@
   "opc.analytics.title": "7 天分析",
   "opc.analytics.refresh.aria": "刷新分析",
   "opc.analytics.refresh": "刷新",
+  "opc.analytics.loadFailed": "无法加载分析",
   "opc.analytics.loading": "加载分析中……",
   "opc.analytics.retry": "重试",
   "opc.analytics.totalTasks": "总任务数",

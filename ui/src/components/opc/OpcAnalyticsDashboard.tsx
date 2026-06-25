@@ -9,6 +9,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { OpcMetrics } from '@/types'
+import LoadingState from '@/components/ui/loading-state'
+import ErrorState from '@/components/ui/error-state'
 
 const STATUS_TONES: Record<string, string> = {
   completed: 'bg-tertiary/15 text-tertiary border-tertiary/40',
@@ -49,7 +51,7 @@ export default function OpcAnalyticsDashboard() {
   if (loading && !metrics) {
     return (
       <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
-        <p className="text-body-sm text-on-surface-variant text-center py-md">{t('opc.analytics.loading')}</p>
+        <LoadingState label={t('opc.analytics.loading')} size="sm" />
       </div>
     )
   }
@@ -57,17 +59,11 @@ export default function OpcAnalyticsDashboard() {
   if (error) {
     return (
       <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
-        <div className="font-label-sm text-error flex items-center gap-sm">
-          <span className="material-symbols-outlined text-[14px]">error</span>
-          {error}
-        </div>
-        <button
-          type="button"
-          onClick={refresh}
-          className="mt-sm font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer"
-        >
-          {t('opc.analytics.retry')}
-        </button>
+        <ErrorState
+          title={t('opc.analytics.loadFailed')}
+          description={error}
+          action={{ label: t('opc.analytics.retry'), onClick: refresh }}
+        />
       </div>
     )
   }
