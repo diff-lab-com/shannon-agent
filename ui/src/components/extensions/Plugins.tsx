@@ -3,6 +3,7 @@ import { FormattedMessage, useIntl } from "react-intl";
 import { useOutletContext } from "react-router-dom";
 import * as api from "@/lib/tauri-api";
 import type { CatalogUpstream } from "@/lib/tauri-api";
+import { CardSkeleton } from "@/components/SkeletonLoader";
 import type { CatalogEntry, CatalogSource, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
 
@@ -377,8 +378,8 @@ export default function Plugins() {
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-xl">
-          <span className="material-symbols-outlined animate-spin text-[32px] text-primary">progress_activity</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+          {Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}
         </div>
       ) : error ? (
         <div className="text-center py-xl text-on-surface-variant">
