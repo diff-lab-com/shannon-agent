@@ -128,7 +128,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
           <h3 className="font-headline-md text-on-surface font-bold">{t('tasks.taskDetailDrawer.title')}</h3>
           <button
             aria-label={t('tasks.taskDetailDrawer.closeAria')}
-            className="p-sm rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer"
+            className="p-sm rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             onClick={onClose}
           >
             <span className="material-symbols-outlined">close</span>

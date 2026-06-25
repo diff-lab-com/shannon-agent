@@ -62,14 +62,14 @@ export default function CalendarSidebarWidget({
         <div className="flex gap-sm">
           <button
             aria-label={t('tasks.calendarSidebarWidget.prevMonth')}
-            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors"
+            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
             onClick={onPrevMonth}
           >
             chevron_left
           </button>
           <button
             aria-label={t('tasks.calendarSidebarWidget.nextMonth')}
-            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors"
+            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
             onClick={onNextMonth}
           >
             chevron_right

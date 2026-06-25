@@ -154,7 +154,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
                 <button
                   role="option"
                   aria-selected={i === selected}
-                  className={`w-full text-left px-lg py-sm flex items-center gap-md transition-colors ${i === selected ? 'bg-primary/10 text-primary' : 'text-on-surface hover:bg-surface-container-low'}`}
+                  className={`w-full text-left px-lg py-sm flex items-center gap-md transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${i === selected ? 'bg-primary/10 text-primary' : 'text-on-surface hover:bg-surface-container-low'}`}
                   onClick={() => { item.action(); onClose() }}
                   onMouseEnter={() => setSelected(i)}
                 >

@@ -257,7 +257,7 @@ export default function Plugins() {
           )}
           <button
             onClick={() => handleInstall(entry)}
-            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 inline-flex items-center gap-xs cursor-pointer"
+            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 inline-flex items-center gap-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <span className="material-symbols-outlined text-[14px]">download</span>
             {t("extensions.plugins.install")}
@@ -370,7 +370,7 @@ export default function Plugins() {
           {activeFilterCount > 0 && (
             <button
               onClick={resetFilters}
-              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors text-label-sm font-bold"
+              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors text-label-sm font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <span className="material-symbols-outlined text-[14px]">filter_alt_off</span>
               {t("extensions.plugins.filter.reset")}
