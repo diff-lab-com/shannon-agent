@@ -53,6 +53,16 @@
   --color-background: #f7f9fb;
   --color-on-background: #191c1e;
 
+  /* Chart series — saturated Tailwind palette, works on both light and dark surfaces */
+  --chart-series-1: #3b82f6;
+  --chart-series-2: #10b981;
+  --chart-series-3: #f59e0b;
+  --chart-series-4: #ef4444;
+  --chart-series-5: #8b5cf6;
+  --chart-series-6: #ec4899;
+  --chart-series-7: #06b6d4;
+  --chart-series-8: #84cc16;
+
   /* Spacing mapping */
   --spacing-xs: 4px;
   --spacing-sm: 8px;
