@@ -121,7 +121,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
     >
       <div className="bg-black/20 absolute inset-0" />
       <div
-        className="relative w-[400px] bg-surface-container-lowest shadow-2xl border-l border-outline-variant/20 p-xl overflow-y-auto"
+        className="relative w-[400px] max-w-[90vw] bg-surface-container-lowest shadow-2xl border-l border-outline-variant/20 p-xl overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-lg">

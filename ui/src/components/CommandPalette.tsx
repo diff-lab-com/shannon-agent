@@ -127,7 +127,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   let lastCategory = ''
   return (
     <div className="fixed inset-0 z-[200] flex items-start justify-center pt-[20vh]" onClick={onClose}>
-      <div className="w-[520px] max-h-[400px] bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl overflow-hidden flex flex-col" role="dialog" aria-modal="true" aria-label={t('palette.search.placeholder')} onClick={e => e.stopPropagation()}>
+      <div className="w-[520px] max-w-[90vw] max-h-[400px] bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl overflow-hidden flex flex-col" role="dialog" aria-modal="true" aria-label={t('palette.search.placeholder')} onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-sm px-lg py-md border-b border-outline-variant/10">
           <span className="material-symbols-outlined text-on-surface-variant">search</span>
           <input
