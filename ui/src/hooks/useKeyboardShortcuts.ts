@@ -6,13 +6,24 @@ interface ShortcutMap {
   [key: string]: () => void
 }
 
-export function useKeyboardShortcuts(onTogglePalette?: () => void, onToggleHelp?: () => void) {
+export function useKeyboardShortcuts(
+  onTogglePalette?: () => void,
+  onToggleHelp?: () => void,
+  onCreateSession?: () => void,
+) {
   const navigate = useNavigate()
   const { cancelQuery, isQuerying } = useApp()
 
   useEffect(() => {
     const shortcuts: ShortcutMap = {
-      'mod+n': () => navigate('/chat'),
+      'mod+n': () => {
+        if (onCreateSession) {
+          onCreateSession()
+          navigate('/chat')
+        } else {
+          navigate('/chat')
+        }
+      },
       'mod+shift+n': () => navigate('/chat'),
       'mod+k': () => onTogglePalette?.(),
       'mod+d': () => window.dispatchEvent(new Event('shannon:change-wd')),
@@ -58,5 +69,5 @@ export function useKeyboardShortcuts(onTogglePalette?: () => void, onToggleHelp?
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [navigate, cancelQuery, isQuerying, onTogglePalette, onToggleHelp])
+  }, [navigate, cancelQuery, isQuerying, onTogglePalette, onToggleHelp, onCreateSession])
 }
