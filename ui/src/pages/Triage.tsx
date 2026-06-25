@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { useTriageItems, useTriageStats } from '@/hooks/scheduled-tasks'
 import type { TriageItem } from '@/types'
 import { formatUnixDateTime } from '@/components/tasks/shared'
+import * as api from '@/lib/tauri-api'
 
 type ReadFilter = 'all' | 'unread' | 'read'
 type SortOrder = 'newest' | 'oldest'
@@ -177,30 +178,32 @@ export default function Triage() {
   const bulkMarkRead = useCallback(async () => {
     setBulkRunning(true)
     const results = await Promise.allSettled(
-      Array.from(effectiveSelected).map(id => markRead(id)),
+      Array.from(effectiveSelected).map(id => api.markTriageRead(id)),
     )
-    const ok = results.filter(r => r.status === 'fulfilled' && r.value).length
+    await refresh()
     setBulkRunning(false)
+    const ok = results.filter(r => r.status === 'fulfilled').length
     if (ok > 0) {
       const key = ok === 1 ? 'triage.toast.markRead' : 'triage.toast.markRead.plural'
       toast.success(intl.formatMessage({ id: key }, { count: ok }))
     }
     clearSelection()
-  }, [effectiveSelected, markRead, clearSelection, intl])
+  }, [effectiveSelected, refresh, clearSelection, intl])
 
   const bulkArchive = useCallback(async () => {
     setBulkRunning(true)
     const results = await Promise.allSettled(
-      Array.from(effectiveSelected).map(id => archive(id)),
+      Array.from(effectiveSelected).map(id => api.archiveTriageItem(id)),
     )
-    const ok = results.filter(r => r.status === 'fulfilled' && r.value).length
+    await refresh()
     setBulkRunning(false)
+    const ok = results.filter(r => r.status === 'fulfilled').length
     if (ok > 0) {
       const key = ok === 1 ? 'triage.toast.archived' : 'triage.toast.archived.plural'
       toast.success(intl.formatMessage({ id: key }, { count: ok }))
     }
     clearSelection()
-  }, [effectiveSelected, archive, clearSelection, intl])
+  }, [effectiveSelected, refresh, clearSelection, intl])
 
   // Delete UI was removed — the backend doesn't expose a hard-delete endpoint,
   // so the previous "Delete" button was lying to users (it actually archived).
