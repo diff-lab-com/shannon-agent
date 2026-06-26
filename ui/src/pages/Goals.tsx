@@ -33,7 +33,7 @@ export default function Goals() {
         <div className="p-md border-b border-outline-variant/20">
           <div className="relative">
             <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/60 text-[20px]">search</span>
-            <Input className="w-full pl-10 pr-4 py-2 bg-surface-container-lowest border border-outline-variant/50 rounded-lg text-body-sm focus:outline-none focus:border-primary transition-all outline-none" placeholder={t('goals.searchTasks')} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
+            <Input className="w-full pl-10 pr-4 py-2 bg-surface-container-lowest border border-outline-variant/50 rounded-lg text-body-sm" placeholder={t('goals.searchTasks')} type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
           </div>
         </div>
         <div className="flex-1 overflow-y-auto py-sm">

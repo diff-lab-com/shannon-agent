@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Textarea } from '@/components/ui/textarea'
 
 export default function OPCTask() {
   const intl = useIntl()
@@ -176,8 +177,8 @@ export default function OPCTask() {
 
                   {showRevisionInput === taskId && (
                     <div className="mt-sm flex flex-col gap-sm">
-                      <textarea
-                        className="w-full px-md py-sm rounded-xl border border-outline-variant/50 bg-surface-container-lowest text-body-sm text-on-surface resize-none focus:outline-none focus:border-primary transition-colors"
+                      <Textarea
+                        className="resize-none bg-surface-container-lowest border-outline-variant/50 text-body-sm text-on-surface"
                         rows={3}
                         placeholder={t('opcTask.revisionPlaceholder')}
                         value={revisionNote}
