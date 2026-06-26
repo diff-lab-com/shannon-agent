@@ -39,6 +39,10 @@ struct SessionFile {
 }
 
 /// Extract a stable signature from a tool_use block: name + sorted arg keys.
+/// Build a stable signature from a tool name + sorted argument keys.
+/// Only the **keys** participate — values are dropped on purpose so
+/// that file paths, tokens, or other user secrets never leak into
+/// candidate JSONL or the hash that deduplicates candidates.
 fn signature_of(tool_name: &str, input: &serde_json::Map<String, serde_json::Value>) -> String {
     let mut keys: Vec<&str> = input.keys().map(|s| s.as_str()).collect();
     keys.sort();
@@ -236,6 +240,12 @@ pub fn default_sessions_dir() -> Result<PathBuf, String> {
 
 #[tauri::command]
 pub async fn trigger_skill_pattern_detection(days_back: Option<u32>) -> Result<usize, String> {
+    // Privacy opt-out: when the user has disabled skill detection in
+    // Settings, the detector returns 0 without touching session files.
+    let cfg = crate::config::load_config();
+    if !cfg.skill_detection_enabled {
+        return Ok(0);
+    }
     let dir = default_sessions_dir()?;
     let days = days_back.unwrap_or(7);
     run_detection(&dir, days, DEFAULT_MIN_SESSIONS, DEFAULT_MIN_OCCURRENCES)

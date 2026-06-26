@@ -168,6 +168,26 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   to a 7-day lookback. Can be wired into the scheduled-tasks layer
   for automatic daily runs. 6 Rust tests.
 
+- **Self-improvement Phase 3 — live catalog refresh (D6).**
+  `approve_skill_candidate` and `reject_skill_candidate` now emit a
+  `skill-catalog-changed` Tauri event. The Skills tab subscribes via
+  `useTauriEvent` and re-pulls its installed + agent-authored lists,
+  so approving a candidate no longer requires a page reload to see it.
+
+- **Self-improvement Phase 4 — LLM skill refinement (D6).** New
+  `refine_skill_candidate(id)` Tauri command calls the configured
+  LLM with a skill-procedure refinement prompt, stores the rewritten
+  steps back into the candidate, and marks `refined=true`. Falls
+  back to the original procedure on LLM error. `SkillCandidate` gains
+  a backwards-compatible `refined:bool` field (`#[serde(default)]`).
+
+- **Self-improvement Phase 5 — privacy opt-out + docs (D6).**
+  New `skill_detection_enabled` config flag (default: true). When
+  disabled, `trigger_skill_pattern_detection` returns 0 without
+  scanning sessions. Toggle surfaced in Settings → Advanced.
+  `signature_of` now documented as key-only by design — no file
+  paths, tokens, or argument values ever leave the session log.
+
 - **Voice Phase 3 multi-provider scaffold (D2).** New
   `lib/voice/` module with a provider abstraction:
   `VoiceProvider` interface + three concrete providers

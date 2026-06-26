@@ -19,6 +19,7 @@ export default function AdvancedSettings() {
   const [encryptionEnabled, setEncryptionEnabled] = useState(config?.encryption_enabled ?? true)
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
   const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
+  const [skillDetectionEnabled, setSkillDetectionEnabled] = useState(config?.skill_detection_enabled ?? true)
   const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
@@ -109,6 +110,13 @@ export default function AdvancedSettings() {
               <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.enabledDesc')}</div>
             </div>
             <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" />
+          </div>
+          <div className="flex items-center justify-between gap-md mt-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.detectionEnabled')}</div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.detectionEnabledDesc')}</div>
+            </div>
+            <Switch checked={skillDetectionEnabled} onCheckedChange={v => handleToggle('skill_detection_enabled', v, setSkillDetectionEnabled)} className="shrink-0" />
           </div>
           {candidates.length > 0 && (
             <Button

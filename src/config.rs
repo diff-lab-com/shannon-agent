@@ -44,6 +44,15 @@ pub struct DesktopConfig {
     /// Minimum tool call count to trigger skill evaluation.
     #[serde(default = "default_skill_loop_min_tool_calls")]
     pub skill_loop_min_tool_calls: usize,
+    /// Enable the recurring-pattern skill-candidate detector (D6 Phase 1).
+    /// When false, trigger_skill_pattern_detection returns 0 without
+    /// scanning sessions. Default: true.
+    #[serde(default = "default_skill_detection_enabled")]
+    pub skill_detection_enabled: bool,
+}
+
+fn default_skill_detection_enabled() -> bool {
+    true
 }
 
 /// MCP server configuration.
@@ -87,6 +96,7 @@ impl Default for DesktopConfig {
             skill_loop_enabled: false,
             skill_loop_min_duration_secs: default_skill_loop_min_duration_secs(),
             skill_loop_min_tool_calls: default_skill_loop_min_tool_calls(),
+            skill_detection_enabled: default_skill_detection_enabled(),
         }
     }
 }
@@ -192,6 +202,7 @@ mod tests {
             skill_loop_enabled: false,
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
+            skill_detection_enabled: true,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -239,6 +250,7 @@ mod tests {
             skill_loop_enabled: false,
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
+            skill_detection_enabled: true,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -268,6 +280,7 @@ mod tests {
             skill_loop_enabled: false,
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
+            skill_detection_enabled: true,
         };
 
         // Test serialization preserves approval_mode
