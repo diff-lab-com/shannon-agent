@@ -135,6 +135,7 @@
   "settings.notifications.testSent": "测试通知已发送。",
   "settings.notifications.testFailed": "通知发送失败。",
   "app.brandName": "Shannon Code",
+  "common.dismiss": "关闭",
   "nav.tagline": "你的 AI 工作空间",
   "nav.resize.aria": "调整侧边栏大小",
   "nav.resize.title": "拖动以调整侧边栏大小",
