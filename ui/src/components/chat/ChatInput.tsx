@@ -5,6 +5,9 @@ import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useApp } from '@/context/AppContext'
+import { useVoice } from '@/hooks/useVoice'
+import { MicButton } from '@/components/voice/MicButton'
+import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import * as api from '@/lib/tauri-api'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
@@ -52,6 +55,12 @@ export default function ChatInput({
   const modelList = models ?? []
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const voice = useVoice({
+    onTranscript: (text) => {
+      const merged = value ? `${value} ${text}` : text
+      onChange(merged)
+    },
+  })
 
   const handleChangeWorkingDir = async () => {
     if (!currentSessionId) return
@@ -193,6 +202,12 @@ export default function ChatInput({
         >
           <span className="material-symbols-outlined icon-sm shrink-0">route</span>
           <span className="font-label-sm truncate">{t('chat.input.planMode.banner')}</span>
+        </div>
+      )}
+
+      {voice.state !== 'idle' && (
+        <div className="flex items-center justify-center py-sm bg-primary/5 rounded-t-2xl">
+          <VoiceOrb state={voice.state} />
         </div>
       )}
 
@@ -374,6 +389,13 @@ export default function ChatInput({
             >
               <span className="material-symbols-outlined icon-md">code</span>
             </Button>
+
+            <MicButton
+              state={voice.state}
+              disabled={disabled}
+              onStart={() => void voice.startRecording()}
+              onStop={() => void voice.stopRecording()}
+            />
 
             {isQuerying ? (
               <Button

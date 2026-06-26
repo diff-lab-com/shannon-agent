@@ -98,6 +98,30 @@ describe('ChatInput', () => {
     expect(sendButton).toBeDisabled()
   })
 
+  it('renders the Voice mic button in idle state', () => {
+    renderChatInput()
+    expect(screen.getByLabelText('Start voice recording (stub)')).toBeInTheDocument()
+  })
+
+  it('does not render the Voice orb when idle', () => {
+    const { container } = renderChatInput()
+    expect(container.querySelector('[role="presentation"]')).toBeNull()
+  })
+
+  it('appends stub transcript to value after recording cycle', async () => {
+    const onChange = vi.fn()
+    renderChatInput({ value: '', onChange })
+    const mic = screen.getByLabelText('Start voice recording (stub)')
+    fireEvent.click(mic)
+    expect(screen.getByLabelText('Stop recording')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('Stop recording'))
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled()
+    })
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1]
+    expect(lastCall[0]).toContain('stub transcript')
+  })
+
   it('calls onCancelQuery when Stop button is clicked', () => {
     const onCancelQuery = vi.fn()
     renderChatInput({ isQuerying: true, onCancelQuery })
