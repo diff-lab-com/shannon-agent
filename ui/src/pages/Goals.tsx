@@ -148,6 +148,7 @@ export default function Goals() {
                 icon="task_alt"
                 title={t('goals.noTasksYet')}
                 description={t('goals.noTasksDescription')}
+                action={{ label: t('goals.noTasksCta'), onClick: () => sendMessage(t('goals.noTasksPrompt')) }}
               />
             ) : (
               tasks.map(task => {

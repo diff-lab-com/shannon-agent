@@ -77,11 +77,12 @@ export default function MyAgents() {
       </div>
 
       {/* Agents Bento Grid */}
-      {agents.length === 0 ? (
+      {agents.length === 0 && !showAddAgent ? (
         <EmptyState
           icon="smart_toy"
           title={t('extensions.myAgents.emptyTitle')}
           description={t('extensions.myAgents.emptyDesc')}
+          action={{ label: t('extensions.myAgents.createFirstCta'), onClick: () => setShowAddAgent(true) }}
         />
       ) : (
         <>
