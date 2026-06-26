@@ -212,4 +212,39 @@ describe('Skills (P3 federated catalog)', () => {
       expect(screen.getByText('No skills found.')).toBeInTheDocument()
     })
   })
+
+  it('opens detail drawer when card title is clicked', async () => {
+    listSkillCatalog.mockResolvedValue([repoSkill])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('brainstorming')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('brainstorming'))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /brainstorming/i })).toBeInTheDocument()
+    })
+    // Drawer shows the "Source" / "Homepage" labels — card doesn't.
+    expect(screen.getByText('Source')).toBeInTheDocument()
+    expect(screen.getByText('Homepage')).toBeInTheDocument()
+    // Source line in the drawer renders repo + ref.
+    expect(screen.getByText('anthropics/skills @ main')).toBeInTheDocument()
+  })
+
+  it('closes detail drawer on backdrop click', async () => {
+    listSkillCatalog.mockResolvedValue([repoSkill])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('brainstorming')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByText('brainstorming'))
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: /brainstorming/i })).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('dialog', { name: /brainstorming/i }))
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+  })
 })
