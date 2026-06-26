@@ -4,12 +4,12 @@
 //! JavaScript as `invoke("command_name", { args })`.
 
 use serde::{Deserialize, Serialize};
+use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent};
+use shannon_core::tools::ToolRegistry;
 use shannon_engine::api::client::LlmClient;
 use shannon_engine::api::types::LlmClientConfig;
 use shannon_engine::permissions::{ApprovalMode, PermissionManager};
-use shannon_core::query_engine::{QueryContext, QueryEngine, QueryEvent};
 use shannon_engine::state::StateManager;
-use shannon_core::tools::ToolRegistry;
 use shannon_mcp::McpProcessPool;
 use shannon_skills::SkillRegistry;
 use shannon_tools::register_default_tools;
@@ -668,11 +668,15 @@ pub async fn send_message(
                             let cfg = crate::config::load_config();
                             if cfg.skill_loop_enabled {
                                 if cfg.skill_loop_enabled {
-                                    let duration_met = elapsed_secs >= cfg.skill_loop_min_duration_secs;
-                                    let tools_met = task_tool_call_count >= cfg.skill_loop_min_tool_calls;
+                                    let duration_met =
+                                        elapsed_secs >= cfg.skill_loop_min_duration_secs;
+                                    let tools_met =
+                                        task_tool_call_count >= cfg.skill_loop_min_tool_calls;
 
                                     if duration_met || tools_met {
-                                        use shannon_core::skill_loop::{TaskEvaluation, TaskOutcome};
+                                        use shannon_core::skill_loop::{
+                                            TaskEvaluation, TaskOutcome,
+                                        };
 
                                         let evaluation = TaskEvaluation {
                                             duration_secs: elapsed_secs,
@@ -688,9 +692,15 @@ pub async fn send_message(
                                             let state_guard = app_clone.state::<AppState>();
                                             state_guard.client_config.read().await.clone()
                                         };
-                                        let client = shannon_engine::api::client::LlmClient::new(client_config);
+                                        let client = shannon_engine::api::client::LlmClient::new(
+                                            client_config,
+                                        );
 
-                                        match shannon_core::skill_loop::evaluate_task(&client, evaluation).await {
+                                        match shannon_core::skill_loop::evaluate_task(
+                                            &client, evaluation,
+                                        )
+                                        .await
+                                        {
                                             Ok(result) if result.suggest => {
                                                 let _ = app_clone.emit(
                                                     crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,

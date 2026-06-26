@@ -42,7 +42,10 @@ pub async fn send(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!("telegram status {status}: {}", truncate(&body, 200)));
+        return Err(format!(
+            "telegram status {status}: {}",
+            truncate(&body, 200)
+        ));
     }
 
     let parsed: TelegramResponse = resp
@@ -80,7 +83,9 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let err = rt.block_on(send(&reqwest::Client::new(), &cfg, "hi")).unwrap_err();
+        let err = rt
+            .block_on(send(&reqwest::Client::new(), &cfg, "hi"))
+            .unwrap_err();
         assert!(err.contains("bot_token"));
     }
 
@@ -94,7 +99,9 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let err = rt.block_on(send(&reqwest::Client::new(), &cfg, "hi")).unwrap_err();
+        let err = rt
+            .block_on(send(&reqwest::Client::new(), &cfg, "hi"))
+            .unwrap_err();
         assert!(err.contains("chat_id"));
     }
 

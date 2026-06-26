@@ -69,11 +69,7 @@ impl SendOutcome {
 
 /// Fan a message out to every configured provider in `dto`. Providers that
 /// fail (network error, 4xx, etc.) are recorded but do not abort the loop.
-pub async fn send_all(
-    http: &reqwest::Client,
-    dto: &OutboundConfigDto,
-    text: &str,
-) -> SendOutcome {
+pub async fn send_all(http: &reqwest::Client, dto: &OutboundConfigDto, text: &str) -> SendOutcome {
     let mut results = Vec::new();
     if let Some(s) = dto.slack.as_ref() {
         let res = slack::send(http, s, text).await;
