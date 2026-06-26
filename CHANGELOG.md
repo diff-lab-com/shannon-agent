@@ -168,6 +168,16 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   to a 7-day lookback. Can be wired into the scheduled-tasks layer
   for automatic daily runs. 6 Rust tests.
 
+- **Voice Phase 3 multi-provider scaffold (D2).** New
+  `lib/voice/` module with a provider abstraction:
+  `VoiceProvider` interface + three concrete providers
+  (`stub`, `webspeech`, `remote`) + a factory that picks one based on
+  runtime support. The remote provider posts audio blobs to a
+  configurable endpoint with optional bearer auth — ready for a
+  Whisper / Deepgram / AssemblyAI backend. 15 tests. useVoice stays
+  on Web Speech for now; a follow-up will refactor it to consume
+  this abstraction.
+
 ### Documentation
 
 - **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6
