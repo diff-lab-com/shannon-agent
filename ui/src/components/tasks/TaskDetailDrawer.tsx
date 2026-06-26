@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import type { TaskItem, BackgroundTaskInfo, UpdateTaskPayload } from '@/types'
 import * as api from '@/lib/tauri-api'
 import { useApp } from '@/context/AppContext'
+import { normalizePriority } from '@/lib/task-status'
 
 type TaskLike = TaskItem | BackgroundTaskInfo
 
@@ -21,7 +22,7 @@ interface TaskDetailDrawerProps {
   onUpdated?: () => void
 }
 
-const PRIORITIES = ['low', 'normal', 'high', 'critical'] as const
+const PRIORITIES = ['low', 'normal', 'medium', 'high', 'critical'] as const
 const STATUSES = ['pending', 'in_progress', 'running', 'completed', 'failed', 'blocked'] as const
 
 function getTitle(task: TaskLike): string {
@@ -120,14 +121,14 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
     >
       <div className="bg-black/20 absolute inset-0" />
       <div
-        className="relative w-[400px] bg-surface-container-lowest shadow-2xl border-l border-outline-variant/20 p-xl overflow-y-auto"
+        className="relative w-[400px] max-w-[90vw] bg-surface-container-lowest shadow-2xl border-l border-outline-variant/20 p-xl overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-lg">
           <h3 className="font-headline-md text-on-surface font-bold">{t('tasks.taskDetailDrawer.title')}</h3>
           <button
             aria-label={t('tasks.taskDetailDrawer.closeAria')}
-            className="p-sm rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer"
+            className="p-sm rounded-lg hover:bg-surface-container text-on-surface-variant cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             onClick={onClose}
           >
             <span className="material-symbols-outlined">close</span>
@@ -146,7 +147,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
               <select
                 value={status}
                 onChange={e => setStatus(e.target.value)}
-                aria-label="Status"
+                aria-label={t('tasks.taskDetailDrawer.status')}
                 className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
               >
                 {STATUSES.map(s => (
@@ -183,7 +184,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                 </select>
               ) : (
                 <p className="font-body-md text-on-surface mt-xs capitalize">
-                  {task.priority ?? t('tasks.taskDetailDrawer.none')}
+                  {(task.priority && normalizePriority(task.priority)) ?? t('tasks.taskDetailDrawer.none')}
                 </p>
               )}
             </div>

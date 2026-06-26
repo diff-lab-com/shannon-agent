@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { useApp } from '@/context/AppContext'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { AgentInfo, TaskItem } from '@/types'
 
@@ -236,6 +237,9 @@ function SpawnAgentModal({ open, onClose }: { open: boolean; onClose: () => void
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, containerRef)
+
   const reset = () => {
     setName(''); setModel(''); setPrompt('')
     setTools({ bash: true, read: true, write: true })
@@ -265,6 +269,7 @@ function SpawnAgentModal({ open, onClose }: { open: boolean; onClose: () => void
 
   return (
     <div
+      ref={containerRef}
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-md"
       role="dialog"
       aria-modal="true"
@@ -383,6 +388,9 @@ function ReassignModal({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(!!target, containerRef)
+
   useEffect(() => {
     if (target) { setPick(''); setError(null) }
   }, [target])
@@ -410,6 +418,7 @@ function ReassignModal({
 
   return (
     <div
+      ref={containerRef}
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-md"
       role="dialog"
       aria-modal="true"

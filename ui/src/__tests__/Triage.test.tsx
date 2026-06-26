@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { IntlProvider } from 'react-intl'
 import Triage from '@/pages/Triage'
+import * as api from '@/lib/tauri-api'
 import type { TriageItem, TriageStats } from '@/types'
 
 // Test locale messages (minimal set for test assertions)
@@ -20,7 +21,6 @@ const testMessages: Record<string, string> = {
   'triage.bulk.title': 'Bulk actions',
   'triage.bulk.markRead': 'Mark read',
   'triage.bulk.archive': 'Archive',
-  'triage.bulk.delete': 'Delete',
   'triage.bulk.clear': 'Clear',
   'triage.bulk.selected': '{count} selected',
   'triage.select.aria': 'Select item {id}',
@@ -37,16 +37,10 @@ const testMessages: Record<string, string> = {
   'triage.unread.title': 'Unread',
   'triage.unread': '{count} unread',
   'triage.total': '{count} total',
-  'triage.delete.aria': 'Delete item',
-  'triage.delete.title': 'Delete',
-  'triage.deleteDialog.title': 'Delete item',
-  'triage.deleteDialog.message': 'Delete this item?',
-  'triage.deleteDialog.confirm': 'Delete',
-  'triage.deleteDialog.cancel': 'Cancel',
-  'triage.bulkDelete.title': 'Bulk delete',
-  'triage.bulkDeleteDialog.title': 'Delete {count} item?',
-  'triage.bulkDeleteDialog.message': 'This removes the selected items from your inbox. Underlying records are archived, not erased.',
-  'triage.toast.deleted': 'Item deleted',
+  'triage.toast.markRead': 'Marked {count} item as read',
+  'triage.toast.markRead.plural': 'Marked {count} items as read',
+  'triage.toast.archived': 'Archived {count} item',
+  'triage.toast.archived.plural': 'Archived {count} items',
   'triage.noMatch.title': 'No matches',
   'triage.noMatch.description': 'No items match your filter',
   'triage.sort.label': 'Sort',
@@ -104,6 +98,8 @@ function renderWithIntl(ui: React.ReactElement) {
 beforeEach(() => {
   itemsSpy.mockReset()
   statsSpy.mockReset()
+  vi.mocked(api.markTriageRead).mockClear()
+  vi.mocked(api.archiveTriageItem).mockClear()
   setItems([])
 })
 
@@ -170,66 +166,26 @@ describe('Triage page', () => {
     expect(screen.queryByRole('region', { name: 'Bulk actions' })).not.toBeInTheDocument()
   })
 
-  it('Mark read bulk action calls markRead for each selected id', async () => {
-    const { markRead } = setItems([
+  it('Mark read bulk action calls api.markTriageRead for each selected id', async () => {
+    setItems([
       makeItem({ id: 'a' }), makeItem({ id: 'b' }), makeItem({ id: 'c' }),
     ])
+    const spy = vi.mocked(api.markTriageRead)
     renderWithIntl(<Triage />)
     fireEvent.click(screen.getByLabelText('Select all visible items'))
     const bar = screen.getByRole('region', { name: 'Bulk actions' })
     fireEvent.click(within(bar).getByRole('button', { name: /Mark read/ }))
-    await waitFor(() => expect(markRead).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(3))
   })
 
-  it('Archive bulk action calls archive for each selected id', async () => {
-    const { archive } = setItems([makeItem({ id: 'x' }), makeItem({ id: 'y' })])
+  it('Archive bulk action calls api.archiveTriageItem for each selected id', async () => {
+    setItems([makeItem({ id: 'x' }), makeItem({ id: 'y' })])
+    const spy = vi.mocked(api.archiveTriageItem)
     renderWithIntl(<Triage />)
     fireEvent.click(screen.getByLabelText('Select all visible items'))
     const bar = screen.getByRole('region', { name: 'Bulk actions' })
     fireEvent.click(within(bar).getByRole('button', { name: /Archive/ }))
-    await waitFor(() => expect(archive).toHaveBeenCalledTimes(2))
-  })
-
-  it('Delete bulk action opens confirmation modal then deletes on confirm', async () => {
-    const { archive } = setItems([makeItem({ id: 'x' }), makeItem({ id: 'y' })])
-    renderWithIntl(<Triage />)
-    fireEvent.click(screen.getByLabelText('Select all visible items'))
-    const bar = screen.getByRole('region', { name: 'Bulk actions' })
-    fireEvent.click(within(bar).getByRole('button', { name: /Delete/ }))
-    // Confirmation dialog appears
-    const dialog = await screen.findByRole('dialog', { name: 'Delete 2 item?' })
-    expect(dialog).toHaveTextContent(/Delete 2 item\?/)
-    // Confirm
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Delete$/ }))
-    await waitFor(() => expect(archive).toHaveBeenCalledTimes(2))
-  })
-
-  it('Cancel in bulk delete modal does NOT call archive', () => {
-    const { archive } = setItems([makeItem({ id: 'x' })])
-    renderWithIntl(<Triage />)
-    fireEvent.click(screen.getByLabelText('Select all visible items'))
-    fireEvent.click(within(screen.getByRole('region', { name: 'Bulk actions' })).getByRole('button', { name: /Delete/ }))
-    const dialog = screen.getByRole('dialog', { name: 'Delete 1 item?' })
-    fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/ }))
-    expect(archive).not.toHaveBeenCalled()
-  })
-
-  it('per-item Delete button opens single-item confirm and deletes on confirm', async () => {
-    const { archive } = setItems([makeItem({ id: 'only' })])
-    renderWithIntl(<Triage />)
-    fireEvent.click(screen.getByLabelText(/Delete item/))
-    const dialog = await screen.findByRole('dialog', { name: 'Delete item' })
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Delete$/ }))
-    await waitFor(() => expect(archive).toHaveBeenCalledWith('only'))
-  })
-
-  it('Cancel in single-item delete modal does NOT call archive', () => {
-    const { archive } = setItems([makeItem({ id: 'only' })])
-    renderWithIntl(<Triage />)
-    fireEvent.click(screen.getByLabelText(/Delete item/))
-    const dialog = screen.getByRole('dialog', { name: 'Delete item' })
-    fireEvent.click(within(dialog).getByRole('button', { name: /Cancel/ }))
-    expect(archive).not.toHaveBeenCalled()
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
   })
 
   it('read filter hides read items when "unread" is selected', () => {

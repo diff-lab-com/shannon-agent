@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
+import { CardSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
 import type { SkillInfo } from '@/types'
 
@@ -94,8 +95,8 @@ export default function ExtensionsHub() {
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-xl">
-            <span className="material-symbols-outlined animate-spin text-[32px] text-primary">progress_activity</span>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-md">
+            {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
           </div>
         ) : filteredSkills.length === 0 ? (
           <EmptyState

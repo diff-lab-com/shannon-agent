@@ -5,7 +5,9 @@
 // trigger / policy editing here too. Click backdrop or close button to
 // dismiss. Escape closes too.
 
+import { useRef } from 'react'
 import { useIntl } from 'react-intl'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import type { ScheduledRoutine } from '@/types'
 import DependsOnEditor from './DependsOnEditor'
 
@@ -30,6 +32,9 @@ export default function RoutineDetailDrawer({
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(!!routine, containerRef)
+
   if (!routine) return null
   const deps = (routine.depends_on ?? []).map(id => routines.find(r => r.id === id)?.name ?? id)
   return (
@@ -43,7 +48,8 @@ export default function RoutineDetailDrawer({
     >
       <div className="bg-black/20 absolute inset-0" />
       <div
-        className="relative w-[440px] bg-surface-container-lowest shadow-2xl border-l border-outline-variant/20 p-xl overflow-y-auto"
+        ref={containerRef}
+        className="relative w-[440px] max-w-[90vw] bg-surface-container-lowest shadow-2xl border-l border-outline-variant/20 p-xl overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-lg">

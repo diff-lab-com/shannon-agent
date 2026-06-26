@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import ConversationsList from '@/components/conversations/ConversationsList'
 import type { SessionInfo } from '@/types'
+
+vi.mock('@/context/AppContext', () => ({
+  AppProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  useApp: () => ({ switchSession: vi.fn() }),
+}))
 
 const now = Date.now()
 

@@ -54,7 +54,7 @@ export default function QuickFix() {
             type="text"
             value={diag.file_path}
             onChange={(e) => setDiag({ ...diag, file_path: e.target.value })}
-            placeholder="/abs/path/to/src/lib.rs"
+            placeholder={t('quickFix.filePath.placeholder')}
             className="font-mono font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </label>
@@ -92,7 +92,7 @@ export default function QuickFix() {
             type="text"
             value={diag.message}
             onChange={(e) => setDiag({ ...diag, message: e.target.value })}
-            placeholder="unused variable: `x`"
+            placeholder={t('quickFix.message.placeholder')}
             className="font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </label>
@@ -115,7 +115,7 @@ export default function QuickFix() {
         <button
           type="submit"
           disabled={!canSubmit}
-          className="self-start font-label-md bg-primary text-on-primary rounded-full px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="self-start font-label-md bg-primary text-on-primary rounded-lg px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         >
           {t('quickFix.askLSP')}
         </button>

@@ -32,7 +32,7 @@ const agentsCtx = vi.hoisted(() => ({
 
 vi.mock('@/context/AppContext', () => ({
   AppProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  useApp: () => agentsCtx,
+  useApp: () => ({ ...agentsCtx, switchSession: vi.fn() }),
 }))
 
 function wrap(ui: React.ReactElement) {

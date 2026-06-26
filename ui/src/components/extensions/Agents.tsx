@@ -11,6 +11,7 @@ import {
   type InstalledAgent,
 } from "@/lib/tauri-api";
 import { SecurityBadge } from "./SecurityBadge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 /**
  * P4 Agents tab — federated catalog + install/remove.
@@ -23,7 +24,7 @@ import { SecurityBadge } from "./SecurityBadge";
  */
 export default function Agents() {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const { search } = useOutletContext<{ search: string }>();
 
@@ -36,6 +37,7 @@ export default function Agents() {
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ id: string; msg: string; ok: boolean } | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -83,10 +85,10 @@ export default function Agents() {
         const ref_ = entry.source.ref_ ?? 'main';
         await installAgentFromRepo(entry.name, repo, ref_);
       } else {
-        setFeedback({ id: entry.id, msg: `Unsupported agent source: ${entry.source.type}`, ok: false });
+        setFeedback({ id: entry.id, msg: t('extensions.agents.unsupportedSource', { type: entry.source.type }), ok: false });
         return;
       }
-      setFeedback({ id: entry.id, msg: `Installed ${entry.name}`, ok: true });
+      setFeedback({ id: entry.id, msg: t('extensions.agents.installedToast', { name: entry.name }), ok: true });
       refreshInstalled();
     } catch (err) {
       setFeedback({ id: entry.id, msg: String(err), ok: false });
@@ -100,7 +102,7 @@ export default function Agents() {
     setFeedback(null);
     try {
       await uninstallAgentPlugin(name);
-      setFeedback({ id: `uninstall:${name}`, msg: `Removed ${name}`, ok: true });
+      setFeedback({ id: `uninstall:${name}`, msg: t('extensions.agents.removedToast', { name }), ok: true });
       refreshInstalled();
     } catch (err) {
       setFeedback({ id: `uninstall:${name}`, msg: String(err), ok: false });
@@ -122,7 +124,7 @@ export default function Agents() {
   return (
     <div className="p-lg max-w-6xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.agents.title')}</h2>
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.agents.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
           {t('extensions.agents.subtitle')}
         </p>
@@ -144,7 +146,7 @@ export default function Agents() {
       {!catalogLoading && !catalogError && (
         <section>
           <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-            Catalog · {filtered.length}
+            {t('extensions.agents.catalogCount', { count: filtered.length })}
           </h3>
           {filtered.length === 0 ? (
             <div className="text-center py-md text-on-surface-variant text-label-md">
@@ -169,7 +171,7 @@ export default function Agents() {
 
       <section>
         <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-          Installed · {installed.length}
+          {t('extensions.agents.installedCount', { count: installed.length })}
         </h3>
         {installedLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.agents.loadingInstalled')}</div>
@@ -193,7 +195,7 @@ export default function Agents() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleUninstall(agent.name)}
+                  onClick={() => setRemoveTarget(agent.name)}
                   disabled={busyId === `uninstall:${agent.name}`}
                   className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
                 >
@@ -204,6 +206,20 @@ export default function Agents() {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title={t('extensions.agents.removeConfirm.title')}
+        message={t('extensions.agents.removeConfirm.message', { name: removeTarget ?? '' })}
+        confirmLabel={t('extensions.agents.removeConfirm.confirm')}
+        cancelLabel={t('extensions.agents.removeConfirm.cancel')}
+        destructive
+        busy={busyId?.startsWith('uninstall:') ?? false}
+        onConfirm={() => {
+          if (removeTarget) void handleUninstall(removeTarget).finally(() => setRemoveTarget(null))
+        }}
+        onCancel={() => setRemoveTarget(null)}
+      />
     </div>
   );
 }
@@ -234,7 +250,7 @@ function AgentCard({
         <div className="flex items-center gap-[4px] shrink-0">
           <SecurityBadge text={entry.description} trust={entry.trust} />
           <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls}`}>
-            {trustLabel.text}
+            {t(trustLabel.textKey)}
           </span>
         </div>
       </div>
@@ -276,18 +292,16 @@ function AgentCard({
           disabled={busy || installed}
           className="px-sm py-xs rounded-lg bg-primary text-on-primary text-label-xs font-bold hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {busy ? "…" : installed ? t('extensions.agents.installed') : t('extensions.agents.install')}
+          {busy ? "…" : installed ? t('extensions.agents.installedBtn') : t('extensions.agents.installBtn')}
         </button>
       </div>
     </div>
   );
 }
 
-const TRUST_LABELS: Record<AgentCatalogEntry['trust'], { text: string; cls: string }> = {
-  verified: { text: "Verified", cls: "bg-primary-container/50 text-on-primary-container" },
-  official: { text: "Official", cls: "bg-secondary-container/50 text-on-secondary-container" },
-  community: { text: "Community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
-  unknown: { text: "Unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
+const TRUST_LABELS: Record<AgentCatalogEntry['trust'], { textKey: string; cls: string }> = {
+  verified: { textKey: "extensions.agents.trust.verified", cls: "bg-primary-container/50 text-on-primary-container" },
+  official: { textKey: "extensions.agents.trust.official", cls: "bg-secondary-container/50 text-on-secondary-container" },
+  community: { textKey: "extensions.agents.trust.community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
+  unknown: { textKey: "extensions.agents.trust.unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
 };
-
-// Trust labels are static — no i18n needed for these constants

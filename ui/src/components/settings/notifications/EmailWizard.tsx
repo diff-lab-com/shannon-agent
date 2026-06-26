@@ -3,8 +3,16 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 
+export interface EmailImapConfig {
+  imap_server: string
+  imap_port: number
+  username: string
+  password: string
+  folder: string
+}
+
 interface EmailWizardProps {
-  onSave: (config: any) => Promise<void>
+  onSave: (config: EmailImapConfig) => Promise<void>
   onCancel: () => void
 }
 

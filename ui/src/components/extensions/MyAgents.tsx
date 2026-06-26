@@ -146,8 +146,8 @@ export default function MyAgents() {
                       <span className="material-symbols-outlined">more_horiz</span>
                       {showMenu === agent.id && (
                         <div ref={menuRef} className="absolute right-0 top-full mt-1 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-xs z-10 min-w-[140px]">
-                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>{t('extensions.myAgents.viewStatus')}</button>
-                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors text-error" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(intl.formatMessage({ id: 'extensions.myAgents.stopped' }, { name: agent.name })) } catch (e) { toastError(t('extensions.myAgents.stopFailed'), e) } }}>{t('extensions.myAgents.stopAgent')}</button>
+                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>{t('extensions.myAgents.viewStatus')}</button>
+                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors text-error focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(intl.formatMessage({ id: 'extensions.myAgents.stopped' }, { name: agent.name })) } catch (e) { toastError(t('extensions.myAgents.stopFailed'), e) } }}>{t('extensions.myAgents.stopAgent')}</button>
                         </div>
                       )}
                     </Button>

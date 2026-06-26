@@ -6,6 +6,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
+import { useApp } from '@/context/AppContext'
 import type { SessionInfo } from '@/types'
 
 type SortKey = 'recent' | 'messages'
@@ -26,9 +27,15 @@ export default function ConversationsList({ sessions }: Props) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const navigate = useNavigate()
+  const { switchSession } = useApp()
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('recent')
   const [filter, setFilter] = useState<FilterKey>('all')
+
+  const openSession = async (id: string) => {
+    await switchSession(id)
+    navigate('/chat')
+  }
 
   const counts = useMemo(() => ({
     all: sessions.length,
@@ -136,7 +143,7 @@ export default function ConversationsList({ sessions }: Props) {
                 {items.map(s => (
                   <li key={s.id}>
                     <button
-                      onClick={() => navigate('/chat')}
+                      onClick={() => openSession(s.id)}
                       className="w-full text-left p-md rounded-xl bg-surface-container-lowest border border-outline-variant/30 hover:border-primary/40 hover:bg-surface-container-low transition-colors cursor-pointer flex items-center gap-md group"
                     >
                       <span className="material-symbols-outlined text-on-surface-variant group-hover:text-primary transition-colors">chat_bubble</span>

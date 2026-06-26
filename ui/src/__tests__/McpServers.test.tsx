@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import McpServers from '@/components/extensions/McpServers'
 
@@ -273,6 +273,8 @@ describe('McpServers (Cursor-style UX)', () => {
       expect(screen.getByText('Remove')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('Remove'))
+    const dialog = await screen.findByRole('alertdialog', { name: /Remove MCP server\?/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Remove$/ }))
     await waitFor(() => {
       expect(uninstallMcpServer).toHaveBeenCalledWith('filesystem')
     })

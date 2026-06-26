@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type React from 'react'
 import { useIntl } from 'react-intl'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { toast } from 'sonner'
 import {
   createMemory,
@@ -56,6 +57,7 @@ export default function MemoryPanel() {
   const [projectFilter, setProjectFilter] = useState<string>('all')
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all')
   const [query, setQuery] = useState('')
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
 
   const [editing, setEditing] = useState<MemoryEntry | null>(null)
   const [creating, setCreating] = useState(false)
@@ -87,8 +89,11 @@ export default function MemoryPanel() {
     void fetchAll()
   }, [fetchAll])
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm(t('memory.confirmDelete'))) return
+  const handleDelete = (id: string) => setPendingDeleteId(id)
+
+  const confirmDelete = async () => {
+    const id = pendingDeleteId
+    if (!id) return
     try {
       const ok = await deleteMemory(id)
       if (!ok) {
@@ -99,6 +104,8 @@ export default function MemoryPanel() {
       await fetchAll()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : t('memory.toast.failedDelete'))
+    } finally {
+      setPendingDeleteId(null)
     }
   }
 
@@ -144,7 +151,7 @@ export default function MemoryPanel() {
     <div className="flex-1 overflow-y-auto w-full pb-16">
       <div className="max-w-[1100px] mx-auto px-lg py-xl">
         <header className="mb-xl">
-          <h1 className="text-headline-md font-bold text-on-surface mb-xs">
+          <h1 className="text-headline-md font-headline-md text-on-surface mb-xs">
             {t('memory.title')}
           </h1>
           <p className="text-body-md text-on-surface-variant">
@@ -195,7 +202,7 @@ export default function MemoryPanel() {
           <select
             value={projectFilter}
             onChange={(e) => setProjectFilter(e.target.value)}
-            className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md"
+            className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md transition-colors hover:border-primary/30 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none cursor-pointer"
           >
             <option value="all">{t('memory.filter.allProjects')}</option>
             {projects.map((p) => (
@@ -208,7 +215,7 @@ export default function MemoryPanel() {
           <select
             value={categoryFilter}
             onChange={(e) => setCategoryFilter(e.target.value as CategoryFilter)}
-            className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md"
+            className="px-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md transition-colors hover:border-primary/30 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none cursor-pointer"
           >
             {CATEGORIES.map((c) => (
               <option key={c} value={c}>
@@ -226,7 +233,7 @@ export default function MemoryPanel() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={t('memory.searchPlaceholder')}
-              className="w-full pl-[40px] pr-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md"
+              className="w-full pl-[40px] pr-md py-sm rounded-xl bg-surface-container-low border border-outline-variant text-label-md transition-colors hover:border-primary/30 focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:outline-none"
             />
           </div>
 
@@ -285,6 +292,17 @@ export default function MemoryPanel() {
           onSave={handleSave}
         />
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        title={t('memory.confirmDelete.title')}
+        message={t('memory.confirmDelete.message')}
+        confirmLabel={t('memory.confirmDelete.confirm')}
+        cancelLabel={t('memory.confirmDelete.cancel')}
+        destructive
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDeleteId(null)}
+      />
     </div>
   )
 }
@@ -311,6 +329,7 @@ function MemoryCard({
   onDelete: () => void
 }) {
   const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const fmtDate = (iso: string) => {
     const d = new Date(iso)
     if (Number.isNaN(d.getTime())) return iso
@@ -318,7 +337,7 @@ function MemoryCard({
   }
 
   return (
-    <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 hover:border-primary/30 transition-colors">
+    <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 shadow-sm hover:shadow-md hover:border-primary/30 transition-all">
       <div className="flex items-start gap-md">
         <span
           className={`material-symbols-outlined text-[20px] mt-[2px] px-sm py-xs rounded-lg ${CATEGORY_COLOR[entry.category]}`}
@@ -328,7 +347,7 @@ function MemoryCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-sm mb-xs">
             <span className="text-label-xs px-sm py-[2px] rounded-full bg-surface-container-high text-on-surface-variant font-bold uppercase">
-              {entry.category}
+              {t(`memory.category.${entry.category}`)}
             </span>
             <span className="text-label-xs text-on-surface-variant">{entry.project}</span>
             <span className="text-label-xs text-on-surface-variant/60">
@@ -336,15 +355,15 @@ function MemoryCard({
             </span>
             {entry.access_count > 0 && (
               <span className="text-label-xs text-on-surface-variant/60">
-                · Used {entry.access_count}×
+                · {intl.formatMessage({ id: 'memory.used' }, { count: entry.access_count })}
               </span>
             )}
           </div>
-          <p className="text-body-md text-on-surface whitespace-pre-wrap break-words mb-xs">
+          <p className="text-body-md text-on-surface whitespace-pre-wrap break-words mb-md">
             {entry.content}
           </p>
           {entry.tags.length > 0 && (
-            <div className="flex flex-wrap gap-xs mt-xs">
+            <div className="flex flex-wrap gap-xs mt-sm">
               {entry.tags.map((tag) => (
                 <span
                   key={tag}
@@ -360,14 +379,14 @@ function MemoryCard({
           <button
             onClick={onEdit}
             className="p-xs rounded-lg hover:bg-surface-container-high cursor-pointer"
-            aria-label="Edit"
+            aria-label={t('memory.action.edit')}
           >
             <span className="material-symbols-outlined text-[18px] text-on-surface-variant">edit</span>
           </button>
           <button
             onClick={onDelete}
             className="p-xs rounded-lg hover:bg-error/10 cursor-pointer"
-            aria-label="Delete"
+            aria-label={t('memory.action.delete')}
           >
             <span className="material-symbols-outlined text-[18px] text-error/70">delete</span>
           </button>
@@ -402,6 +421,19 @@ function MemoryEditor({
   const [tagsInput, setTagsInput] = useState((initial?.tags ?? []).join(', '))
   const [confidence, setConfidence] = useState(initial?.confidence ?? 1.0)
   const [saving, setSaving] = useState(false)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+
+  const isDirty = () =>
+    project !== (initial?.project ?? '.') ||
+    category !== (initial?.category ?? 'context') ||
+    content !== (initial?.content ?? '') ||
+    tagsInput !== (initial?.tags ?? []).join(', ') ||
+    confidence !== (initial?.confidence ?? 1.0)
+
+  const attemptCancel = () => {
+    if (isDirty()) setConfirmDiscard(true)
+    else onCancel()
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -427,7 +459,7 @@ function MemoryEditor({
   return (
     <div
       className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-md"
-      onClick={onCancel}
+      onClick={attemptCancel}
     >
       <form
         onClick={(e) => e.stopPropagation()}
@@ -440,9 +472,9 @@ function MemoryEditor({
           </h2>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={attemptCancel}
             className="p-xs rounded hover:bg-surface-container-high cursor-pointer"
-            aria-label="Close"
+            aria-label={t('memory.action.close')}
           >
             <span className="material-symbols-outlined text-[20px] text-on-surface-variant">close</span>
           </button>
@@ -456,7 +488,7 @@ function MemoryEditor({
                 onChange={(e) => setProject(e.target.value)}
                 required
                 className="w-full px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant text-label-md"
-                placeholder="my-project"
+                placeholder={t('memory.editor.project.placeholder')}
               />
             </Field>
             <Field label={t('memory.editor.category')}>
@@ -491,7 +523,7 @@ function MemoryEditor({
                 value={tagsInput}
                 onChange={(e) => setTagsInput(e.target.value)}
                 className="w-full px-md py-sm rounded-lg bg-surface-container-low border border-outline-variant text-label-md"
-                placeholder="database, react, frontend"
+                placeholder={t('memory.editor.tags.placeholder')}
               />
             </Field>
             {!initial && (
@@ -513,7 +545,7 @@ function MemoryEditor({
         <footer className="flex justify-end gap-sm px-lg py-md border-t border-outline-variant/30 bg-surface-container-lowest">
           <button
             type="button"
-            onClick={onCancel}
+            onClick={attemptCancel}
             className="px-md py-sm rounded-lg bg-surface-container-high text-on-surface text-label-md font-bold"
           >
             {t('memory.editor.cancel')}
@@ -526,6 +558,44 @@ function MemoryEditor({
             {saving ? t('memory.editor.saving') : t('memory.editor.save')}
           </button>
         </footer>
+
+        {confirmDiscard && (
+          <div
+            role="alertdialog"
+            aria-label={t('memory.editor.discard.title')}
+            className="absolute inset-0 z-10 bg-black/40 flex items-center justify-center p-md"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full">
+              <div className="flex items-center gap-sm mb-md">
+                <span className="material-symbols-outlined text-error text-[24px]">warning</span>
+                <h3 className="font-headline-md text-on-surface">{t('memory.editor.discard.title')}</h3>
+              </div>
+              <p className="text-body-md text-on-surface-variant mb-lg">
+                {t('memory.editor.discard.message')}
+              </p>
+              <div className="flex justify-end gap-sm">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDiscard(false)}
+                  className="px-md py-sm rounded-lg bg-surface-container-high text-on-surface text-label-md font-bold cursor-pointer"
+                >
+                  {t('memory.editor.discard.keep')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmDiscard(false)
+                    onCancel()
+                  }}
+                  className="px-md py-sm rounded-lg bg-error text-on-error text-label-md font-bold cursor-pointer"
+                >
+                  {t('memory.editor.discard.confirm')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </form>
     </div>
   )

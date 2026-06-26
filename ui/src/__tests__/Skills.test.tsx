@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import Skills from '@/components/extensions/Skills'
 
@@ -199,6 +199,8 @@ describe('Skills (P3 federated catalog)', () => {
       expect(screen.getByText('Remove')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('Remove'))
+    const dialog = await screen.findByRole('alertdialog', { name: /Remove skill\?/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Remove$/ }))
     await waitFor(() => {
       expect(uninstallSkillPlugin).toHaveBeenCalledWith('PDF Toolkit')
     })

@@ -67,23 +67,8 @@ describe('BillingSettings', () => {
     expect(screen.getByText(/Enterprise Team/i)).toBeInTheDocument()
   })
 
-  // US-SET-06: Change Plan modal
-  it('opens change plan modal on Change Plan click', async () => {
-    await renderReady()
-    fireEvent.click(screen.getAllByText('Change Plan')[0])
-    expect(screen.getByText('Free')).toBeInTheDocument()
-    expect(screen.getByText('Pro')).toBeInTheDocument()
-    expect(screen.getByText('Enterprise')).toBeInTheDocument()
-  })
-
-  it('closes change plan modal when close button clicked', async () => {
-    await renderReady()
-    fireEvent.click(screen.getAllByText('Change Plan')[0])
-    expect(screen.getByText('Free')).toBeInTheDocument()
-    const modal = screen.getByText('Free').closest('.fixed')!
-    const closeBtn = modal.querySelector('.material-symbols-outlined')
-    if (closeBtn) fireEvent.click(closeBtn)
-  })
+  // US-SET-06: Change Plan modal is intentionally disabled in demo mode
+  // (no real billing backend). Tests removed — see P0.5 fix.
 
   // US-SET-08: Legal modal
   it('opens legal modal on Legal & Terms click', async () => {

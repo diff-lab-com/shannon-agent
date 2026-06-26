@@ -11,6 +11,32 @@ import {
   type InstalledDataSource,
 } from "@/lib/tauri-api";
 import DataSourcesQuery from "./DataSourcesQuery";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import LoadingState from "@/components/ui/loading-state";
+
+const DATASOURCE_ICONS: Record<string, string> = {
+  obsidian: 'book',
+  imap: 'mail',
+  smtp: 'mail',
+  gmail: 'mail',
+  notion: 'description',
+  git: 'hub',
+  github: 'hub',
+  sqlite: 'database',
+  postgres: 'database',
+  apple_notes: 'sticky_note_2',
+  apple_mail: 'mail',
+  files: 'folder',
+  filesystem: 'folder',
+};
+
+function datasourceIcon(slug: string): string {
+  const key = slug.toLowerCase();
+  for (const [k, v] of Object.entries(DATASOURCE_ICONS)) {
+    if (key.includes(k)) return v;
+  }
+  return 'database';
+}
 
 /**
  * P5 Data Sources tab — Tier-1 native Rust adapters.
@@ -24,7 +50,7 @@ import DataSourcesQuery from "./DataSourcesQuery";
  */
 export default function DataSources() {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const { search } = useOutletContext<{ search: string }>();
 
@@ -40,6 +66,7 @@ export default function DataSources() {
   const [installForm, setInstallForm] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<{ slug: string; msg: string; ok: boolean } | null>(null);
   const [busySlug, setBusySlug] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,7 +166,7 @@ export default function DataSources() {
   return (
     <div className="p-lg max-w-6xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.datasources.title')}</h2>
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.datasources.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
           {t('extensions.datasources.subtitle')}
         </p>
@@ -171,16 +198,13 @@ export default function DataSources() {
       </div>
 
       {activeTab === 'query' ? (
-        <DataSourcesQuery />
+        <DataSourcesQuery onSwitchToAdapters={() => setActiveTab('adapters')} />
       ) : catalogLoading ? (
-        <div className="text-center py-lg text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          {t('extensions.datasources.loading')}
-        </div>
+        <LoadingState size="sm" label={t('extensions.datasources.loading')} />
       ) : (
         <section>
           <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-            Adapters · {filtered.length}
+            {t('extensions.datasources.adapters')} · {filtered.length}
           </h3>
           {filtered.length === 0 ? (
             <div className="text-center py-md text-on-surface-variant text-label-md">
@@ -220,7 +244,7 @@ export default function DataSources() {
 
       <section>
         <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-          Installed · {installed.length}
+          {t('extensions.datasources.installedSection')} · {installed.length}
         </h3>
         {installedLoading ? (
           <div className="text-center py-md text-on-surface-variant text-label-sm">{t('extensions.datasources.loadingInstalled')}</div>
@@ -235,7 +259,7 @@ export default function DataSources() {
                 key={row.slug}
                 className={`flex items-center gap-md px-md py-sm ${i === installed.length - 1 ? "" : "border-b border-outline-variant/15"}`}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]">database</span>
+                <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">{datasourceIcon(row.slug)}</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-bold text-label-md text-on-surface truncate">{row.name}</div>
                   <div className="text-label-xs text-on-surface-variant font-mono truncate">
@@ -247,7 +271,7 @@ export default function DataSources() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleUninstall(row.slug)}
+                  onClick={() => setRemoveTarget(row.slug)}
                   disabled={busySlug === `uninstall:${row.slug}`}
                   className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
                 >
@@ -258,6 +282,20 @@ export default function DataSources() {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title={t('extensions.datasources.removeConfirm.title')}
+        message={t('extensions.datasources.removeConfirm.message', { name: removeTarget ?? '' })}
+        confirmLabel={t('extensions.datasources.removeConfirm.confirm')}
+        cancelLabel={t('extensions.datasources.removeConfirm.cancel')}
+        destructive
+        busy={busySlug?.startsWith('uninstall:') ?? false}
+        onConfirm={() => {
+          if (removeTarget) void handleUninstall(removeTarget).finally(() => setRemoveTarget(null))
+        }}
+        onCancel={() => setRemoveTarget(null)}
+      />
     </div>
   );
 }

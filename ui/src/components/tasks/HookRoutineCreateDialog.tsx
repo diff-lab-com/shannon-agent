@@ -4,8 +4,9 @@
 // `create_triggered_routine` Tauri command. On success, callers should refresh
 // their routine list (the dialog calls onCreated with the new routine DTO).
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useIntl } from 'react-intl'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
 
@@ -38,6 +39,9 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
   const [description, setDescription] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, containerRef)
 
   useEffect(() => {
     if (open) {
@@ -85,6 +89,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
 
   return (
     <div
+      ref={containerRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md"
       role="dialog"
       aria-modal="true"

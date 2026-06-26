@@ -93,7 +93,7 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
             className={`flex items-center gap-xs px-sm py-xs rounded-full text-label-sm font-label-md ${meta.bgClass}`}
           >
             <span className={`w-2 h-2 rounded-full ${meta.dotClass}`} />
-            <span className="text-on-surface-variant">{meta.title}</span>
+            <span className="text-on-surface-variant">{t(meta.titleKey)}</span>
             <span className="text-on-surface font-bold">{totals[key]}</span>
           </div>
         )

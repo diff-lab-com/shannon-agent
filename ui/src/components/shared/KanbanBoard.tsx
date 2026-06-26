@@ -109,7 +109,7 @@ export function KanbanBoard({
               <KanbanColumn
                 key={col}
                 family={col}
-                title={meta.title}
+                title={intl.formatMessage({ id: meta.titleKey })}
                 icon={meta.icon}
                 dotClass={meta.dotClass}
                 bgClass={meta.bgClass}

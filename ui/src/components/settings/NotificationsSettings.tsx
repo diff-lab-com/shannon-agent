@@ -229,19 +229,45 @@ function WebhookSection() {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder={presetMeta.urlPlaceholder}
-          aria-describedby="webhook-url-hint"
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          aria-describedby="webhook-url-hint webhook-url-status"
+          className={`w-full px-md py-sm rounded-md border bg-surface text-on-surface focus:outline-none focus:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 ${
+            url.trim() ? (validateWebhookUrl(url.trim()).ok ? 'border-tertiary/50' : 'border-error/50') : 'border-outline'
+          }`}
         />
-        <p id="webhook-url-hint" className="mt-xs text-on-surface-variant font-body-sm">
-          {t(presetMeta.urlHintKey)}
-        </p>
+        <div className="mt-xs flex items-center gap-xs">
+          <p id="webhook-url-hint" className="text-on-surface-variant font-body-sm flex-1">
+            {t(presetMeta.urlHintKey)}
+          </p>
+          {url.trim() && (
+            <span
+              id="webhook-url-status"
+              className={`text-label-sm font-bold ${validateWebhookUrl(url.trim()).ok ? 'text-tertiary' : 'text-error'}`}
+            >
+              {validateWebhookUrl(url.trim()).ok ? t('settings.notifications.urlStatus.valid') : t('settings.notifications.urlStatus.invalid')}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-sm pt-md">
-        <Button onClick={handleSave} disabled={saving}>
+        <Button onClick={handleSave} disabled={saving || !url.trim() || !validateWebhookUrl(url.trim()).ok}>
           {saving ? t('settings.notifications.saving') : t('settings.notifications.save')}
         </Button>
-        <Button variant="outline" onClick={handleClear} disabled={clearing}>
+      </div>
+
+      <div className="pt-md mt-sm border-t border-error/20 space-y-sm">
+        <p className="font-label-sm text-error font-bold uppercase tracking-wide">
+          {t('settings.notifications.dangerZone')}
+        </p>
+        <p className="text-on-surface-variant font-body-sm">
+          {t('settings.notifications.clearDescription')}
+        </p>
+        <Button
+          variant="outline"
+          onClick={handleClear}
+          disabled={clearing || !url}
+          className="border-error/40 text-error hover:bg-error/10 hover:border-error"
+        >
           {clearing ? t('settings.notifications.clearing') : t('settings.notifications.clear')}
         </Button>
       </div>

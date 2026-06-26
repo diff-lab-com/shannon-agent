@@ -2,8 +2,10 @@
 //
 // MD3 tokens. Click outside or "Keep Running" dismisses without action.
 
+import { useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { useIntl } from 'react-intl'
+import { useModalFocus } from '@/hooks/useModalFocus'
 
 interface CancelTaskModalProps {
   open: boolean
@@ -14,6 +16,8 @@ interface CancelTaskModalProps {
 export default function CancelTaskModal({ open, onCancel, onConfirm }: CancelTaskModalProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, containerRef)
   if (!open) return null
   return (
     <div
@@ -21,6 +25,7 @@ export default function CancelTaskModal({ open, onCancel, onConfirm }: CancelTas
       onClick={onCancel}
     >
       <div
+        ref={containerRef}
         className="bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl p-xl max-w-sm w-full mx-md"
         role="dialog"
         aria-modal="true"

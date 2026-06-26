@@ -5,24 +5,30 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useApp } from '@/context/AppContext';
+import { useModalFocus } from '@/hooks/useModalFocus';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
 import { toastError } from '@/lib/errorToast';
 
 const TITLE_MAP: [string, string][] = [
-  ['/opc/task', 'OPC Task'],
-  ['/opc', 'One Person Company'],
-  ['/settings', 'Settings'],
-  ['/tasks', 'Scheduled'],
-  ['/extensions', 'Extensions'],
-  ['/chat', 'Chat'],
+  ['/opc/task', 'header.title.opcTask'],
+  ['/opc', 'header.title.opc'],
+  ['/settings', 'header.title.settings'],
+  ['/tasks', 'header.title.tasks'],
+  ['/extensions', 'header.title.extensions'],
+  ['/memory', 'header.title.memory'],
+  ['/triage', 'header.title.triage'],
+  ['/editor', 'header.title.editor'],
+  ['/quickfix', 'header.title.quickfix'],
+  ['/welcome', 'header.title.welcome'],
+  ['/chat', 'header.title.chat'],
 ]
 
-function getTitle(pathname: string): string {
-  for (const [prefix, title] of TITLE_MAP) {
-    if (pathname.includes(prefix)) return title
+function getTitleKey(pathname: string): string {
+  for (const [prefix, key] of TITLE_MAP) {
+    if (pathname.includes(prefix)) return key
   }
-  return 'Chat'
+  return 'header.title.chat'
 }
 
 export function Header() {
@@ -35,7 +41,10 @@ export function Header() {
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
 
-  const title = getTitle(location.pathname);
+  const permissionRef = useRef<HTMLDivElement>(null);
+  useModalFocus(!!permissionRequest, permissionRef);
+
+  const title = t(getTitleKey(location.pathname));
   const isOpc = location.pathname.includes('/opc') && !location.pathname.includes('/opc/task');
   const isOpcTask = location.pathname.includes('/opc/task');
 
@@ -63,7 +72,7 @@ export function Header() {
   return (
     <>
       <header className="fixed top-0 right-0 z-40 flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
-        <Button variant="ghost" aria-label="Toggle sidebar" className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
+        <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
           <span className="material-symbols-outlined text-[24px]">menu</span>
         </Button>
         <div className="flex items-center gap-md relative w-full overflow-hidden">
@@ -146,7 +155,7 @@ export function Header() {
       {/* Permission Modal */}
       {permissionRequest && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm" onKeyDown={e => { if (e.key === 'Escape') respondPermission(permissionRequest.request_id, false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/20 p-xl max-w-md w-full mx-md" role="dialog" aria-modal="true">
+          <div ref={permissionRef} className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/20 p-xl max-w-md w-full mx-md" role="dialog" aria-modal="true">
             <div className="flex items-center gap-md mb-lg">
               <div className="h-10 w-10 rounded-full bg-tertiary-container flex items-center justify-center">
                 <span className="material-symbols-outlined text-on-tertiary-container">shield</span>

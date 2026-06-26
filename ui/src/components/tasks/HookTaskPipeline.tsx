@@ -12,6 +12,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
+import LoadingState from '@/components/ui/loading-state'
 import HookRoutineCreateDialog from './HookRoutineCreateDialog'
 
 const HOOK_BADGE: Record<string, { icon: string; tone: string }> = {
@@ -118,7 +119,7 @@ export default function HookTaskPipeline() {
       ) : null}
 
       {loading && routines.length === 0 ? (
-        <p className="text-body-sm text-on-surface-variant text-center py-md">{t('tasks.hookTaskPipeline.loading')}</p>
+        <LoadingState size="sm" label={t('tasks.hookTaskPipeline.loading')} />
       ) : routines.length === 0 ? (
         <div className="text-center py-lg">
           <span className="material-symbols-outlined text-[32px] text-on-surface-variant/40 block mb-sm">link_off</span>

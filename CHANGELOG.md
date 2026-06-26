@@ -2,6 +2,47 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — P0 PM review fixes] — Demo mode + i18n + Welcome rendering
+
+### Fixes
+
+- **Demo-mode crashes on /triage, /memory, /extensions/featured.**
+  Three pages threw raw errors when run with `VITE_MOCK_MODE=1`
+  because mock handlers were missing or returned the wrong shape.
+  `MOCK_TRIAGE_STATS` had `as unknown as TriageStats` hiding a
+  missing `by_kind` field; `Triage.tsx` now null-guards
+  `Object.entries(stats.by_kind)`. New `ui/src/lib/mock/data/memory.ts`
+  plus eight handlers (`list_memories`, `list_memory_projects`,
+  `get_memory_stats`, `create_memory`, `update_memory`,
+  `delete_memory`, `search_memories`, `list_featured_vendors`)
+  cover the Memory page and Extensions Hub Featured tab.
+  (`s2/p0-pm-review-fixes`)
+
+- **Welcome page option cards rendered as 32-pixel-wide slivers.**
+  Tailwind v4 ships `--container-2xl/3xl/…/7xl` defaults but
+  `xs/sm/md/lg/xl` silently fall through to the spacing scale, so
+  `max-w-xl` resolved to `32px` instead of `36rem`. Patched
+  `ui/src/index.css` with explicit `@layer utilities` overrides for
+  the five broken sizes. Welcome now renders the 2×2 grid of task
+  option cards as designed.
+
+- **Vite mock mode failed to start (`Cannot read file:
+  /src/lib/mock/coreMock.ts`).** The `@tauri-apps/api/core` alias was
+  a bare specifier that esbuild's pre-bundle phase treated as a
+  filesystem path. Switched to `path.resolve(__dirname, …)` so the
+  alias resolves to an absolute path before the bundler sees it.
+
+- **Header page titles were hardcoded English, bypassing i18n.**
+  `Header.tsx` used a switch on `pathname` returning English string
+  literals. Replaced with a `TITLE_MAP` of route-prefix → i18n key
+  and routed all titles through `intl.formatMessage`. Eleven new
+  `header.title.*` keys added to `en.json` and `zh-CN.json`.
+
+- **Mock `status.version` was a hardcoded `"0.4.2"`.** Now sourced
+  from `__APP_VERSION__`, a build-time constant injected via Vite
+  `define` from `package.json`. `ui/src/vite-env.d.ts` carries the
+  global type declaration so TS stays happy.
+
 ## [v0.3.7 — DRAFT, pending PR #50 merge] — UI design overhaul
 
 ### Tooling

@@ -142,7 +142,7 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
       </div>
 
       <div className="overflow-auto">
-        <svg width={width} height={height} role="img" aria-label="Schedule dependency graph">
+        <svg width={width} height={height} role="img" aria-label={intl.formatMessage({ id: 'tasks.scheduleDAGView.ariaLabel' })}>
           <defs>
             <marker id="sched-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />

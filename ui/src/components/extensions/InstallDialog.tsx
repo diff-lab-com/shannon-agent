@@ -145,6 +145,9 @@ export default function InstallDialog({
           { id: "extensions.plugins.installSuccess" },
           { name: result.name },
         ),
+        {
+          description: result.install_path ?? undefined,
+        },
       );
       dispatchInstalled();
       onClose();
@@ -265,6 +268,7 @@ export default function InstallDialog({
       }
       case "git_hub_repo": {
         const ref_ = entry.source.ref_ || "main";
+        const isFloatingBranch = !/^[0-9a-f]{7,40}$/i.test(ref_);
         return (
           <div className="flex flex-col gap-md">
             <div className="flex items-center gap-sm">
@@ -280,7 +284,18 @@ export default function InstallDialog({
                 commit
               </span>
               <span className="font-body-md font-mono text-on-surface">{ref_}</span>
+              {isFloatingBranch && (
+                <span className="inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-tertiary-container/50 text-on-tertiary-container text-label-xs font-bold">
+                  <span className="material-symbols-outlined text-[12px]">warning</span>
+                  {t("extensions.installDialog.floatingBranch")}
+                </span>
+              )}
             </div>
+            {isFloatingBranch && (
+              <p className="text-label-xs text-on-surface-variant">
+                {t("extensions.installDialog.floatingBranchHelp")}
+              </p>
+            )}
             <button
               type="button"
               onClick={handleGitHubInstall}

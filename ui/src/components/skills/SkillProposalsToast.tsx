@@ -38,29 +38,29 @@ export default function SkillProposalsToast({ onOpenReview }: SkillProposalsToas
 
   return (
     <div className="fixed bottom-4 right-4 z-50 animate-slide-in-from-bottom">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 p-4 max-w-md">
+      <div className="bg-surface-container-lowest rounded-lg shadow-lg border border-outline-variant p-4 max-w-md">
         <div className="flex items-start gap-3">
           <span className="material-symbols-outlined text-[24px] text-primary">lightbulb</span>
           <div className="flex-1">
-            <h4 className="font-medium text-gray-900 dark:text-gray-100 text-sm">
+            <h4 className="font-medium text-on-surface text-sm">
               {intl.formatMessage(
               { id: 'skillProposals.toast.title' },
               { count: pendingCount }
             )}
             </h4>
-            <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+            <p className="text-xs text-on-surface-variant mt-1">
               {t('skillProposals.toast.description')}
             </p>
             <div className="flex gap-2 mt-3">
               <button
                 onClick={handleView}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-md transition-colors"
+                className="px-3 py-1.5 bg-primary hover:bg-primary/90 text-on-primary text-sm rounded-md transition-colors"
               >
                 {t('skillProposals.toast.viewButton')}
               </button>
               <button
                 onClick={handleDismiss}
-                className="px-3 py-1.5 text-gray-600 dark:text-gray-400 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
+                className="px-3 py-1.5 text-on-surface-variant text-sm hover:bg-surface-container rounded-md transition-colors"
               >
                 {t('skillProposals.toast.closeButton')}
               </button>

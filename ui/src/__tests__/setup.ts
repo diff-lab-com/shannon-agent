@@ -157,4 +157,6 @@ vi.mock('@/lib/tauri-api', () => ({
   getMemoryStats: vi.fn().mockResolvedValue({
     total: 0, by_category: {}, by_project: {}, most_recent_at: null,
   }),
+  markTriageRead: vi.fn().mockResolvedValue(undefined),
+  archiveTriageItem: vi.fn().mockResolvedValue(undefined),
 }))

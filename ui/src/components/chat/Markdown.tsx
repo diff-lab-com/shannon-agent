@@ -1,4 +1,5 @@
 import { useState, useEffect, memo, type ReactNode } from 'react'
+import { useIntl } from 'react-intl'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -72,6 +73,8 @@ function extractText(node: ReactNode): string {
 }
 
 function CodeBlock({ children, ...props }: { children?: ReactNode } & React.HTMLAttributes<HTMLPreElement>) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
   const code = extractText(children)
   const [copied, setCopied] = useState(false)
 
@@ -87,11 +90,11 @@ function CodeBlock({ children, ...props }: { children?: ReactNode } & React.HTML
       <button
         type="button"
         onClick={handleCopy}
-        aria-label="Copy code"
+        aria-label={t('chat.copyCode.aria')}
         className="absolute top-xs right-xs opacity-0 group-hover/code:opacity-100 focus-visible:opacity-100 transition-opacity px-xs py-[2px] rounded-md bg-surface-container-high/80 text-on-surface-variant hover:text-primary text-[11px] flex items-center gap-xs cursor-pointer"
       >
         <span className="material-symbols-outlined text-[14px]">{copied ? 'check' : 'content_copy'}</span>
-        {copied ? 'Copied' : 'Copy'}
+        {copied ? t('chat.copyCode.copied') : t('chat.copyCode.copy')}
       </button>
       <pre {...props}>{children}</pre>
     </div>

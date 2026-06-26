@@ -5,12 +5,16 @@
 // Phase E1 v2: auto-LSP diagnostics via publishDiagnostics subscription.
 // Phase E1 v1: manual squiggle UI.
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
+import { open as openDialog } from '@tauri-apps/plugin-dialog'
+import { toast } from 'sonner'
 import CodeEditor, {
   type EditorDiagnostic,
 } from '@/components/editor/CodeEditor'
 import LspQuickFixPanel from '@/components/lsp/LspQuickFixPanel'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { SourceFile } from '@/lib/tauri-api'
 
@@ -55,6 +59,7 @@ function normalizeSeverity(raw: string): EditorDiagnostic['severity'] {
 export default function Editor() {
   const intl = useIntl()
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
+  const navigate = useNavigate()
   const [filePath, setFilePath] = useState('')
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -73,8 +78,16 @@ export default function Editor() {
   const [newSeverity, setNewSeverity] =
     useState<EditorDiagnostic['severity']>('warning')
 
+  // Edit mode
+  const [editMode, setEditMode] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+
   // Side drawer for quick-fix
   const [drawer, setDrawer] = useState<DrawerDiag | null>(null)
+
+  const drawerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(!!drawer, drawerRef)
 
   const fetchDiagnostics = useCallback(async (sourceFile: SourceFile) => {
     const server = api.defaultDiagnosticsServer(sourceFile.language_id)
@@ -126,6 +139,8 @@ export default function Editor() {
       try {
         const dto = await api.readSourceFile(filePath.trim())
         setFile(dto)
+        setDraft(dto.content)
+        setEditMode(false)
         setManualDiags([])
         void fetchDiagnostics(dto)
       } catch (err) {
@@ -138,6 +153,55 @@ export default function Editor() {
       }
     },
     [filePath, fetchDiagnostics],
+  )
+
+  const onBrowse = useCallback(async () => {
+    try {
+      const picked = await openDialog({
+        multiple: false,
+        directory: false,
+      })
+      if (typeof picked === 'string' && picked.length > 0) {
+        setFilePath(picked)
+      }
+    } catch (err) {
+      setLoadError(String(err))
+    }
+  }, [])
+
+  const onToggleEdit = useCallback(() => {
+    if (!file) return
+    setDraft(file.content)
+    setEditMode(v => !v)
+  }, [file])
+
+  const onSave = useCallback(async () => {
+    if (!file) return
+    setSaving(true)
+    try {
+      await api.saveTextFile(file.path, draft)
+      const refreshed = { ...file, content: draft }
+      setFile(refreshed)
+      setEditMode(false)
+      void fetchDiagnostics(refreshed)
+      toast.success(t('editor.saveSuccess'))
+    } catch (err) {
+      toast.error(t('editor.saveFailed'), { description: String(err) })
+    } finally {
+      setSaving(false)
+    }
+  }, [file, draft, fetchDiagnostics, t])
+
+  const onAskAi = useCallback(
+    (d: MixedDiagnostic) => {
+      if (!file) return
+      const severity = d.severity.toUpperCase()
+      const loc = `${d.start_line + 1}:${d.start_character + 1}`
+      const sourceTag = d.kind === 'auto' && d.source ? ` [${d.source}]` : ''
+      const msg = `${file.path}:${loc} — ${severity}${sourceTag}\n${d.message}`
+      navigate('/chat', { state: { prefill: msg } })
+    },
+    [file, navigate],
   )
 
   const onAddSquiggle = (e: React.FormEvent) => {
@@ -191,7 +255,7 @@ export default function Editor() {
   return (
     <div className="max-w-6xl mx-auto p-md flex flex-col gap-md">
       <header>
-        <h2 className="font-headline-md text-on-surface">{t('editor.title')}</h2>
+        <h2 className="text-headline-md font-headline-md text-on-surface">{t('editor.title')}</h2>
         <p className="font-label-sm text-on-surface-variant mt-xs">
           {t('editor.subtitle')}
         </p>
@@ -203,18 +267,31 @@ export default function Editor() {
       >
         <label className="font-label-sm text-on-surface-variant flex flex-col gap-xs">
           {t('editor.filePath')}
-          <input
-            type="text"
-            value={filePath}
-            onChange={(e) => setFilePath(e.target.value)}
-            placeholder="/abs/path/to/src/lib.rs"
-            className="font-mono font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-          />
+          <div className="flex gap-xs">
+            <input
+              type="text"
+              value={filePath}
+              onChange={(e) => setFilePath(e.target.value)}
+              placeholder={t('editor.filePath.placeholder')}
+              className="flex-1 font-mono font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+            />
+            <button
+              type="button"
+              onClick={onBrowse}
+              aria-label={t('editor.browse')}
+              className="flex items-center gap-xs px-md py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                folder_open
+              </span>
+              <span className="font-label-md">{t('editor.browse')}</span>
+            </button>
+          </div>
         </label>
         <button
           type="submit"
           disabled={!filePath.trim() || loading}
-          className="self-start font-label-md bg-primary text-on-primary rounded-full px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+          className="self-start font-label-md bg-primary text-on-primary rounded-lg px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         >
           {loading ? t('editor.loading') : t('editor.loadFile')}
         </button>
@@ -243,8 +320,8 @@ export default function Editor() {
               type="button"
               onClick={() => void fetchDiagnostics(file)}
               disabled={diagLoading}
-              className="ml-auto flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-              aria-label="Re-run diagnostics"
+              className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              aria-label={t('editor.reRun')}
             >
               <span
                 className={
@@ -257,6 +334,44 @@ export default function Editor() {
               </span>
               <span>{diagLoading ? t('editor.running') : t('editor.reRun')}</span>
             </button>
+            <div className="ml-auto flex items-center gap-xs">
+              {editMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={onSave}
+                    disabled={saving}
+                    className="flex items-center gap-xs px-sm py-0.5 rounded-full bg-primary text-on-primary hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">
+                      {saving ? 'progress_activity' : 'save'}
+                    </span>
+                    <span>{saving ? t('editor.saving') : t('editor.save')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onToggleEdit}
+                    disabled={saving}
+                    className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">
+                      close
+                    </span>
+                    <span>{t('editor.cancel')}</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onToggleEdit}
+                  className="flex items-center gap-xs px-sm py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
+                  aria-label={t('editor.editMode')}
+                >
+                  <span className="material-symbols-outlined text-[14px]">edit</span>
+                  <span>{t('editor.editMode')}</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {(diagError || diagTimedOut) && file ? (
@@ -278,11 +393,12 @@ export default function Editor() {
           ) : null}
 
           <CodeEditor
-            value={file.content}
+            value={editMode ? draft : file.content}
+            onValueChange={editMode ? setDraft : undefined}
             language={file.language_id}
             diagnostics={diags}
             onDiagnosticClick={onSquiggleClick}
-            readOnly
+            readOnly={!editMode}
           />
 
           <form
@@ -332,7 +448,7 @@ export default function Editor() {
                 >
                   {SEVERITIES.map((s) => (
                     <option key={s} value={s}>
-                      {s}
+                      {t(`editor.severity.${s}`)}
                     </option>
                   ))}
                 </select>
@@ -344,14 +460,14 @@ export default function Editor() {
                 type="text"
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                placeholder="unused variable: `x`"
+                placeholder={t('editor.message.placeholder')}
                 className="font-label-md bg-surface-container-low text-on-surface border border-outline-variant/40 rounded-lg px-sm py-xs focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               />
             </label>
             <button
               type="submit"
               disabled={!newMessage.trim()}
-              className="self-start font-label-md bg-primary text-on-primary rounded-full px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+              className="self-start font-label-md bg-primary text-on-primary rounded-lg px-md py-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               {t('editor.addSquiggleBtn')}
             </button>
@@ -373,13 +489,13 @@ export default function Editor() {
                         style={{
                           color:
                             d.severity === 'error'
-                              ? 'var(--color-error, #b3261e)'
+                              ? 'var(--color-error)'
                               : d.severity === 'warning'
-                                ? 'var(--color-warning, #7c5800)'
+                                ? 'var(--color-tertiary)'
                                 : 'var(--color-on-surface-variant)',
                         }}
                       >
-                        {d.severity}
+                        {t(`editor.severity.${d.severity}`)}
                       </span>
                       <span className="flex-1 font-label-md">
                         <span className="font-mono text-on-surface-variant">
@@ -392,7 +508,9 @@ export default function Editor() {
                           className="font-label-sm uppercase text-[10px] tracking-wider text-on-surface-variant"
                           title={
                             d.source
-                              ? `source: ${d.source}${d.code ? ` (${d.code})` : ''}`
+                              ? (d.code
+                                  ? intl.formatMessage({ id: 'editor.sourceTitle' }, { source: d.source, code: d.code })
+                                  : intl.formatMessage({ id: 'editor.sourceTitle.noCode' }, { source: d.source }))
                               : t('editor.source')
                           }
                         >
@@ -406,6 +524,18 @@ export default function Editor() {
                       <span className="material-symbols-outlined text-[14px] text-primary">
                         build
                       </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onAskAi(d)}
+                      aria-label={t('editor.askAi')}
+                      title={t('editor.askAi')}
+                      className="flex items-center gap-xs px-xs py-0.5 rounded-full border border-outline-variant/40 bg-surface-container-low text-on-surface hover:bg-surface-container-high focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 cursor-pointer"
+                    >
+                      <span className="material-symbols-outlined text-[14px] text-primary">
+                        chat
+                      </span>
+                      <span className="font-label-sm">{t('editor.askAi')}</span>
                     </button>
                   </li>
                 ))}
@@ -427,7 +557,7 @@ export default function Editor() {
             aria-label={t('editor.closeDrawer')}
             className="flex-1 bg-black/30"
           />
-          <aside className="w-[420px] max-w-[90vw] bg-surface-container-lowest h-full overflow-auto p-md border-l border-outline-variant/30 shadow-lg flex flex-col gap-sm">
+          <aside ref={drawerRef} className="w-[420px] max-w-[90vw] bg-surface-container-lowest h-full overflow-auto p-md border-l border-outline-variant/30 shadow-lg flex flex-col gap-sm">
             <LspQuickFixPanel
               diagnostic={drawer}
               onApplied={() => {
