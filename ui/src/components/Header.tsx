@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { useIntl } from 'react-intl';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { useApp } from '@/context/AppContext';
 import { useModalFocus } from '@/hooks/useModalFocus';
 import { useSidebar } from './Layout';
@@ -35,6 +34,7 @@ export function Header() {
   const intl = useIntl()
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const location = useLocation();
+  const navigate = useNavigate();
   const { status, models, permissionRequest, respondPermission } = useApp();
   const { toggle: toggleSidebar } = useSidebar();
   const [modelOpen, setModelOpen] = useState(false);
@@ -45,7 +45,6 @@ export function Header() {
   useModalFocus(!!permissionRequest, permissionRef);
 
   const title = t(getTitleKey(location.pathname));
-  const isOpc = location.pathname.includes('/opc') && !location.pathname.includes('/opc/task');
   const isOpcTask = location.pathname.includes('/opc/task');
 
   // Click outside to close model selector
@@ -83,17 +82,6 @@ export function Header() {
             </div>
           ) : (
             <h2 className="font-headline-md text-[24px] font-extrabold text-on-surface whitespace-nowrap">{title}</h2>
-          )}
-
-          {isOpc && (
-            <div className="flex-1 max-w-[400px] ml-auto mr-lg relative hidden md:block">
-              <Input
-                type="text"
-                placeholder={t('header.search.placeholder')}
-                className="w-full bg-surface-container-low border-none rounded-full py-2 pl-4 pr-10 text-sm font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
-              />
-              <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]">search</span>
-            </div>
           )}
 
           {isOpcTask && (
@@ -140,7 +128,7 @@ export function Header() {
             )}
           </div>
 
-          <Button variant="ghost" aria-label={t('header.notifications')} title={t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative">
+          <Button variant="ghost" aria-label={t('header.notifications')} title={t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={() => navigate('/triage')}>
             <span className="material-symbols-outlined text-[20px]" aria-hidden="true">notifications</span>
           </Button>
           <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>

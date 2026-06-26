@@ -342,15 +342,24 @@ function AdapterCard({
             <h4 className="font-bold text-label-md text-on-surface truncate">{entry.name}</h4>
             <p className="text-label-sm text-on-surface-variant line-clamp-2">{entry.description}</p>
           </div>
-          <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container/50 text-on-primary-container shrink-0">
-            {t('extensions.datasources.verified')}
-          </span>
+          {isQueryPending && !isInstalled ? (
+            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary/15 text-secondary shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
+              <span className="material-symbols-outlined text-[12px]">schedule</span>
+              {t('extensions.datasources.queryComingSoon')}
+            </span>
+          ) : (
+            <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container/50 text-on-primary-container shrink-0">
+              {t('extensions.datasources.verified')}
+            </span>
+          )}
         </div>
 
         {isQueryPending && !isInstalled && (
-          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-secondary-container/40 text-on-secondary-container">
-            <span className="material-symbols-outlined text-[12px]">schedule</span>
-            {t('extensions.datasources.queryComingSoon')}
+          <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-secondary/10 text-on-secondary-container border border-secondary/20">
+            <span className="material-symbols-outlined text-[12px]">info</span>
+            {t('extensions.datasources.queryComingSoonHint')}
+          </div>
+        )}
           </div>
         )}
 

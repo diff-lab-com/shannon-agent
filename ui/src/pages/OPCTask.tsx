@@ -10,7 +10,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 export default function OPCTask() {
   const intl = useIntl()
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
-  const { tasks, agents, usage, respondPermission } = useApp()
+  const { tasks, agents, usage, permissionRequest, respondPermission } = useApp()
   const [revisionNote, setRevisionNote] = useState('')
   const [showRevisionInput, setShowRevisionInput] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<'approve' | 'rollback' | null>(null)
@@ -18,7 +18,6 @@ export default function OPCTask() {
 
   // Find the task by URL param, or the first in-progress task
   const task = (id ? tasks.find(t => t.id === id) : null) ?? tasks.find(t => t.status === 'in_progress' || t.status === 'running')
-  const hasRunningTasks = tasks.some(t => t.status === 'in_progress' || t.status === 'running' || t.status === 'pending')
   const taskId = task?.id ?? ''
 
   return (
@@ -139,8 +138,8 @@ export default function OPCTask() {
             {/* Agent Messages (Phase D C3) */}
             <AgentMessagesPanel limit={50} />
 
-            {/* Human-in-the-Loop Review */}
-            {hasRunningTasks && (
+            {/* Human-in-the-Loop Review — only render when a permission request is actually pending */}
+            {permissionRequest !== null && (
               <div className="glass-card bg-surface-container-lowest/80 rounded-2xl p-xl border border-outline-variant/40 shadow-sm">
                 <div className="flex items-center gap-2 mb-6">
                   <span className="material-symbols-outlined text-[20px] text-on-surface-variant">verified_user</span>
