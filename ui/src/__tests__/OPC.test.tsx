@@ -176,7 +176,7 @@ describe('OPC page', () => {
     resetCtx()
     renderOPC()
     fireEvent.click(screen.getByText('Edit'))
-    expect(screen.getByText('Save Focus')).toBeInTheDocument()
+    expect(screen.getByText('Save Mission')).toBeInTheDocument()
   })
 
   it('shows Cancel when editing and toggles back', () => {
