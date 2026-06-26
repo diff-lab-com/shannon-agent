@@ -20,6 +20,8 @@ import {
 } from '@/components/ai-elements'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
+import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
+import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 
 interface MessageBubbleProps {
@@ -161,6 +163,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
 
   const hasAttachments = message.file_attachments && message.file_attachments.length > 0
   const hasReport = !!message.research_report
+  const detectedArtifacts = !isUser ? detectArtifacts(message.content) : []
 
   if (isUser) {
     return (
@@ -220,6 +223,11 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <FootnoteMarkdown>{message.content}</FootnoteMarkdown>
           </ResponseStream>
+          {detectedArtifacts.length > 0 && (
+            <div className="mt-md">
+              <ArtifactChipList artifacts={detectedArtifacts} />
+            </div>
+          )}
           {message.tool_calls && message.tool_calls.length > 0 && (
             <div className="mt-md space-y-sm">
               {(() => {

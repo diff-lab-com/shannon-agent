@@ -11,6 +11,8 @@ import { Pagination } from '@/components/ui/pagination'
 import WelcomeState from '@/components/WelcomeState'
 import DiffDialog from '@/components/diff/DiffDialog'
 import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
+import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
+import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
 import ChatInput from '@/components/chat/ChatInput'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import StreamingResponse from '@/components/chat/StreamingResponse'
@@ -328,6 +330,7 @@ export default function Chat() {
   }
 
   return (
+    <ArtifactProvider>
     <div className="flex-1 flex w-full h-full relative">
       {/* Left Sidebar - Session History */}
       <aside className="hidden md:flex w-[220px] border-r border-outline-variant/10 flex-col glass-panel shrink-0 bg-surface-container-lowest/40">
@@ -758,7 +761,9 @@ export default function Chat() {
       </aside>
       <DiffDialog open={diffPath !== null} filePath={diffPath} onClose={() => setDiffPath(null)} />
       <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />
+      <ArtifactPanel />
     </div>
+    </ArtifactProvider>
   )
 }
 
