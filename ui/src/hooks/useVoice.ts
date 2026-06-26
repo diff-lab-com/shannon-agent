@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { createTtsSpeaker, type TtsSpeaker } from '@/lib/voice/tts'
 
 export type VoiceState = 'idle' | 'recording' | 'transcribing' | 'speaking'
 
@@ -46,9 +47,16 @@ function getSpeechRecognitionCtor(): AnySpeechRecognition | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
 }
 
-function getSpeechSynthesis(): SpeechSynthesis | null {
-  if (typeof window === 'undefined') return null
-  return window.speechSynthesis ?? null
+// Track the active TTS speaker across hook instances so that a new
+// useVoice mount cancels any utterance that is still playing. Without
+// this, navigating away from a spoken assistant reply leaves the audio
+// running in the background.
+let activeSpeaker: TtsSpeaker | null = null
+function claimSpeaker(speaker: TtsSpeaker) {
+  if (activeSpeaker && activeSpeaker !== speaker) {
+    activeSpeaker.cancel()
+  }
+  activeSpeaker = speaker
 }
 
 export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
@@ -61,6 +69,13 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
   const transcriptRef = useRef(onTranscript)
   transcriptRef.current = onTranscript
+  const ttsRef = useRef<TtsSpeaker | null>(null)
+  if (!ttsRef.current) {
+    ttsRef.current = createTtsSpeaker({
+      lang,
+      onError: (msg) => setError(`Speech synthesis error: ${msg}`),
+    })
+  }
 
   const supported = getSpeechRecognitionCtor() !== null
 
@@ -71,10 +86,17 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     }
   }
 
-  useEffect(() => () => {
-    clearTimer()
-    recognitionRef.current?.abort()
-    recognitionRef.current = null
+  useEffect(() => {
+    const speaker = ttsRef.current!
+    claimSpeaker(speaker)
+    return () => {
+      clearTimer()
+      recognitionRef.current?.abort()
+      recognitionRef.current = null
+      // Stop any in-flight TTS when the component unmounts.
+      speaker.cancel()
+      if (activeSpeaker === speaker) activeSpeaker = null
+    }
   }, [])
 
   const startRecording = useCallback(async () => {
@@ -153,22 +175,17 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
 
   const speak = useCallback(async (text: string) => {
     setError(null)
+    const speaker = ttsRef.current!
     setState('speaking')
-    const synth = getSpeechSynthesis()
-    if (!synth) {
+    if (!speaker.isSupported()) {
       setError('Speech synthesis not supported in this browser')
       return
     }
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = lang
-    utterance.onend = () => setState('idle')
-    utterance.onerror = () => setState('idle')
-    synth.speak(utterance)
-  }, [lang])
+    speaker.speak(text)
+  }, [])
 
   const stopSpeaking = useCallback(() => {
-    const synth = getSpeechSynthesis()
-    if (synth) synth.cancel()
+    ttsRef.current?.cancel()
     setState('idle')
   }, [])
 
