@@ -23,19 +23,21 @@ export interface UseVoiceResult {
 const STUB_PARTIALS = ['Listening...', 'Detected: hello world', 'Processing audio...']
 const STUB_FINAL = 'This is a stub transcript. Real STT backend not configured.'
 
+type SpeechRecognitionInstance = {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  maxAlternatives: number
+  start: () => void
+  stop: () => void
+  abort: () => void
+  onresult: ((e: { resultIndex: number; results: { length: number; [i: number]: { 0: { transcript: string }; isFinal: boolean } } }) => void) | null
+  onerror: ((e: { error?: string }) => void) | null
+  onend: (() => void) | null
+}
+
 type AnySpeechRecognition = {
-  new (): {
-    lang: string
-    continuous: boolean
-    interimResults: boolean
-    maxAlternatives: number
-    start: () => void
-    stop: () => void
-    abort: () => void
-    onresult: ((e: { resultIndex: number; results: { length: number; [i: number]: { 0: { transcript: string }; isFinal: boolean } } }) => void) | null
-    onerror: ((e: { error?: string }) => void) | null
-    onend: (() => void) | null
-  }
+  new (): SpeechRecognitionInstance
 }
 
 function getSpeechRecognitionCtor(): AnySpeechRecognition | null {
@@ -56,7 +58,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const [error, setError] = useState<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const partialIdxRef = useRef(0)
-  const recognitionRef = useRef<ReturnType<AnySpeechRecognition['new']> | null>(null)
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
   const transcriptRef = useRef(onTranscript)
   transcriptRef.current = onTranscript
 
