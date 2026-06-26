@@ -68,6 +68,10 @@ export function createRemoteProvider(config: VoiceProviderConfig): VoiceProvider
         next.onError({ code: 'no-endpoint', message: 'remoteEndpoint is required for remote voice provider' })
         return
       }
+      if (!/^https:\/\//i.test(endpoint)) {
+        next.onError({ code: 'insecure-protocol', message: 'remoteEndpoint must use https:// to protect auth token and audio payload' })
+        return
+      }
       if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
         next.onError(unsupported())
         return

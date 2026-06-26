@@ -87,6 +87,43 @@ describe('createVoiceProvider', () => {
       }
     }
   })
+
+  it('remote provider rejects http:// endpoint with insecure-protocol even when runtime supports it', async () => {
+    const originalMR = (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+    const originalGUM = navigator.mediaDevices?.getUserMedia
+    ;(globalThis as unknown as { MediaRecorder: typeof MediaRecorder }).MediaRecorder = class {
+      static isTypeSupported() { return true }
+      start() {} stop() {}
+      ondataavailable = null as unknown
+      onstop = null as unknown
+    } as unknown as typeof MediaRecorder
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia: vi.fn().mockResolvedValue({} as MediaStream) },
+      configurable: true,
+    })
+    try {
+      const p = createVoiceProvider({ kind: 'remote', remoteEndpoint: 'http://example.com/stt', remoteAuthToken: 'secret' })
+      expect(p.kind).toBe('remote')
+      const onError = vi.fn()
+      const getUserMedia = (navigator.mediaDevices as { getUserMedia: ReturnType<typeof vi.fn> }).getUserMedia
+      await p.start({ onResult: vi.fn(), onError })
+      expect(onError).toHaveBeenCalledTimes(1)
+      expect(onError.mock.calls[0][0].code).toBe('insecure-protocol')
+      expect(getUserMedia).not.toHaveBeenCalled()
+    } finally {
+      if (originalMR !== undefined) {
+        ;(globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder = originalMR
+      } else {
+        delete (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+      }
+      if (originalGUM !== undefined) {
+        Object.defineProperty(navigator, 'mediaDevices', {
+          value: { getUserMedia: originalGUM },
+          configurable: true,
+        })
+      }
+    }
+  })
 })
 
 describe('stub provider', () => {

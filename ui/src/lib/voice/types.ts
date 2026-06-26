@@ -20,9 +20,12 @@ export interface VoiceProviderConfig {
   /**
    * Endpoint URL for the `remote` provider. Audio chunks are POSTed as
    * binary blobs with `Content-Type: application/octet-stream`.
+   * Must use the `https:` scheme — sending bearer tokens or audio
+   * over plain HTTP leaks them on the network. Providers reject
+   * insecure URLs with error code `insecure-protocol`.
    */
   remoteEndpoint?: string
-  /** Optional bearer token for `remote` calls. */
+  /** Optional bearer token sent as `Authorization: Bearer …` over HTTPS. */
   remoteAuthToken?: string
 }
 
