@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { save } from '@tauri-apps/plugin-dialog'
+import 'highlight.js/styles/github.css'
 import * as api from '@/lib/tauri-api'
 import { useArtifact } from './ArtifactContext'
 import { artifactIcon, artifactKindLabel } from './detectArtifact'
@@ -9,6 +10,7 @@ import { HtmlRenderer } from './HtmlRenderer'
 import { SvgRenderer } from './SvgRenderer'
 import { MermaidRenderer } from './MermaidRenderer'
 import { DocumentRenderer } from './DocumentRenderer'
+import { CodeBlock } from './CodeBlock'
 
 type Tab = 'preview' | 'code'
 
@@ -238,7 +240,7 @@ export function ArtifactPanel() {
             </div>
           )
         ) : (
-          <pre className="p-md text-body-sm font-mono text-on-surface whitespace-pre-wrap break-words">{active.source}</pre>
+          <CodeBlock source={active.source} kind={active.kind} />
         )}
       </div>
     </aside>

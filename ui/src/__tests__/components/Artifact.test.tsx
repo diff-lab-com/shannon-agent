@@ -385,3 +385,28 @@ describe('DocumentRenderer', () => {
     expect(container.querySelector('h2')).toBeTruthy()
   })
 })
+
+describe('CodeBlock', () => {
+  it('renders source inside pre/code', async () => {
+    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
+    const { container } = render(<CodeBlock source="const x = 1" kind="document" />)
+    expect(container.querySelector('pre')).toBeTruthy()
+    expect(container.querySelector('code.hljs')).toBeTruthy()
+  })
+
+  it('escapes HTML characters in output', async () => {
+    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
+    const { container } = render(<CodeBlock source={'<script>alert(1)</script>'} />)
+    const html = container.querySelector('code')?.innerHTML ?? ''
+    expect(html).not.toContain('<script>')
+    expect(html).toContain('&lt;')
+    expect(html).toContain('script')
+  })
+
+  it('highlights known language tokens', async () => {
+    const { CodeBlock } = await import('@/components/artifact/CodeBlock')
+    const { container } = render(<CodeBlock source={'const x = 1'} />)
+    const html = container.querySelector('code')?.innerHTML ?? ''
+    expect(html).toContain('hljs-')
+  })
+})
