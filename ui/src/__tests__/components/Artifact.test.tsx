@@ -208,3 +208,67 @@ describe('HtmlRenderer security', () => {
     expect(srcDoc).toContain("default-src 'none'")
   })
 })
+
+describe('MermaidRenderer', () => {
+  it('renders iframe with sandbox attribute', async () => {
+    const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
+    const { container } = render(<MermaidRenderer source="graph TD\nA-->B" />)
+    const iframe = container.querySelector('iframe')
+    expect(iframe).toBeTruthy()
+    expect(iframe?.getAttribute('sandbox')).toBe('allow-scripts')
+    expect(iframe?.getAttribute('sandbox')?.includes('allow-same-origin')).toBe(false)
+  })
+
+  it('injects CSP allowing only the mermaid CDN', async () => {
+    const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
+    const { container } = render(<MermaidRenderer source="graph TD\nA-->B" />)
+    const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
+    expect(srcDoc).toContain('Content-Security-Policy')
+    expect(srcDoc).toContain('cdn.jsdelivr.net/npm/mermaid@11')
+    expect(srcDoc).toContain("default-src 'none'")
+  })
+
+  it('embeds source as JSON-encoded string', async () => {
+    const { MermaidRenderer } = await import('@/components/artifact/MermaidRenderer')
+    const { container } = render(<MermaidRenderer source="graph TD\nA-->B" />)
+    const srcDoc = container.querySelector('iframe')?.getAttribute('srcdoc') ?? ''
+    expect(srcDoc).toContain('graph TD')
+    expect(srcDoc).toContain('securityLevel')
+    expect(srcDoc).toContain('strict')
+  })
+})
+
+describe('DocumentRenderer', () => {
+  it('renders markdown paragraphs', async () => {
+    const { DocumentRenderer } = await import('@/components/artifact/DocumentRenderer')
+    const { container } = render(
+      <I18nProvider>
+        <DocumentRenderer source="Hello world" />
+      </I18nProvider>
+    )
+    expect(container.textContent).toContain('Hello world')
+  })
+
+  it('applies remark-gfm for tables and strikethrough', async () => {
+    const { DocumentRenderer } = await import('@/components/artifact/DocumentRenderer')
+    const md = '| A | B |\n| - | - |\n| 1 | 2 |\n\n~~strikethrough~~'
+    const { container } = render(
+      <I18nProvider>
+        <DocumentRenderer source={md} />
+      </I18nProvider>
+    )
+    expect(container.querySelector('table')).toBeTruthy()
+    expect(container.textContent?.includes('strikethrough')).toBeTruthy()
+  })
+
+  it('renders headings with appropriate levels', async () => {
+    const { DocumentRenderer } = await import('@/components/artifact/DocumentRenderer')
+    const { container } = render(
+      <I18nProvider>
+        <DocumentRenderer source={"# Title\n\n## Section"} />
+      </I18nProvider>
+    )
+    expect(container.querySelector('h1')).toBeTruthy()
+    expect(container.querySelector('h2')).toBeTruthy()
+  })
+})

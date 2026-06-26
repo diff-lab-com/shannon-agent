@@ -7,6 +7,8 @@ import { useArtifact } from './ArtifactContext'
 import { artifactIcon, artifactKindLabel } from './detectArtifact'
 import { HtmlRenderer } from './HtmlRenderer'
 import { SvgRenderer } from './SvgRenderer'
+import { MermaidRenderer } from './MermaidRenderer'
+import { DocumentRenderer } from './DocumentRenderer'
 
 type Tab = 'preview' | 'code'
 
@@ -137,6 +139,8 @@ export function ArtifactPanel() {
         {tab === 'preview' ? (
           active.kind === 'html' ? <HtmlRenderer source={active.source} title={active.title} />
           : active.kind === 'svg' ? <SvgRenderer source={active.source} title={active.title} />
+          : active.kind === 'mermaid' ? <MermaidRenderer source={active.source} title={active.title} />
+          : active.kind === 'document' ? <DocumentRenderer source={active.source} />
           : (
             <div className="p-md text-body-sm text-on-surface-variant font-mono whitespace-pre-wrap break-words">
               {t('chat.artifact.previewUnsupported')}
