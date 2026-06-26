@@ -17,6 +17,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AgentAuthoredBadge } from "@/components/self-improve/SkillBadge";
 import LoadingState from "@/components/ui/loading-state";
 import { usePagedVisible } from "@/hooks/usePagedVisible";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 const CATALOG_PAGE_SIZE = 24;
 
@@ -79,12 +80,22 @@ export default function Skills() {
       .finally(() => setInstalledLoading(false));
   };
 
-  useEffect(() => {
+  const refreshAgentAuthored = () => {
     listAgentAuthoredSkills()
       .then(setAgentAuthored)
       .catch(() => setAgentAuthored([]))
       .finally(() => setAgentAuthoredLoading(false));
+  };
+
+  useEffect(() => {
+    refreshAgentAuthored();
   }, []);
+
+  // Live-refresh when a candidate is approved/rejected elsewhere in the app.
+  useTauriEvent<{ slug?: string; action?: string }>("skill-catalog-changed", () => {
+    refreshInstalled();
+    refreshAgentAuthored();
+  });
 
   const agentAuthoredNames = new Set(agentAuthored.map((s) => s.name));
   const filteredInstalled = installed.filter((s) => {

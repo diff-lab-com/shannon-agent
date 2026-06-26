@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillCandidate {
@@ -137,6 +138,7 @@ pub async fn list_skill_candidates() -> Result<Vec<SkillCandidate>, String> {
 
 #[tauri::command]
 pub async fn approve_skill_candidate(
+    app: tauri::AppHandle,
     id: String,
     edits: Option<AgentAuthoredSkillEdits>,
 ) -> Result<AgentAuthoredSkill, String> {
@@ -185,18 +187,28 @@ pub async fn approve_skill_candidate(
     let json = serde_json::to_string_pretty(&skill).map_err(|e| format!("serialize skill: {e}"))?;
     std::fs::write(&path, json).map_err(|e| format!("write {}: {e}", path.display()))?;
 
+    let _ = app.emit(
+        "skill-catalog-changed",
+        serde_json::json!({ "slug": slug, "action": "approved" }),
+    );
+
     Ok(skill)
 }
 
 #[tauri::command]
-pub async fn reject_skill_candidate(id: String) -> Result<(), String> {
+pub async fn reject_skill_candidate(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
     let mut candidates = load_candidates()?;
     let before = candidates.len();
     candidates.retain(|c| c.id != id);
     if candidates.len() == before {
         return Err(format!("Candidate {id} not found"));
     }
-    save_candidates(&candidates)
+    save_candidates(&candidates)?;
+    let _ = app.emit("skill-catalog-changed", serde_json::json!({ "action": "rejected" }));
+    Ok(())
 }
 
 #[tauri::command]
