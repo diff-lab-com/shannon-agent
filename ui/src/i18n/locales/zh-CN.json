@@ -1338,6 +1338,8 @@
   "chat.input.attach.dropHint": "拖放文件以添加附件",
   "chat.input.attach.detachAll": "全部移除",
   "chat.input.attach.remove": "移除文件",
+  "chat.input.attach.filter.images": "图片",
+  "chat.input.attach.filter.all": "所有文件",
   "chat.input.processing": "处理中……",
   "chat.input.placeholder": "向 Shannon 提问……",
   "chat.input.stop.aria": "停止生成",

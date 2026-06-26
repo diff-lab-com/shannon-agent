@@ -159,6 +159,19 @@ describe('ChatInput', () => {
     expect(screen.getByText('file2.txt')).toBeInTheDocument()
   })
 
+  it('renders image thumbnail for image files', () => {
+    renderChatInput({
+      attachedFiles: ['/path/to/screenshot.png', '/path/to/doc.pdf'],
+    })
+
+    const img = screen.getByAltText('screenshot.png')
+    expect(img).toBeInTheDocument()
+    expect(img).toHaveAttribute('src', 'asset://localhost/path/to/screenshot.png')
+
+    // Non-image keeps the description icon, no <img>
+    expect(screen.queryByAltText('doc.pdf')).not.toBeInTheDocument()
+  })
+
   it('removes individual file when close button clicked', () => {
     const onAttach = vi.fn()
     renderChatInput({
