@@ -149,6 +149,16 @@ export default function ChatInput({
   const currentMode = config?.approval_mode || 'suggest'
   const currentModelId = modelList.find(m => m.name === config?.model && m.provider === config?.provider)?.id || ''
   const workingDirBasename = sessionWorkingDir ? sessionWorkingDir.split('/').pop() || sessionWorkingDir.split('\\').pop() || '' : ''
+  const planModeActive = currentMode === 'plan'
+
+  const handlePlanToggle = async () => {
+    try {
+      await api.configure({ key: 'approval_mode', value: planModeActive ? 'suggest' : 'plan' })
+      await refreshConfig()
+    } catch (err) {
+      console.warn('Failed to toggle plan mode:', err)
+    }
+  }
 
   const modeOptions = [
     { value: 'readonly', label: t('chat.input.mode.readonly'), icon: 'lock', color: 'border-green-500/50' },
@@ -173,6 +183,16 @@ export default function ChatInput({
             <span className="material-symbols-outlined icon-xl">cloud_upload</span>
             <p className="font-label-md">{t('chat.input.attach.dropHint')}</p>
           </div>
+        </div>
+      )}
+
+      {planModeActive && (
+        <div
+          role="status"
+          className="flex items-center gap-xs px-md py-xs bg-tertiary-container/60 border-b border-tertiary/30 rounded-t-2xl text-on-tertiary-container"
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0">route</span>
+          <span className="font-label-sm truncate">{t('chat.input.planMode.banner')}</span>
         </div>
       )}
 
@@ -260,6 +280,22 @@ export default function ChatInput({
                 {workingDirBasename || t('chat.input.wd.title')}
               </span>
               <span className="material-symbols-outlined text-[14px] opacity-50 group-hover/wd:opacity-100 group-hover/wd:text-primary transition-opacity">change_folder</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePlanToggle}
+              aria-pressed={planModeActive}
+              aria-label={t('chat.input.planMode.aria')}
+              title={t('chat.input.planMode.tooltip')}
+              className={`flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+                planModeActive
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
+              }`}
+            >
+              <span className="material-symbols-outlined icon-sm">route</span>
+              <span>{t('chat.input.planMode.label')}</span>
             </button>
 
             <Select value={currentMode} onValueChange={handleModeChange}>
