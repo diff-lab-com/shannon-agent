@@ -149,6 +149,18 @@ describe('OPCTask', () => {
     expect(screen.getByPlaceholderText(/Describe what needs to change/)).toBeInTheDocument()
   })
 
+  it('disables Submit revision until the note has non-empty text', () => {
+    resetCtx()
+    ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium' }
+    renderOPCTask()
+    fireEvent.click(screen.getByText('Request Revision'))
+    const submit = screen.getByText('Submit revision')
+    expect(submit).toBeDisabled()
+    fireEvent.change(screen.getByPlaceholderText(/Describe what needs to change/), { target: { value: 'fix the bug' } })
+    expect(submit).not.toBeDisabled()
+  })
+
   it('shows Related Tasks in sidebar', () => {
     resetCtx()
     ctx.tasks = [{ id: '1', title: 'Related', status: 'completed' }]
