@@ -10,6 +10,8 @@ import {
   type SkillCatalogEntry,
   type InstalledSkill,
 } from "@/lib/tauri-api";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import LoadingState from "@/components/ui/loading-state";
 
 /**
  * P3 Skills tab — federated catalog + install/remove.
@@ -23,7 +25,7 @@ import {
  */
 export default function Skills() {
   const intl = useIntl()
-  const t = (id: string) => intl.formatMessage({ id })
+  const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
   const { search } = useOutletContext<{ search: string }>();
 
@@ -36,6 +38,7 @@ export default function Skills() {
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ id: string; msg: string; ok: boolean } | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -120,17 +123,14 @@ export default function Skills() {
   return (
     <div className="p-lg max-w-6xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.skills.title')}</h2>
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.skills.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
           {t('extensions.skills.subtitle')}
         </p>
       </header>
 
       {catalogLoading && (
-        <div className="text-center py-lg text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          {t('extensions.skills.loading')}
-        </div>
+        <LoadingState size="sm" label={t('extensions.skills.loading')} />
       )}
 
       {catalogError && (
@@ -193,7 +193,7 @@ export default function Skills() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => handleUninstall(skill.name)}
+                  onClick={() => setRemoveTarget(skill.name)}
                   disabled={busyId === `uninstall:${skill.name}`}
                   className="px-sm py-xs rounded-lg bg-error-container/40 text-on-error-container text-label-xs font-bold hover:bg-error-container/70 disabled:opacity-50"
                 >
@@ -204,6 +204,20 @@ export default function Skills() {
           </div>
         )}
       </section>
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title={t('extensions.skills.removeConfirm.title')}
+        message={t('extensions.skills.removeConfirm.message', { name: removeTarget ?? '' })}
+        confirmLabel={t('extensions.skills.removeConfirm.confirm')}
+        cancelLabel={t('extensions.skills.removeConfirm.cancel')}
+        destructive
+        busy={busyId?.startsWith('uninstall:') ?? false}
+        onConfirm={() => {
+          if (removeTarget) void handleUninstall(removeTarget).finally(() => setRemoveTarget(null))
+        }}
+        onCancel={() => setRemoveTarget(null)}
+      />
     </div>
   );
 }

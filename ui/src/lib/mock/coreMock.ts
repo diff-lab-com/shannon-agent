@@ -17,10 +17,14 @@ export async function invoke<T = unknown>(cmd: string, args?: InvokeArgs): Promi
       throw e
     }
   }
-  // Surface missing handlers loudly — better UX than silent failure
-  const msg = `[mock] unhandled Tauri command: "${cmd}". Add it to src/lib/mock/handlers.ts.`
-  console.error(msg)
-  throw new Error(msg)
+  // Surface missing handlers loudly — better UX than silent failure.
+  // Console keeps the technical detail for developers; the thrown error
+  // uses a user-friendly message so it doesn't leak implementation paths
+  // to demo-mode users (safeErrorMessage still rewrites this to a generic
+  // fallback — this is just defense in depth).
+  const detail = `[mock] unhandled Tauri command: "${cmd}". Add it to src/lib/mock/handlers.ts.`
+  console.error(detail)
+  throw new Error('This feature is not available in demo mode.')
 }
 
 // Re-export other things from @tauri-apps/api/core that the app might use,

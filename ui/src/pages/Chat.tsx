@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useMemo, memo, lazy, Suspense } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -10,10 +11,12 @@ import { Pagination } from '@/components/ui/pagination'
 import WelcomeState from '@/components/WelcomeState'
 import DiffDialog from '@/components/diff/DiffDialog'
 import ChatInput from '@/components/chat/ChatInput'
-import { Markdown } from '@/components/chat/Markdown'
-import { MessageBubble, ToolCallDisplay } from '@/components/chat/MessageBubble'
+import { MessageBubble } from '@/components/chat/MessageBubble'
+import StreamingResponse from '@/components/chat/StreamingResponse'
 import { useApp } from '@/context/AppContext'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
+import { buildPrintStyles } from '@/lib/printStyles'
 import type { SessionInfo } from '@/types'
 
 // QuickFix and Editor are no longer top-level routes — they are inline
@@ -91,9 +94,25 @@ export default function Chat() {
   } = useApp()
   const intl = useIntl()
   const navigate = useNavigate()
+  const location = useLocation()
   const t = (id: string) => intl.formatMessage({ id })
 
   const [input, setInput] = useState('')
+
+  // Pre-fill the composer when navigated from elsewhere (e.g. Editor's
+  // "Ask AI about this diagnostic" button passes { prefill } in location.state).
+  // Guard with a ref so the effect doesn't re-fire on every keystroke that
+  // updates `input` — only react to the navigation event itself.
+  const prefillApplied = useRef(false)
+  useEffect(() => {
+    if (prefillApplied.current) return
+    const prefill = (location.state as { prefill?: string } | null)?.prefill
+    if (prefill) {
+      setInput(prefill)
+      prefillApplied.current = true
+      navigate(location.pathname, { replace: true, state: null })
+    }
+  }, [location.state, location.pathname, navigate])
   const [sessionSearch, setSessionSearch] = useState('')
   const [backendSessionHits, setBackendSessionHits] = useState<SessionInfo[] | null>(null)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
@@ -105,9 +124,30 @@ export default function Chat() {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const [quickFixOpen, setQuickFixOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
+
+  const quickFixRef = useRef<HTMLDivElement>(null)
+  useModalFocus(quickFixOpen, quickFixRef)
+  const editorRef = useRef<HTMLDivElement>(null)
+  useModalFocus(editorOpen, editorRef)
   const [contextPanelOpen, setContextPanelOpen] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const scrollParentRef = useRef<HTMLDivElement>(null)
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollParentRef.current,
+    estimateSize: () => 200,
+    overscan: 4,
+    measureElement: typeof window !== 'undefined' && 'ResizeObserver' in window
+      ? (el) => el.getBoundingClientRect().height
+      : undefined,
+  })
+
+  // Virtualization only kicks in past the threshold. Below it, the overhead
+  // of measuring/positioning outweighs the win from fewer DOM nodes — and
+  // jsdom can't provide real dimensions, so tests would render zero items.
+  const shouldVirtualize = messages.length > 30
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -227,16 +267,7 @@ export default function Chat() {
       const doc = printWindow.document
       doc.title = title
       const style = doc.createElement('style')
-      style.textContent = `
-        body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; color: #111; max-width: 760px; margin: 0 auto; }
-        h1 { font-size: 22px; margin-bottom: 4px; }
-        h3 { font-size: 14px; margin-top: 24px; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
-        hr { border: 0; border-top: 1px solid #ddd; margin: 16px 0; }
-        pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
-        code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 13px; }
-        p { white-space: pre-wrap; }
-        strong { font-weight: 600; }
-      `
+      style.textContent = buildPrintStyles({ variant: 'chat' })
       doc.head.appendChild(style)
       const h1 = doc.createElement('h1')
       h1.textContent = title
@@ -468,56 +499,52 @@ export default function Chat() {
           </div>
         )}
 
-        {/* Message Area */}
-        <ScrollArea className="flex-1 px-xl pt-lg space-y-lg pb-32">
+        {/* Message Area — virtualized list for chat history */}
+        <div ref={scrollParentRef} className="flex-1 overflow-y-auto px-xl pt-lg pb-32">
           {messages.length === 0 && !streamingText && (
-            sessions.length === 0 ? (
-              <WelcomeState onSelectPrompt={setInput} />
-            ) : (
-              <div className="flex items-center justify-center h-full opacity-40">
-                <div className="text-center space-y-sm">
-                  <span className="material-symbols-outlined text-[48px] text-primary">chat_bubble</span>
-                  <p className="font-body-lg text-on-surface-variant">{t('chat.empty.start')}</p>
-                </div>
-              </div>
-            )
+            <WelcomeState onSelectPrompt={setInput} />
           )}
 
-          {messages.map((msg, i) => (
-            <MessageBubble key={`${msg.timestamp}-${i}`} message={msg} messageIndex={i} onViewDiff={setDiffPath} />
-          ))}
+          {messages.length > 0 && shouldVirtualize && (
+            <div
+              style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}
+              aria-label={t('chat.history.aria')}
+            >
+              {virtualizer.getVirtualItems().map(vItem => {
+                const msg = messages[vItem.index]
+                return (
+                  <div
+                    key={`${msg.timestamp}-${vItem.index}`}
+                    data-index={vItem.index}
+                    ref={virtualizer.measureElement}
+                    className="pb-lg"
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
+                  >
+                    <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} />
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
+          {messages.length > 0 && !shouldVirtualize && (
+            <div aria-label={t('chat.history.aria')}>
+              {messages.map((msg, i) => (
+                <div key={`${msg.timestamp}-${i}`} className="pb-lg">
+                  <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} />
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Streaming response */}
           {(streamingText || thinkingText || activeToolCalls.length > 0) && (
-            <div className="flex gap-md max-w-[90%]" aria-live="polite" aria-label={t('chat.streaming.aria')}>
-              <div className="h-10 w-10 rounded-full bg-primary-container flex items-center justify-center shrink-0 shadow-md">
-                <span className="material-symbols-outlined text-on-primary-container">smart_toy</span>
-              </div>
-              <div className="space-y-md flex-1">
-                {thinkingText && (
-                  <div className="bg-surface-container-lowest p-md rounded-xl border border-outline-variant/10">
-                    <div className="relative pl-6">
-                      <div className="absolute left-0 top-1 h-4 w-4 rounded-full bg-primary/20 flex items-center justify-center">
-                        <div className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse"></div>
-                      </div>
-                      <span className="font-label-sm text-on-surface-variant block uppercase opacity-70">{t('chat.streaming.thinking')}</span>
-                      <p className="text-body-sm whitespace-pre-wrap">{thinkingText}</p>
-                    </div>
-                  </div>
-                )}
-                {activeToolCalls.map(tc => (
-                  <ToolCallDisplay key={tc.tool_use_id} toolCall={tc} onViewDiff={setDiffPath} />
-                ))}
-                {streamingText && (
-                  <div className="bg-surface-container-lowest px-lg py-md rounded-2xl rounded-tl-none border border-outline-variant/20 shadow-sm">
-                    <div className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
-                      <Markdown>{streamingText}</Markdown>
-                      <span className="inline-block w-2 h-5 bg-primary/60 ml-xs animate-pulse align-text-bottom"></span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+            <StreamingResponse
+              streamingText={streamingText}
+              thinkingText={thinkingText}
+              activeToolCalls={activeToolCalls}
+              onViewDiff={setDiffPath}
+            />
           )}
 
           {error && (
@@ -528,7 +555,7 @@ export default function Chat() {
           )}
 
           <div ref={messagesEndRef} />
-        </ScrollArea>
+        </div>
 
         {/* Input Bar */}
         <div className="absolute bottom-6 md:bottom-12 w-full px-lg md:px-xl py-lg transition-colors">
@@ -599,6 +626,7 @@ export default function Chat() {
       {/* Inline QuickFix panel — opened from the chat input toolbar. */}
       {quickFixOpen && (
         <div
+          ref={quickFixRef}
           role="dialog"
           aria-modal="true"
           aria-label={t('nav.quickFix')}
@@ -628,6 +656,7 @@ export default function Chat() {
       {/* Inline Editor panel — opened from the chat input toolbar. */}
       {editorOpen && (
         <div
+          ref={editorRef}
           role="dialog"
           aria-modal="true"
           aria-label={t('nav.editor')}
@@ -685,7 +714,8 @@ export default function Chat() {
                 </div>
                 {(() => {
                   const total = usage.input_tokens + usage.output_tokens
-                  const max = (usage as any).max_tokens ?? 200000
+                  const max = (usage as any).max_tokens as number | undefined
+                  if (!max) return null
                   const pct = Math.min(100, (total / max) * 100)
                   const barColor = pct > 80 ? 'bg-error' : pct > 50 ? 'bg-secondary' : 'bg-primary'
                   return (

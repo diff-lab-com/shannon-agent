@@ -29,6 +29,7 @@ import {
   safeErrorMessage,
 } from "@/lib/packageValidation";
 import { useModalFocus } from "@/hooks/useModalFocus";
+import LoadingState from "@/components/ui/loading-state";
 
 export interface McpAddServerDialogProps {
   open: boolean;
@@ -412,18 +413,16 @@ function SearchTab({
       />
 
       {loading && (
-        <div className="text-center py-md text-on-surface-variant text-label-sm">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs text-[16px]">
-            progress_activity
-          </span>
-          {t("extensions.mcp.fetching")}
-        </div>
+        <LoadingState size="sm" label={t("extensions.mcp.fetching")} />
       )}
 
       {error && (
-        <div className="border border-error/30 rounded-xl p-md bg-error-container/10 text-label-sm text-error">
-          {t("extensions.mcp.registryError")}{" "}
-          <span className="font-mono">{error}</span>
+        <div className="border border-error/30 rounded-xl p-md bg-error-container/10 text-label-sm text-error flex items-start gap-sm">
+          <span className="material-symbols-outlined text-error text-[18px] shrink-0">error</span>
+          <span>
+            {t("extensions.mcp.registryError")}{" "}
+            <span className="font-mono">{error}</span>
+          </span>
         </div>
       )}
 
@@ -548,15 +547,19 @@ function PasteJsonTab({ onInstalled }: { onInstalled: () => void }) {
     setInstalling(false);
     if (ok > 0) {
       toast.success(
-        t("extensions.mcp.oneClick.installSuccess", { name: `${ok} server(s)` }),
+        intl.formatMessage(
+          { id: "extensions.mcp.oneClick.installSuccessCount" },
+          { count: ok },
+        ),
       );
       onInstalled();
     }
     if (failed > 0) {
       toast.error(
-        t("extensions.mcp.oneClick.installFailed", {
-          error: `${failed} server(s) failed`,
-        }),
+        intl.formatMessage(
+          { id: "extensions.mcp.oneClick.installFailedCount" },
+          { count: failed },
+        ),
       );
     }
   }
@@ -697,7 +700,7 @@ function ManualTab({ onInstalled }: { onInstalled: () => void }) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="filesystem"
+          placeholder={t('extensions.mcp.serverName.placeholder')}
           className="w-full px-sm py-xs rounded border border-outline-variant text-label-sm bg-surface"
           disabled={busy}
         />

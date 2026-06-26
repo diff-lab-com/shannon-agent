@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import { Markdown } from '@/components/chat/Markdown'
 import { Button } from '@/components/ui/button'
+import { buildPrintStyles } from '@/lib/printStyles'
 import type { ResearchReport } from '@/types'
 
 interface ResearchReportModalProps {
@@ -256,22 +257,7 @@ function stripCitations(text: string): string {
 
 function buildStyleElement(doc: Document): HTMLStyleElement {
   const style = doc.createElement('style')
-  style.textContent = `
-    body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 32px; color: #111; max-width: 760px; margin: 0 auto; }
-    h1 { font-size: 24px; margin: 0 0 4px; }
-    h2 { font-size: 15px; margin-top: 28px; color: #444; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-    h3 { font-size: 16px; margin-top: 22px; }
-    .summary { font-style: italic; color: #444; margin: 12px 0 24px; }
-    .meta { color: #666; font-size: 12px; margin-bottom: 24px; }
-    .citations { margin-top: 32px; padding-top: 16px; border-top: 1px solid #ddd; }
-    .citation { margin-bottom: 8px; padding-left: 28px; position: relative; }
-    .citation .num { position: absolute; left: 0; top: 0; font-weight: 600; color: #666; }
-    .citation a { color: #0066cc; text-decoration: none; word-break: break-all; }
-    .citation a:hover { text-decoration: underline; }
-    pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
-    code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 13px; }
-    p { white-space: pre-wrap; }
-  `
+  style.textContent = buildPrintStyles({ variant: 'report' })
   return style
 }
 

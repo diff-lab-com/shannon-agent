@@ -6,12 +6,13 @@
 // plus an "Apply all" footer button that writes every file with >=1
 // accepted hunk in sequence.
 
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import DiffViewer from '@/components/diff/DiffViewer'
 import FileDiffList, { type FileFilter } from '@/components/diff/FileDiffList'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { computeHunks, mergeFile, type HunkDecision } from '@/lib/diff-merge'
 import type { FileDiff } from '@/types'
@@ -39,6 +40,9 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
   const [decisions, setDecisions] = useState<Map<string, Map<string, HunkDecision>>>(new Map())
   const [filter, setFilter] = useState<FileFilter>('all')
   const [applying, setApplying] = useState(false)
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, containerRef)
 
   useEffect(() => {
     if (!open || filePaths.length === 0) {
@@ -212,6 +216,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
       onClick={onClose}
     >
       <div
+        ref={containerRef}
         className="bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl w-full max-w-7xl max-h-[85vh] flex flex-col"
         role="dialog"
         aria-modal="true"

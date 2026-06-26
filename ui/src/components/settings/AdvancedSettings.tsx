@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useApp } from '@/context/AppContext'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 
 export default function AdvancedSettings() {
@@ -21,6 +22,15 @@ export default function AdvancedSettings() {
   const [showApiKeys, setShowApiKeys] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+
+  const logsRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showLogs, logsRef)
+  const apiKeysRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showApiKeys, apiKeysRef)
+  const clearConfirmRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showClearConfirm, clearConfirmRef)
+  const resetConfirmRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showResetConfirm, resetConfirmRef)
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -180,7 +190,7 @@ export default function AdvancedSettings() {
 
       {/* System Logs Modal */}
       {showLogs && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLogs(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLogs(false) }}>
+        <div ref={logsRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLogs(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLogs(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-2xl w-full mx-lg shadow-2xl max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-lg">
               <h3 className="font-headline-md text-on-surface">{t('settings.advanced.systemLogs')}</h3>
@@ -199,7 +209,7 @@ export default function AdvancedSettings() {
 
       {/* API Keys Modal */}
       {showApiKeys && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowApiKeys(false)} onKeyDown={e => { if (e.key === 'Escape') setShowApiKeys(false) }}>
+        <div ref={apiKeysRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowApiKeys(false)} onKeyDown={e => { if (e.key === 'Escape') setShowApiKeys(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-lg w-full mx-lg shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-lg">
               <h3 className="font-headline-md text-on-surface">{t('settings.advanced.manageApiKeys')}</h3>
@@ -217,7 +227,7 @@ export default function AdvancedSettings() {
 
       {/* Clear Cache Confirmation */}
       {showClearConfirm && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowClearConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowClearConfirm(false) }}>
+        <div ref={clearConfirmRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowClearConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowClearConfirm(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-secondary text-[24px]">cleaning_services</span>
@@ -234,7 +244,7 @@ export default function AdvancedSettings() {
 
       {/* Factory Reset Confirmation */}
       {showResetConfirm && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowResetConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowResetConfirm(false) }}>
+        <div ref={resetConfirmRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowResetConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowResetConfirm(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-error text-[24px]">warning</span>

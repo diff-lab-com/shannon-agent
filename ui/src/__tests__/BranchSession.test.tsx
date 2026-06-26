@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import * as api from '@/lib/tauri-api'
 import { I18nProvider } from '@/i18n'
@@ -78,21 +78,19 @@ describe('Branch Session feature', () => {
       message_count: 2,
     })
 
-    // Mock window.confirm
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
-
     renderChat()
     const branchButtons = screen.getAllByLabelText(/Branch from this message/i)
     fireEvent.click(branchButtons[0])
 
-    // Wait for async operations
-    await new Promise(resolve => setTimeout(resolve, 0))
+    const dialog = await screen.findByRole('alertdialog')
+    const confirmBtn = within(dialog).getByRole('button', { name: /^Branch$/i })
+    fireEvent.click(confirmBtn)
 
-    expect(branchSessionSpy).toHaveBeenCalledWith('session-1', 0)
+    await waitFor(() => {
+      expect(branchSessionSpy).toHaveBeenCalledWith('session-1', 0)
+    })
     expect(ctx.refreshSessions).toHaveBeenCalled()
     expect(ctx.switchSession).toHaveBeenCalledWith('branch-1')
-
-    confirmSpy.mockRestore()
   })
 
   it('does not call branchSession when user cancels confirm dialog', async () => {
@@ -103,18 +101,18 @@ describe('Branch Session feature', () => {
       message_count: 2,
     })
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-
     renderChat()
     const branchButtons = screen.getAllByLabelText(/Branch from this message/i)
     fireEvent.click(branchButtons[0])
+
+    const dialog = await screen.findByRole('alertdialog')
+    const cancelBtn = within(dialog).getByRole('button', { name: /cancel/i })
+    fireEvent.click(cancelBtn)
 
     await new Promise(resolve => setTimeout(resolve, 0))
 
     expect(branchSessionSpy).not.toHaveBeenCalled()
     expect(ctx.refreshSessions).not.toHaveBeenCalled()
-
-    confirmSpy.mockRestore()
   })
 
   it('disables branch button when no current session', () => {
@@ -140,21 +138,23 @@ describe('Branch Session feature', () => {
         message_count: 3,
       })
 
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
-
     renderChat()
     const branchButtons = screen.getAllByLabelText(/Branch from this message/i)
 
     // Click first user message (index 0)
     fireEvent.click(branchButtons[0])
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(branchSessionSpy).toHaveBeenLastCalledWith('session-1', 0)
+    let dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Branch$/i }))
+    await waitFor(() => {
+      expect(branchSessionSpy).toHaveBeenLastCalledWith('session-1', 0)
+    })
 
     // Click second user message (index 2, since it's the third message overall)
     fireEvent.click(branchButtons[1])
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(branchSessionSpy).toHaveBeenLastCalledWith('session-1', 2)
-
-    confirmSpy.mockRestore()
+    dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Branch$/i }))
+    await waitFor(() => {
+      expect(branchSessionSpy).toHaveBeenLastCalledWith('session-1', 2)
+    })
   })
 })

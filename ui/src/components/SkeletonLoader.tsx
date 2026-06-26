@@ -44,3 +44,22 @@ export function MetricsSkeleton() {
     </div>
   )
 }
+
+export function RowSkeleton({ count = 4 }: { count?: number }) {
+  return (
+    <div className="space-y-sm">
+      {Array.from({ length: count }).map((_, i) => (
+        <div
+          key={i}
+          className="bg-surface-container-lowest/80 border border-outline-variant/20 rounded-xl px-md py-sm flex items-center gap-md"
+        >
+          <Skeleton className="w-16 h-5 rounded-full shrink-0" />
+          <Skeleton className="h-4 flex-1 max-w-[200px]" />
+          <Skeleton className="h-3 w-20 hidden sm:block" />
+          <Skeleton className="h-3 w-12" />
+          <Skeleton className="h-3 w-16" />
+        </div>
+      ))}
+    </div>
+  )
+}

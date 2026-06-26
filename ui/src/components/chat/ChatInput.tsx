@@ -170,7 +170,7 @@ export default function ChatInput({
                 {path.split('/').pop()}
                 <button
                   type="button"
-                  className="hover:text-error cursor-pointer"
+                  className="hover:text-error cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
                   aria-label={t('chat.input.attach.remove')}
                   onClick={() => {
                     const newFiles = attachedFiles.filter((_, idx) => idx !== i)

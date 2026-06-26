@@ -156,7 +156,16 @@ interface PieChartProps {
   spec: ChartSpec
 }
 
-const PIE_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+const PIE_COLORS = [
+  'var(--chart-series-1)',
+  'var(--chart-series-2)',
+  'var(--chart-series-3)',
+  'var(--chart-series-4)',
+  'var(--chart-series-5)',
+  'var(--chart-series-6)',
+  'var(--chart-series-7)',
+  'var(--chart-series-8)',
+]
 
 function PieChart({ spec }: PieChartProps) {
   const total = spec.data.reduce((s, d) => s + d.value, 0)
@@ -195,7 +204,7 @@ function PieChart({ spec }: PieChartProps) {
             key={i}
             d={s.path}
             fill={s.color}
-            stroke="white"
+            stroke="var(--color-on-primary)"
             strokeWidth={1.5}
           />
         ))}
@@ -212,7 +221,7 @@ function PieChart({ spec }: PieChartProps) {
               textAnchor="middle"
               fontSize={12}
               fontWeight="bold"
-              fill="white"
+              fill="var(--color-on-primary)"
             >
               {pct}%
             </text>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import Agents from '@/components/extensions/Agents'
 
@@ -209,6 +209,8 @@ describe('Agents (P4 federated catalog)', () => {
       expect(screen.getByText('Remove')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('Remove'))
+    const dialog = await screen.findByRole('alertdialog', { name: /Remove agent\?/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Remove$/ }))
     await waitFor(() => {
       expect(uninstallAgentPlugin).toHaveBeenCalledWith('code-reviewer')
     })

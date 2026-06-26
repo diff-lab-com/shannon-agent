@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, Outlet } from 'react-router-dom'
 import DataSources from '@/components/extensions/DataSources'
 
@@ -211,6 +211,8 @@ describe('DataSources (P5 native adapters)', () => {
       expect(screen.getByText('Remove')).toBeInTheDocument()
     })
     fireEvent.click(screen.getByText('Remove'))
+    const dialog = await screen.findByRole('alertdialog', { name: /Remove data source\?/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Remove$/ }))
     await waitFor(() => {
       expect(uninstallDataSource).toHaveBeenCalledWith('obsidian-vault')
     })

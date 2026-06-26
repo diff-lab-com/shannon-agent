@@ -3,6 +3,9 @@ import { FormattedMessage, useIntl } from "react-intl";
 import { useOutletContext } from "react-router-dom";
 import * as api from "@/lib/tauri-api";
 import type { CatalogUpstream } from "@/lib/tauri-api";
+import { CardSkeleton } from "@/components/SkeletonLoader";
+import ErrorState from "@/components/ui/error-state";
+import EmptyState from "@/components/ui/empty-state";
 import type { CatalogEntry, CatalogSource, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
 
@@ -254,7 +257,7 @@ export default function Plugins() {
           )}
           <button
             onClick={() => handleInstall(entry)}
-            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 inline-flex items-center gap-xs cursor-pointer"
+            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 inline-flex items-center gap-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <span className="material-symbols-outlined text-[14px]">download</span>
             {t("extensions.plugins.install")}
@@ -270,7 +273,7 @@ export default function Plugins() {
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-md">
           <span className="material-symbols-outlined text-primary text-[32px]">workspaces</span>
         </div>
-        <h2 className="text-headline-md font-bold text-on-surface mb-sm">
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-sm">
           {intl.formatMessage({ id: "extensions.plugins.title" })}
         </h2>
         <p className="text-body-md text-on-surface-variant max-w-xl mx-auto">
@@ -367,7 +370,7 @@ export default function Plugins() {
           {activeFilterCount > 0 && (
             <button
               onClick={resetFilters}
-              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors text-label-sm font-bold"
+              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors text-label-sm font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <span className="material-symbols-outlined text-[14px]">filter_alt_off</span>
               {t("extensions.plugins.filter.reset")}
@@ -377,21 +380,20 @@ export default function Plugins() {
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-xl">
-          <span className="material-symbols-outlined animate-spin text-[32px] text-primary">progress_activity</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+          {Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}
         </div>
       ) : error ? (
-        <div className="text-center py-xl text-on-surface-variant">
-          <span className="material-symbols-outlined text-[32px] mb-sm block">cloud_off</span>
-          <p className="text-label-md">{error}</p>
-        </div>
+        <ErrorState
+          icon="cloud_off"
+          title={t("extensions.plugins.loadFailed")}
+          description={error}
+        />
       ) : filtered.length === 0 ? (
-        <div className="text-center py-xl text-on-surface-variant">
-          <span className="material-symbols-outlined text-[32px] mb-sm block">search_off</span>
-          <p className="text-label-md">
-            {search ? t("extensions.plugins.noMatch") : t("extensions.plugins.empty")}
-          </p>
-        </div>
+        <EmptyState
+          icon="search_off"
+          title={search ? t("extensions.plugins.noMatch") : t("extensions.plugins.empty")}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-md">
           {sorted.map(renderCard)}

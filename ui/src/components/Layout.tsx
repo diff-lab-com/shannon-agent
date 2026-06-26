@@ -20,7 +20,7 @@ const SidebarContext = createContext<SidebarContextValue>({ open: false, toggle:
 export const useSidebar = () => useContext(SidebarContext)
 
 export function Layout() {
-  const { usage, agents, status, sessions, backgroundTasks, config, loading } = useApp();
+  const { usage, agents, status, sessions, backgroundTasks, config, loading, createSession } = useApp();
   const navigate = useNavigate();
   const intl = useIntl();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -30,7 +30,8 @@ export function Layout() {
   const toggleHelp = useCallback(() => setHelpOpen(p => !p), []);
   const toggleSidebar = useCallback(() => setSidebarOpen(p => !p), []);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
-  useKeyboardShortcuts(togglePalette, toggleHelp);
+  const handleNewSession = useCallback(() => { void createSession() }, [createSession]);
+  useKeyboardShortcuts(togglePalette, toggleHelp, handleNewSession);
 
   useEffect(() => {
     const handler = () => setHelpOpen(p => !p)

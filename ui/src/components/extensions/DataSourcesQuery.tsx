@@ -6,12 +6,13 @@ import {
   type InstalledDataSource,
 } from "@/lib/tauri-api";
 import type { DataSourceResult, DataSourceItem } from "@/types";
+import LoadingState from "@/components/ui/loading-state";
 
 /**
  * Query panel for installed data sources.
  * Allows users to search across their personal data (Obsidian vaults, email, etc.)
  */
-export default function DataSourcesQuery() {
+export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAdapters?: () => void }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
@@ -51,10 +52,7 @@ export default function DataSourcesQuery() {
   if (installedLoading) {
     return (
       <div className="p-lg max-w-5xl mx-auto">
-        <div className="text-center py-lg text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          {t('extensions.datasources.loadingInstalled')}
-        </div>
+        <LoadingState size="sm" label={t('extensions.datasources.loadingInstalled')} />
       </div>
     );
   }
@@ -64,7 +62,17 @@ export default function DataSourcesQuery() {
       <div className="p-lg max-w-5xl mx-auto">
         <div className="text-center py-3xl text-on-surface-variant text-body-md">
           <span className="material-symbols-outlined text-[48px] text-outline mb-md">database_off</span>
-          <p>{t('extensions.datasources.query.noDataSourcesInstalled')}</p>
+          <p className="mb-md">{t('extensions.datasources.query.noDataSourcesInstalled')}</p>
+          {onSwitchToAdapters && (
+            <button
+              type="button"
+              onClick={onSwitchToAdapters}
+              className="inline-flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">addon</span>
+              {t('extensions.datasources.query.installCta')}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -73,7 +81,7 @@ export default function DataSourcesQuery() {
   return (
     <div className="p-lg max-w-5xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">
           {t('extensions.datasources.query.title')}
         </h2>
         <p className="text-body-md text-on-surface-variant">
