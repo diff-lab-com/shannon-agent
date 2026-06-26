@@ -56,6 +56,77 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   three new keys added (en + zh-CN), and the untranslated
   `extensions.datasources.noInstalled` value in `zh-CN.json` corrected.
 
+## [Unreleased — Week D] — Plan Mode + Diff Preview + Voice/Artifact/Self-improve wire-ups
+
+### Features
+
+- **Plan Mode toggle (D4).** Dedicated `PlanModeToggle` in the chat
+  composer area; clicking it switches `approval_mode` to `plan` via
+  `api.configure`. When active, an "exit plan" banner sits above the
+  message list with a one-click return to the prior mode. 8 tests.
+  (`s2/week-d-diff-preview`)
+
+- **Diff Preview (D5).** Files-changed summary bar with file counts,
+  expand/collapse for each file, and "Review all" bulk action. Wired
+  into the existing file-diff endpoint. 7 tests.
+
+- **Voice Mode UI shell (C1/D1).** `MicButton` + animated `VoiceOrb`
+  + `useVoice` hook. In stub mode the hook returns a placeholder
+  transcript after `simulateLatencyMs`. Drop-in ready for a real STT
+  backend. 16 tests.
+
+- **Artifact Panel Phase 1 (C3/D2).** Detects HTML / SVG / mermaid /
+  long-markdown artifacts inside chat messages and surfaces them as
+  inline chips. Click a chip to open the side panel with Preview /
+  Code tabs, Copy, Export. 19 tests.
+
+- **Self-Improvement Phase 1 (C5/D6).** Tauri API stubs for
+  `list_skill_candidates`, `approve_skill_candidate`,
+  `reject_skill_candidate`, `list_agent_authored_skills`.
+  `AgentAuthoredBadge` + `SkillApprovalModal` primitives ready for
+  hook-up. 12 tests.
+
+- **Voice MicButton wire-up (E1).** Composer-integrated mic button
+  with idle / recording / processing states; orb animates above the
+  composer while recording.
+
+- **Skills page filter pill + AgentAuthoredBadge (E2).** Installed
+  skills section gains All / Curated / Agent-authored tabs with
+  counts; agent-authored rows show the badge and an `auto_fix` icon.
+  3 tests.
+
+- **SkillApprovalModal trigger (E3).** Advanced Settings → Skill
+  Extraction card now shows a pending-count badge and Review button
+  when candidates exist; clicking Review walks through the queue.
+  3 tests.
+
+- **Artifact Phase 2 renderers (F1).** `MermaidRenderer` uses a
+  sandboxed iframe with strict CSP (script-src limited to
+  `cdn.jsdelivr.net/npm/mermaid@11`) so diagrams render without
+  adding mermaid to the bundle. `DocumentRenderer` uses
+  `react-markdown` + `remark-gfm` + `rehype-sanitize` +
+  `rehype-highlight` with MD3-styled components. 6 tests.
+
+- **Artifact Phase 3 polish (F2).** Resizable panel (drag handle on
+  left edge, width persisted to `localStorage`); fullscreen toggle;
+  auto-open toggle (when on, new chips auto-open the panel on
+  mount); `Cmd/Ctrl+Shift+A` shortcut cycles through open artifacts.
+  6 tests.
+
+- **Pending-skill badge on Header bell (H1).** `usePendingSkillCandidates`
+  hook polls every 30 s. When the queue is non-empty, the bell shows
+  a red count badge and clicking it opens `SkillApprovalModal`
+  directly; with an empty queue the bell falls back to the existing
+  Triage navigation. 3 tests.
+
+### Documentation
+
+- **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6
+  Self-Improvement Loop — three planning documents under
+  `claudedocs/` describing scope, phasing, and explicit deferrals
+  for multi-day / cross-repo work.
+
+
 ## [Unreleased — P0 PM review fixes] — Demo mode + i18n + Welcome rendering
 
 ### Fixes
