@@ -517,6 +517,45 @@ export async function uninstallSkillPlugin(name: string): Promise<void> {
   return invoke('uninstall_skill_plugin', { name })
 }
 
+// --- Self-improvement (D6 Phase 1+: skill candidates + agent-authored) ---
+
+export interface SkillCandidate {
+  id: string
+  detected_at: string
+  occurrence_count: number
+  example_session_ids: string[]
+  proposed_name: string
+  proposed_trigger: string
+  procedure: string[]
+  source_tool_calls: Array<{ tool: string; args_summary: Record<string, unknown> }>
+}
+
+export interface AgentAuthoredSkill {
+  id: string
+  name: string
+  description: string
+  trigger: string
+  procedure: string[]
+  created_at: string
+  originating_sessions: string[]
+}
+
+export async function listSkillCandidates(): Promise<SkillCandidate[]> {
+  return invoke('list_skill_candidates')
+}
+
+export async function approveSkillCandidate(id: string, edits?: Partial<AgentAuthoredSkill>): Promise<AgentAuthoredSkill> {
+  return invoke('approve_skill_candidate', { id, edits: edits ?? null })
+}
+
+export async function rejectSkillCandidate(id: string): Promise<void> {
+  return invoke('reject_skill_candidate', { id })
+}
+
+export async function listAgentAuthoredSkills(): Promise<AgentAuthoredSkill[]> {
+  return invoke('list_agent_authored_skills')
+}
+
 // --- Extensions Hub (P4: Agents catalog + installer) ---
 
 export interface AgentCatalogEntry {
