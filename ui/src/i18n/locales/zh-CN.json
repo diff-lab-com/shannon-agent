@@ -1526,6 +1526,7 @@
   "voice.orb.idle": "语音模式就绪",
   "voice.banner.disabled": "当前版本的语音模式仅为界面预览,真实语音识别将在后续版本提供。",
   "skills.badge.agentAuthored": "助手自创",
+  "skills.catalog.showMore": "显示更多（{count}）",
   "skills.installed.filter.aria": "按来源筛选已安装技能",
   "skills.installed.filter.all": "全部",
   "skills.installed.filter.curated": "精选",

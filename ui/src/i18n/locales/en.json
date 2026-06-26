@@ -1526,6 +1526,7 @@
   "voice.orb.idle": "Voice mode ready",
   "voice.banner.disabled": "Voice mode is a UI preview in this build. Real speech recognition will arrive in a future update.",
   "skills.badge.agentAuthored": "Agent-authored",
+  "skills.catalog.showMore": "Show more ({count})",
   "skills.installed.filter.aria": "Filter installed skills by source",
   "skills.installed.filter.all": "All",
   "skills.installed.filter.curated": "Curated",

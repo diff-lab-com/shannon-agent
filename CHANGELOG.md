@@ -146,6 +146,11 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   adds an inline search input, and surfaces the new Plan Mode toggle,
   Artifact cycle, and per-hunk diff review shortcuts. 11 tests.
 
+- **Long-list pagination for Skills catalog (B6).** New
+  `usePagedVisible` hook paginates client-side lists with a "show
+  more" affordance. Applied to the Skills catalog so 24 cards show
+  initially, with the rest loaded on demand. 6 hook tests.
+
 ### Documentation
 
 - **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6

@@ -16,6 +16,9 @@ import SkillDetailDrawer from "./SkillDetailDrawer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { AgentAuthoredBadge } from "@/components/self-improve/SkillBadge";
 import LoadingState from "@/components/ui/loading-state";
+import { usePagedVisible } from "@/hooks/usePagedVisible";
+
+const CATALOG_PAGE_SIZE = 24;
 
 /**
  * P3 Skills tab — federated catalog + install/remove.
@@ -145,6 +148,8 @@ export default function Skills() {
       )
     : catalog;
 
+  const catalogPage = usePagedVisible(filtered, CATALOG_PAGE_SIZE);
+
   return (
     <div className="p-lg max-w-6xl mx-auto space-y-xl">
       <header>
@@ -175,19 +180,35 @@ export default function Skills() {
                 {t('extensions.skills.noSkills')}
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
-                {filtered.map((entry) => (
-                  <SkillCard
-                    key={entry.id}
-                    entry={entry}
-                    installed={installedNames.has(entry.name)}
-                    busy={busyId === entry.id}
-                    feedback={feedback?.id === entry.id ? feedback : null}
-                    onInstall={() => handleInstall(entry)}
-                    onOpenDetail={() => setDetailEntry(entry)}
-                  />
-                ))}
-              </div>
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+                  {catalogPage.slice.map((entry) => (
+                    <SkillCard
+                      key={entry.id}
+                      entry={entry}
+                      installed={installedNames.has(entry.name)}
+                      busy={busyId === entry.id}
+                      feedback={feedback?.id === entry.id ? feedback : null}
+                      onInstall={() => handleInstall(entry)}
+                      onOpenDetail={() => setDetailEntry(entry)}
+                    />
+                  ))}
+                </div>
+                {catalogPage.hasMore && (
+                  <div className="flex justify-center mt-md">
+                    <button
+                      type="button"
+                      onClick={catalogPage.showMore}
+                      className="px-md py-sm rounded-lg border border-outline-variant/40 bg-surface-container-lowest hover:bg-surface-container-low hover:border-primary/40 text-on-surface text-label-md transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+                    >
+                      {intl.formatMessage(
+                        { id: 'skills.catalog.showMore' },
+                        { count: catalogPage.remaining },
+                      )}
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </section>
         </>
