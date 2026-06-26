@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import { Header } from '@/components/Header'
+import * as api from '@/lib/tauri-api'
 
 const mockCtx = vi.hoisted(() => ({
   status: { model: 'claude-sonnet-4-6', provider: 'anthropic', querying: false } as any,
@@ -117,5 +118,40 @@ describe('Header component', () => {
     render(wrap(<Header />, { route: '/chat' }))
     expect(screen.getByLabelText('Notifications')).toBeInTheDocument()
     expect(screen.getByLabelText('Help')).toBeInTheDocument()
+  })
+})
+
+describe('Header — skill candidate badge', () => {
+  beforeEach(() => {
+    vi.mocked(api.listSkillCandidates).mockReset()
+  })
+
+  it('hides badge when no pending candidates', async () => {
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([])
+    render(wrap(<Header />, { route: '/chat' }))
+    await waitFor(() => { expect(api.listSkillCandidates).toHaveBeenCalled() })
+    const bell = screen.getByLabelText('Notifications')
+    expect(bell.querySelector('span.bg-error')).toBeNull()
+  })
+
+  it('shows count badge when candidates pending', async () => {
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([
+      { id: 'c1', proposed_name: 'X', proposed_trigger: 'Y', occurrence_count: 1, procedure: [], last_seen_at: '', originating_sessions: [] },
+    ])
+    render(wrap(<Header />, { route: '/chat' }))
+    await waitFor(() => {
+      const bell = screen.getByLabelText('Notifications')
+      expect(bell.querySelector('.bg-error')?.textContent).toBe('1')
+    })
+  })
+
+  it('opens SkillApprovalModal on bell click when pending', async () => {
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([
+      { id: 'c1', proposed_name: 'Wrap commits', proposed_trigger: 'when committing', occurrence_count: 2, procedure: ['s1'], last_seen_at: '', originating_sessions: [] },
+    ])
+    render(wrap(<Header />, { route: '/chat' }))
+    await waitFor(() => { expect(screen.getByLabelText('Notifications').querySelector('.bg-error')).toBeTruthy() })
+    fireEvent.click(screen.getByLabelText('Notifications'))
+    await waitFor(() => { expect(screen.getByText('Save as skill?')).toBeInTheDocument() })
   })
 })

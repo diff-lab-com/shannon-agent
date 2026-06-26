@@ -1377,6 +1377,7 @@
   "header.model.select": "Select model",
   "header.notifications": "Notifications",
   "header.notifications.aria": "View notifications (Triage inbox)",
+  "header.notifications.pending": "Review {count, plural, one {{count} pending skill} other {{count} pending skills}}",
   "header.help": "Help",
   "header.help.aria": "Help",
   "header.title.chat": "Chat",

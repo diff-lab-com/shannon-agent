@@ -1377,6 +1377,7 @@
   "header.model.select": "选择模型",
   "header.notifications": "通知",
   "header.notifications.aria": "查看通知（收件箱）",
+  "header.notifications.pending": "{count} 个待审核技能",
   "header.help": "帮助",
   "header.help.aria": "获取帮助",
   "header.title.chat": "对话",

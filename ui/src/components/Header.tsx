@@ -5,6 +5,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { useApp } from '@/context/AppContext';
 import { useModalFocus } from '@/hooks/useModalFocus';
+import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
+import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
 import { toastError } from '@/lib/errorToast';
@@ -43,6 +45,25 @@ export function Header() {
 
   const permissionRef = useRef<HTMLDivElement>(null);
   useModalFocus(!!permissionRequest, permissionRef);
+
+  const { candidates, refetch } = usePendingSkillCandidates();
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const pendingCount = candidates.length;
+
+  const handleBellClick = () => {
+    if (pendingCount > 0) setApprovalOpen(true)
+    else navigate('/triage')
+  }
+
+  const onApprovalClose = () => {
+    setApprovalOpen(false)
+    refetch()
+  }
+
+  const advanceCandidate = () => {
+    if (candidates.length <= 1) setApprovalOpen(false)
+    refetch()
+  }
 
   const title = t(getTitleKey(location.pathname));
   const isOpcTask = location.pathname.includes('/opc/task');
@@ -128,8 +149,16 @@ export function Header() {
             )}
           </div>
 
-          <Button variant="ghost" aria-label={t('header.notifications')} title={t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={() => navigate('/triage')}>
+          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">notifications</span>
+            {pendingCount > 0 && (
+              <span
+                aria-hidden="true"
+                className="absolute top-0 right-0 min-w-[16px] h-4 px-[4px] rounded-full bg-error text-on-error text-[10px] font-bold flex items-center justify-center leading-none"
+              >
+                {pendingCount > 9 ? '9+' : pendingCount}
+              </span>
+            )}
           </Button>
           <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
             <span className="material-symbols-outlined icon-md" aria-hidden="true">help</span>
@@ -183,6 +212,14 @@ export function Header() {
           </div>
         </div>
       )}
+
+      <SkillApprovalModal
+        open={approvalOpen}
+        candidate={candidates[0] ?? null}
+        onClose={onApprovalClose}
+        onApproved={advanceCandidate}
+        onRejected={advanceCandidate}
+      />
     </>
   );
 }
