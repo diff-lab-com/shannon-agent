@@ -134,6 +134,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
             icon="group"
             title={intl.formatMessage({ id: 'opc.agentSwarm.noAgentsRunning' })}
             description={intl.formatMessage({ id: 'opc.agentSwarm.startTeamCoordination' })}
+            action={{ label: intl.formatMessage({ id: 'opc.agentSwarm.spawnCta' }), onClick: () => setSpawnOpen(true) }}
           />
         </div>
       ) : (

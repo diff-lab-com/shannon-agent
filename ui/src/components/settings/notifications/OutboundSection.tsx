@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 
 interface ResultRowProps {
   provider: string
@@ -96,8 +97,7 @@ export default function OutboundSection() {
       await api.saveOutboundConfig(dto)
       toast.success(t('settings.notifications.outbound.saved'))
     } catch (e) {
-      console.warn('saveOutboundConfig error:', e)
-      toast.error(t('settings.notifications.outbound.error.saveFailed'))
+      toastError(t('settings.notifications.outbound.error.saveFailed'), e)
     }
     setSaving(false)
   }
@@ -113,8 +113,7 @@ export default function OutboundSection() {
       setResults(null)
       toast.success(t('settings.notifications.outbound.cleared'))
     } catch (e) {
-      console.warn('clearOutboundConfig error:', e)
-      toast.error(t('settings.notifications.outbound.error.clearFailed'))
+      toastError(t('settings.notifications.outbound.error.clearFailed'), e)
     }
     setClearing(false)
   }
@@ -135,10 +134,7 @@ export default function OutboundSection() {
         toast.error(t('settings.notifications.outbound.test.allFailed'))
       }
     } catch (e) {
-      console.warn('sendOutboundTest error:', e)
-      toast.error(
-        typeof e === 'string' ? e : t('settings.notifications.outbound.test.allFailed'),
-      )
+      toastError(t('settings.notifications.outbound.test.allFailed'), e)
     }
     setSending(false)
   }

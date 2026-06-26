@@ -89,7 +89,7 @@ describe('Sidebar — Simple mode (default)', () => {
 
   it('hides Extensions section in Simple mode', () => {
     render(wrap(<Sidebar />))
-    expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
+    expect(screen.queryByText('Integrations')).not.toBeInTheDocument()
   })
 
   it('hides OPC section in Simple mode', () => {
@@ -113,8 +113,8 @@ describe('Sidebar — Simple mode (default)', () => {
   it('toggles to Advanced mode on mode button click', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
-    // Now in Advanced mode — Extensions visible
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    // Now in Advanced mode — Integrations visible
+    expect(screen.getByText('Integrations')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -127,7 +127,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Integrations')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -148,7 +148,7 @@ describe('Sidebar — Advanced mode', () => {
 
   it('renders Extensions section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.getByText('Integrations')).toBeInTheDocument()
   })
 
   it('renders OPC section', () => {
@@ -160,7 +160,7 @@ describe('Sidebar — Advanced mode', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('Skills')).toBeInTheDocument()
     expect(screen.getByText('My Agents')).toBeInTheDocument()
-    expect(screen.getByText('Data Sources')).toBeInTheDocument()
+    expect(screen.getByText('Connections')).toBeInTheDocument()
   })
 
   it('renders OPC sub-link when expanded', () => {
@@ -170,18 +170,18 @@ describe('Sidebar — Advanced mode', () => {
 
   it('collapses and expands Extensions section', () => {
     render(wrap(<Sidebar />))
-    // Extensions is open by default
+    // Integrations is open by default
     expect(screen.getByText('Skills')).toBeInTheDocument()
 
-    // Click Extensions button to collapse
-    const extensionsButtons = screen.getAllByText('Extensions')
-    fireEvent.click(extensionsButtons[0])
+    // Click Integrations button to collapse
+    const integrationsButtons = screen.getAllByText('Integrations')
+    fireEvent.click(integrationsButtons[0])
 
     // Sub-links should be gone
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
 
     // Click again to expand
-    fireEvent.click(screen.getByText('Extensions'))
+    fireEvent.click(screen.getByText('Integrations'))
     expect(screen.getByText('Skills')).toBeInTheDocument()
   })
 

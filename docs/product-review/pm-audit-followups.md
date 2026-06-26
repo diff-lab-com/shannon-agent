@@ -12,7 +12,7 @@ that PR. Grouped by audit severity, then by page.
 
 | # | Page | Finding | Status |
 |---|------|---------|--------|
-| 1 | Chat | **Attach button has no handler** (US-CHAT-08). Files can only be attached via undocumented drag-and-drop. | Not in PR #50 |
+| 1 | Chat | **Attach button has no handler** (US-CHAT-08). Files can only be attached via undocumented drag-and-drop. | **Resolved.** Click handler shipped in bf8a933 (pre-PR #50, audit was stale). UX polish (image thumbnails + filter presets) shipped in commit 4f5ade4 on `s2/p0-chat-attach-enhancements`. |
 | 2 | Extensions → Skills | **Skill cards not clickable.** No detail drawer, no install flow. Hover state is purely decorative. | Not in PR #50 |
 
 ## Still open — P1 (per-page)
@@ -98,7 +98,16 @@ The full table in `03-senior-pm-audit.md` §A is **not yet applied**:
 **Recommendation:** shared error boundary + retry pattern, user-visible error messages with actual cause.
 
 ### C. Empty states
-Most empty states now have CTAs after PR #50 (ConfirmDialog + LoadingState primitives help), but audit identified ~32 empty states. Recommend a dedicated sweep to verify each one has a CTA.
+Audited 11 `EmptyState` usages; 5 already had CTAs, 6 lacked them. The 6 gaps are now wired:
+
+- `WorktreePanel` → "Refresh workspaces" (reloads via `useTaskWorktrees.refresh`)
+- `Goals` → "Ask AI to suggest tasks" (sends a starter prompt via `sendMessage`)
+- `Triage` (no-match) → "Clear filters" (resets kind/read/archived filters)
+- `OPCAgentSwarm` → "Spawn agent" (opens the existing `SpawnAgentModal`)
+- `ExtensionsHub/MyAgents` → "Create first agent" (toggles the inline create form)
+- `ExtensionsHub` → "Clear search" / "Reload" (depends on whether a query is active)
+
+`AgentMessagesPanel` intentionally left without a CTA — the empty state is purely informational (no actionable next step until the user records a test message via the button already rendered above).
 
 ### D. Mobile / small-screen
 App is still desktop-only. No sidebar overlay pattern for <768px. Tauri targets desktop but Windows tablets and small laptops exist.

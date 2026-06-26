@@ -6,6 +6,7 @@ import { Switch } from '@/components/ui/switch'
 import { useApp } from '@/context/AppContext'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 
 export default function AdvancedSettings() {
   const intl = useIntl()
@@ -38,18 +39,18 @@ export default function AdvancedSettings() {
       await api.configure({ key, value: String(value) })
       await refreshConfig()
       toast.success(intl.formatMessage({ id: 'settings.advanced.toggled' }, { key: key.replace(/_/g, ' '), state: value ? t('settings.advanced.enabled') : t('settings.advanced.disabled') }))
-    } catch (e) { console.warn("AdvancedSettings error:", e); toast.error(t('settings.advanced.updateFailed')) }
+    } catch (e) { toastError(t('settings.advanced.updateFailed'), e) }
   }
 
   const handleClearCache = async () => {
     setClearing(true)
-    try { await api.configure({ key: 'clear_cache', value: 'true' }); toast.success(t('settings.advanced.cacheCleared')) } catch (e) { console.warn("AdvancedSettings error:", e); toast.error(t('settings.advanced.clearCacheFailed')) }
+    try { await api.configure({ key: 'clear_cache', value: 'true' }); toast.success(t('settings.advanced.cacheCleared')) } catch (e) { toastError(t('settings.advanced.clearCacheFailed'), e) }
     setClearing(false)
   }
 
   const handleFactoryReset = async () => {
     setResetting(true)
-    try { await api.configure({ key: 'factory_reset', value: 'true' }); toast.success(t('settings.advanced.resetComplete')) } catch (e) { console.warn("AdvancedSettings error:", e); toast.error(t('settings.advanced.resetFailed')) }
+    try { await api.configure({ key: 'factory_reset', value: 'true' }); toast.success(t('settings.advanced.resetComplete')) } catch (e) { toastError(t('settings.advanced.resetFailed'), e) }
     setResetting(false)
     setShowResetConfirm(false)
   }

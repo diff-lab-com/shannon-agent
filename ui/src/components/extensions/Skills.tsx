@@ -10,6 +10,7 @@ import {
   type SkillCatalogEntry,
   type InstalledSkill,
 } from "@/lib/tauri-api";
+import SkillDetailDrawer from "./SkillDetailDrawer";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import LoadingState from "@/components/ui/loading-state";
 
@@ -38,6 +39,7 @@ export default function Skills() {
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ id: string; msg: string; ok: boolean } | null>(null);
+  const [detailEntry, setDetailEntry] = useState<SkillCatalogEntry | null>(null);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   useEffect(() => {
@@ -159,6 +161,7 @@ export default function Skills() {
                     busy={busyId === entry.id}
                     feedback={feedback?.id === entry.id ? feedback : null}
                     onInstall={() => handleInstall(entry)}
+                    onOpenDetail={() => setDetailEntry(entry)}
                   />
                 ))}
               </div>
@@ -205,6 +208,15 @@ export default function Skills() {
         )}
       </section>
 
+      <SkillDetailDrawer
+        entry={detailEntry}
+        installed={detailEntry ? installedNames.has(detailEntry.name) : false}
+        busy={detailEntry ? busyId === detailEntry.id : false}
+        onClose={() => setDetailEntry(null)}
+        onInstall={() => {
+          if (detailEntry) handleInstall(detailEntry)
+        }}
+      />
       <ConfirmDialog
         open={removeTarget !== null}
         title={t('extensions.skills.removeConfirm.title')}
@@ -228,12 +240,14 @@ function SkillCard({
   busy,
   feedback,
   onInstall,
+  onOpenDetail,
 }: {
   entry: SkillCatalogEntry;
   installed: boolean;
   busy: boolean;
   feedback: { id: string; msg: string; ok: boolean } | null;
   onInstall: () => void;
+  onOpenDetail: () => void;
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -241,15 +255,29 @@ function SkillCard({
   const trustLabel = TRUST_LABELS[entry.trust];
   return (
     <div className="border border-outline-variant/30 rounded-2xl p-md bg-surface-container-low/40 flex flex-col">
-      <div className="flex items-start justify-between mb-xs">
-        <h4 className="font-bold text-label-md text-on-surface">{entry.name}</h4>
-        <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls}`}>
+      <div className="flex items-start justify-between mb-xs gap-xs">
+        <button
+          type="button"
+          onClick={onOpenDetail}
+          aria-label={intl.formatMessage({ id: 'extensions.skills.drawer.openDetail' }) + ': ' + entry.name}
+          className="text-left flex-1 min-w-0 hover:text-primary transition-colors"
+        >
+          <h4 className="font-bold text-label-md text-on-surface hover:underline truncate">{entry.name}</h4>
+        </button>
+        <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls} shrink-0`}>
           {trustLabel.text}
         </span>
       </div>
-      <p className="text-label-sm text-on-surface-variant flex-1 mb-sm line-clamp-2">
-        {entry.description}
-      </p>
+      <button
+        type="button"
+        onClick={onOpenDetail}
+        className="text-left flex-1 mb-sm block"
+        aria-label={intl.formatMessage({ id: 'extensions.skills.drawer.openDetail' }) + ': ' + entry.name}
+      >
+        <p className="text-label-sm text-on-surface-variant line-clamp-2">
+          {entry.description}
+        </p>
+      </button>
       {entry.author && (
         <div className="text-label-xs text-on-surface-variant mb-xs font-mono">
           {entry.author}

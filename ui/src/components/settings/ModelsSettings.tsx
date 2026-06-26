@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 
 export default function ModelsSettings() {
   const intl = useIntl()
@@ -31,7 +32,7 @@ export default function ModelsSettings() {
       await api.switchProvider({ provider: status.provider, model: modelId })
       await Promise.all([refreshModels(), refreshStatus()])
       toast.success(intl.formatMessage({ id: 'settings.models.switched' }, { model: modelId }))
-    } catch (e) { console.warn("ModelsSettings error:", e); toast.error(t('settings.models.switchFailed')) }
+    } catch (e) { toastError(t('settings.models.switchFailed'), e) }
     setSwitching(null)
   }
 

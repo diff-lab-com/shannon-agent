@@ -372,6 +372,7 @@ export default function Triage() {
                 icon="filter_alt_off"
                 title={t('triage.noMatch.title')}
                 description={t('triage.noMatch.description')}
+                action={{ label: t('triage.noMatch.cta'), onClick: () => { setKindFilter(undefined); setReadFilter('all'); setShowArchived(false) } }}
               />
             ) : (
               <div className="space-y-md">

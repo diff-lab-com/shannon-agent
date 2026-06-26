@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -16,12 +16,17 @@ export default function ExtensionsHub() {
   const [selectedSkill, setSelectedSkill] = useState<SkillInfo | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  useEffect(() => {
+  const reload = useCallback(() => {
+    setLoading(true)
     api.listSkills()
       .then(setSkills)
       .catch(e => { console.warn('Failed to load skills:', e); toast.error(t('extensions.hub.loadFailed')) })
       .finally(() => setLoading(false))
-  }, [])
+  }, [t])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
 
   useEffect(() => {
     if (!selectedSkill) return
@@ -98,6 +103,9 @@ export default function ExtensionsHub() {
             icon="extension_off"
             title={searchQuery ? t('extensions.hub.noMatchTitle') : t('extensions.hub.noneAvailableTitle')}
             description={searchQuery ? t('extensions.hub.noMatchDesc') : t('extensions.hub.noneAvailableDesc')}
+            action={searchQuery
+              ? { label: t('extensions.hub.noMatchCta'), onClick: () => setSearchQuery('') }
+              : { label: t('extensions.hub.noneAvailableCta'), onClick: reload }}
           />
         ) : (
           sortedCategories.map(cat => (

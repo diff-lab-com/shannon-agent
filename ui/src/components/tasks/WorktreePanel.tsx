@@ -26,7 +26,7 @@ export default function WorktreePanel() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
   const { tasks: routines } = useScheduledTasks()
-  const { worktrees, loading, error, create, remove, prune } = useTaskWorktrees()
+  const { worktrees, loading, error, create, remove, prune, refresh } = useTaskWorktrees()
   const [selectedTaskId, setSelectedTaskId] = useState<string>('')
   const [busy, setBusy] = useState(false)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
@@ -142,6 +142,7 @@ export default function WorktreePanel() {
             icon="fork_right"
             title={t('tasks.worktreePanel.emptyTitle')}
             description={t('tasks.worktreePanel.emptyDesc')}
+            action={{ label: t('tasks.worktreePanel.emptyCta'), onClick: () => void refresh() }}
           />
         </div>
       ) : (

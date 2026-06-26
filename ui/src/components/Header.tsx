@@ -8,6 +8,7 @@ import { useApp } from '@/context/AppContext';
 import { useModalFocus } from '@/hooks/useModalFocus';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
+import { toastError } from '@/lib/errorToast';
 
 const TITLE_MAP: [string, string][] = [
   ['/opc/task', 'header.title.opcTask'],
@@ -65,7 +66,7 @@ export function Header() {
       await api.switchProvider({ provider: status.provider, model: modelId })
       setModelOpen(false)
       toast.success(t('header.permRequest.toast.switched', { modelId }))
-    } catch (e) { console.warn("Header error:", e); toast.error(t('header.permRequest.error')) }
+    } catch (e) { toastError(t('header.permRequest.error'), e) }
   }
 
   return (
