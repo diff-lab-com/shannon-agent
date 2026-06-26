@@ -60,7 +60,7 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive }:
         </label>
         <div className="flex items-start gap-md flex-1 min-w-0">
           <div className={`w-10 h-10 rounded-xl bg-surface-container-low flex items-center justify-center ${meta.color} shrink-0`}>
-            <span className="material-symbols-outlined text-[24px]">{meta.icon}</span>
+            <span className="material-symbols-outlined icon-lg">{meta.icon}</span>
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-sm mb-xs">
@@ -312,7 +312,7 @@ export default function Triage() {
               onClick={bulkMarkRead}
               className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span className="material-symbols-outlined text-[16px] mr-xs align-middle">done_all</span>
+              <span className="material-symbols-outlined icon-sm mr-xs align-middle">done_all</span>
               {t('triage.bulk.markRead')}
             </Button>
             <Button
@@ -321,7 +321,7 @@ export default function Triage() {
               onClick={bulkArchive}
               className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span className="material-symbols-outlined text-[16px] mr-xs align-middle">archive</span>
+              <span className="material-symbols-outlined icon-sm mr-xs align-middle">archive</span>
               {t('triage.bulk.archive')}
             </Button>
             <Button

@@ -256,7 +256,7 @@ export default function MemoryPanel() {
           </div>
         ) : isEmpty ? (
           <div className="text-center py-3xl">
-            <span className="material-symbols-outlined text-[48px] text-on-surface-variant/40 mb-md block">
+            <span className="material-symbols-outlined icon-2xl text-on-surface-variant/40 mb-md block">
               psychology
             </span>
             <p className="text-on-surface-variant mb-lg">{t('memory.empty')}</p>
@@ -340,7 +340,7 @@ function MemoryCard({
     <div className="px-md py-md rounded-xl bg-surface-container-low border border-outline-variant/30 shadow-sm hover:shadow-md hover:border-primary/30 transition-all">
       <div className="flex items-start gap-md">
         <span
-          className={`material-symbols-outlined text-[20px] mt-[2px] px-sm py-xs rounded-lg ${CATEGORY_COLOR[entry.category]}`}
+          className={`material-symbols-outlined icon-md mt-[2px] px-sm py-xs rounded-lg ${CATEGORY_COLOR[entry.category]}`}
         >
           {CATEGORY_ICON[entry.category]}
         </span>
@@ -476,7 +476,7 @@ function MemoryEditor({
             className="p-xs rounded hover:bg-surface-container-high cursor-pointer"
             aria-label={t('memory.action.close')}
           >
-            <span className="material-symbols-outlined text-[20px] text-on-surface-variant">close</span>
+            <span className="material-symbols-outlined icon-md text-on-surface-variant">close</span>
           </button>
         </header>
 

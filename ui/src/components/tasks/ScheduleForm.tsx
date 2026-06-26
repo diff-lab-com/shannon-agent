@@ -227,7 +227,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
                 }`}
               >
                 <span className="flex items-center gap-xs">
-                  <span className="material-symbols-outlined text-[16px]">{opt.icon}</span>
+                  <span className="material-symbols-outlined icon-sm">{opt.icon}</span>
                   <span className="font-label-md font-bold">{opt.label}</span>
                 </span>
                 <span className="font-label-sm text-[11px] text-on-surface-variant">{opt.hint}</span>
@@ -387,7 +387,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
 
       {error ? (
         <div className="font-label-md text-error flex items-center gap-sm">
-          <span className="material-symbols-outlined text-[16px]">error</span>
+          <span className="material-symbols-outlined icon-sm">error</span>
           {error}
         </div>
       ) : null}

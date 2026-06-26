@@ -379,7 +379,7 @@ export default function Editor() {
               className="bg-error/10 border border-error/30 rounded-lg p-sm font-label-sm text-error flex items-start gap-sm"
               role="status"
             >
-              <span className="material-symbols-outlined text-[16px] mt-0.5">
+              <span className="material-symbols-outlined icon-sm mt-0.5">
                 warning
               </span>
               <span className="flex-1">

@@ -18,7 +18,7 @@ export default function ErrorState({ icon = 'error', title, description, action 
       role="alert"
       className="flex flex-col items-center justify-center py-xl text-center"
     >
-      <span className="material-symbols-outlined text-[48px] text-error mb-md">{icon}</span>
+      <span className="material-symbols-outlined icon-2xl text-error mb-md">{icon}</span>
       <h3 className="font-body-lg font-bold text-on-surface mb-xs">{title}</h3>
       {description && (
         <p className="font-body-md text-on-surface-variant max-w-[420px]">{description}</p>

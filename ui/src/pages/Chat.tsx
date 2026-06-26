@@ -418,7 +418,7 @@ export default function Chat() {
                   </p>
                   {session.working_dir && (
                     <p className="text-label-xs text-outline font-mono truncate mt-[2px] flex items-center gap-[4px]" title={session.working_dir}>
-                      <span className="material-symbols-outlined text-[12px] opacity-70">folder</span>
+                      <span className="material-symbols-outlined icon-xs opacity-70">folder</span>
                       <span className="truncate">{formatDirBreadcrumb(session.working_dir)}</span>
                     </p>
                   )}
@@ -466,7 +466,7 @@ export default function Chat() {
             aria-expanded={contextPanelOpen}
             aria-pressed={contextPanelOpen}
           >
-            <span className="material-symbols-outlined text-[20px]">{contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}</span>
+            <span className="material-symbols-outlined icon-md">{contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}</span>
           </button>
         </header>
 

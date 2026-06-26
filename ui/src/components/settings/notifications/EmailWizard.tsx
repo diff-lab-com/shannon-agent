@@ -91,7 +91,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
               value={imapServer}
               onChange={(e) => setImapServer(e.target.value)}
               placeholder="imap.gmail.com"
-              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
             />
           </div>
 
@@ -104,7 +104,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
               value={imapPort}
               onChange={(e) => setImapPort(e.target.value)}
               placeholder="993"
-              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
             />
           </div>
         </div>
@@ -118,7 +118,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="user@example.com"
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </div>
 
@@ -131,7 +131,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
           <p className="text-on-surface-variant text-xs mt-sm">
             {t('settings.notifications.wizard.email.passwordHint')}
@@ -147,7 +147,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
             value={folder}
             onChange={(e) => setFolder(e.target.value)}
             placeholder="INBOX"
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </div>
 

@@ -174,7 +174,7 @@ function WebhookSection() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
-        <span className="material-symbols-outlined text-[32px] text-primary animate-spin" aria-hidden="true">progress_activity</span>
+        <span className="material-symbols-outlined icon-xl text-primary animate-spin" aria-hidden="true">progress_activity</span>
         <span className="sr-only">{t('settings.notifications.loading')}</span>
       </div>
     )
@@ -209,7 +209,7 @@ function WebhookSection() {
           <SelectContent>
             {PRESET_IDS.map((id) => (
               <SelectItem key={id} value={id}>
-                <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                   {PRESET_META[id].icon}
                 </span>
                 <span>{t(PRESET_META[id].labelKey)}</span>
@@ -230,7 +230,7 @@ function WebhookSection() {
           onChange={(e) => setUrl(e.target.value)}
           placeholder={presetMeta.urlPlaceholder}
           aria-describedby="webhook-url-hint webhook-url-status"
-          className={`w-full px-md py-sm rounded-md border bg-surface text-on-surface focus:outline-none focus:border-primary focus-visible:ring-2 focus-visible:ring-primary/20 ${
+          className={`w-full px-md py-sm rounded-md border bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/20 ${
             url.trim() ? (validateWebhookUrl(url.trim()).ok ? 'border-tertiary/50' : 'border-error/50') : 'border-outline'
           }`}
         />
@@ -331,7 +331,7 @@ export default function NotificationsSettings() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
-        <span className="material-symbols-outlined text-[32px] text-primary animate-spin" aria-hidden="true">progress_activity</span>
+        <span className="material-symbols-outlined icon-xl text-primary animate-spin" aria-hidden="true">progress_activity</span>
         <span className="sr-only">{t('settings.notifications.loading')}</span>
       </div>
     )
@@ -416,7 +416,7 @@ export default function NotificationsSettings() {
                     if (health === 'inactive') {
                       return (
                         <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-error/15 text-error font-label-sm" role="status" title={t('settings.notifications.wizard.channel.status.inactive')}>
-                          <span className="material-symbols-outlined text-[12px]" aria-hidden="true">warning</span>
+                          <span className="material-symbols-outlined icon-xs" aria-hidden="true">warning</span>
                           {t('settings.notifications.wizard.channel.status.inactive')}
                         </span>
                       )

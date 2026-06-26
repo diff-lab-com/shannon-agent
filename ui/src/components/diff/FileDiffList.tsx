@@ -141,7 +141,7 @@ export default function FileDiffList({
                   aria-current={isActive ? 'true' : undefined}
                 >
                   <div className="flex items-center gap-xs min-w-0">
-                    <span className="material-symbols-outlined text-[16px] text-on-surface-variant shrink-0">
+                    <span className="material-symbols-outlined icon-sm text-on-surface-variant shrink-0">
                       description
                     </span>
                     <code className="font-label-sm text-on-surface truncate flex-1 min-w-0">{path}</code>

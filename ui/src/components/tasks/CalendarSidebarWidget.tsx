@@ -132,7 +132,7 @@ export default function CalendarSidebarWidget({
                 onClick={() => onSelectRoutine?.(r.id)}
                 aria-label={`Open routine detail for ${r.name}`}
               >
-                <span className="material-symbols-outlined text-[16px] text-primary">
+                <span className="material-symbols-outlined icon-sm text-primary">
                   {r.enabled ? 'bolt' : 'block'}
                 </span>
                 <span className="flex-1 min-w-0">

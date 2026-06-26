@@ -116,7 +116,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
     <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
       <div className="flex items-center justify-between mb-md">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[20px] text-on-surface">forum</span>
+          <span className="material-symbols-outlined icon-md text-on-surface">forum</span>
           <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.agentMessagesPanel.title')}</h3>
           {team && (
             <span className="text-label-sm text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full border border-outline-variant/20">
@@ -158,7 +158,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
               onChange={e => setFrom(e.target.value)}
               placeholder={t('tasks.agentMessagesPanel.fromPlaceholder')}
               aria-label={t('tasks.agentMessagesPanel.fromAria')}
-              className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
+              className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
             />
             <input
               type="text"
@@ -166,13 +166,13 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
               onChange={e => setTo(e.target.value)}
               placeholder={t('tasks.agentMessagesPanel.toPlaceholder')}
               aria-label={t('tasks.agentMessagesPanel.toAria')}
-              className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
+              className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
             />
             <select
               value={priority}
               onChange={e => setPriority(e.target.value as Priority)}
               aria-label={t('tasks.agentMessagesPanel.priorityAria')}
-              className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
+              className="px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               {PRIORITIES.map(p => (
                 <option key={p} value={p}>
@@ -190,7 +190,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
             placeholder={t('tasks.agentMessagesPanel.contentPlaceholder')}
             rows={2}
             aria-label={t('tasks.agentMessagesPanel.contentAria')}
-            className="px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface resize-none focus:outline-none focus:border-primary"
+            className="px-md py-sm rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface resize-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
           <div className="flex justify-end gap-sm">
             <button
@@ -247,7 +247,7 @@ export default function AgentMessagesPanel({ team, limit = 100 }: AgentMessagesP
                   />
                   <div className="flex flex-wrap items-baseline gap-x-sm gap-y-xs">
                     <span className="font-label-md text-on-surface font-bold">{m.from}</span>
-                    <span className="material-symbols-outlined text-[12px] text-on-surface-variant">
+                    <span className="material-symbols-outlined icon-xs text-on-surface-variant">
                       {isBroadcast ? 'campaign' : 'arrow_forward'}
                     </span>
                     <span className="font-label-md text-on-surface">{m.to}</span>

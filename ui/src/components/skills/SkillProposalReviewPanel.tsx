@@ -162,7 +162,7 @@ export default function SkillProposalReviewPanel({
         <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <span className="material-symbols-outlined text-[32px] text-primary animate-spin">
+              <span className="material-symbols-outlined icon-xl text-primary animate-spin">
                 progress_activity
               </span>
             </div>

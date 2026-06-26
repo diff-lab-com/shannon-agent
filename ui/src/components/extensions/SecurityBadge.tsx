@@ -59,7 +59,7 @@ export function SecurityBadge({
         className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-error-container/60 text-on-error-container flex items-center gap-[2px]"
         title={t('extensions.security.injectionTitle')}
       >
-        <span className="material-symbols-outlined text-[12px]">warning</span>
+        <span className="material-symbols-outlined icon-xs">warning</span>
         {t('extensions.security.injectionRisk')}
       </span>
     )
@@ -70,7 +70,7 @@ export function SecurityBadge({
       className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-tertiary-container/60 text-on-tertiary-container flex items-center gap-[2px]"
       title={t('extensions.security.reviewTitle')}
     >
-      <span className="material-symbols-outlined text-[12px]">info</span>
+      <span className="material-symbols-outlined icon-xs">info</span>
       {t('extensions.security.review')}
     </span>
   )

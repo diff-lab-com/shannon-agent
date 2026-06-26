@@ -344,7 +344,7 @@ function AdapterCard({
           </div>
           {isQueryPending && !isInstalled ? (
             <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-secondary/15 text-secondary shrink-0 inline-flex items-center gap-[4px]" title={t('extensions.datasources.queryComingSoonHint')}>
-              <span className="material-symbols-outlined text-[12px]">schedule</span>
+              <span className="material-symbols-outlined icon-xs">schedule</span>
               {t('extensions.datasources.queryComingSoon')}
             </span>
           ) : (
@@ -356,7 +356,7 @@ function AdapterCard({
 
         {isQueryPending && !isInstalled && (
           <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-secondary/10 text-on-secondary-container border border-secondary/20">
-            <span className="material-symbols-outlined text-[12px]">info</span>
+            <span className="material-symbols-outlined icon-xs">info</span>
             {t('extensions.datasources.queryComingSoonHint')}
           </div>
         )}
@@ -365,7 +365,7 @@ function AdapterCard({
 
         {feedback && (
           <div className={`text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded ${feedback.ok ? "bg-primary-container/50 text-on-primary-container" : "bg-error-container/50 text-on-error-container"}`}>
-            <span className="material-symbols-outlined text-[12px]">{feedback.ok ? "check_circle" : "error"}</span>
+            <span className="material-symbols-outlined icon-xs">{feedback.ok ? "check_circle" : "error"}</span>
             {feedback.msg}
           </div>
         )}
@@ -410,7 +410,7 @@ function AdapterCard({
                   value={installForm[field.key] ?? ""}
                   onChange={(e) => onFormChange(field.key, e.target.value)}
                   placeholder={field.placeholder ?? ""}
-                  className="w-full px-sm py-xs rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-sm font-mono focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  className="w-full px-sm py-xs rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-sm font-mono focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus:ring-2 focus:ring-primary/20"
                 />
                 {field.help && (
                   <p className="text-label-xs text-on-surface-variant mt-[2px]">{field.help}</p>

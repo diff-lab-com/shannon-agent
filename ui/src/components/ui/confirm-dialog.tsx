@@ -37,7 +37,7 @@ export function ConfirmDialog({
       <ModalBody className="pt-0">
         <div className="flex items-start gap-sm">
           <span
-            className={`material-symbols-outlined text-[24px] mt-[2px] ${
+            className={`material-symbols-outlined icon-lg mt-[2px] ${
               destructive ? 'text-error' : 'text-primary'
             }`}
             aria-hidden="true"

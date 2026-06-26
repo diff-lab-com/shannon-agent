@@ -33,7 +33,7 @@ export default function KeyboardShortcutsHelp({ open, onClose }: { open: boolean
         <div className="flex items-center justify-between mb-lg">
           <h3 className="font-headline-md text-on-surface">{t('shortcutsHelp.title')}</h3>
           <button autoFocus className="p-xs rounded-lg hover:bg-surface-container text-on-surface-variant" onClick={onClose}>
-            <span className="material-symbols-outlined text-[20px]">close</span>
+            <span className="material-symbols-outlined icon-md">close</span>
           </button>
         </div>
         <div className="grid grid-cols-2 gap-sm">

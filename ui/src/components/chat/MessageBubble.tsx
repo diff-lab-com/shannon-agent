@@ -285,7 +285,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
   return (
     <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
       <ToolHeader onClick={() => setExpanded(!expanded)}>
-        <span className={`material-symbols-outlined text-[16px] ${statusColor} ${toolCall.status === 'running' ? 'animate-spin' : ''}`}>{statusIcon}</span>
+        <span className={`material-symbols-outlined icon-sm ${statusColor} ${toolCall.status === 'running' ? 'animate-spin' : ''}`}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
         {canDiff && (
           <button
@@ -298,7 +298,7 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
             {t('chat.message.diff')}
           </button>
         )}
-        <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{expanded ? 'expand_less' : 'expand_more'}</span>
+        <span className="material-symbols-outlined icon-sm text-on-surface-variant">{expanded ? 'expand_less' : 'expand_more'}</span>
       </ToolHeader>
       {expanded && (
         <ToolContent>

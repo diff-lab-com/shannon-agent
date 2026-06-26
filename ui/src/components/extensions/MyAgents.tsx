@@ -166,7 +166,7 @@ export default function MyAgents() {
             {!showAddAgent ? (
               <div className="border-2 border-dashed border-outline-variant p-lg rounded-xl flex flex-col items-center justify-center text-center group cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setShowAddAgent(true)}>
                 <div className="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant group-hover:bg-primary-container/20 group-hover:text-primary transition-colors mb-md">
-                  <span className="material-symbols-outlined text-[32px]">add</span>
+                  <span className="material-symbols-outlined icon-xl">add</span>
                 </div>
                 <h3 className="text-body-lg font-bold">{t('extensions.myAgents.newSpecialization')}</h3>
                 <p className="text-label-md text-on-surface-variant max-w-[200px]">{t('extensions.myAgents.newSpecializationDesc')}</p>

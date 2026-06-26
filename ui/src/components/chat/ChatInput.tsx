@@ -170,7 +170,7 @@ export default function ChatInput({
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
-            <span className="material-symbols-outlined text-[32px]">cloud_upload</span>
+            <span className="material-symbols-outlined icon-xl">cloud_upload</span>
             <p className="font-label-md">{t('chat.input.attach.dropHint')}</p>
           </div>
         </div>
@@ -255,7 +255,7 @@ export default function ChatInput({
                   : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              <span className="material-symbols-outlined text-[16px]">folder_open</span>
+              <span className="material-symbols-outlined icon-sm">folder_open</span>
               <span className="max-w-[120px] truncate font-mono">
                 {workingDirBasename || t('chat.input.wd.title')}
               </span>
@@ -268,14 +268,14 @@ export default function ChatInput({
                 aria-label={t('chat.input.mode.label')}
                 className={`border ${selectedMode.color} bg-transparent hover:bg-surface-container-low/50 transition-colors`}
               >
-                <span className="material-symbols-outlined text-[16px]">{selectedMode.icon}</span>
+                <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
                 <SelectValue placeholder={t('chat.input.mode.label')} />
               </SelectTrigger>
               <SelectContent>
                 {modeOptions.map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined text-[16px]">{mode.icon}</span>
+                      <span className="material-symbols-outlined icon-sm">{mode.icon}</span>
                       <span>{mode.label}</span>
                     </div>
                   </SelectItem>
@@ -289,14 +289,14 @@ export default function ChatInput({
                 aria-label={t('chat.input.model.label')}
                 className="border border-outline-variant/30 bg-transparent hover:bg-surface-container-low/50 transition-colors"
               >
-                <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                <span className="material-symbols-outlined icon-sm">auto_awesome</span>
                 <SelectValue placeholder={t('chat.input.model.label')} />
               </SelectTrigger>
               <SelectContent>
                 {modelList.map(model => (
                   <SelectItem key={model.id} value={model.id}>
                     <div className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                      <span className="material-symbols-outlined icon-sm">auto_awesome</span>
                       <div className="flex flex-col">
                         <span className="text-sm">{model.name}</span>
                         <span className="text-xs text-on-surface-variant">{model.provider}</span>
@@ -316,7 +316,7 @@ export default function ChatInput({
               className="p-md text-on-surface-variant hover:text-primary"
               onClick={handleAttachClick}
             >
-              <span className="material-symbols-outlined text-[20px]">attach_file</span>
+              <span className="material-symbols-outlined icon-md">attach_file</span>
             </Button>
 
             <Button
@@ -326,7 +326,7 @@ export default function ChatInput({
               className="p-md text-on-surface-variant hover:text-primary"
               onClick={onOpenQuickFix}
             >
-              <span className="material-symbols-outlined text-[20px]">build</span>
+              <span className="material-symbols-outlined icon-md">build</span>
             </Button>
 
             <Button
@@ -336,7 +336,7 @@ export default function ChatInput({
               className="p-md text-on-surface-variant hover:text-primary"
               onClick={onOpenEditor}
             >
-              <span className="material-symbols-outlined text-[20px]">code</span>
+              <span className="material-symbols-outlined icon-md">code</span>
             </Button>
 
             {isQuerying ? (
@@ -345,7 +345,7 @@ export default function ChatInput({
                 className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
                 onClick={onCancelQuery}
               >
-                <span className="material-symbols-outlined text-[20px]">stop</span>
+                <span className="material-symbols-outlined icon-md">stop</span>
               </Button>
             ) : (
               <Button
@@ -354,7 +354,7 @@ export default function ChatInput({
                 onClick={onSend}
                 disabled={!value.trim()}
               >
-                <span className="material-symbols-outlined text-[20px]">arrow_upward</span>
+                <span className="material-symbols-outlined icon-md">arrow_upward</span>
               </Button>
             )}
           </div>

@@ -172,7 +172,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
                               { state: stateLabel(decision) },
                             )}
                           >
-                            <span className="material-symbols-outlined text-[16px]">
+                            <span className="material-symbols-outlined icon-sm">
                               {decision === 'accept' ? 'check_circle' : decision === 'reject' ? 'cancel' : 'radio_button_unchecked'}
                             </span>
                             <span className="font-label-sm uppercase tracking-wider">{stateLabel(decision)}</span>

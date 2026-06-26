@@ -146,7 +146,7 @@ export default function Profiles() {
 
       {loading ? (
         <div className="flex items-center justify-center py-xl">
-          <span className="material-symbols-outlined text-[32px] text-primary animate-spin">progress_activity</span>
+          <span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span>
         </div>
       ) : (
         <>
@@ -191,7 +191,7 @@ export default function Profiles() {
             </div>
             {custom.length === 0 ? (
               <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-xl text-center">
-                <span className="material-symbols-outlined text-[48px] text-outline-variant block mb-sm">person_off</span>
+                <span className="material-symbols-outlined icon-2xl text-outline-variant block mb-sm">person_off</span>
                 <p className="font-headline-md text-on-surface mb-xs">{t('profiles.empty.title')}</p>
                 <p className="font-body-sm text-on-surface-variant">{t('profiles.empty.description')}</p>
               </div>
@@ -236,7 +236,7 @@ function ProfileRow({ profile, onDelete }: { profile: CustomProfileInfo; onDelet
           aria-label={t('profiles.delete.aria', { name: profile.name })}
           className="p-xs rounded-lg text-on-surface-variant hover:text-error hover:bg-error-container/30 cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
-          <span className="material-symbols-outlined text-[20px]">delete</span>
+          <span className="material-symbols-outlined icon-md">delete</span>
         </button>
       </div>
       <div className="flex flex-wrap gap-md font-label-sm">
@@ -341,7 +341,7 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
           disabled={saving || !form.name.trim()}
           className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-sm"
         >
-          {saving && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
+          {saving && <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>}
           {saving ? t('profiles.form.saving') : t('profiles.form.create')}
         </button>
       </div>

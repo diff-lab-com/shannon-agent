@@ -154,7 +154,7 @@ export default function WorktreePanel() {
                 key={wt.path}
                 className="bg-surface-container-lowest/80 border border-outline-variant/20 rounded-xl px-md py-sm flex items-center gap-md"
               >
-                <span className="material-symbols-outlined text-[20px] text-primary">folder_git</span>
+                <span className="material-symbols-outlined icon-md text-primary">folder_git</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-label-md text-[13px] font-bold text-on-surface truncate">
                     {wt.task_name}

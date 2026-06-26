@@ -208,7 +208,7 @@ export default function Goals() {
                         <span className="font-label-md text-on-surface font-bold">{task.title}</span>
                       </div>
                       <span className="px-sm py-xs bg-primary/10 text-primary font-label-sm rounded-lg flex items-center gap-1">
-                        <span className="material-symbols-outlined text-[12px]">sync</span>
+                        <span className="material-symbols-outlined icon-xs">sync</span>
                         {task.status === 'in_progress' ? t('goals.inProgress') : t('goals.running')}
                       </span>
                     </div>
@@ -236,14 +236,14 @@ export default function Goals() {
                         className="px-md py-sm rounded-lg bg-primary/10 text-primary font-label-md hover:bg-primary/20 transition-colors flex items-center gap-1"
                         onClick={() => { respondPermission(task.id, true); toast.success(t('goals.approved')) }}
                       >
-                        <span className="material-symbols-outlined text-[16px]">check</span>
+                        <span className="material-symbols-outlined icon-sm">check</span>
                         {t('goals.approve')}
                       </button>
                       <button
                         className="px-md py-sm rounded-lg border border-outline-variant/50 text-on-surface-variant font-label-md hover:bg-surface-container-high/60 transition-colors flex items-center gap-1"
                         onClick={() => { respondPermission(task.id, false); toast.info(t('goals.adjustmentsRequested')) }}
                       >
-                        <span className="material-symbols-outlined text-[16px]">tune</span>
+                        <span className="material-symbols-outlined icon-sm">tune</span>
                         {t('goals.adjust')}
                       </button>
                     </div>
@@ -284,7 +284,7 @@ export default function Goals() {
           />
           <div className="relative">
             <Button variant="ghost" aria-label={t('goals.aiAssistant')} className="p-md text-primary" onClick={() => setAiMenuOpen(!aiMenuOpen)}>
-              <span className="material-symbols-outlined text-[20px]" aria-hidden="true">auto_awesome</span>
+              <span className="material-symbols-outlined icon-md" aria-hidden="true">auto_awesome</span>
             </Button>
             {aiMenuOpen && (
               <div className="absolute bottom-full right-0 mb-sm w-[220px] bg-surface-container-lowest rounded-xl border border-outline-variant/20 shadow-xl py-xs z-50">
@@ -294,7 +294,7 @@ export default function Goals() {
                   { label: t('goals.identifyRisks'), icon: 'warning', prompt: 'Identify potential risks and blockers in my current tasks' },
                 ].map(opt => (
                   <button key={opt.label} className="w-full text-left px-md py-sm hover:bg-primary/5 flex items-center gap-sm text-on-surface font-label-md transition-colors" onClick={() => { sendMessage(opt.prompt); setGoalInput(''); setAiMenuOpen(false) }}>
-                    <span className="material-symbols-outlined text-[16px] text-primary">{opt.icon}</span>
+                    <span className="material-symbols-outlined icon-sm text-primary">{opt.icon}</span>
                     {opt.label}
                   </button>
                 ))}
@@ -302,7 +302,7 @@ export default function Goals() {
             )}
           </div>
           <Button aria-label={t('goals.sendMessage')} className="bg-primary text-on-primary p-2 rounded-xl hover:shadow-md hover:shadow-primary/30 transition-all" disabled={!goalInput.trim()} onClick={() => { if (goalInput.trim()) { sendMessage(goalInput); setGoalInput('') } }}>
-            <span className="material-symbols-outlined text-[20px]" aria-hidden="true">arrow_upward</span>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">arrow_upward</span>
           </Button>
         </div>
       </div>

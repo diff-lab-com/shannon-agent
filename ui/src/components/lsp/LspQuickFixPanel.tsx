@@ -134,7 +134,7 @@ export default function LspQuickFixPanel({
               aria-label={intl.formatMessage({ id: 'lsp.quickFix.close.aria' })}
               className="text-on-surface-variant hover:bg-surface-container-high rounded-full p-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
-              <span className="material-symbols-outlined text-[16px]">close</span>
+              <span className="material-symbols-outlined icon-sm">close</span>
             </button>
           ) : null}
         </div>

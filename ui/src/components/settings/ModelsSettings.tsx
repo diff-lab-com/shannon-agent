@@ -97,7 +97,7 @@ export default function ModelsSettings() {
             ))}
           </div>
           <p className="mt-md text-label-sm text-on-surface-variant opacity-70 flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[16px]">info</span>
+            <span className="material-symbols-outlined icon-sm">info</span>
             {strategy === 'high-quality' ? t('settings.models.stratHighQuality') : strategy === 'speed' ? t('settings.models.stratSpeed') : t('settings.models.stratBalanced')}
           </p>
         </section>
@@ -217,7 +217,7 @@ export default function ModelsSettings() {
                   onFocus={() => { if (!keyDraft && config?.api_key) setKeyDraft('') }}
                 />
                 <Button variant="ghost" className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => setShowKey(v => !v)} aria-label={showKey ? t('settings.models.hideKey') : t('settings.models.showKey')}>
-                  <span className="material-symbols-outlined text-[20px]">{showKey ? 'visibility_off' : 'visibility'}</span>
+                  <span className="material-symbols-outlined icon-md">{showKey ? 'visibility_off' : 'visibility'}</span>
                 </Button>
               </div>
               <Button
@@ -341,7 +341,7 @@ function QuickSetupPresets({
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-sm">
                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'}`}>
-                    <span className="material-symbols-outlined text-[20px]">{preset.icon}</span>
+                    <span className="material-symbols-outlined icon-md">{preset.icon}</span>
                   </div>
                   <div>
                     <div className="flex items-center gap-xs">

@@ -72,7 +72,7 @@ export function Header() {
     <>
       <header className="fixed top-0 right-0 z-40 flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
         <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
-          <span className="material-symbols-outlined text-[24px]">menu</span>
+          <span className="material-symbols-outlined icon-lg">menu</span>
         </Button>
         <div className="flex items-center gap-md relative w-full overflow-hidden">
           {isOpcTask ? (
@@ -102,7 +102,7 @@ export function Header() {
             >
               <span className={`w-2 h-2 rounded-full shrink-0 ${status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary'}`}></span>
               <span className="font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
-              <span className="material-symbols-outlined text-[16px]">expand_more</span>
+              <span className="material-symbols-outlined icon-sm">expand_more</span>
             </Button>
             {modelOpen && models.length > 0 && (
               <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-50 py-sm" role="listbox" onKeyDown={e => {
@@ -129,10 +129,10 @@ export function Header() {
           </div>
 
           <Button variant="ghost" aria-label={t('header.notifications')} title={t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={() => navigate('/triage')}>
-            <span className="material-symbols-outlined text-[20px]" aria-hidden="true">notifications</span>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">notifications</span>
           </Button>
           <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
-            <span className="material-symbols-outlined text-[20px]" aria-hidden="true">help</span>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">help</span>
           </Button>
           <div className="h-8 w-8 rounded-full overflow-hidden bg-surface-container flex items-center justify-center ring-2 ring-primary/10">
             <span className="material-symbols-outlined text-on-surface-variant text-[18px]" aria-hidden="true">person</span>
