@@ -360,8 +360,6 @@ function AdapterCard({
             {t('extensions.datasources.queryComingSoonHint')}
           </div>
         )}
-          </div>
-        )}
 
         {feedback && (
           <div className={`text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded ${feedback.ok ? "bg-primary-container/50 text-on-primary-container" : "bg-error-container/50 text-on-error-container"}`}>
