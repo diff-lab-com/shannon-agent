@@ -1,29 +1,5 @@
 import { useMemo } from 'react'
-import hljs from 'highlight.js/lib/core'
-import javascript from 'highlight.js/lib/languages/javascript'
-import typescript from 'highlight.js/lib/languages/typescript'
-import xml from 'highlight.js/lib/languages/xml'
-import css from 'highlight.js/lib/languages/css'
-import json from 'highlight.js/lib/languages/json'
-import markdown from 'highlight.js/lib/languages/markdown'
-import python from 'highlight.js/lib/languages/python'
-import rust from 'highlight.js/lib/languages/rust'
-import bash from 'highlight.js/lib/languages/bash'
-import yaml from 'highlight.js/lib/languages/yaml'
-
-hljs.registerLanguage('javascript', javascript)
-hljs.registerLanguage('typescript', typescript)
-hljs.registerLanguage('xml', xml)
-hljs.registerLanguage('html', xml)
-hljs.registerLanguage('css', css)
-hljs.registerLanguage('json', json)
-hljs.registerLanguage('markdown', markdown)
-hljs.registerLanguage('python', python)
-hljs.registerLanguage('rust', rust)
-hljs.registerLanguage('bash', bash)
-hljs.registerLanguage('shell', bash)
-hljs.registerLanguage('yaml', yaml)
-hljs.registerLanguage('yml', yaml)
+import { hljs } from '@/lib/hljs'
 
 const KIND_TO_LANG: Record<string, string> = {
   html: 'html',

@@ -119,6 +119,28 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   directly; with an empty queue the bell falls back to the existing
   Triage navigation. 3 tests.
 
+- **Voice Phase 2 — Web Speech API (B1).** `useVoice` now prefers
+  `window.SpeechRecognition` / `webkitSpeechRecognition` when available,
+  falling back to the stub implementation when the browser doesn't
+  expose the API (e.g. jsdom tests). Adds `supported` and surfaces
+  recognition errors. 3 new tests.
+
+- **Artifact code-tab syntax highlighting (B2).** Code tab in the
+  ArtifactPanel now uses a shared `CodeBlock` component (highlight.js
+  core, 12 languages registered). Languages are resolved from artifact
+  kind (HTML/SVG/mermaid/markdown) or auto-detected. 5 tests.
+
+- **Plan Mode enhancements (B3).** Banner gets a dismiss button, and
+  `Cmd/Ctrl+Shift+P` globally toggles plan mode on or off. 5 new tests.
+
+- **Diff Preview syntax highlighting (B4).** `DiffViewer` now renders
+  per-line highlighted HTML using a shared hljs setup. Language is
+  resolved from the diff's language hint plus the file extension
+  (covers TypeScript, JavaScript, Python, Rust, Bash, YAML, Markdown,
+  JSON, HTML, XML, CSS). Open highlight spans carry across newlines so
+  multi-line constructs (block comments, template literals) stay
+  colored on every line. 10 new tests in `diff-highlight.test.ts`.
+
 ### Documentation
 
 - **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6

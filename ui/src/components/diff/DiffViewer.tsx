@@ -12,6 +12,8 @@ import { Fragment, useMemo } from 'react'
 import { useIntl } from 'react-intl'
 import type { FileDiff } from '@/types'
 import { computeHunks, type HunkDecision } from '@/lib/diff-merge'
+import { highlightLines, resolveDiffLang } from '@/lib/diff-highlight'
+import 'highlight.js/styles/github.css'
 
 interface DiffViewerProps {
   diff: FileDiff
@@ -100,6 +102,10 @@ function decisionHeaderStyle(decision: HunkDecision): string {
   }
 }
 
+function escapePlain(s: string): string {
+  return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] ?? c))
+}
+
 export default function DiffViewer({ diff, decisions, onToggleHunk, className }: DiffViewerProps) {
   const intl = useIntl()
   const hunks = useMemo(
@@ -108,6 +114,21 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
   )
   const lines = useMemo(() => flattenHunks(hunks), [hunks])
   const headerIndices = useMemo(() => hunkHeaderIndices(lines), [lines])
+
+  const lang = useMemo(
+    () => resolveDiffLang(diff.language, diff.file_name),
+    [diff.language, diff.file_name],
+  )
+  const oldHighlighted = useMemo(() => highlightLines(diff.old_content, lang), [diff.old_content, lang])
+  const newHighlighted = useMemo(() => highlightLines(diff.new_content, lang), [diff.new_content, lang])
+
+  const lineHtml = (line: FlatLine): string => {
+    if (line.kind === 'del' && line.oldNo !== null) return oldHighlighted[line.oldNo - 1] ?? escapePlain(line.text)
+    if (line.kind === 'add' && line.newNo !== null) return newHighlighted[line.newNo - 1] ?? escapePlain(line.text)
+    if (line.newNo !== null) return newHighlighted[line.newNo - 1] ?? escapePlain(line.text)
+    if (line.oldNo !== null) return oldHighlighted[line.oldNo - 1] ?? escapePlain(line.text)
+    return escapePlain(line.text)
+  }
 
   const addCount = lines.filter(l => l.kind === 'add').length
   const delCount = lines.filter(l => l.kind === 'del').length
@@ -191,7 +212,9 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
                       <td className="px-xs text-right text-outline select-none border-r border-outline-variant/20" style={{ width: `${gutterWidth + 1}ch` }}>
                         {line.newNo ?? ''}
                       </td>
-                      <td className="px-md whitespace-pre text-on-surface">{line.text || ' '}</td>
+                      <td className="px-md whitespace-pre text-on-surface">
+                        <span className="hljs" dangerouslySetInnerHTML={{ __html: lineHtml(line) || '&nbsp;' }} />
+                      </td>
                     </tr>
                   </Fragment>
                 )
