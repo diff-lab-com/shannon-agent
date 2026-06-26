@@ -112,3 +112,42 @@ describe('ChatInput — Plan Mode toggle (D4)', () => {
     })
   })
 })
+
+describe('ChatInput — Plan Mode B3 enhancements', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.configure).mockResolvedValue(undefined)
+    mockRefreshConfig.mockReset()
+  })
+
+  it('shows Exit button in banner when plan mode active', () => {
+    renderWithMode('plan')
+    expect(screen.getByRole('button', { name: 'Exit plan mode' })).toBeInTheDocument()
+  })
+
+  it('clicking Exit button reverts to suggest mode', async () => {
+    renderWithMode('plan')
+    fireEvent.click(screen.getByRole('button', { name: 'Exit plan mode' }))
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'suggest' })
+    })
+  })
+
+  it('toggles plan mode on Ctrl+Shift+P from suggest', async () => {
+    renderWithMode('suggest')
+    const evt = new KeyboardEvent('keydown', { key: 'P', shiftKey: true, ctrlKey: true, bubbles: true })
+    window.dispatchEvent(evt)
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'plan' })
+    })
+  })
+
+  it('toggles plan mode off on Ctrl+Shift+P when active', async () => {
+    renderWithMode('plan')
+    const evt = new KeyboardEvent('keydown', { key: 'P', shiftKey: true, ctrlKey: true, bubbles: true })
+    window.dispatchEvent(evt)
+    await waitFor(() => {
+      expect(api.configure).toHaveBeenCalledWith({ key: 'approval_mode', value: 'suggest' })
+    })
+  })
+})

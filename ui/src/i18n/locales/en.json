@@ -1451,6 +1451,7 @@
   "chat.input.planMode.label": "Plan mode",
   "chat.input.planMode.tooltip": "Agent proposes a plan before making changes. You approve before execution.",
   "chat.input.planMode.banner": "Plan mode active — the agent will propose a plan before any file changes.",
+  "chat.input.planMode.exit": "Exit plan mode",
   "chat.delete.title": "Delete Session",
   "chat.delete.confirm": "Are you sure you want to delete this session? This cannot be undone.",
   "chat.delete.cancel": "Cancel",

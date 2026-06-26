@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
 import { convertFileSrc } from '@tauri-apps/api/core'
@@ -169,6 +169,18 @@ export default function ChatInput({
     }
   }
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+        e.preventDefault()
+        void handlePlanToggle()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planModeActive])
+
   const modeOptions = [
     { value: 'readonly', label: t('chat.input.mode.readonly'), icon: 'lock', color: 'border-green-500/50' },
     { value: 'plan', label: t('chat.input.mode.plan'), icon: 'description', color: 'border-green-500/50' },
@@ -201,7 +213,16 @@ export default function ChatInput({
           className="flex items-center gap-xs px-md py-xs bg-tertiary-container/60 border-b border-tertiary/30 rounded-t-2xl text-on-tertiary-container"
         >
           <span className="material-symbols-outlined icon-sm shrink-0">route</span>
-          <span className="font-label-sm truncate">{t('chat.input.planMode.banner')}</span>
+          <span className="font-label-sm truncate flex-1">{t('chat.input.planMode.banner')}</span>
+          <button
+            type="button"
+            onClick={handlePlanToggle}
+            aria-label={t('chat.input.planMode.exit')}
+            title={t('chat.input.planMode.exit')}
+            className="p-xs rounded hover:bg-tertiary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0"
+          >
+            <span className="material-symbols-outlined icon-sm">close</span>
+          </button>
         </div>
       )}
 
