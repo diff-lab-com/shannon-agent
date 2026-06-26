@@ -2,6 +2,60 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — PM audit follow-ups batch] — Naming + error feedback + empty states + chat attach + skill drawer
+
+Branch `s2/pm-audit-followups-batch`. Closes the remaining P0 honesty
+findings and the §A–§C cross-cutting items from the senior PM audit
+(`docs/product-review/03-senior-pm-audit.md`) that PR #50 did not reach.
+
+### UI
+
+- **PM naming pass (audit §A).** Seven user-visible labels renamed to match
+  the rename table in `03-senior-pm-audit.md` §A: Extensions → Integrations,
+  Data Sources → Connections, Worktrees → Workspaces, Routines → Schedules,
+  Hooks → Automations, Permission Profiles → Approval Profiles, and the OPC
+  "Save Focus" → "Save Mission" copy. Labels only — route paths, code
+  identifiers, and i18n keys are unchanged so bookmarks, tests, and downstream
+  consumers keep working. (`ed8a41d`)
+
+- **Shared error-feedback helper (audit §B).** New `ui/src/lib/errorToast.ts`
+  exports `errorMessage(e)` (normalises unknown catch values to a display
+  string) and `toastError(key, e)` (sonner toast with the translated title and
+  the real cause in the description slot). Eleven catch blocks across seven
+  components (Header, MyAgents, AdvancedSettings, BillingSettings,
+  GeneralSettings, ModelsSettings, OutboundSection) migrated from
+  `console.warn` + generic `toast.error('Failed')` to the helper, so users now
+  see *why* an action failed. Bulk replacement of the remaining silent catches
+  is tracked as a follow-up. (`023c208`)
+
+- **Empty-state CTAs wired (audit §C).** Six of eleven `EmptyState` usages
+  lacked an action; now wired: WorktreePanel (Refresh workspaces), Goals (Ask
+  AI to suggest tasks), Triage no-match (Clear filters), OPCAgentSwarm (Spawn
+  agent), ExtensionsHub (Clear search / Reload), MyAgents (Create first agent).
+  AgentMessagesPanel left intentionally without a CTA — purely informational.
+  (`fbf516e`)
+
+- **Chat attach picker polish.** The attach button (US-CHAT-08, wired in
+  `bf8a933`) now opens with two filter presets (Images / All Files) and renders
+  image thumbnails (png/jpg/jpeg/gif/webp/bmp/svg) on the attached-file chips
+  via `convertFileSrc`; non-images keep the description-icon chip. (`4f5ade4`)
+
+- **Skill detail drawer.** Skill card bodies now open a right-side drawer
+  showing full metadata (author, version, license, stars, source repo, last
+  updated, tags, homepage), following the `TaskDetailDrawer` pattern
+  (role=dialog, aria-modal, Escape/backdrop to close, click-on-panel doesn't
+  dismiss). The card Install button still works independently; the drawer
+  mirrors it for symmetry. (`7823238`)
+
+### Fixes
+
+- **DataSources page leaked hardcoded English.** The "Verified" badge, the
+  "Query coming soon" notice, and the install/uninstall feedback strings were
+  literal English bypassing i18n; the `extensions.datasources.verified` and
+  `.required` keys already existed but were unused. Now routed through `t()`,
+  three new keys added (en + zh-CN), and the untranslated
+  `extensions.datasources.noInstalled` value in `zh-CN.json` corrected.
+
 ## [Unreleased — P0 PM review fixes] — Demo mode + i18n + Welcome rendering
 
 ### Fixes

@@ -13,7 +13,7 @@ that PR. Grouped by audit severity, then by page.
 | # | Page | Finding | Status |
 |---|------|---------|--------|
 | 1 | Chat | **Attach button has no handler** (US-CHAT-08). Files can only be attached via undocumented drag-and-drop. | **Resolved.** Click handler shipped in bf8a933 (pre-PR #50, audit was stale). UX polish (image thumbnails + filter presets) shipped in commit 4f5ade4 on `s2/p0-chat-attach-enhancements`. |
-| 2 | Extensions → Skills | **Skill cards not clickable.** No detail drawer, no install flow. Hover state is purely decorative. | Not in PR #50 |
+| 2 | Extensions → Skills | **Skill cards not clickable.** No detail drawer, no install flow. Hover state is purely decorative. | **Resolved.** Skill detail drawer shipped in `7823238` (this batch). |
 
 ## Still open — P1 (per-page)
 
@@ -81,7 +81,8 @@ that PR. Grouped by audit severity, then by page.
 ## Still open — Cross-cutting
 
 ### A. Naming inconsistencies (rename pass)
-The full table in `03-senior-pm-audit.md` §A is **not yet applied**:
+**Resolved** in `ed8a41d` (this batch) — all seven renames applied as
+label-only changes (route paths, code identifiers, and i18n keys unchanged):
 - Extensions → Integrations
 - Data Sources → Connections (MCP)
 - Profiles → Approval Profiles
@@ -91,11 +92,14 @@ The full table in `03-senior-pm-audit.md` §A is **not yet applied**:
 - Strategic Focus → Mission
 
 ### B. State feedback
-- 47 `catch (e) { console.warn(...) }` patterns still silent
-- 23 `toast.error('Failed')` calls don't tell user why
+**Partial** in `023c208` (this batch) — `ui/src/lib/errorToast.ts` helper
+added (`errorMessage` + `toastError`) and 11 catch blocks across 7 components
+migrated to surface the real cause. Remaining work:
+- ~36 `catch (e) { console.warn(...) }` patterns still silent
+- ~12 `toast.error('Failed')` calls don't tell user why
 - Loading spinners have no timeout
 
-**Recommendation:** shared error boundary + retry pattern, user-visible error messages with actual cause.
+**Recommendation:** finish the bulk migration to `toastError`, add shared error boundary + retry pattern, add loading timeouts.
 
 ### C. Empty states
 Audited 11 `EmptyState` usages; 5 already had CTAs, 6 lacked them. The 6 gaps are now wired:
