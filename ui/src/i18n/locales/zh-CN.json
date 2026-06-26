@@ -1632,6 +1632,7 @@
   "routines.form.create": "创建例行程序",
   "triage.unread.title": "未读",
   "triage.archived.label": "已归档",
+  "triage.list.aria": "分拣项目。使用 j 或 k 移动焦点，回车标记已读，a 归档。",
   "triage.markRead.aria": "标记已读",
   "triage.markRead.title": "标记为已读",
   "triage.archive.aria": "归档项目",

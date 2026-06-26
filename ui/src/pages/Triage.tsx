@@ -8,7 +8,7 @@
 // + sort + archived toggle) → bulk-action bar when items selected → list of
 // TriageItem cards with checkbox + Mark Read / Archive actions, empty state.
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
@@ -37,9 +37,10 @@ function kindMeta(kind: string): { icon: string; color: string; labelKey: string
   }
 }
 
-function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive }: {
+function TriageCard({ item, selected, focused, onToggleSelected, onMarkRead, onArchive }: {
   item: TriageItem
   selected: boolean
+  focused?: boolean
   onToggleSelected: (id: string) => void
   onMarkRead: (id: string) => void
   onArchive: (id: string) => void
@@ -48,7 +49,7 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive }:
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const meta = kindMeta(item.kind)
   return (
-    <div className={`glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 ${item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20'} ${selected ? 'ring-2 ring-primary/40' : ''}`}>
+    <div role="listitem" data-focused={focused ? 'true' : undefined} className={`glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 ${item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20'} ${focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : ''}`}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('triage.select.aria', { id: item.id })}>
           <input
@@ -121,6 +122,8 @@ export default function Triage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkRunning, setBulkRunning] = useState(false)
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const { stats } = useTriageStats()
   const filter = useMemo(() => ({
     kind: kindFilter,
@@ -208,6 +211,47 @@ export default function Triage() {
   // so the previous "Delete" button was lying to users (it actually archived).
   // Archive is reversible via "Show archived" toggle; if the backend later
   // adds hard-delete, re-add a destructive action with explicit copy.
+
+  // Keyboard navigation over the triage list (list must be focused first).
+  // j/ArrowDown = next, k/ArrowUp = previous, Enter = mark read, a = archive.
+  // Ignored when the keystroke originates from a form field so the filter
+  // chips and read-filter controls keep working normally.
+  useEffect(() => {
+    if (focusedIndex == null) return
+    if (visibleItems.length === 0) { setFocusedIndex(null); return }
+    if (focusedIndex >= visibleItems.length) setFocusedIndex(visibleItems.length - 1)
+  }, [visibleItems, focusedIndex])
+
+  useEffect(() => {
+    if (focusedIndex == null) return
+    const el = listRef.current?.querySelector('[data-focused="true"]') as HTMLElement | null
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [focusedIndex])
+
+  const handleListKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const tag = (e.target as HTMLElement).tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+    const max = visibleItems.length
+    if (max === 0) return
+    const cur = focusedIndex ?? -1
+    if (e.key === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      setFocusedIndex(Math.min(cur + 1, max - 1))
+    } else if (e.key === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      setFocusedIndex(Math.max(cur - 1, 0))
+    } else if (e.key === 'Enter') {
+      if (cur >= 0) {
+        const it = visibleItems[cur]
+        if (it && !it.read) { e.preventDefault(); markRead(it.id) }
+      }
+    } else if (e.key === 'a') {
+      if (cur >= 0) {
+        const it = visibleItems[cur]
+        if (it && !it.archived) { e.preventDefault(); archive(it.id) }
+      }
+    }
+  }
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
@@ -375,12 +419,20 @@ export default function Triage() {
                 action={{ label: t('triage.noMatch.cta'), onClick: () => { setKindFilter(undefined); setReadFilter('all'); setShowArchived(false) } }}
               />
             ) : (
-              <div className="space-y-md">
-                {visibleItems.map(item => (
+              <div
+                ref={listRef}
+                role="list"
+                tabIndex={0}
+                aria-label={t('triage.list.aria')}
+                onKeyDown={handleListKey}
+                className="space-y-md outline-none"
+              >
+                {visibleItems.map((item, i) => (
                   <TriageCard
                     key={item.id}
                     item={item}
                     selected={effectiveSelected.has(item.id)}
+                    focused={focusedIndex === i}
                     onToggleSelected={toggleSelected}
                     onMarkRead={markRead}
                     onArchive={archive}

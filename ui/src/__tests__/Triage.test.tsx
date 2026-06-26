@@ -27,6 +27,7 @@ const testMessages: Record<string, string> = {
   'triage.select.selectAll': 'Select all visible items',
   'triage.select.deselectAll': 'Deselect all',
   'triage.select.shown': 'shown',
+  'triage.list.aria': 'Triage items. Use j or k to move focus, Enter to mark read, and a to archive.',
   'triage.markRead.aria': 'Mark item {id} as read',
   'triage.markRead.title': 'Mark read',
   'triage.archive.aria': 'Archive item {id}',
@@ -214,5 +215,42 @@ describe('Triage page', () => {
     const cardsAfter = container.querySelectorAll('.glass-panel')
     expect(cardsAfter[0]).toHaveTextContent('Older')
     expect(cardsAfter[1]).toHaveTextContent('Newer')
+  })
+
+  it('j moves focus and Enter marks the focused item read', () => {
+    const { markRead } = setItems([
+      makeItem({ id: 'a', message: 'first', read: false }),
+      makeItem({ id: 'b', message: 'second', read: false }),
+    ])
+    renderWithIntl(<Triage />)
+    const list = screen.getByRole('list', { name: /Triage items/ })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'j' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    expect(markRead).toHaveBeenCalledWith('a')
+  })
+
+  it('a archives the focused item', () => {
+    const { archive } = setItems([
+      makeItem({ id: 'a', message: 'first', read: false }),
+      makeItem({ id: 'b', message: 'second', read: false }),
+    ])
+    renderWithIntl(<Triage />)
+    const list = screen.getByRole('list', { name: /Triage items/ })
+    list.focus()
+    fireEvent.keyDown(list, { key: 'j' })
+    fireEvent.keyDown(list, { key: 'a' })
+    expect(archive).toHaveBeenCalledWith('a')
+  })
+
+  it('keyboard nav is ignored when the keystroke comes from a form control', () => {
+    const { markRead } = setItems([makeItem({ id: 'a' }), makeItem({ id: 'b' })])
+    renderWithIntl(<Triage />)
+    const list = screen.getByRole('list', { name: /Triage items/ })
+    const checkbox = within(list).getAllByRole('checkbox')[0]
+    list.focus()
+    fireEvent.keyDown(checkbox, { key: 'j' })
+    fireEvent.keyDown(checkbox, { key: 'Enter' })
+    expect(markRead).not.toHaveBeenCalled()
   })
 })
