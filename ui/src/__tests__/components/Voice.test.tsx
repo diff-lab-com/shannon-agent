@@ -79,6 +79,110 @@ describe('useVoice hook (stubbed backend)', () => {
   })
 })
 
+describe('useVoice hook — Web Speech API integration', () => {
+  function fireFinal(recognition: any, transcript: string) {
+    recognition.onresult({
+      resultIndex: 0,
+      results: [{ 0: { transcript }, isFinal: true }],
+    })
+  }
+
+  it('reports supported=false when SpeechRecognition is unavailable', () => {
+    function Probe() {
+      const v = useVoice()
+      return <div data-testid="supported">{v.supported ? 'yes' : 'no'}</div>
+    }
+    renderWithI18n(<Probe />)
+    expect(screen.getByTestId('supported')).toHaveTextContent('no')
+  })
+
+  it('uses SpeechRecognition when available and emits final transcripts', async () => {
+    const Ctor = vi.fn()
+    const recognition: any = {
+      lang: '',
+      continuous: false,
+      interimResults: false,
+      maxAlternatives: 0,
+      start: vi.fn(),
+      stop: vi.fn(),
+      abort: vi.fn(),
+      onresult: null,
+      onerror: null,
+      onend: null,
+    }
+    Ctor.mockReturnValue(recognition)
+    ;(window as any).SpeechRecognition = Ctor
+
+    try {
+      const onTranscript = vi.fn()
+      function Probe() {
+        const v = useVoice({ onTranscript })
+        return (
+          <div>
+            <div data-testid="state">{v.state}</div>
+            <div data-testid="supported">{v.supported ? 'yes' : 'no'}</div>
+            <button onClick={() => void v.startRecording()}>start</button>
+            <button onClick={() => void v.stopRecording()}>stop</button>
+          </div>
+        )
+      }
+      renderWithI18n(<Probe />)
+      expect(screen.getByTestId('supported')).toHaveTextContent('yes')
+
+      fireEvent.click(screen.getByText('start'))
+      expect(recognition.start).toHaveBeenCalled()
+      expect(screen.getByTestId('state')).toHaveTextContent('recording')
+
+      fireFinal(recognition, 'hello world')
+      expect(onTranscript).toHaveBeenCalledWith('hello world')
+
+      fireEvent.click(screen.getByText('stop'))
+      expect(recognition.stop).toHaveBeenCalled()
+    } finally {
+      delete (window as any).SpeechRecognition
+    }
+  })
+
+  it('surfaces recognition errors via error state', async () => {
+    const Ctor = vi.fn()
+    const recognition: any = {
+      lang: '',
+      continuous: false,
+      interimResults: false,
+      maxAlternatives: 0,
+      start: vi.fn(),
+      stop: vi.fn(),
+      abort: vi.fn(),
+      onresult: null,
+      onerror: null,
+      onend: null,
+    }
+    Ctor.mockReturnValue(recognition)
+    ;(window as any).SpeechRecognition = Ctor
+
+    try {
+      function Probe() {
+        const v = useVoice()
+        return (
+          <div>
+            <div data-testid="state">{v.state}</div>
+            <div data-testid="error">{v.error || 'none'}</div>
+            <button onClick={() => void v.startRecording()}>start</button>
+          </div>
+        )
+      }
+      renderWithI18n(<Probe />)
+      fireEvent.click(screen.getByText('start'))
+      recognition.onerror({ error: 'audio-capture' })
+      await waitFor(() => {
+        expect(screen.getByTestId('error')).toHaveTextContent('Voice recognition error: audio-capture')
+      })
+    } finally {
+      delete (window as any).SpeechRecognition
+    }
+  })
+})
+
 describe('MicButton', () => {
   it('renders mic icon when idle', () => {
     renderWithI18n(<MicButton state="idle" onStart={() => {}} onStop={() => {}} />)
