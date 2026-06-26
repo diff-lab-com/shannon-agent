@@ -1602,6 +1602,8 @@
   "chat.session.meta": "{count, plural, =1 {1 条消息} other {{count, number} 条消息}} · {time}",
   "chat.context.lines": "{count, plural, =1 {1 行} other {{count, number} 行}}",
   "chat.message.diff.aria": "查看 {path} 的 diff",
+  "chat.message.filesChanged": "{count, plural, =1 {{count} 个文件已修改} other {{count} 个文件已修改}}",
+  "chat.message.reviewAll": "查看全部",
   "editor.subtitle": "加载源文件以查看语法高亮。诊断信息会从语言服务器自动获取 — 可添加手动标注。点击任何标注可询问语言服务器的快速修复。",
   "editor.line": "行（0 索引）",
   "editor.severity": "严重程度",

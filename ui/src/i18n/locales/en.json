@@ -1602,6 +1602,8 @@
   "chat.session.meta": "{count, plural, =1 {1 message} other {{count} messages}} · {time}",
   "chat.context.lines": "{count, plural, =1 {1 line} other {{count} lines}}",
   "chat.message.diff.aria": "View diff for {path}",
+  "chat.message.filesChanged": "{count, plural, =1 {{count} file changed} other {{count} files changed}}",
+  "chat.message.reviewAll": "Review all",
   "editor.subtitle": "Edit task files with inline diagnostics and quick fixes.",
   "editor.line": "Line",
   "editor.severity": "Severity",
