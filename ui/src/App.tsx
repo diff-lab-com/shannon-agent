@@ -34,7 +34,7 @@ const BillingSettings = lazy(() => import('./components/settings/BillingSettings
 const NotificationsSettings = lazy(() => import('./components/settings/NotificationsSettings'));
 
 function PageLoader() {
-  return <div className="flex-1 flex items-center justify-center"><span className="material-symbols-outlined text-[32px] text-primary animate-spin">progress_activity</span></div>;
+  return <div className="flex-1 flex items-center justify-center"><span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span></div>;
 }
 
 export default function App() {

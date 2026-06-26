@@ -162,7 +162,7 @@ export default function SlackWizard({ config, onSave, onCancel }: SlackWizardPro
           value={botToken}
           onChange={(e) => setBotToken(e.target.value)}
           placeholder="xoxb-..."
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.slack.botTokenHint')}
@@ -191,7 +191,7 @@ export default function SlackWizard({ config, onSave, onCancel }: SlackWizardPro
           value={triggerWord}
           onChange={(e) => setTriggerWord(e.target.value)}
           placeholder="shannon"
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.slack.triggerWordHint')}
@@ -207,7 +207,7 @@ export default function SlackWizard({ config, onSave, onCancel }: SlackWizardPro
           value={allowedChannels}
           onChange={(e) => setAllowedChannels(e.target.value)}
           placeholder="C012345, C678901"
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.slack.allowedChannelsHint')}

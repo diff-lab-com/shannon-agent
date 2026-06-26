@@ -155,7 +155,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                 <div className="flex items-center justify-between mb-sm">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                      <span className="material-symbols-outlined text-[20px] text-on-surface-variant opacity-70">{iconForAgent(agent.name)}</span>
+                      <span className="material-symbols-outlined icon-md text-on-surface-variant opacity-70">{iconForAgent(agent.name)}</span>
                     </div>
                     <div>
                       <div className="font-label-md text-[14px] font-bold">{agent.name}</div>
@@ -172,7 +172,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                       className="w-6 h-6 flex items-center justify-center rounded text-on-surface-variant hover:bg-surface-container-high/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 cursor-pointer"
                       onClick={e => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : agent.id) }}
                     >
-                      <span className="material-symbols-outlined text-[16px]">more_vert</span>
+                      <span className="material-symbols-outlined icon-sm">more_vert</span>
                     </button>
                   </div>
                 </div>
@@ -184,7 +184,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                 </div>
                 {agent.worktree_path ? (
                   <div className="mt-sm flex items-center gap-1 font-label-sm text-[10px] text-on-surface-variant/80 bg-surface-container-low/60 rounded px-1.5 py-0.5 self-start">
-                    <span className="material-symbols-outlined text-[12px]">fork_right</span>
+                    <span className="material-symbols-outlined icon-xs">fork_right</span>
                     <span className="font-mono truncate max-w-[200px]" title={agent.worktree_path}>{shortWorktree(agent.worktree_path)}</span>
                   </div>
                 ) : null}

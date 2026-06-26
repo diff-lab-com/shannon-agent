@@ -79,7 +79,7 @@ export default function OpcAnalyticsDashboard() {
     >
       <header className="flex items-center justify-between">
         <div className="flex items-center gap-sm">
-          <span className="material-symbols-outlined text-[20px] text-primary">monitoring</span>
+          <span className="material-symbols-outlined icon-md text-primary">monitoring</span>
           <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('opc.analytics.title')}</h3>
         </div>
         <button
@@ -232,7 +232,7 @@ export default function OpcAnalyticsDashboard() {
 function StatCard({ label, value, icon }: { label: string; value: string | number; icon: string }) {
   return (
     <div className="bg-surface-container-low rounded-xl p-md flex items-center gap-sm border border-outline-variant/20">
-      <span className="material-symbols-outlined text-[20px] text-primary">{icon}</span>
+      <span className="material-symbols-outlined icon-md text-primary">{icon}</span>
       <div className="min-w-0">
         <div className="font-headline-md text-[20px] font-bold text-on-surface leading-none">{value}</div>
         <div className="font-label-sm text-[11px] text-on-surface-variant mt-1">{label}</div>

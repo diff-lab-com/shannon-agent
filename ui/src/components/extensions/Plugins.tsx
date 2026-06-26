@@ -196,7 +196,7 @@ export default function Plugins() {
         <div className="flex items-start justify-between gap-sm">
           <div className="flex items-start gap-sm min-w-0">
             <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-[20px]">workspaces</span>
+              <span className="material-symbols-outlined icon-md">workspaces</span>
             </div>
             <div className="min-w-0">
               <h4 className="font-bold text-label-md text-on-surface truncate">{entry.name}</h4>
@@ -207,7 +207,7 @@ export default function Plugins() {
             className={`inline-flex items-center gap-xs px-xs py-[2px] rounded-full text-label-xs font-bold shrink-0 ${TRUST_BADGE_CLASS[trust]}`}
             title={t(TRUST_LABEL_KEY[trust])}
           >
-            <span className="material-symbols-outlined text-[12px]">{TRUST_ICON[trust]}</span>
+            <span className="material-symbols-outlined icon-xs">{TRUST_ICON[trust]}</span>
             {t(TRUST_LABEL_KEY[trust])}
           </span>
         </div>
@@ -219,24 +219,24 @@ export default function Plugins() {
         <div className="flex flex-wrap items-center gap-xs text-label-xs text-on-surface-variant">
           {license && (
             <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
-              <span className="material-symbols-outlined text-[12px]">gavel</span>
+              <span className="material-symbols-outlined icon-xs">gavel</span>
               {license}
             </span>
           )}
           {typeof stars === "number" && (
             <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
-              <span className="material-symbols-outlined text-[12px]">star</span>
+              <span className="material-symbols-outlined icon-xs">star</span>
               {stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars}
             </span>
           )}
           {entry.version && (
             <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
-              <span className="material-symbols-outlined text-[12px]">tag</span>
+              <span className="material-symbols-outlined icon-xs">tag</span>
               {entry.version}
             </span>
           )}
           <span className="inline-flex items-center gap-[2px] truncate" title={sourceLabel(entry.source)}>
-            <span className="material-symbols-outlined text-[12px]">link</span>
+            <span className="material-symbols-outlined icon-xs">link</span>
             <span className="truncate">{sourceLabel(entry.source)}</span>
           </span>
         </div>

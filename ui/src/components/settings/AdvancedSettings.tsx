@@ -1,12 +1,14 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useApp } from '@/context/AppContext'
 import { useModalFocus } from '@/hooks/useModalFocus'
+import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import type { SkillCandidate } from '@/lib/tauri-api'
 
 export default function AdvancedSettings() {
   const intl = useIntl()
@@ -17,12 +19,29 @@ export default function AdvancedSettings() {
   const [encryptionEnabled, setEncryptionEnabled] = useState(config?.encryption_enabled ?? true)
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
   const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
+  const [skillDetectionEnabled, setSkillDetectionEnabled] = useState(config?.skill_detection_enabled ?? true)
   const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
   const [showApiKeys, setShowApiKeys] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+
+  const [candidates, setCandidates] = useState<SkillCandidate[]>([])
+  const [candidateIndex, setCandidateIndex] = useState(0)
+  const [approvalOpen, setApprovalOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    listSkillCandidatesSafe(!cancelled)
+    return () => { cancelled = true }
+
+    function listSkillCandidatesSafe(active: boolean) {
+      api.listSkillCandidates()
+        .then((rows) => { if (active) setCandidates(rows) })
+        .catch(() => { if (active) setCandidates([]) })
+    }
+  }, [])
 
   const logsRef = useRef<HTMLDivElement>(null)
   useModalFocus(showLogs, logsRef)
@@ -55,6 +74,14 @@ export default function AdvancedSettings() {
     setShowResetConfirm(false)
   }
 
+  function advanceCandidate() {
+    setCandidates((prev) => {
+      const next = prev.slice(1)
+      if (next.length === 0) setApprovalOpen(false)
+      return next
+    })
+  }
+
   return (
     <div className="pb-xl">
       <div className="mb-xl">
@@ -70,6 +97,11 @@ export default function AdvancedSettings() {
               <span className="material-symbols-outlined">auto_awesome</span>
             </div>
             <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.skillLoop.title')}</h3>
+            {candidates.length > 0 && (
+              <span className="ml-auto px-sm py-[2px] rounded-full bg-tertiary-container text-on-tertiary-container text-label-xs font-bold">
+                {intl.formatMessage({ id: 'settings.skillLoop.pendingCount' }, { count: candidates.length })}
+              </span>
+            )}
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.skillLoop.description')}</p>
           <div className="flex items-center justify-between gap-md">
@@ -79,6 +111,23 @@ export default function AdvancedSettings() {
             </div>
             <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" />
           </div>
+          <div className="flex items-center justify-between gap-md mt-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.detectionEnabled')}</div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.detectionEnabledDesc')}</div>
+            </div>
+            <Switch checked={skillDetectionEnabled} onCheckedChange={v => handleToggle('skill_detection_enabled', v, setSkillDetectionEnabled)} className="shrink-0" />
+          </div>
+          {candidates.length > 0 && (
+            <Button
+              variant="ghost"
+              className="w-full mt-md py-sm border border-tertiary/30 rounded-lg text-tertiary font-label-md font-bold text-[14px] hover:bg-tertiary-container/30 transition-colors cursor-pointer"
+              onClick={() => { setCandidateIndex(0); setApprovalOpen(true) }}
+            >
+              <span className="material-symbols-outlined icon-sm mr-xs">rate_review</span>
+              {t('settings.skillLoop.review')}
+            </Button>
+          )}
         </div>
 
         {/* Memory Management */}
@@ -149,12 +198,12 @@ export default function AdvancedSettings() {
               <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.devOptionsDesc')}</p>
               <div className="flex items-center gap-md">
                 <Button variant="ghost" className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowLogs(true)}>
-                  <span className="material-symbols-outlined text-[16px]">description</span>
+                  <span className="material-symbols-outlined icon-sm">description</span>
                   {t('settings.advanced.viewLogs')}
                 </Button>
                 <span className="text-outline-variant">|</span>
                 <Button variant="ghost" className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
-                  <span className="material-symbols-outlined text-[16px]">api</span>
+                  <span className="material-symbols-outlined icon-sm">api</span>
                   {t('settings.advanced.manageApiKeys')}
                 </Button>
               </div>
@@ -259,6 +308,14 @@ export default function AdvancedSettings() {
           </div>
         </div>
       )}
+
+      <SkillApprovalModal
+        open={approvalOpen}
+        candidate={candidates[candidateIndex] ?? null}
+        onClose={() => setApprovalOpen(false)}
+        onApproved={() => advanceCandidate()}
+        onRejected={() => advanceCandidate()}
+      />
     </div>
   )
 }

@@ -29,7 +29,7 @@ class ErrorBoundaryInner extends Component<ErrorBoundaryInnerProps, State> {
       if (this.props.fallback) return this.props.fallback
       return (
         <div className="flex flex-col items-center justify-center py-xxl text-center" role="alert">
-          <span className="material-symbols-outlined text-[48px] text-error mb-md">error</span>
+          <span className="material-symbols-outlined icon-2xl text-error mb-md">error</span>
           <h3 className="font-headline-md text-on-surface mb-sm">{t('errorBoundary.title')}</h3>
           <p className="text-body-sm text-on-surface-variant max-w-md mb-lg">{this.state.error.message}</p>
           <button className="px-md py-sm bg-primary text-on-primary rounded-xl font-label-md cursor-pointer" onClick={() => this.setState({ error: null })}>{t('errorBoundary.tryAgain')}</button>

@@ -6,11 +6,13 @@ import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Textarea } from '@/components/ui/textarea'
+import { Badge } from '@/components/ui/badge'
 
 export default function OPCTask() {
   const intl = useIntl()
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
-  const { tasks, agents, usage, respondPermission } = useApp()
+  const { tasks, agents, usage, permissionRequest, respondPermission } = useApp()
   const [revisionNote, setRevisionNote] = useState('')
   const [showRevisionInput, setShowRevisionInput] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<'approve' | 'rollback' | null>(null)
@@ -18,7 +20,6 @@ export default function OPCTask() {
 
   // Find the task by URL param, or the first in-progress task
   const task = (id ? tasks.find(t => t.id === id) : null) ?? tasks.find(t => t.status === 'in_progress' || t.status === 'running')
-  const hasRunningTasks = tasks.some(t => t.status === 'in_progress' || t.status === 'running' || t.status === 'pending')
   const taskId = task?.id ?? ''
 
   return (
@@ -35,7 +36,7 @@ export default function OPCTask() {
             {/* Agent Workflow */}
             <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
               <div className="flex items-center gap-2 mb-8">
-                <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
+                <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
                 <h3 className="font-headline-md text-[20px] font-bold text-on-surface">{t('opcTask.agentWorkflow')}</h3>
               </div>
 
@@ -54,10 +55,10 @@ export default function OPCTask() {
                           }`}>
                             {isActive ? (
                               <div className="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-md">
-                                <span className="material-symbols-outlined text-[20px]">smart_toy</span>
+                                <span className="material-symbols-outlined icon-md">smart_toy</span>
                               </div>
                             ) : (
-                              <span className="material-symbols-outlined text-[20px] text-on-surface-variant">smart_toy</span>
+                              <span className="material-symbols-outlined icon-md text-on-surface-variant">smart_toy</span>
                             )}
                           </div>
                           <span className={`font-label-sm text-[12px] ${isActive ? 'text-primary font-bold' : 'text-on-surface-variant'}`}>{agent.name}</span>
@@ -73,19 +74,19 @@ export default function OPCTask() {
             {task ? (
               <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
                 <div className="flex items-center gap-2 mb-6">
-                  <span className="material-symbols-outlined text-[20px] text-on-surface">description</span>
+                  <span className="material-symbols-outlined icon-md text-on-surface">description</span>
                   <h3 className="font-headline-md text-[20px] font-bold text-on-surface">{t('opcTask.taskDescription')}</h3>
                 </div>
                 <div className="space-y-sm">
                   <h4 className="font-body-lg font-bold text-on-surface">{task.title}</h4>
                   <p className="font-body-md text-on-surface-variant">{task.description ?? t('opcTask.noDescription')}</p>
                   <div className="flex items-center gap-md mt-md">
-                    <span className={`px-sm py-xs rounded-full font-label-sm text-[11px] font-bold uppercase tracking-wider ${
-                      task.status === 'completed' ? 'bg-tertiary/10 text-tertiary' :
-                      task.status === 'running' || task.status === 'in_progress' ? 'bg-primary/10 text-primary' :
-                      task.status === 'failed' ? 'bg-error/10 text-error' :
-                      'bg-surface-container text-on-surface-variant'
-                    }`}>{task.status}</span>
+                    <Badge variant={
+                      task.status === 'completed' ? 'tertiary' :
+                      task.status === 'running' || task.status === 'in_progress' ? 'primary' :
+                      task.status === 'failed' ? 'error' :
+                      'neutral'
+                    }>{task.status}</Badge>
                     {task.assignee ? <span className="font-label-sm text-on-surface-variant">{t('opcTask.assignedTo', { assignee: task.assignee })}</span> : null}
                     {task.priority ? <span className="font-label-sm text-on-surface-variant">{t('opcTask.priority', { priority: task.priority })}</span> : null}
                   </div>
@@ -93,7 +94,7 @@ export default function OPCTask() {
               </div>
             ) : (
               <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm text-center">
-                <span className="material-symbols-outlined text-[48px] text-outline-variant">task_alt</span>
+                <span className="material-symbols-outlined icon-2xl text-outline-variant">task_alt</span>
                 <p className="font-body-md text-on-surface-variant mt-md">{t('opcTask.noTaskSelected')}</p>
               </div>
             )}
@@ -102,7 +103,7 @@ export default function OPCTask() {
             <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
               <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[20px] text-on-surface">receipt_long</span>
+                  <span className="material-symbols-outlined icon-md text-on-surface">receipt_long</span>
                   <h3 className="font-headline-md text-[20px] font-bold text-on-surface">{t('opcTask.executionLog')}</h3>
                 </div>
                 <span className="bg-surface-container-low text-on-surface-variant font-label-sm text-[11px] px-3 py-1 rounded-full border border-outline-variant/20">{t('opcTask.agentsCount', { count: agents.length })}</span>
@@ -120,7 +121,7 @@ export default function OPCTask() {
                       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 relative z-10 md:ml-2 ${
                         isActive ? 'bg-primary text-on-primary shadow-sm ring-4 ring-primary/10' : 'border-2 border-outline-variant/40 bg-surface-container-lowest text-on-surface-variant'
                       }`}>
-                        <span className="material-symbols-outlined text-[16px]">smart_toy</span>
+                        <span className="material-symbols-outlined icon-sm">smart_toy</span>
                       </div>
                       <div className="flex-1 -mt-1">
                         <div className="flex justify-between items-start mb-1">
@@ -139,11 +140,11 @@ export default function OPCTask() {
             {/* Agent Messages (Phase D C3) */}
             <AgentMessagesPanel limit={50} />
 
-            {/* Human-in-the-Loop Review */}
-            {hasRunningTasks && (
+            {/* Human-in-the-Loop Review — only render when a permission request is actually pending */}
+            {permissionRequest !== null && (
               <div className="glass-card bg-surface-container-lowest/80 rounded-2xl p-xl border border-outline-variant/40 shadow-sm">
                 <div className="flex items-center gap-2 mb-6">
-                  <span className="material-symbols-outlined text-[20px] text-on-surface-variant">verified_user</span>
+                  <span className="material-symbols-outlined icon-md text-on-surface-variant">verified_user</span>
                   <h3 className="font-headline-md text-[20px] font-bold text-on-surface">{t('opcTask.humanInTheLoopReview')}</h3>
                   <span className="ml-auto w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
                 </div>
@@ -177,8 +178,8 @@ export default function OPCTask() {
 
                   {showRevisionInput === taskId && (
                     <div className="mt-sm flex flex-col gap-sm">
-                      <textarea
-                        className="w-full px-md py-sm rounded-xl border border-outline-variant/50 bg-surface-container-lowest text-body-sm text-on-surface resize-none focus:outline-none focus:border-primary transition-colors"
+                      <Textarea
+                        className="resize-none bg-surface-container-lowest border-outline-variant/50 text-body-sm text-on-surface"
                         rows={3}
                         placeholder={t('opcTask.revisionPlaceholder')}
                         value={revisionNote}
@@ -210,7 +211,7 @@ export default function OPCTask() {
             {/* Efficiency Metrics */}
             <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm flex flex-col gap-md">
               <div className="flex items-center gap-2 mb-2">
-                <span className="material-symbols-outlined text-[20px] text-primary">monitoring</span>
+                <span className="material-symbols-outlined icon-md text-primary">monitoring</span>
                 <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('opcTask.efficiencyMetrics')}</h3>
               </div>
 
@@ -250,17 +251,21 @@ export default function OPCTask() {
             {/* Active Tasks */}
             <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm flex flex-col gap-md">
               <div className="flex items-center gap-2 mb-2">
-                <span className="material-symbols-outlined text-[20px] text-primary">inventory_2</span>
+                <span className="material-symbols-outlined icon-md text-primary">inventory_2</span>
                 <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('opcTask.relatedTasks')}</h3>
               </div>
               {tasks.slice(0, 5).map(t => (
                 <Link key={t.id} to={`/opc/task/${t.id}`} className="border border-outline-variant/30 rounded-xl p-md flex items-start gap-md hover:border-primary/40 hover:bg-surface-container-lowest transition-colors cursor-pointer group focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:outline-none">
                   <div className="w-10 h-10 rounded-lg bg-surface-container flex items-center justify-center shrink-0 text-on-surface-variant group-hover:text-primary group-hover:bg-primary/10 transition-colors">
-                    <span className="material-symbols-outlined text-[20px]">task_alt</span>
+                    <span className="material-symbols-outlined icon-md">task_alt</span>
                   </div>
                   <div>
                     <div className="font-label-md text-[14px] font-bold text-on-surface mb-0.5 group-hover:text-primary transition-colors">{t.title}</div>
-                    <span className={`font-label-sm text-[11px] ${t.status === 'completed' ? 'text-tertiary' : t.status === 'in_progress' || t.status === 'running' ? 'text-primary' : 'text-on-surface-variant'}`}>{t.status}</span>
+                    <Badge variant={
+                      t.status === 'completed' ? 'tertiary' :
+                      t.status === 'in_progress' || t.status === 'running' ? 'primary' :
+                      'neutral'
+                    } size="sm">{t.status}</Badge>
                   </div>
                 </Link>
               ))}

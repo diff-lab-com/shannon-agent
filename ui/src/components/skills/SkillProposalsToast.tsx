@@ -40,7 +40,7 @@ export default function SkillProposalsToast({ onOpenReview }: SkillProposalsToas
     <div className="fixed bottom-4 right-4 z-50 animate-slide-in-from-bottom">
       <div className="bg-surface-container-lowest rounded-lg shadow-lg border border-outline-variant p-4 max-w-md">
         <div className="flex items-start gap-3">
-          <span className="material-symbols-outlined text-[24px] text-primary">lightbulb</span>
+          <span className="material-symbols-outlined icon-lg text-primary">lightbulb</span>
           <div className="flex-1">
             <h4 className="font-medium text-on-surface text-sm">
               {intl.formatMessage(

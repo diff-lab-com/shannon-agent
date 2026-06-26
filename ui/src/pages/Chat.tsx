@@ -10,6 +10,9 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Pagination } from '@/components/ui/pagination'
 import WelcomeState from '@/components/WelcomeState'
 import DiffDialog from '@/components/diff/DiffDialog'
+import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
+import { ArtifactProvider } from '@/components/artifact/ArtifactContext'
+import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
 import ChatInput from '@/components/chat/ChatInput'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import StreamingResponse from '@/components/chat/StreamingResponse'
@@ -118,6 +121,7 @@ export default function Chat() {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
   const [diffPath, setDiffPath] = useState<string | null>(null)
+  const [diffPaths, setDiffPaths] = useState<string[] | null>(null)
   const [attachedFiles, setAttachedFiles] = useState<string[]>([])
   const [pinnedIds, setPinnedIds] = useState<Set<string>>(new Set())
   const [sessionPage, setSessionPage] = useState(1)
@@ -326,6 +330,7 @@ export default function Chat() {
   }
 
   return (
+    <ArtifactProvider>
     <div className="flex-1 flex w-full h-full relative">
       {/* Left Sidebar - Session History */}
       <aside className="hidden md:flex w-[220px] border-r border-outline-variant/10 flex-col glass-panel shrink-0 bg-surface-container-lowest/40">
@@ -418,7 +423,7 @@ export default function Chat() {
                   </p>
                   {session.working_dir && (
                     <p className="text-label-xs text-outline font-mono truncate mt-[2px] flex items-center gap-[4px]" title={session.working_dir}>
-                      <span className="material-symbols-outlined text-[12px] opacity-70">folder</span>
+                      <span className="material-symbols-outlined icon-xs opacity-70">folder</span>
                       <span className="truncate">{formatDirBreadcrumb(session.working_dir)}</span>
                     </p>
                   )}
@@ -466,7 +471,7 @@ export default function Chat() {
             aria-expanded={contextPanelOpen}
             aria-pressed={contextPanelOpen}
           >
-            <span className="material-symbols-outlined text-[20px]">{contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}</span>
+            <span className="material-symbols-outlined icon-md">{contextPanelOpen ? 'right_panel_close' : 'right_panel_open'}</span>
           </button>
         </header>
 
@@ -520,7 +525,7 @@ export default function Chat() {
                     className="pb-lg"
                     style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vItem.start}px)` }}
                   >
-                    <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} />
+                    <MessageBubble message={msg} messageIndex={vItem.index} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} />
                   </div>
                 )
               })}
@@ -531,7 +536,7 @@ export default function Chat() {
             <div aria-label={t('chat.history.aria')}>
               {messages.map((msg, i) => (
                 <div key={`${msg.timestamp}-${i}`} className="pb-lg">
-                  <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} />
+                  <MessageBubble message={msg} messageIndex={i} onViewDiff={setDiffPath} onViewDiffMulti={setDiffPaths} />
                 </div>
               ))}
             </div>
@@ -755,7 +760,10 @@ export default function Chat() {
         </div>
       </aside>
       <DiffDialog open={diffPath !== null} filePath={diffPath} onClose={() => setDiffPath(null)} />
+      <DiffDialogMulti open={diffPaths !== null} filePaths={diffPaths ?? []} onClose={() => setDiffPaths(null)} />
+      <ArtifactPanel />
     </div>
+    </ArtifactProvider>
   )
 }
 

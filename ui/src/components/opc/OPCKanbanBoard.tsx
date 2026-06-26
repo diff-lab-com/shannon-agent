@@ -118,7 +118,7 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
         className="absolute right-1 top-1/2 -translate-y-1/2 w-6 h-6 bg-primary text-on-primary rounded-[4px] flex items-center justify-center hover:bg-primary/90 transition-colors"
         onClick={handleQuickTask}
       >
-        <span className="material-symbols-outlined text-[16px]">add</span>
+        <span className="material-symbols-outlined icon-sm">add</span>
       </Button>
     </div>
   )
@@ -250,7 +250,7 @@ function ActiveCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType
       <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary rounded-l-xl" />
       <div className="flex justify-between items-center mb-2 ml-1">
         <span className="font-label-sm text-[10px] font-bold text-primary tracking-wider">{task.id.slice(0, 8)}</span>
-        <span className="material-symbols-outlined text-[16px] text-primary">autorenew</span>
+        <span className="material-symbols-outlined icon-sm text-primary">autorenew</span>
       </div>
       <h4 className="font-label-md text-[15px] font-bold mb-4 leading-tight ml-1">{task.title}</h4>
       {task.assignee ? (
@@ -286,7 +286,7 @@ function DoneCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType<t
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[16px] text-tertiary">check_circle</span>
+          <span className="material-symbols-outlined icon-sm text-tertiary">check_circle</span>
           <span className="font-label-md text-[13px] text-on-surface">{task.title}</span>
         </div>
         <span className="font-label-sm text-[10px] text-on-surface-variant">{intl.formatMessage({ id: 'opc.kanban.done' })}</span>
@@ -309,7 +309,7 @@ function FailedCard({ task, intl, openTask }: { task: TaskItem; intl: ReturnType
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[16px] text-on-surface-variant">archive</span>
+          <span className="material-symbols-outlined icon-sm text-on-surface-variant">archive</span>
           <span className="font-label-md text-[13px] text-on-surface-variant line-through">{task.title}</span>
         </div>
         <span className="font-label-sm text-[10px] text-on-surface-variant uppercase tracking-wider">{intl.formatMessage({ id: 'opc.kanban.archived' })}</span>

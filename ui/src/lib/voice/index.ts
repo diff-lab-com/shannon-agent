@@ -1,0 +1,5 @@
+export * from './types'
+export { createVoiceProvider, defaultVoiceConfig } from './factory'
+export { createStubProvider } from './stubProvider'
+export { createWebSpeechProvider } from './webSpeechProvider'
+export { createRemoteProvider } from './remoteProvider'

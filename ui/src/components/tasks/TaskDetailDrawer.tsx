@@ -148,7 +148,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                 value={status}
                 onChange={e => setStatus(e.target.value)}
                 aria-label={t('tasks.taskDetailDrawer.status')}
-                className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
+                className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
               >
                 {STATUSES.map(s => (
                   <option key={s} value={s}>{s}</option>
@@ -175,7 +175,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                   value={priority}
                   onChange={e => setPriority(e.target.value)}
                   aria-label={t('tasks.taskDetailDrawer.priority')}
-                  className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
+                  className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
                 >
                   <option value="">{t('tasks.taskDetailDrawer.none')}</option>
                   {PRIORITIES.map(p => (
@@ -203,7 +203,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                     onChange={e => setAssignee(e.target.value)}
                     placeholder={t('tasks.taskDetailDrawer.assigneePlaceholder')}
                     aria-label={t('tasks.taskDetailDrawer.assignee')}
-                    className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
+                    className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
                   />
                   <datalist id="assignee-options">
                     {agentNames.map(n => (
@@ -227,7 +227,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                   value={dueDate}
                   onChange={e => setDueDate(e.target.value)}
                   aria-label={t('tasks.taskDetailDrawer.dueDate')}
-                  className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus:outline-none focus:border-primary"
+                  className="mt-xs w-full px-md py-xs rounded-lg border border-outline-variant/50 bg-surface-container-lowest font-body-md text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
                 />
               ) : (
                 <p className="font-body-md text-on-surface mt-xs">
@@ -332,7 +332,7 @@ export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetai
                   onClick={() => setEditing(true)}
                   className="px-md py-xs rounded-lg bg-primary/10 text-primary font-label-md hover:bg-primary/20 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                 >
-                  <span className="material-symbols-outlined text-[16px] align-middle mr-xs">edit</span>
+                  <span className="material-symbols-outlined icon-sm align-middle mr-xs">edit</span>
                   {t('tasks.taskDetailDrawer.edit')}
                 </button>
               )}

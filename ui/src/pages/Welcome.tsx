@@ -441,7 +441,7 @@ export default function Welcome() {
                       disabled={testing || !apiKey}
                       className="shrink-0 px-md py-xs rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary flex items-center gap-xs"
                     >
-                      {testing && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
+                      {testing && <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>}
                       {testing
                         ? intl.formatMessage({ id: 'welcome.testConnection.testing' })
                         : intl.formatMessage({ id: 'welcome.testConnection.button' })}

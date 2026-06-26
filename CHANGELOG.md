@@ -56,6 +56,156 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   three new keys added (en + zh-CN), and the untranslated
   `extensions.datasources.noInstalled` value in `zh-CN.json` corrected.
 
+## [Unreleased — Week D] — Plan Mode + Diff Preview + Voice/Artifact/Self-improve wire-ups
+
+### Features
+
+- **Plan Mode toggle (D4).** Dedicated `PlanModeToggle` in the chat
+  composer area; clicking it switches `approval_mode` to `plan` via
+  `api.configure`. When active, an "exit plan" banner sits above the
+  message list with a one-click return to the prior mode. 8 tests.
+  (`s2/week-d-diff-preview`)
+
+- **Diff Preview (D5).** Files-changed summary bar with file counts,
+  expand/collapse for each file, and "Review all" bulk action. Wired
+  into the existing file-diff endpoint. 7 tests.
+
+- **Voice Mode UI shell (C1/D1).** `MicButton` + animated `VoiceOrb`
+  + `useVoice` hook. In stub mode the hook returns a placeholder
+  transcript after `simulateLatencyMs`. Drop-in ready for a real STT
+  backend. 16 tests.
+
+- **Artifact Panel Phase 1 (C3/D2).** Detects HTML / SVG / mermaid /
+  long-markdown artifacts inside chat messages and surfaces them as
+  inline chips. Click a chip to open the side panel with Preview /
+  Code tabs, Copy, Export. 19 tests.
+
+- **Self-Improvement Phase 1 (C5/D6).** Tauri API stubs for
+  `list_skill_candidates`, `approve_skill_candidate`,
+  `reject_skill_candidate`, `list_agent_authored_skills`.
+  `AgentAuthoredBadge` + `SkillApprovalModal` primitives ready for
+  hook-up. 12 tests.
+
+- **Voice MicButton wire-up (E1).** Composer-integrated mic button
+  with idle / recording / processing states; orb animates above the
+  composer while recording.
+
+- **Skills page filter pill + AgentAuthoredBadge (E2).** Installed
+  skills section gains All / Curated / Agent-authored tabs with
+  counts; agent-authored rows show the badge and an `auto_fix` icon.
+  3 tests.
+
+- **SkillApprovalModal trigger (E3).** Advanced Settings → Skill
+  Extraction card now shows a pending-count badge and Review button
+  when candidates exist; clicking Review walks through the queue.
+  3 tests.
+
+- **Artifact Phase 2 renderers (F1).** `MermaidRenderer` uses a
+  sandboxed iframe with strict CSP (script-src limited to
+  `cdn.jsdelivr.net/npm/mermaid@11`) so diagrams render without
+  adding mermaid to the bundle. `DocumentRenderer` uses
+  `react-markdown` + `remark-gfm` + `rehype-sanitize` +
+  `rehype-highlight` with MD3-styled components. 6 tests.
+
+- **Artifact Phase 3 polish (F2).** Resizable panel (drag handle on
+  left edge, width persisted to `localStorage`); fullscreen toggle;
+  auto-open toggle (when on, new chips auto-open the panel on
+  mount); `Cmd/Ctrl+Shift+A` shortcut cycles through open artifacts.
+  6 tests.
+
+- **Pending-skill badge on Header bell (H1).** `usePendingSkillCandidates`
+  hook polls every 30 s. When the queue is non-empty, the bell shows
+  a red count badge and clicking it opens `SkillApprovalModal`
+  directly; with an empty queue the bell falls back to the existing
+  Triage navigation. 3 tests.
+
+- **Voice Phase 2 — Web Speech API (B1).** `useVoice` now prefers
+  `window.SpeechRecognition` / `webkitSpeechRecognition` when available,
+  falling back to the stub implementation when the browser doesn't
+  expose the API (e.g. jsdom tests). Adds `supported` and surfaces
+  recognition errors. 3 new tests.
+
+- **Artifact code-tab syntax highlighting (B2).** Code tab in the
+  ArtifactPanel now uses a shared `CodeBlock` component (highlight.js
+  core, 12 languages registered). Languages are resolved from artifact
+  kind (HTML/SVG/mermaid/markdown) or auto-detected. 5 tests.
+
+- **Plan Mode enhancements (B3).** Banner gets a dismiss button, and
+  `Cmd/Ctrl+Shift+P` globally toggles plan mode on or off. 5 new tests.
+
+- **Diff Preview syntax highlighting (B4).** `DiffViewer` now renders
+  per-line highlighted HTML using a shared hljs setup. Language is
+  resolved from the diff's language hint plus the file extension
+  (covers TypeScript, JavaScript, Python, Rust, Bash, YAML, Markdown,
+  JSON, HTML, XML, CSS). Open highlight spans carry across newlines so
+  multi-line constructs (block comments, template literals) stay
+  colored on every line. 10 new tests in `diff-highlight.test.ts`.
+
+- **Keyboard shortcuts help overlay (B5).** Rebuild of the `?` overlay:
+  grouped into Global / Navigation / Chat / Diff Review sections,
+  adds an inline search input, and surfaces the new Plan Mode toggle,
+  Artifact cycle, and per-hunk diff review shortcuts. 11 tests.
+
+- **Long-list pagination for Skills catalog (B6).** New
+  `usePagedVisible` hook paginates client-side lists with a "show
+  more" affordance. Applied to the Skills catalog so 24 cards show
+  initially, with the rest loaded on demand. 6 hook tests.
+
+- **Skill candidate storage (C1).** New
+  `commands_skill_candidates.rs` module backs the four Tauri commands
+  the UI was already calling (`list_skill_candidates`,
+  `approve_skill_candidate`, `reject_skill_candidate`,
+  `list_agent_authored_skills`). Candidates persist as JSONL at
+  `~/.shannon/desktop/skill-candidates.jsonl`; promoted skills land at
+  `~/.shannon/skills/agent-authored/<slug>.json`. 5 Rust tests.
+
+- **Pattern detection daily cron (C2).** New
+  `skill_pattern_detection.rs` module + `trigger_skill_pattern_detection`
+  Tauri command. Scans `~/.shannon/sessions/*.json` modified in the
+  last N days, computes a normalized signature per tool_use block
+  (tool name + sorted arg keys), and emits SkillCandidate entries for
+  signatures seen in 2+ sessions with 3+ total occurrences. Defaults
+  to a 7-day lookback. Can be wired into the scheduled-tasks layer
+  for automatic daily runs. 6 Rust tests.
+
+- **Self-improvement Phase 3 — live catalog refresh (D6).**
+  `approve_skill_candidate` and `reject_skill_candidate` now emit a
+  `skill-catalog-changed` Tauri event. The Skills tab subscribes via
+  `useTauriEvent` and re-pulls its installed + agent-authored lists,
+  so approving a candidate no longer requires a page reload to see it.
+
+- **Self-improvement Phase 4 — LLM skill refinement (D6).** New
+  `refine_skill_candidate(id)` Tauri command calls the configured
+  LLM with a skill-procedure refinement prompt, stores the rewritten
+  steps back into the candidate, and marks `refined=true`. Falls
+  back to the original procedure on LLM error. `SkillCandidate` gains
+  a backwards-compatible `refined:bool` field (`#[serde(default)]`).
+
+- **Self-improvement Phase 5 — privacy opt-out + docs (D6).**
+  New `skill_detection_enabled` config flag (default: true). When
+  disabled, `trigger_skill_pattern_detection` returns 0 without
+  scanning sessions. Toggle surfaced in Settings → Advanced.
+  `signature_of` now documented as key-only by design — no file
+  paths, tokens, or argument values ever leave the session log.
+
+- **Voice Phase 3 multi-provider scaffold (D2).** New
+  `lib/voice/` module with a provider abstraction:
+  `VoiceProvider` interface + three concrete providers
+  (`stub`, `webspeech`, `remote`) + a factory that picks one based on
+  runtime support. The remote provider posts audio blobs to a
+  configurable endpoint with optional bearer auth — ready for a
+  Whisper / Deepgram / AssemblyAI backend. 15 tests. useVoice stays
+  on Web Speech for now; a follow-up will refactor it to consume
+  this abstraction.
+
+### Documentation
+
+- **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6
+  Self-Improvement Loop — three planning documents under
+  `claudedocs/` describing scope, phasing, and explicit deferrals
+  for multi-day / cross-repo work.
+
+
 ## [Unreleased — P0 PM review fixes] — Demo mode + i18n + Welcome rendering
 
 ### Fixes

@@ -195,7 +195,7 @@ function InstalledSection({
         <LoadingState size="sm" label={t("extensions.mcp.loading")} />
       ) : servers.length === 0 ? (
         <div className="border border-dashed border-outline-variant/40 rounded-2xl p-lg text-center bg-surface-container-low/30">
-          <span className="material-symbols-outlined text-[32px] text-on-surface-variant mb-xs inline-block">
+          <span className="material-symbols-outlined icon-xl text-on-surface-variant mb-xs inline-block">
             dns
           </span>
           <div className="font-bold text-label-md text-on-surface mb-xs">

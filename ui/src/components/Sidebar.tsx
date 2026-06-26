@@ -108,7 +108,7 @@ function SessionsSection({ sessions, currentSessionId, switchSession, closeMobil
         onChange={e => setQuery(e.target.value)}
         placeholder={intl.formatMessage({ id: 'sidebar.sessions.search.placeholder' })}
         aria-label={intl.formatMessage({ id: 'sidebar.sessions.search.aria' })}
-        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary"
+        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-outline-variant focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
       />
       {visible.length === 0 ? (
         <div className="px-2 py-3 text-center font-label-sm text-label-sm text-outline-variant">
@@ -262,7 +262,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         className="mb-xs w-full py-3 px-4 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
         onClick={createSession}
       >
-        <span className="material-symbols-outlined text-[20px]">add</span>
+        <span className="material-symbols-outlined icon-md">add</span>
         <span>{intl.formatMessage({ id: 'nav.newChat' })}</span>
       </Button>
       <Button
@@ -272,7 +272,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         className="mb-lg w-full py-2 px-3 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-label-md flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
         onClick={createSessionInWorktree}
       >
-        <span className="material-symbols-outlined text-[16px]">account_tree</span>
+        <span className="material-symbols-outlined icon-sm">account_tree</span>
         <span>{intl.formatMessage({ id: 'sidebar.worktree.new' })}</span>
       </Button>
 
@@ -330,7 +330,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
               <span className="material-symbols-outlined">grid_view</span>
               <span>{intl.formatMessage({ id: 'nav.extensions' })}</span>
             </div>
-            <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: extensionsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+            <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: extensionsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
           </Button>
 
           {extensionsOpen && (
@@ -375,7 +375,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
                 {intl.formatMessage({ id: 'nav.experiment' })}
               </span>
             </div>
-            <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: opcOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+            <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: opcOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
           </Button>
 
           {opcOpen && (
@@ -424,7 +424,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
             <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>settings</span>
             <span>{intl.formatMessage({ id: 'nav.settings' })}</span>
           </div>
-          <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: settingsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+          <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: settingsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
         </Button>
 
         {settingsOpen && (

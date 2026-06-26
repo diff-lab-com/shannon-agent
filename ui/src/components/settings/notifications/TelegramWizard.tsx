@@ -137,7 +137,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
           value={botToken}
           onChange={(e) => setBotToken(e.target.value)}
           placeholder="123456789:ABC..."
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.telegram.botTokenHint')}
@@ -170,7 +170,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
           value={triggerWord}
           onChange={(e) => setTriggerWord(e.target.value)}
           placeholder="shannon"
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.telegram.triggerWordHint')}
@@ -186,7 +186,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
           value={allowedChats}
           onChange={(e) => setAllowedChats(e.target.value)}
           placeholder="-1001234567890, 123456789"
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.telegram.allowedChatsHint')}

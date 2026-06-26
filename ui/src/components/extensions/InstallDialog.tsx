@@ -260,7 +260,7 @@ export default function InstallDialog({
               onClick={handleOAuthConnect}
               className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-xs cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[16px]">link</span>
+              <span className="material-symbols-outlined icon-sm">link</span>
               <FormattedMessage id="extensions.installDialog.connect" />
             </button>
           </div>
@@ -286,7 +286,7 @@ export default function InstallDialog({
               <span className="font-body-md font-mono text-on-surface">{ref_}</span>
               {isFloatingBranch && (
                 <span className="inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-tertiary-container/50 text-on-tertiary-container text-label-xs font-bold">
-                  <span className="material-symbols-outlined text-[12px]">warning</span>
+                  <span className="material-symbols-outlined icon-xs">warning</span>
                   {t("extensions.installDialog.floatingBranch")}
                 </span>
               )}
@@ -302,7 +302,7 @@ export default function InstallDialog({
               disabled={installing}
               className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-xs cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[16px]">
+              <span className="material-symbols-outlined icon-sm">
                 {installing ? "progress_activity" : "download"}
               </span>
               {installing ? (
@@ -342,7 +342,7 @@ export default function InstallDialog({
               disabled={installing || !spec}
               className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-xs cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[16px]">
+              <span className="material-symbols-outlined icon-sm">
                 {installing ? "progress_activity" : "download"}
               </span>
               {installing ? (
@@ -372,7 +372,7 @@ export default function InstallDialog({
             onClick={handleOpenTab}
             className="px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 inline-flex items-center justify-center gap-xs cursor-pointer"
           >
-            <span className="material-symbols-outlined text-[16px]">tab</span>
+            <span className="material-symbols-outlined icon-sm">tab</span>
             <FormattedMessage id="extensions.installDialog.openTab" />
           </button>
         ) : null}
@@ -398,7 +398,7 @@ export default function InstallDialog({
             id="install-dialog-title"
             className="font-headline-md text-[18px] font-bold text-on-surface flex items-center gap-sm"
           >
-            <span className="material-symbols-outlined text-[20px] text-primary">
+            <span className="material-symbols-outlined icon-md text-primary">
               download
             </span>
             <FormattedMessage

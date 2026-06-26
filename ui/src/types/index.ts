@@ -184,6 +184,7 @@ export interface DesktopConfig {
   skill_loop_enabled?: boolean
   skill_loop_min_duration_secs?: number
   skill_loop_min_tool_calls?: number
+  skill_detection_enabled?: boolean
 }
 
 export interface SendMessageResponse {

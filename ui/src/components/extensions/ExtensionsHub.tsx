@@ -122,7 +122,7 @@ export default function ExtensionsHub() {
                       <p className="text-label-sm font-label-sm text-on-surface-variant truncate">{skill.description || intl.formatMessage({ id: 'extensions.hub.triggerFallback' }, { trigger: skill.trigger })}</p>
                     </div>
                     <span className="px-sm py-xs bg-surface-container-low rounded-full text-label-sm font-label-sm text-on-surface-variant">{skill.source}</span>
-                    <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{selectedSkill?.name === skill.name ? 'expand_less' : 'expand_more'}</span>
+                    <span className="material-symbols-outlined icon-sm text-on-surface-variant">{selectedSkill?.name === skill.name ? 'expand_less' : 'expand_more'}</span>
                   </div>
                 ))}
                 {sortedSkills(cat).map(skill => selectedSkill?.name === skill.name && (

@@ -124,6 +124,31 @@
   --text-display-lg--line-height: 1.1;
   --text-display-lg--letter-spacing: -0.02em;
   --text-display-lg--font-weight: 700;
+
+  /* Elevation scale — e1=card-rest, e2=card-hover, e3=dropdown,
+     e4=drawer, e5=modal. Authors should prefer these over raw shadow-* */
+  --shadow-e1: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-e2: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-e3: 0 10px 15px -3px rgb(0 0 0 / 0.10), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+  --shadow-e4: 0 20px 25px -5px rgb(0 0 0 / 0.12), 0 8px 10px -6px rgb(0 0 0 / 0.05);
+  --shadow-e5: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+
+  /* Motion duration tokens */
+  --duration-fast: 100ms;
+  --duration-normal: 160ms;
+  --duration-slow: 240ms;
+  --duration-slower: 400ms;
+}
+
+@layer utilities {
+  /* Icon size scale — semantic utility classes so call sites stop
+     hard-coding text-[12px] / text-[16px] / text-[20px] etc. */
+  .icon-xs { font-size: 12px; }
+  .icon-sm { font-size: 16px; }
+  .icon-md { font-size: 20px; }
+  .icon-lg { font-size: 24px; }
+  .icon-xl { font-size: 32px; }
+  .icon-2xl { font-size: 48px; }
 }
 
 /* Tailwind v4 ships --container-2xl/3xl/4xl/5xl/6xl/7xl defaults but
@@ -202,7 +227,11 @@
   textarea:focus-visible,
   [role="button"]:focus-visible,
   [role="menuitem"]:focus-visible,
+  [role="menuitemcheckbox"]:focus-visible,
+  [role="menuitemradio"]:focus-visible,
   [role="tab"]:focus-visible,
+  [role="option"]:focus-visible,
+  [role="listitem"]:focus-visible,
   summary:focus-visible {
     outline: 2px solid var(--color-primary);
     outline-offset: 2px;

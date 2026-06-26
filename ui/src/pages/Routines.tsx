@@ -126,11 +126,11 @@ export default function Routines() {
 
       {loading ? (
         <div className="flex items-center justify-center py-xl">
-          <span className="material-symbols-outlined text-[32px] text-primary animate-spin">progress_activity</span>
+          <span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span>
         </div>
       ) : routines.length === 0 ? (
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-xl text-center">
-          <span className="material-symbols-outlined text-[48px] text-outline-variant block mb-sm">bolt</span>
+          <span className="material-symbols-outlined icon-2xl text-outline-variant block mb-sm">bolt</span>
           <p className="font-headline-md text-on-surface mb-xs">{t('routines.empty.title')}</p>
           <p className="font-body-sm text-on-surface-variant">{t('routines.empty.description')}</p>
         </div>
@@ -278,7 +278,7 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
           disabled={saving || !form.name.trim() || !form.command.trim()}
           className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-sm"
         >
-          {saving && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
+          {saving && <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>}
           {saving ? t('routines.form.saving') : t('routines.form.create')}
         </button>
       </div>

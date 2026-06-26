@@ -28,7 +28,7 @@ function StatusPill({ status }: { status: string }) {
   const badge = statusBadge(status)
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold ${badge.bg}`}>
-      <span className="material-symbols-outlined text-[12px]">{badge.icon}</span>
+      <span className="material-symbols-outlined icon-xs">{badge.icon}</span>
       {badge.label}
     </span>
   )
@@ -136,7 +136,7 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
                 {row.token_usage != null ? (
                   <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
                 ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
-                <span className={`material-symbols-outlined text-[16px] text-on-surface-variant transition-transform ${isExpanded ? 'rotate-180' : ''}`}>expand_more</span>
+                <span className={`material-symbols-outlined icon-sm text-on-surface-variant transition-transform ${isExpanded ? 'rotate-180' : ''}`}>expand_more</span>
               </button>
               {isExpanded ? (
                 <div className="px-md pb-md border-t border-outline-variant/10">

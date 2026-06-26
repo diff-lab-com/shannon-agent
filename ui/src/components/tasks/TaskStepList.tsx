@@ -42,7 +42,7 @@ export default function TaskStepList({ taskId, active = true }: TaskStepListProp
     <div className="flex flex-col gap-xs">
       {state.latestRetry && (
         <div className="flex items-center gap-sm p-sm bg-warning/10 border border-warning/20 rounded-lg font-label-sm text-warning">
-          <span className="material-symbols-outlined text-[16px]">replay</span>
+          <span className="material-symbols-outlined icon-sm">replay</span>
           <span>
             {intl.formatMessage(
               { id: 'tasks.steps.retrying' },

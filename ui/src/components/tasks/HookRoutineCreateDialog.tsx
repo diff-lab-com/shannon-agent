@@ -103,7 +103,7 @@ export default function HookRoutineCreateDialog({ open, onClose, onCreated }: Ho
       >
         <div className="flex items-center justify-between">
           <h2 id="hook-routine-create-title" className="font-headline-md text-[18px] font-bold text-on-surface flex items-center gap-sm">
-            <span className="material-symbols-outlined text-[20px] text-primary">add_link</span>
+            <span className="material-symbols-outlined icon-md text-primary">add_link</span>
             {t('tasks.hookRoutineCreateDialog.title')}
           </h2>
           <button

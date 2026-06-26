@@ -71,6 +71,9 @@ importers:
       diff:
         specifier: ^9.0.0
         version: 9.0.0
+      highlight.js:
+        specifier: ^11.11.1
+        version: 11.11.1
       lucide-react:
         specifier: ^0.546.0
         version: 0.546.0(react@19.2.7)

@@ -201,7 +201,7 @@ export default function Featured() {
                   >
                     {isBusy ? (
                       <>
-                        <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                        <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>
                         {vendor.install_kind.type === "oauth_remote"
                           ? t('extensions.featured.authorizing')
                           : t('extensions.featured.installing')}

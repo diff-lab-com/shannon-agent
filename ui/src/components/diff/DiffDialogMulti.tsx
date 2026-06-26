@@ -225,7 +225,7 @@ export default function DiffDialogMulti({ open, filePaths, onClose }: DiffDialog
       >
         <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
           <div className="flex items-center gap-md min-w-0">
-            <span className="material-symbols-outlined text-[20px] text-on-surface-variant">difference</span>
+            <span className="material-symbols-outlined icon-md text-on-surface-variant">difference</span>
             <h3 className="font-headline-md text-on-surface truncate">
               {intl.formatMessage({ id: 'diff.multi.title' }, { count: filePaths.length })}
             </h3>

@@ -169,7 +169,7 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
       >
         <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
           <div className="flex items-center gap-md min-w-0">
-            <span className="material-symbols-outlined text-[20px] text-on-surface-variant">difference</span>
+            <span className="material-symbols-outlined icon-md text-on-surface-variant">difference</span>
             <h3 className="font-headline-md text-on-surface truncate">{intl.formatMessage({ id: 'diff.dialog.title' })}</h3>
             {filePath ? (
               <code className="font-label-sm text-on-surface-variant bg-surface-container-low px-sm py-xs rounded truncate">{filePath}</code>

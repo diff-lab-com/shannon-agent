@@ -102,11 +102,11 @@ export default function Hooks() {
 
       {loading ? (
         <div className="flex items-center justify-center py-xl">
-          <span className="material-symbols-outlined text-[32px] text-primary animate-spin">progress_activity</span>
+          <span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span>
         </div>
       ) : filtered.length === 0 ? (
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-xl text-center">
-          <span className="material-symbols-outlined text-[48px] text-outline-variant block mb-sm">search_off</span>
+          <span className="material-symbols-outlined icon-2xl text-outline-variant block mb-sm">search_off</span>
           <p className="font-headline-md text-on-surface mb-xs">{t('hooks.empty.title')}</p>
           <p className="font-body-sm text-on-surface-variant">{t('hooks.empty.description')}</p>
         </div>

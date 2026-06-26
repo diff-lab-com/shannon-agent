@@ -81,7 +81,7 @@ export default function HookTaskPipeline() {
     <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm flex flex-col gap-md">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-sm">
-          <span className="material-symbols-outlined text-[20px] text-on-surface">conversion_path</span>
+          <span className="material-symbols-outlined icon-md text-on-surface">conversion_path</span>
           <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('tasks.hookTaskPipeline.title')}</h3>
           {routines.length > 0 ? (
             <span className="font-label-sm text-[11px] text-on-surface-variant bg-surface-container-low px-xs py-1 rounded-full">
@@ -122,7 +122,7 @@ export default function HookTaskPipeline() {
         <LoadingState size="sm" label={t('tasks.hookTaskPipeline.loading')} />
       ) : routines.length === 0 ? (
         <div className="text-center py-lg">
-          <span className="material-symbols-outlined text-[32px] text-on-surface-variant/40 block mb-sm">link_off</span>
+          <span className="material-symbols-outlined icon-xl text-on-surface-variant/40 block mb-sm">link_off</span>
           <p className="text-body-sm text-on-surface-variant">
             {t('tasks.hookTaskPipeline.empty')}
           </p>
@@ -145,7 +145,7 @@ export default function HookTaskPipeline() {
                 }`}
               >
                 <span className={`inline-flex items-center gap-1 px-xs py-1 rounded-full border font-label-sm text-[10px] font-bold uppercase tracking-wide ${b.tone}`}>
-                  <span className="material-symbols-outlined text-[12px]">{b.icon}</span>
+                  <span className="material-symbols-outlined icon-xs">{b.icon}</span>
                   {b.label}
                 </span>
                 <div className="flex-1 min-w-0">

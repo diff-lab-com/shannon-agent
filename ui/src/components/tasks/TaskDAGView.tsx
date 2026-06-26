@@ -128,7 +128,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
     return (
       <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
         <div className="flex items-center gap-2 mb-md">
-          <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
+          <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
           <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.dag.title')}</h3>
         </div>
         <p className="text-body-sm text-on-surface-variant text-center py-lg">
@@ -142,7 +142,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
     <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
       <div className="flex items-center justify-between mb-md">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
+          <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
           <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.dag.title')}</h3>
         </div>
         <span className="text-label-sm text-on-surface-variant">

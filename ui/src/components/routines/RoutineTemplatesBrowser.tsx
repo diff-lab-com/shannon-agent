@@ -106,7 +106,7 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             aria-label={t('routines.templates.filter.ariaLabel')}
-            className="px-md py-xs rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="px-md py-xs rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             {categories.map((c) => (
               <option key={c} value={c}>

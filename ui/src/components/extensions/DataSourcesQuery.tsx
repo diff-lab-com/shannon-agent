@@ -61,7 +61,7 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
     return (
       <div className="p-lg max-w-5xl mx-auto">
         <div className="text-center py-3xl text-on-surface-variant text-body-md">
-          <span className="material-symbols-outlined text-[48px] text-outline mb-md">database_off</span>
+          <span className="material-symbols-outlined icon-2xl text-outline mb-md">database_off</span>
           <p className="mb-md">{t('extensions.datasources.query.noDataSourcesInstalled')}</p>
           {onSwitchToAdapters && (
             <button
@@ -98,7 +98,7 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
             id="dataSourceSelect"
             value={selectedSlug}
             onChange={(e) => setSelectedSlug(e.target.value)}
-            className="w-full px-sm py-sm rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-md focus:outline-none focus:border-primary"
+            className="w-full px-sm py-sm rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-md focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <option value="">{t('extensions.datasources.query.selectSourcePlaceholder')}</option>
             {installed.map((source) => (
@@ -119,7 +119,7 @@ export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAda
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('extensions.datasources.query.queryPlaceholder')}
-            className="w-full px-sm py-sm rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-md focus:outline-none focus:border-primary"
+            className="w-full px-sm py-sm rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-md focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </div>
 
@@ -200,7 +200,7 @@ function ResultCard({ item }: { item: DataSourceItem }) {
             rel="noreferrer"
             className="text-label-xs px-sm py-xs rounded-lg bg-primary-container/20 text-on-primary-container font-bold hover:bg-primary-container/40 flex items-center gap-xs"
           >
-            <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+            <span className="material-symbols-outlined icon-sm">open_in_new</span>
             {t('extensions.datasources.query.openLink')}
           </a>
         )}
@@ -212,11 +212,11 @@ function ResultCard({ item }: { item: DataSourceItem }) {
 
       <div className="flex items-center gap-md text-label-xs text-on-surface-variant">
         <div className="flex items-center gap-xs">
-          <span className="material-symbols-outlined text-[16px]">category</span>
+          <span className="material-symbols-outlined icon-sm">category</span>
           <span>{item.kind}</span>
         </div>
         <div className="flex items-center gap-xs">
-          <span className="material-symbols-outlined text-[16px]">schedule</span>
+          <span className="material-symbols-outlined icon-sm">schedule</span>
           <span>{formatDate(item.updated_at)}</span>
         </div>
       </div>

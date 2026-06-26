@@ -123,7 +123,7 @@ export default function TaskCalendarView({
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-md">
                         <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                          <span className="material-symbols-outlined text-[24px]">task_alt</span>
+                          <span className="material-symbols-outlined icon-lg">task_alt</span>
                         </div>
                         <div>
                           <h3 className="font-body-lg font-semibold text-on-surface group-hover:text-primary transition-colors">{task.title}</h3>
