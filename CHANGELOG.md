@@ -151,6 +151,14 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   more" affordance. Applied to the Skills catalog so 24 cards show
   initially, with the rest loaded on demand. 6 hook tests.
 
+- **Skill candidate storage (C1).** New
+  `commands_skill_candidates.rs` module backs the four Tauri commands
+  the UI was already calling (`list_skill_candidates`,
+  `approve_skill_candidate`, `reject_skill_candidate`,
+  `list_agent_authored_skills`). Candidates persist as JSONL at
+  `~/.shannon/desktop/skill-candidates.jsonl`; promoted skills land at
+  `~/.shannon/skills/agent-authored/<slug>.json`. 5 Rust tests.
+
 ### Documentation
 
 - **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6

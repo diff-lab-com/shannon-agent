@@ -1,0 +1,309 @@
+//! Skill-candidate commands — recurring-pattern detection surface for the
+//! self-improvement loop (D6 Phase 2).
+//!
+//! Candidates represent potential skills detected by analyzing recurring
+//! tool-call patterns across sessions. They are persisted as JSONL at
+//! `~/.shannon/desktop/skill-candidates.jsonl`. The detection cron (C2,
+//! `automation_commands.rs`) writes here; this module surfaces them to the
+//! UI plus handles approve / reject.
+//!
+//! Approving a candidate promotes it to an agent-authored skill at
+//! `~/.shannon/skills/agent-authored/<slug>.json` and removes the candidate.
+//! Rejecting just removes the candidate.
+
+use std::path::PathBuf;
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCandidate {
+    pub id: String,
+    pub detected_at: String,
+    pub occurrence_count: u32,
+    pub example_session_ids: Vec<String>,
+    pub proposed_name: String,
+    pub proposed_trigger: String,
+    pub procedure: Vec<String>,
+    pub source_tool_calls: Vec<SourceToolCall>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceToolCall {
+    pub tool: String,
+    pub args_summary: HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentAuthoredSkill {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub trigger: String,
+    pub procedure: Vec<String>,
+    pub created_at: String,
+    pub originating_sessions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentAuthoredSkillEdits {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub trigger: Option<String>,
+    #[serde(default)]
+    pub procedure: Option<Vec<String>>,
+}
+
+fn candidates_file() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let dir = home.join(".shannon").join("desktop");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+    Ok(dir.join("skill-candidates.jsonl"))
+}
+
+fn agent_authored_dir() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    let dir = home.join(".shannon").join("skills").join("agent-authored");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+fn load_candidates() -> Result<Vec<SkillCandidate>, String> {
+    let path = candidates_file()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let contents = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let mut out = Vec::new();
+    for (lineno, line) in contents.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<SkillCandidate>(trimmed) {
+            Ok(c) => out.push(c),
+            Err(e) => return Err(format!("candidates:{}: parse error: {e}", lineno + 1)),
+        }
+    }
+    Ok(out)
+}
+
+fn save_candidates(candidates: &[SkillCandidate]) -> Result<(), String> {
+    let path = candidates_file()?;
+    let mut out = String::new();
+    for c in candidates {
+        let line = serde_json::to_string(c).map_err(|e| format!("serialize: {e}"))?;
+        out.push_str(&line);
+        out.push('\n');
+    }
+    std::fs::write(&path, out).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+fn slugify(input: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if ch == '-' || ch.is_whitespace() || ch == '_' {
+            if !prev_dash && !out.is_empty() {
+                out.push('-');
+                prev_dash = true;
+            }
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+/// Take an optional String, trim it, and return Some(String) only when it
+/// contains at least one non-whitespace character.
+fn non_empty(s: &Option<String>) -> Option<String> {
+    s.as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[tauri::command]
+pub async fn list_skill_candidates() -> Result<Vec<SkillCandidate>, String> {
+    load_candidates()
+}
+
+#[tauri::command]
+pub async fn approve_skill_candidate(
+    id: String,
+    edits: Option<AgentAuthoredSkillEdits>,
+) -> Result<AgentAuthoredSkill, String> {
+    let mut candidates = load_candidates()?;
+    let idx = candidates
+        .iter()
+        .position(|c| c.id == id)
+        .ok_or_else(|| format!("Candidate {id} not found"))?;
+    let candidate = candidates.remove(idx);
+    save_candidates(&candidates)?;
+
+    let name = edits
+        .as_ref()
+        .and_then(|e| non_empty(&e.name))
+        .unwrap_or(candidate.proposed_name);
+    let trigger = edits
+        .as_ref()
+        .and_then(|e| non_empty(&e.trigger))
+        .unwrap_or(candidate.proposed_trigger);
+    let procedure = edits
+        .as_ref()
+        .and_then(|e| e.procedure.clone())
+        .filter(|p| !p.is_empty())
+        .unwrap_or(candidate.procedure);
+    let description = edits
+        .as_ref()
+        .and_then(|e| non_empty(&e.description))
+        .unwrap_or_else(|| format!("Auto-detected skill from {} recurring session(s)", candidate.occurrence_count));
+
+    let slug = slugify(&name);
+    if slug.is_empty() {
+        return Err("Skill name must contain alphanumeric characters".into());
+    }
+    let skill = AgentAuthoredSkill {
+        id: format!("agent-{slug}"),
+        name,
+        description,
+        trigger,
+        procedure,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        originating_sessions: candidate.example_session_ids.clone(),
+    };
+
+    let dir = agent_authored_dir()?;
+    let path = dir.join(format!("{slug}.json"));
+    let json = serde_json::to_string_pretty(&skill).map_err(|e| format!("serialize skill: {e}"))?;
+    std::fs::write(&path, json).map_err(|e| format!("write {}: {e}", path.display()))?;
+
+    Ok(skill)
+}
+
+#[tauri::command]
+pub async fn reject_skill_candidate(id: String) -> Result<(), String> {
+    let mut candidates = load_candidates()?;
+    let before = candidates.len();
+    candidates.retain(|c| c.id != id);
+    if candidates.len() == before {
+        return Err(format!("Candidate {id} not found"));
+    }
+    save_candidates(&candidates)
+}
+
+#[tauri::command]
+pub async fn list_agent_authored_skills() -> Result<Vec<AgentAuthoredSkill>, String> {
+    let dir = agent_authored_dir()?;
+    let mut out = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(format!("read {}: {e}", dir.display())),
+    };
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("readdir: {e}"))?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        match serde_json::from_str::<AgentAuthoredSkill>(&contents) {
+            Ok(skill) => out.push(skill),
+            Err(_) => continue,
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Append a new candidate (used by the C2 cron when it detects a pattern).
+/// Public so the automation module can call it without going through Tauri.
+pub fn append_candidate(candidate: SkillCandidate) -> Result<(), String> {
+    let mut current = load_candidates()?;
+    current.push(candidate);
+    save_candidates(&current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    /// Use a throwaway HOME so tests don't touch the user's real ~/.shannon.
+    /// We can't easily override `dirs::home_dir()` for the production code,
+    /// so instead we verify the slug / serde layer that doesn't touch disk.
+    #[test]
+    fn slugify_handles_spaces_punctuation_and_case() {
+        assert_eq!(slugify("My Cool Skill"), "my-cool-skill");
+        assert_eq!(slugify("UPPER-case_Test!"), "upper-case-test");
+        assert_eq!(slugify("    leading and trailing   "), "leading-and-trailing");
+        assert_eq!(slugify("---only-dashes---"), "only-dashes");
+        assert_eq!(slugify(" ironic 😎 mixed "), "ironic-mixed");
+    }
+
+    #[test]
+    fn slugify_returns_empty_for_no_alphanumeric() {
+        assert_eq!(slugify("😱🔥"), "");
+        assert_eq!(slugify("    "), "");
+    }
+
+    #[test]
+    fn candidate_round_trip_json() {
+        let candidate = SkillCandidate {
+            id: "test-1".into(),
+            detected_at: "2026-06-26T19:00:00Z".into(),
+            occurrence_count: 3,
+            example_session_ids: vec!["s1".into(), "s2".into()],
+            proposed_name: "Daily report".into(),
+            proposed_trigger: "user says 'daily report'".into(),
+            procedure: vec!["run query".into(), "send to slack".into()],
+            source_tool_calls: vec![],
+        };
+        let json = serde_json::to_string(&candidate).expect("serialize");
+        let parsed: SkillCandidate = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed.id, "test-1");
+        assert_eq!(parsed.occurrence_count, 3);
+        assert_eq!(parsed.example_session_ids.len(), 2);
+    }
+
+    #[test]
+    fn agent_authored_skill_serialization_includes_required_fields() {
+        let skill = AgentAuthoredSkill {
+            id: "agent-daily-report".into(),
+            name: "Daily report".into(),
+            description: "Runs query and posts to Slack".into(),
+            trigger: "user says 'daily report'".into(),
+            procedure: vec!["step 1".into()],
+            created_at: "2026-06-26T19:00:00Z".into(),
+            originating_sessions: vec!["s1".into()],
+        };
+        let json = serde_json::to_string(&skill).expect("serialize");
+        for field in ["agent-daily-report", "Daily report", "Runs query", "step 1", "originating_sessions"] {
+            assert!(json.contains(field), "expected {field} in JSON: {json}");
+        }
+    }
+
+    /// Verify candidates_file path resolves under $HOME/.shannon/desktop.
+    /// Skip if HOME isn't set (CI edge cases).
+    #[test]
+    fn candidates_file_path_under_shannon() {
+        if env::var_os("HOME").is_none() && env::var_os("USERPROFILE").is_none() {
+            return;
+        }
+        let path = candidates_file().expect("path");
+        let components: Vec<_> = path.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+        assert!(components.iter().any(|c| c == ".shannon"), "expected .shannon in path: {:?}", components);
+        assert!(path.ends_with("skill-candidates.jsonl"), "expected skill-candidates.jsonl suffix: {}", path.display());
+    }
+}
