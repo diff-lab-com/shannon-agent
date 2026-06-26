@@ -27,6 +27,11 @@ pub struct SkillCandidate {
     pub proposed_trigger: String,
     pub procedure: Vec<String>,
     pub source_tool_calls: Vec<SourceToolCall>,
+    /// True after refine_skill_candidate has produced an LLM-polished
+    /// procedure. Persists across detections so the catalog UI can badge
+    /// refined entries.
+    #[serde(default)]
+    pub refined: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -211,6 +216,68 @@ pub async fn reject_skill_candidate(
     Ok(())
 }
 
+/// Ask the configured LLM to rewrite a candidate's procedure into a
+/// clean, step-by-step skill procedure. Stores the result back into
+/// the candidate and marks `refined=true`. Returns the refined text
+/// so the UI can show it without a re-fetch.
+///
+/// Falls back to the original procedure (joined with newlines) when
+/// the LLM call fails — the user still sees something usable and can
+/// edit it during approve.
+#[tauri::command]
+pub async fn refine_skill_candidate(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::commands::AppState>,
+    id: String,
+) -> Result<String, String> {
+    let mut candidates = load_candidates()?;
+    let idx = candidates
+        .iter()
+        .position(|c| c.id == id)
+        .ok_or_else(|| format!("Candidate {id} not found"))?;
+    let original = candidates[idx].procedure.join("\n");
+    let trigger = candidates[idx].proposed_trigger.clone();
+    let name = candidates[idx].proposed_name.clone();
+
+    let system = "You refine agent-authored skill procedures. Output ONLY a numbered list of concrete steps, no preamble, no markdown headings. Keep each step under 120 characters. Preserve every tool the original procedure referenced.";
+    let user = format!(
+        "Skill name: {name}\nTrigger: {trigger}\nOriginal procedure:\n{original}\n\nRewrite as a clean numbered list:"
+    );
+
+    let client_config = state.client_config.read().await.clone();
+    let client = shannon_engine::api::client::LlmClient::new(client_config);
+    let messages = vec![shannon_engine::api::types::Message {
+        role: "user".into(),
+        content: shannon_engine::api::types::MessageContent::Text(user),
+    }];
+
+    let refined = match client.send_message(messages, None, Some(system.into())).await {
+        Ok(blocks) => {
+            let mut out = String::new();
+            for block in blocks {
+                if let shannon_engine::api::types::ContentBlock::Text { text } = block {
+                    if !out.is_empty() { out.push('\n'); }
+                    out.push_str(&text);
+                }
+            }
+            if out.trim().is_empty() { original } else { out }
+        }
+        Err(_) => original,
+    };
+
+    let new_procedure: Vec<String> = refined
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    candidates[idx].procedure = new_procedure;
+    candidates[idx].refined = true;
+    save_candidates(&candidates)?;
+
+    let _ = app.emit("skill-catalog-changed", serde_json::json!({ "slug": id, "action": "refined" }));
+    Ok(refined)
+}
+
 #[tauri::command]
 pub async fn list_agent_authored_skills() -> Result<Vec<AgentAuthoredSkill>, String> {
     let dir = agent_authored_dir()?;
@@ -281,12 +348,30 @@ mod tests {
             proposed_trigger: "user says 'daily report'".into(),
             procedure: vec!["run query".into(), "send to slack".into()],
             source_tool_calls: vec![],
+            refined: false,
         };
         let json = serde_json::to_string(&candidate).expect("serialize");
         let parsed: SkillCandidate = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(parsed.id, "test-1");
         assert_eq!(parsed.occurrence_count, 3);
         assert_eq!(parsed.example_session_ids.len(), 2);
+        assert!(!parsed.refined);
+    }
+
+    #[test]
+    fn candidate_json_without_refined_field_defaults_false() {
+        let json = r#"{
+            "id":"legacy",
+            "detected_at":"2026-06-26T19:00:00Z",
+            "occurrence_count":1,
+            "example_session_ids":[],
+            "proposed_name":"X",
+            "proposed_trigger":"Y",
+            "procedure":["step"],
+            "source_tool_calls":[]
+        }"#;
+        let parsed: SkillCandidate = serde_json::from_str(json).expect("deserialize legacy");
+        assert!(!parsed.refined);
     }
 
     #[test]

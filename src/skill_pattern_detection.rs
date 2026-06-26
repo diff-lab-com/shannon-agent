@@ -210,6 +210,7 @@ pub fn run_detection(
                 tool: agg.sample_tool.clone(),
                 args_summary: agg.sample_args.iter().map(|(k, _)| (k.clone(), serde_json::Value::Null)).collect(),
             }],
+            refined: false,
         };
         append_candidate(candidate)?;
         appended += 1;

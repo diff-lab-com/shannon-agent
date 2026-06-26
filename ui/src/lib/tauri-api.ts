@@ -528,6 +528,7 @@ export interface SkillCandidate {
   proposed_trigger: string
   procedure: string[]
   source_tool_calls: Array<{ tool: string; args_summary: Record<string, unknown> }>
+  refined?: boolean
 }
 
 export interface AgentAuthoredSkill {
@@ -550,6 +551,10 @@ export async function approveSkillCandidate(id: string, edits?: Partial<AgentAut
 
 export async function rejectSkillCandidate(id: string): Promise<void> {
   return invoke('reject_skill_candidate', { id })
+}
+
+export async function refineSkillCandidate(id: string): Promise<string> {
+  return invoke('refine_skill_candidate', { id })
 }
 
 export async function listAgentAuthoredSkills(): Promise<AgentAuthoredSkill[]> {

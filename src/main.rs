@@ -94,6 +94,7 @@ fn main() {
             commands_skill_candidates::list_skill_candidates,
             commands_skill_candidates::approve_skill_candidate,
             commands_skill_candidates::reject_skill_candidate,
+            commands_skill_candidates::refine_skill_candidate,
             commands_skill_candidates::list_agent_authored_skills,
             skill_pattern_detection::trigger_skill_pattern_detection,
             commands_permissions::request_permission,
