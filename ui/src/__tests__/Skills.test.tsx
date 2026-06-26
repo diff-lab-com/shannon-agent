@@ -12,6 +12,7 @@ const listInstalledSkillPlugins = vi.hoisted(() => vi.fn())
 const installNativeSkill = vi.hoisted(() => vi.fn())
 const installSkillFromRepo = vi.hoisted(() => vi.fn())
 const uninstallSkillPlugin = vi.hoisted(() => vi.fn())
+const listAgentAuthoredSkills = vi.hoisted(() => vi.fn())
 
 vi.mock('@/lib/tauri-api', () => ({
   default: {},
@@ -20,6 +21,7 @@ vi.mock('@/lib/tauri-api', () => ({
   installNativeSkill: (...a: unknown[]) => installNativeSkill(...a),
   installSkillFromRepo: (...a: unknown[]) => installSkillFromRepo(...a),
   uninstallSkillPlugin: (...a: unknown[]) => uninstallSkillPlugin(...a),
+  listAgentAuthoredSkills: (...a: unknown[]) => listAgentAuthoredSkills(...a),
 }))
 
 function renderWithRouter() {
@@ -80,6 +82,8 @@ beforeEach(() => {
   installNativeSkill.mockReset()
   installSkillFromRepo.mockReset()
   uninstallSkillPlugin.mockReset()
+  listAgentAuthoredSkills.mockReset()
+  listAgentAuthoredSkills.mockResolvedValue([])
 })
 
 describe('Skills (P3 federated catalog)', () => {
@@ -248,5 +252,51 @@ describe('Skills (P3 federated catalog)', () => {
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     })
+  })
+
+  it('shows agent-authored filter tabs', async () => {
+    listSkillCatalog.mockResolvedValue([])
+    listInstalledSkillPlugins.mockResolvedValue([])
+    listAgentAuthoredSkills.mockResolvedValue([])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Installed · 0')).toBeInTheDocument()
+    })
+    expect(screen.getByRole('tab', { name: /All · 0/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Curated · 0/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Agent-authored · 0/ })).toBeInTheDocument()
+  })
+
+  it('shows AgentAuthoredBadge next to agent-authored installed skill', async () => {
+    listSkillCatalog.mockResolvedValue([])
+    listInstalledSkillPlugins.mockResolvedValue([
+      { name: 'Auto-skill', path: '/home/.shannon/skills/auto-skill', installed_at: '2026-06-15T00:00:00Z' },
+    ])
+    listAgentAuthoredSkills.mockResolvedValue([
+      { id: 'auto-skill', name: 'Auto-skill', description: '', trigger: '', procedure: [], created_at: '', originating_sessions: [] },
+    ])
+    renderWithRouter()
+    await waitFor(() => {
+      expect(screen.getByText('Auto-skill')).toBeInTheDocument()
+    })
+    expect(screen.getByText('Agent-authored')).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Agent-authored · 1/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /Curated · 0/ })).toBeInTheDocument()
+  })
+
+  it('filtering by Agent-authored hides curated entries', async () => {
+    listSkillCatalog.mockResolvedValue([])
+    listInstalledSkillPlugins.mockResolvedValue([
+      { name: 'Auto-skill', path: '/a', installed_at: '' },
+      { name: 'Human-skill', path: '/b', installed_at: '' },
+    ])
+    listAgentAuthoredSkills.mockResolvedValue([
+      { id: 'auto-skill', name: 'Auto-skill', description: '', trigger: '', procedure: [], created_at: '', originating_sessions: [] },
+    ])
+    renderWithRouter()
+    await waitFor(() => expect(screen.getByText('Auto-skill')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('tab', { name: /Agent-authored · 1/ }))
+    expect(screen.queryByText('Human-skill')).not.toBeInTheDocument()
+    expect(screen.getByText('Auto-skill')).toBeInTheDocument()
   })
 })
