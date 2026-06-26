@@ -112,7 +112,7 @@ export default function DataSources() {
       if (field.required && !value) {
         setFeedback({
           slug: entry.id,
-          msg: `${field.label} is required`,
+          msg: t('extensions.datasources.required', { label: field.label }),
           ok: false,
         });
         return;
@@ -130,7 +130,7 @@ export default function DataSources() {
         entry.name,
         config,
       );
-      setFeedback({ slug: entry.id, msg: `Installed ${entry.name}`, ok: true });
+      setFeedback({ slug: entry.id, msg: t('extensions.datasources.installedWithName', { name: entry.name }), ok: true });
       setInstallingSlug(null);
       refreshInstalled();
     } catch (err) {
@@ -145,7 +145,7 @@ export default function DataSources() {
     setFeedback(null);
     try {
       await uninstallDataSource(slug);
-      setFeedback({ slug: `uninstall:${slug}`, msg: `Removed ${slug}`, ok: true });
+      setFeedback({ slug: `uninstall:${slug}`, msg: t('extensions.datasources.removedWithName', { name: slug }), ok: true });
       refreshInstalled();
     } catch (err) {
       setFeedback({ slug: `uninstall:${slug}`, msg: String(err), ok: false });
@@ -343,14 +343,14 @@ function AdapterCard({
             <p className="text-label-sm text-on-surface-variant line-clamp-2">{entry.description}</p>
           </div>
           <span className="text-label-xs px-xs py-[1px] rounded-full font-bold bg-primary-container/50 text-on-primary-container shrink-0">
-            Verified
+            {t('extensions.datasources.verified')}
           </span>
         </div>
 
         {isQueryPending && !isInstalled && (
           <div className="text-label-xs mb-xs inline-flex items-center gap-[4px] px-xs py-[2px] rounded bg-secondary-container/40 text-on-secondary-container">
             <span className="material-symbols-outlined text-[12px]">schedule</span>
-            Query coming soon — install/configure works today
+            {t('extensions.datasources.queryComingSoon')}
           </div>
         )}
 
