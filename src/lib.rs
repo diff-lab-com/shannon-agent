@@ -159,6 +159,9 @@ pub mod commands_skill_loop;
 pub mod commands_skill_candidates;
 
 #[cfg(feature = "tauri")]
+pub mod skill_pattern_detection;
+
+#[cfg(feature = "tauri")]
 pub mod notifications;
 
 #[cfg(feature = "tauri")]

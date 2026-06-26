@@ -23,6 +23,7 @@ fn main() {
     use shannon_desktop::commands_sessions;
     use shannon_desktop::commands_skill_loop;
     use shannon_desktop::commands_skill_candidates;
+    use shannon_desktop::skill_pattern_detection;
     use shannon_desktop::commands_tasks;
     use shannon_desktop::extensions_commands;
     use tauri::{Emitter, Listener, Manager};
@@ -94,6 +95,7 @@ fn main() {
             commands_skill_candidates::approve_skill_candidate,
             commands_skill_candidates::reject_skill_candidate,
             commands_skill_candidates::list_agent_authored_skills,
+            skill_pattern_detection::trigger_skill_pattern_detection,
             commands_permissions::request_permission,
             commands_permissions::respond_permission,
             commands_files::get_file_diff,

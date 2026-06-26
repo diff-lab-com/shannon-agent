@@ -159,6 +159,15 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   `~/.shannon/desktop/skill-candidates.jsonl`; promoted skills land at
   `~/.shannon/skills/agent-authored/<slug>.json`. 5 Rust tests.
 
+- **Pattern detection daily cron (C2).** New
+  `skill_pattern_detection.rs` module + `trigger_skill_pattern_detection`
+  Tauri command. Scans `~/.shannon/sessions/*.json` modified in the
+  last N days, computes a normalized signature per tool_use block
+  (tool name + sorted arg keys), and emits SkillCandidate entries for
+  signatures seen in 2+ sessions with 3+ total occurrences. Defaults
+  to a 7-day lookback. Can be wired into the scheduled-tasks layer
+  for automatic daily runs. 6 Rust tests.
+
 ### Documentation
 
 - **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6
