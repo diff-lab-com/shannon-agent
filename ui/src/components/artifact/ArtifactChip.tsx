@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useIntl } from 'react-intl'
 import type { DetectedArtifact } from './detectArtifact'
 import { artifactIcon, artifactKindLabel } from './detectArtifact'
@@ -9,7 +10,15 @@ interface ArtifactChipProps {
 
 export function ArtifactChip({ artifact }: ArtifactChipProps) {
   const intl = useIntl()
-  const { open } = useArtifact()
+  const { open, autoOpen } = useArtifact()
+  const firedRef = useRef(false)
+
+  useEffect(() => {
+    if (autoOpen && !firedRef.current) {
+      firedRef.current = true
+      open(artifact)
+    }
+  }, [autoOpen, artifact, open])
 
   return (
     <button

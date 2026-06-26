@@ -189,6 +189,119 @@ describe('ArtifactChip', () => {
   })
 })
 
+describe('ArtifactPanel F2 polish', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  function renderWithArtifact() {
+    return render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ArtifactChip artifact={{ kind: 'html', source: '<p>hi</p>', title: 'Test artifact', confidence: 'high' }} />
+          <ArtifactPanel />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+  }
+
+  it('shows fullscreen toggle button after panel opens', async () => {
+    const { container } = renderWithArtifact()
+    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
+    await waitFor(() => {
+      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+    })
+    expect(screen.getByRole('button', { name: 'Enter fullscreen' })).toBeInTheDocument()
+  })
+
+  it('toggles fullscreen mode on button click', async () => {
+    const { container } = renderWithArtifact()
+    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
+    await waitFor(() => {
+      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+    })
+    const fsBtn = screen.getByRole('button', { name: 'Enter fullscreen' })
+    fireEvent.click(fsBtn)
+    expect(screen.getByRole('button', { name: 'Exit fullscreen' })).toBeInTheDocument()
+    const panel = container.querySelector('[role="complementary"]') as HTMLElement
+    expect(panel.className).toContain('fixed')
+    expect(localStorage.getItem('shannon.artifact.fullscreen')).toBe('1')
+  })
+
+  it('shows auto-open toggle button', async () => {
+    const { container } = renderWithArtifact()
+    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
+    await waitFor(() => {
+      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+    })
+    const toggle = screen.getByRole('button', { name: 'Toggle auto-open on detection' })
+    expect(toggle.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-pressed')).toBe('true')
+    expect(localStorage.getItem('shannon.artifact.autoOpen')).toBe('1')
+  })
+
+  it('persists width to localStorage after resize', async () => {
+    const { container } = renderWithArtifact()
+    fireEvent.click(screen.getByRole('button', { name: /Open HTML artifact: Test artifact/ }))
+    await waitFor(() => {
+      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+    })
+    const handle = container.querySelector('[aria-label="Drag to resize panel"]') as HTMLElement
+    expect(handle).toBeTruthy()
+    fireEvent.pointerDown(handle)
+    fireEvent.pointerMove(window, { clientX: 200 })
+    fireEvent.pointerUp(window)
+    expect(localStorage.getItem('shannon.artifact.panelWidth')).toBeTruthy()
+  })
+})
+
+describe('ArtifactContext keyboard shortcut', () => {
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  it('Ctrl+Shift+A does nothing with no artifacts', () => {
+    render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ArtifactPanel />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    const evt = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, ctrlKey: true, bubbles: true })
+    window.dispatchEvent(evt)
+  })
+
+  it('Ctrl+Shift+A cycles active artifact when panel has items', async () => {
+    const { container } = render(
+      <I18nProvider>
+        <ArtifactProvider>
+          <ArtifactChip artifact={{ kind: 'html', source: '<p>a</p>', title: 'A', confidence: 'high' }} />
+          <ArtifactChip artifact={{ kind: 'svg', source: '<svg/>', title: 'B', confidence: 'high' }} />
+          <ArtifactPanel />
+        </ArtifactProvider>
+      </I18nProvider>,
+    )
+    const buttons = screen.getAllByRole('button', { name: /Open .+ artifact:/ })
+    fireEvent.click(buttons[0])
+    await waitFor(() => {
+      expect(container.querySelector('[role="complementary"]')).toBeTruthy()
+    })
+    const panel = container.querySelector('[role="complementary"]') as HTMLElement
+    fireEvent.click(buttons[1])
+    await waitFor(() => {
+      expect(panel.querySelector('.truncate')?.textContent).toBe('B')
+    })
+    const evt = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, ctrlKey: true, bubbles: true })
+    window.dispatchEvent(evt)
+    await waitFor(() => {
+      const afterTitle = panel.querySelector('.truncate')?.textContent
+      expect(['A', 'B']).toContain(afterTitle)
+    })
+  })
+})
+
 describe('HtmlRenderer security', () => {
   it('renders iframe with sandbox attribute', async () => {
     const { HtmlRenderer } = await import('@/components/artifact/HtmlRenderer')

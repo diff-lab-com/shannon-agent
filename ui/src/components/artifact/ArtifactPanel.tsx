@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { save } from '@tauri-apps/plugin-dialog'
@@ -19,11 +19,66 @@ const FILE_EXT: Record<string, string> = {
   document: 'md',
 }
 
+const WIDTH_KEY = 'shannon.artifact.panelWidth'
+const FULLSCREEN_KEY = 'shannon.artifact.fullscreen'
+
+function readWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(WIDTH_KEY))
+    return Number.isFinite(v) && v >= 360 && v <= 1200 ? v : 640
+  } catch { return 640 }
+}
+
+function readFullscreen(): boolean {
+  try { return localStorage.getItem(FULLSCREEN_KEY) === '1' } catch { return false }
+}
+
 export function ArtifactPanel() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { artifacts, activeId, setActive, closeAll } = useArtifact()
+  const { artifacts, activeId, setActive, closeAll, autoOpen, setAutoOpen } = useArtifact()
   const [tab, setTab] = useState<Tab>('preview')
+  const [width, setWidth] = useState<number>(readWidth)
+  const [fullscreen, setFullscreen] = useState<boolean>(readFullscreen)
+  const draggingRef = useRef(false)
+
+  useEffect(() => {
+    try { localStorage.setItem(WIDTH_KEY, String(width)) } catch { /* ignore */ }
+  }, [width])
+
+  useEffect(() => {
+    try { localStorage.setItem(FULLSCREEN_KEY, fullscreen ? '1' : '0') } catch { /* ignore */ }
+  }, [fullscreen])
+
+  const onPointerMove = useCallback((e: PointerEvent) => {
+    if (!draggingRef.current) return
+    const next = Math.min(1200, Math.max(360, window.innerWidth - e.clientX))
+    setWidth(next)
+  }, [])
+
+  const onPointerUp = useCallback(() => {
+    if (draggingRef.current) {
+      draggingRef.current = false
+      document.body.style.userSelect = ''
+      document.body.style.cursor = ''
+    }
+  }, [])
+
+  useEffect(() => {
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', onPointerUp)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+    }
+  }, [onPointerMove, onPointerUp])
+
+  const startResize = (e: React.PointerEvent) => {
+    e.preventDefault()
+    draggingRef.current = true
+    document.body.style.userSelect = 'none'
+    document.body.style.cursor = 'col-resize'
+  }
 
   if (artifacts.length === 0) return null
   const active = artifacts.find(a => a.id === activeId) ?? artifacts[artifacts.length - 1]
@@ -53,19 +108,55 @@ export function ArtifactPanel() {
     }
   }
 
+  const panelStyle = fullscreen
+    ? { width: '100vw', height: '100vh' }
+    : { width: `${Math.min(width, Math.floor(window.innerWidth * 0.6))}px` }
+  const panelClass = fullscreen
+    ? 'fixed inset-0 z-50 bg-surface-container-lowest flex flex-col'
+    : 'shrink-0 overflow-hidden border-l border-outline-variant/20 bg-surface-container-lowest flex flex-col relative'
+
   return (
     <aside
       role="complementary"
       aria-label={t('chat.artifact.panel.aria')}
-      className="shrink-0 overflow-hidden border-l border-outline-variant/20 bg-surface-container-lowest flex flex-col"
-      style={{ width: 'min(640px, 45vw)' }}
+      className={panelClass}
+      style={panelStyle}
     >
+      {!fullscreen && (
+        <div
+          onPointerDown={startResize}
+          className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-primary/30 transition-colors z-10"
+          aria-label={t('chat.artifact.resize.aria')}
+        />
+      )}
       <header className="flex items-center gap-sm px-md py-sm border-b border-outline-variant/20">
         <span className="material-symbols-outlined icon-sm text-primary shrink-0">{artifactIcon(active.kind)}</span>
         <span className="font-label-md text-on-surface truncate flex-1">{active.title}</span>
         <span className="font-label-xs text-on-surface-variant px-xs py-[2px] rounded bg-surface-container-high shrink-0">
           {artifactKindLabel(active.kind)}
         </span>
+        <button
+          type="button"
+          onClick={() => setAutoOpen(!autoOpen)}
+          aria-pressed={autoOpen}
+          aria-label={t('chat.artifact.autoOpen.aria')}
+          title={t('chat.artifact.autoOpen.aria')}
+          className={`p-xs rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+            autoOpen ? 'text-primary bg-primary/10' : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container'
+          }`}
+        >
+          <span className="material-symbols-outlined icon-sm">{autoOpen ? 'flash_auto' : 'auto_mode'}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setFullscreen(f => !f)}
+          aria-pressed={fullscreen}
+          aria-label={t(fullscreen ? 'chat.artifact.exitFullscreen.aria' : 'chat.artifact.fullscreen.aria')}
+          title={t(fullscreen ? 'chat.artifact.exitFullscreen.aria' : 'chat.artifact.fullscreen.aria')}
+          className="p-xs rounded text-on-surface-variant hover:text-on-surface hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        >
+          <span className="material-symbols-outlined icon-sm">{fullscreen ? 'fullscreen_exit' : 'fullscreen'}</span>
+        </button>
         <button
           type="button"
           onClick={closeAll}
@@ -153,3 +244,4 @@ export function ArtifactPanel() {
     </aside>
   )
 }
+
