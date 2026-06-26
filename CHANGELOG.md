@@ -141,6 +141,11 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   multi-line constructs (block comments, template literals) stay
   colored on every line. 10 new tests in `diff-highlight.test.ts`.
 
+- **Keyboard shortcuts help overlay (B5).** Rebuild of the `?` overlay:
+  grouped into Global / Navigation / Chat / Diff Review sections,
+  adds an inline search input, and surfaces the new Plan Mode toggle,
+  Artifact cycle, and per-hunk diff review shortcuts. 11 tests.
+
 ### Documentation
 
 - **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6

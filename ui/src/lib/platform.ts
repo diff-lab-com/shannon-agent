@@ -24,3 +24,7 @@ export function modSeparator(): string {
 export function formatShortcut(key: string): string {
   return `${modKey()}${modSeparator()}${key}`
 }
+
+export function formatShortcutShift(key: string): string {
+  return isMac() ? `⇧⌘${key}` : `Ctrl+Shift+${key}`
+}
