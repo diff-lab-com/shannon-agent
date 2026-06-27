@@ -44,6 +44,19 @@ plus a generic OpenAI-compatible connection test that closes the gap where GLM
 - Tests: +13 unit tests (probe-URL/auth matrix, slugify + de-dup id, key
   masking, `ProvidersFile` round-trip, optional-field deserialization).
 
+#### Rust (security hardening)
+- **`validate_base_url` guards every user-supplied `base_url`** (the test
+  probe, the ollama host, and `save_provider` persistence): parses with the
+  `url` crate, requires an `http`/`https` scheme, rejects embedded credentials,
+  missing hosts, and unparseable input, and drops fragments. Private/loopback
+  hosts are **intentionally allowed** — `http://localhost:11434` (Ollama) and
+  self-hosted models on private networks are first-class use cases, and the URL
+  is supplied by the local user (no untrusted/remote input vector reaches this
+  path). +6 unit tests covering rejected schemes / credentials / malformed
+  input and the http+localhost allow case.
+
+
+
 ## v0.3.7 (2026-06-27) — UI design overhaul + Week D (Plan Mode, Diff Preview) + PM-audit follow-ups + Settings P1 (Models/Notifications) + i18n completion
 
 ### i18n completion — MermaidRenderer deep audit (last hardcoded strings)
