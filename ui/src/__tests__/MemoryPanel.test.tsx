@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import MemoryPanel from '@/components/memory/MemoryPanel'
 import * as api from '@/lib/tauri-api'
 
@@ -89,7 +89,6 @@ describe('MemoryPanel', () => {
   })
 
   it('deletes memory after confirm', async () => {
-    window.confirm = vi.fn(() => true)
     vi.mocked(api.deleteMemory).mockResolvedValue(true)
     vi.mocked(api.getMemoryStats).mockResolvedValue({
       total: 1,
@@ -119,6 +118,10 @@ describe('MemoryPanel', () => {
 
     const deleteBtn = screen.getByRole('button', { name: 'Delete' })
     fireEvent.click(deleteBtn)
+
+    const dialog = await screen.findByRole('alertdialog')
+    const confirmBtn = within(dialog).getByRole('button', { name: /^Delete$/i })
+    fireEvent.click(confirmBtn)
 
     await waitFor(() => {
       expect(api.deleteMemory).toHaveBeenCalledWith('m1')

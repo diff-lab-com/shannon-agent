@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { useApp } from '@/context/AppContext'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { AgentInfo, TaskItem } from '@/types'
 
@@ -83,8 +85,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
       await api.cancelBackgroundTask(agentId)
       toast.success(intl.formatMessage({ id: 'opc.agentSwarm.stopSuccess' }, { name }))
     } catch (e) {
-      console.warn('Failed to stop agent:', e)
-      toast.error(intl.formatMessage({ id: 'opc.agentSwarm.stopFailed' }, { name }))
+      toastError(intl.formatMessage({ id: 'opc.agentSwarm.stopFailed' }, { name }), e)
     }
   }
 
@@ -133,6 +134,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
             icon="group"
             title={intl.formatMessage({ id: 'opc.agentSwarm.noAgentsRunning' })}
             description={intl.formatMessage({ id: 'opc.agentSwarm.startTeamCoordination' })}
+            action={{ label: intl.formatMessage({ id: 'opc.agentSwarm.spawnCta' }), onClick: () => setSpawnOpen(true) }}
           />
         </div>
       ) : (
@@ -153,7 +155,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                 <div className="flex items-center justify-between mb-sm">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                      <span className="material-symbols-outlined text-[20px] text-on-surface-variant opacity-70">{iconForAgent(agent.name)}</span>
+                      <span className="material-symbols-outlined icon-md text-on-surface-variant opacity-70">{iconForAgent(agent.name)}</span>
                     </div>
                     <div>
                       <div className="font-label-md text-[14px] font-bold">{agent.name}</div>
@@ -170,7 +172,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                       className="w-6 h-6 flex items-center justify-center rounded text-on-surface-variant hover:bg-surface-container-high/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 cursor-pointer"
                       onClick={e => { e.stopPropagation(); setOpenMenuId(isMenuOpen ? null : agent.id) }}
                     >
-                      <span className="material-symbols-outlined text-[16px]">more_vert</span>
+                      <span className="material-symbols-outlined icon-sm">more_vert</span>
                     </button>
                   </div>
                 </div>
@@ -182,7 +184,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
                 </div>
                 {agent.worktree_path ? (
                   <div className="mt-sm flex items-center gap-1 font-label-sm text-[10px] text-on-surface-variant/80 bg-surface-container-low/60 rounded px-1.5 py-0.5 self-start">
-                    <span className="material-symbols-outlined text-[12px]">fork_right</span>
+                    <span className="material-symbols-outlined icon-xs">fork_right</span>
                     <span className="font-mono truncate max-w-[200px]" title={agent.worktree_path}>{shortWorktree(agent.worktree_path)}</span>
                   </div>
                 ) : null}
@@ -235,6 +237,9 @@ function SpawnAgentModal({ open, onClose }: { open: boolean; onClose: () => void
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, containerRef)
+
   const reset = () => {
     setName(''); setModel(''); setPrompt('')
     setTools({ bash: true, read: true, write: true })
@@ -264,6 +269,7 @@ function SpawnAgentModal({ open, onClose }: { open: boolean; onClose: () => void
 
   return (
     <div
+      ref={containerRef}
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-md"
       role="dialog"
       aria-modal="true"
@@ -382,6 +388,9 @@ function ReassignModal({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(!!target, containerRef)
+
   useEffect(() => {
     if (target) { setPick(''); setError(null) }
   }, [target])
@@ -409,6 +418,7 @@ function ReassignModal({
 
   return (
     <div
+      ref={containerRef}
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/30 backdrop-blur-sm p-md"
       role="dialog"
       aria-modal="true"

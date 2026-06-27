@@ -8,7 +8,7 @@
 // + sort + archived toggle) → bulk-action bar when items selected → list of
 // TriageItem cards with checkbox + Mark Read / Archive actions, empty state.
 
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
@@ -17,39 +17,39 @@ import { Button } from '@/components/ui/button'
 import { useTriageItems, useTriageStats } from '@/hooks/scheduled-tasks'
 import type { TriageItem } from '@/types'
 import { formatUnixDateTime } from '@/components/tasks/shared'
+import * as api from '@/lib/tauri-api'
 
 type ReadFilter = 'all' | 'unread' | 'read'
 type SortOrder = 'newest' | 'oldest'
 
-// Severity heuristic: map a triage `kind` to a color/icon for visual sorting.
-function kindMeta(kind: string): { icon: string; color: string; label: string } {
+function kindMeta(kind: string): { icon: string; color: string; labelKey: string } {
   switch (kind) {
     case 'failed_run':
-      return { icon: 'error', color: 'text-error', label: 'Failed Run' }
+      return { icon: 'error', color: 'text-error', labelKey: 'triage.kind.failed_run' }
     case 'budget_exceeded':
-      return { icon: 'payments', color: 'text-error', label: 'Budget Exceeded' }
+      return { icon: 'payments', color: 'text-error', labelKey: 'triage.kind.budget_exceeded' }
     case 'needs_review':
-      return { icon: 'rate_review', color: 'text-primary', label: 'Needs Review' }
+      return { icon: 'rate_review', color: 'text-primary', labelKey: 'triage.kind.needs_review' }
     case 'timeout':
-      return { icon: 'schedule', color: 'text-secondary', label: 'Timeout' }
+      return { icon: 'schedule', color: 'text-secondary', labelKey: 'triage.kind.timeout' }
     default:
-      return { icon: 'notifications', color: 'text-on-surface-variant', label: kind }
+      return { icon: 'notifications', color: 'text-on-surface-variant', labelKey: '' }
   }
 }
 
-function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, onDelete }: {
+function TriageCard({ item, selected, focused, onToggleSelected, onMarkRead, onArchive }: {
   item: TriageItem
   selected: boolean
+  focused?: boolean
   onToggleSelected: (id: string) => void
   onMarkRead: (id: string) => void
   onArchive: (id: string) => void
-  onDelete: (id: string) => void
 }) {
   const intl = useIntl()
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const meta = kindMeta(item.kind)
   return (
-    <div className={`glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 ${item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20'} ${selected ? 'ring-2 ring-primary/40' : ''}`}>
+    <div role="listitem" data-focused={focused ? 'true' : undefined} className={`glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 ${item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20'} ${focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : ''}`}>
       <div className="flex items-start gap-sm">
         <label className="flex items-center pt-xs cursor-pointer shrink-0" aria-label={t('triage.select.aria', { id: item.id })}>
           <input
@@ -61,11 +61,11 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, o
         </label>
         <div className="flex items-start gap-md flex-1 min-w-0">
           <div className={`w-10 h-10 rounded-xl bg-surface-container-low flex items-center justify-center ${meta.color} shrink-0`}>
-            <span className="material-symbols-outlined text-[24px]">{meta.icon}</span>
+            <span className="material-symbols-outlined icon-lg">{meta.icon}</span>
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-sm mb-xs">
-              <span className={`font-label-sm text-[11px] font-bold uppercase tracking-wider ${meta.color}`}>{meta.label}</span>
+              <span className={`font-label-sm text-[11px] font-bold uppercase tracking-wider ${meta.color}`}>{meta.labelKey ? t(meta.labelKey) : item.kind}</span>
               {!item.read && <span className="w-2 h-2 rounded-full bg-primary shrink-0" title={t('triage.unread.title')} />}
               {item.archived && <span className="font-label-sm text-[11px] text-on-surface-variant">{t('triage.archived.label')}</span>}
             </div>
@@ -107,15 +107,6 @@ function TriageCard({ item, selected, onToggleSelected, onMarkRead, onArchive, o
               <span className="material-symbols-outlined text-[18px]">archive</span>
             </Button>
           )}
-          <Button
-            aria-label={t('triage.delete.aria')}
-            variant="ghost"
-            className="p-2 rounded-lg hover:bg-error/10 text-on-surface-variant hover:text-error cursor-pointer"
-            onClick={() => onDelete(item.id)}
-            title={t('triage.delete.title')}
-          >
-            <span className="material-symbols-outlined text-[18px]">delete</span>
-          </Button>
         </div>
       </div>
     </div>
@@ -131,8 +122,8 @@ export default function Triage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [bulkRunning, setBulkRunning] = useState(false)
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null)
-  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const { stats } = useTriageStats()
   const filter = useMemo(() => ({
     kind: kindFilter,
@@ -141,10 +132,10 @@ export default function Triage() {
   const { items, loading, markRead, archive, refresh } = useTriageItems(filter)
 
   const availableKinds = useMemo(() => {
-    return Object.entries(stats.by_kind)
+    return Object.entries(stats?.by_kind ?? {})
       .sort((a, b) => b[1] - a[1])
       .map(([k]) => k)
-  }, [stats.by_kind])
+  }, [stats?.by_kind])
 
   // Client-side read filter + sort on top of the server-side kind/archived filter.
   const visibleItems = useMemo(() => {
@@ -188,55 +179,79 @@ export default function Triage() {
 
   const bulkMarkRead = useCallback(async () => {
     setBulkRunning(true)
-    let ok = 0
-    for (const id of effectiveSelected) {
-      if (await markRead(id)) ok++
-    }
+    const results = await Promise.allSettled(
+      Array.from(effectiveSelected).map(id => api.markTriageRead(id)),
+    )
+    await refresh()
     setBulkRunning(false)
+    const ok = results.filter(r => r.status === 'fulfilled').length
     if (ok > 0) {
       const key = ok === 1 ? 'triage.toast.markRead' : 'triage.toast.markRead.plural'
       toast.success(intl.formatMessage({ id: key }, { count: ok }))
     }
     clearSelection()
-  }, [effectiveSelected, markRead, clearSelection, intl])
+  }, [effectiveSelected, refresh, clearSelection, intl])
 
   const bulkArchive = useCallback(async () => {
     setBulkRunning(true)
-    let ok = 0
-    for (const id of effectiveSelected) {
-      if (await archive(id)) ok++
-    }
+    const results = await Promise.allSettled(
+      Array.from(effectiveSelected).map(id => api.archiveTriageItem(id)),
+    )
+    await refresh()
     setBulkRunning(false)
+    const ok = results.filter(r => r.status === 'fulfilled').length
     if (ok > 0) {
       const key = ok === 1 ? 'triage.toast.archived' : 'triage.toast.archived.plural'
       toast.success(intl.formatMessage({ id: key }, { count: ok }))
     }
     clearSelection()
-  }, [effectiveSelected, archive, clearSelection, intl])
+  }, [effectiveSelected, refresh, clearSelection, intl])
 
-  // Delete in the UI maps to archive in the backend — the backend doesn't
-  // expose a hard-delete endpoint, so we treat archive as soft removal and
-  // surface it as "Delete" to match the spec's bulk complete/archive/delete
-  // triad. A future backend hard-delete can swap in here without UI changes.
-  const deleteItem = useCallback(async (id: string) => {
-    if (await archive(id)) toast.success(intl.formatMessage({ id: 'triage.toast.deleted' }, { count: 1 }))
-    setDeleteTargetId(null)
-  }, [archive, intl])
+  // Delete UI was removed — the backend doesn't expose a hard-delete endpoint,
+  // so the previous "Delete" button was lying to users (it actually archived).
+  // Archive is reversible via "Show archived" toggle; if the backend later
+  // adds hard-delete, re-add a destructive action with explicit copy.
 
-  const bulkDelete = useCallback(async () => {
-    setBulkRunning(true)
-    let ok = 0
-    for (const id of effectiveSelected) {
-      if (await archive(id)) ok++
+  // Keyboard navigation over the triage list (list must be focused first).
+  // j/ArrowDown = next, k/ArrowUp = previous, Enter = mark read, a = archive.
+  // Ignored when the keystroke originates from a form field so the filter
+  // chips and read-filter controls keep working normally.
+  useEffect(() => {
+    if (focusedIndex == null) return
+    if (visibleItems.length === 0) { setFocusedIndex(null); return }
+    if (focusedIndex >= visibleItems.length) setFocusedIndex(visibleItems.length - 1)
+  }, [visibleItems, focusedIndex])
+
+  useEffect(() => {
+    if (focusedIndex == null) return
+    const el = listRef.current?.querySelector('[data-focused="true"]') as HTMLElement | null
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [focusedIndex])
+
+  const handleListKey = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    const tag = (e.target as HTMLElement).tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+    const max = visibleItems.length
+    if (max === 0) return
+    const cur = focusedIndex ?? -1
+    if (e.key === 'j' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      setFocusedIndex(Math.min(cur + 1, max - 1))
+    } else if (e.key === 'k' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      setFocusedIndex(Math.max(cur - 1, 0))
+    } else if (e.key === 'Enter') {
+      if (cur >= 0) {
+        const it = visibleItems[cur]
+        if (it && !it.read) { e.preventDefault(); markRead(it.id) }
+      }
+    } else if (e.key === 'a') {
+      if (cur >= 0) {
+        const it = visibleItems[cur]
+        if (it && !it.archived) { e.preventDefault(); archive(it.id) }
+      }
     }
-    setBulkRunning(false)
-    if (ok > 0) {
-      const key = ok === 1 ? 'triage.toast.deleted' : 'triage.toast.deleted.plural'
-      toast.success(intl.formatMessage({ id: key }, { count: ok }))
-    }
-    setShowBulkDeleteConfirm(false)
-    clearSelection()
-  }, [effectiveSelected, archive, clearSelection, intl])
+  }
 
   return (
     <div className="flex-1 overflow-y-auto w-full pb-16">
@@ -272,6 +287,7 @@ export default function Triage() {
           </Button>
           {availableKinds.map(kind => {
             const meta = kindMeta(kind)
+            const label = meta.labelKey ? t(meta.labelKey) : kind
             return (
               <Button
                 key={kind}
@@ -280,7 +296,7 @@ export default function Triage() {
                 aria-pressed={kindFilter === kind}
                 className={`px-sm py-xs rounded-full text-label-sm transition-colors cursor-pointer ${kindFilter === kind ? 'bg-primary/10 text-primary font-bold' : 'bg-surface-container-low text-on-surface-variant hover:text-primary hover:bg-primary/10'}`}
               >
-                {meta.label}
+                {label}
               </Button>
             )
           })}
@@ -340,7 +356,7 @@ export default function Triage() {
               onClick={bulkMarkRead}
               className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span className="material-symbols-outlined text-[16px] mr-xs align-middle">done_all</span>
+              <span className="material-symbols-outlined icon-sm mr-xs align-middle">done_all</span>
               {t('triage.bulk.markRead')}
             </Button>
             <Button
@@ -349,17 +365,8 @@ export default function Triage() {
               onClick={bulkArchive}
               className="px-sm py-xs rounded-lg text-label-md text-on-surface hover:bg-primary/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span className="material-symbols-outlined text-[16px] mr-xs align-middle">archive</span>
+              <span className="material-symbols-outlined icon-sm mr-xs align-middle">archive</span>
               {t('triage.bulk.archive')}
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={bulkRunning}
-              onClick={() => setShowBulkDeleteConfirm(true)}
-              className="px-sm py-xs rounded-lg text-label-md text-error hover:bg-error/10 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <span className="material-symbols-outlined text-[16px] mr-xs align-middle">delete</span>
-              {t('triage.bulk.delete')}
             </Button>
             <Button
               variant="ghost"
@@ -409,18 +416,26 @@ export default function Triage() {
                 icon="filter_alt_off"
                 title={t('triage.noMatch.title')}
                 description={t('triage.noMatch.description')}
+                action={{ label: t('triage.noMatch.cta'), onClick: () => { setKindFilter(undefined); setReadFilter('all'); setShowArchived(false) } }}
               />
             ) : (
-              <div className="space-y-md">
-                {visibleItems.map(item => (
+              <div
+                ref={listRef}
+                role="list"
+                tabIndex={0}
+                aria-label={t('triage.list.aria')}
+                onKeyDown={handleListKey}
+                className="space-y-md outline-none"
+              >
+                {visibleItems.map((item, i) => (
                   <TriageCard
                     key={item.id}
                     item={item}
                     selected={effectiveSelected.has(item.id)}
+                    focused={focusedIndex === i}
                     onToggleSelected={toggleSelected}
                     onMarkRead={markRead}
                     onArchive={archive}
-                    onDelete={setDeleteTargetId}
                   />
                 ))}
               </div>
@@ -428,86 +443,6 @@ export default function Triage() {
           </>
         )}
       </div>
-
-      {/* Single-item delete confirmation */}
-      {deleteTargetId && (
-        <div
-          role="dialog"
-          aria-label={t('triage.deleteDialog.title')}
-          className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center"
-          onClick={() => setDeleteTargetId(null)}
-          onKeyDown={e => { if (e.key === 'Escape') setDeleteTargetId(null) }}
-        >
-          <div
-            className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-error text-[24px]">delete</span>
-              <h3 className="font-headline-md text-on-surface">{t('triage.deleteDialog.title')}</h3>
-            </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">
-              {t('triage.deleteDialog.message')}
-            </p>
-            <div className="flex justify-end gap-sm">
-              <Button
-                variant="ghost"
-                className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container cursor-pointer"
-                onClick={() => setDeleteTargetId(null)}
-              >
-                {t('triage.deleteDialog.cancel')}
-              </Button>
-              <Button
-                className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90 cursor-pointer"
-                onClick={() => deleteItem(deleteTargetId)}
-              >
-                {t('triage.deleteDialog.confirm')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bulk delete confirmation */}
-      {showBulkDeleteConfirm && (
-        <div
-          role="dialog"
-          aria-label={t('triage.bulkDeleteDialog.title', { count: effectiveSelected.size })}
-          className="fixed inset-0 z-50 bg-black/30 backdrop-blur-sm flex items-center justify-center"
-          onClick={() => setShowBulkDeleteConfirm(false)}
-          onKeyDown={e => { if (e.key === 'Escape') setShowBulkDeleteConfirm(false) }}
-        >
-          <div
-            className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-error text-[24px]">delete</span>
-              <h3 className="font-headline-md text-on-surface">{t('triage.bulkDeleteDialog.title', { count: effectiveSelected.size })}</h3>
-            </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">
-              {t('triage.bulkDeleteDialog.message')}
-            </p>
-            <div className="flex justify-end gap-sm">
-              <Button
-                variant="ghost"
-                disabled={bulkRunning}
-                className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container cursor-pointer"
-                onClick={() => setShowBulkDeleteConfirm(false)}
-              >
-                {t('triage.deleteDialog.cancel')}
-              </Button>
-              <Button
-                disabled={bulkRunning}
-                className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90 cursor-pointer disabled:opacity-50"
-                onClick={bulkDelete}
-              >
-                {bulkRunning ? t('triage.bulkDeleteDialog.deleting') : t('triage.deleteDialog.confirm')}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

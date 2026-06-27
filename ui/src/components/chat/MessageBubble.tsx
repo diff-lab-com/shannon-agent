@@ -1,6 +1,7 @@
 import { useState, useRef, memo } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/context/AppContext'
@@ -18,7 +19,10 @@ import {
   ToolHeader,
   ToolContent,
 } from '@/components/ai-elements'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ResearchReportModal } from '@/components/chat/ResearchReportModal'
+import { ArtifactChipList } from '@/components/artifact/ArtifactChip'
+import { detectArtifacts } from '@/components/artifact/detectArtifact'
 import type { ChatMessage, ToolCall, FileAttachment } from '@/types'
 
 interface MessageBubbleProps {
@@ -26,6 +30,7 @@ interface MessageBubbleProps {
   messageIndex: number
   isBranch?: boolean
   onViewDiff: (path: string) => void
+  onViewDiffMulti?: (paths: string[]) => void
 }
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
@@ -117,29 +122,32 @@ function AttachmentPreview({ attachment }: { attachment: FileAttachment }) {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, messageIndex, isBranch, onViewDiff, onViewDiffMulti }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const [liked, setLiked] = useState(false)
   const [isBranching, setIsBranching] = useState(false)
+  const [pendingBranch, setPendingBranch] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
   const { sendMessage, currentSessionId, switchSession, refreshSessions } = useApp()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.content).catch(() => toast.error(t('chat.toast.copyFailed')))
+    navigator.clipboard.writeText(message.content).catch((e) => toastError(t('chat.toast.copyFailed'), e))
   }
 
   const handleRegenerate = () => {
-    sendMessage('Regenerate the previous response').catch(() => toast.error(t('chat.toast.regenerateFailed')))
+    sendMessage('Regenerate the previous response').catch((e) => toastError(t('chat.toast.regenerateFailed'), e))
   }
 
-  const handleBranch = async () => {
+  const handleBranch = () => {
     if (!currentSessionId || isBranching) return
+    setPendingBranch(true)
+  }
 
-    const confirmed = window.confirm(t('chat.message.branch.confirm'))
-    if (!confirmed) return
-
+  const confirmBranch = async () => {
+    if (!currentSessionId) return
+    setPendingBranch(false)
     setIsBranching(true)
     try {
       const newSession = await api.branchSession(currentSessionId, messageIndex)
@@ -147,8 +155,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
       await switchSession(newSession.id)
       toast.success(t('chat.message.branch.success'))
     } catch (error) {
-      console.error('Branch failed:', error)
-      toast.error(t('chat.message.branch.failed'))
+      toastError(t('chat.message.branch.failed'), error)
     } finally {
       setIsBranching(false)
     }
@@ -156,9 +163,11 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
 
   const hasAttachments = message.file_attachments && message.file_attachments.length > 0
   const hasReport = !!message.research_report
+  const detectedArtifacts = !isUser ? detectArtifacts(message.content) : []
 
   if (isUser) {
     return (
+      <>
       <Message from="user" className="flex justify-end">
         <MessageContent className="max-w-[80%]">
           {isBranch && (
@@ -182,7 +191,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
               aria-label={t('chat.message.branch.aria')}
               onClick={handleBranch}
               disabled={isBranching || !currentSessionId}
-              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors"
+              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
               title={t('chat.message.branch.button')}
             >
               <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
@@ -192,8 +201,19 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           </ActionToolbar>
         </MessageContent>
       </Message>
-    )
-  }
+      <ConfirmDialog
+        open={pendingBranch}
+        title={t('chat.message.branch.confirm.title')}
+        message={t('chat.message.branch.confirm.message')}
+        confirmLabel={t('chat.message.branch.button')}
+        cancelLabel={t('chat.message.branch.confirm.cancel')}
+        busy={isBranching}
+        onConfirm={() => void confirmBranch()}
+        onCancel={() => setPendingBranch(false)}
+      />
+    </>
+  )
+}
 
   return (
     <Message from="assistant" className="flex gap-md max-w-[90%]">
@@ -203,8 +223,46 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           <ResponseStream className="font-body-md text-on-surface prose prose-sm max-w-none prose-p:my-1 prose-pre:bg-surface-container prose-pre:p-md prose-pre:rounded-lg prose-code:text-primary prose-code:before:content-[''] prose-code:after:content-['']">
             <FootnoteMarkdown>{message.content}</FootnoteMarkdown>
           </ResponseStream>
+          {detectedArtifacts.length > 0 && (
+            <div className="mt-md">
+              <ArtifactChipList artifacts={detectedArtifacts} />
+            </div>
+          )}
           {message.tool_calls && message.tool_calls.length > 0 && (
             <div className="mt-md space-y-sm">
+              {(() => {
+                const changedPaths = message.tool_calls
+                  .filter(tc => tc.status === 'completed' && !tc.is_error)
+                  .map(tc => extractFilePath(tc.tool_name, tc.tool_input))
+                  .filter((p): p is string => p != null)
+                const uniquePaths = Array.from(new Set(changedPaths))
+                return uniquePaths.length > 0 ? (
+                  <div className="flex items-center justify-between gap-sm px-md py-xs rounded-lg bg-tertiary/5 border border-tertiary/20">
+                    <div className="flex items-center gap-sm min-w-0">
+                      <span className="material-symbols-outlined icon-sm text-tertiary shrink-0">difference</span>
+                      <span className="font-label-sm text-on-surface truncate">
+                        {intl.formatMessage(
+                          { id: 'chat.message.filesChanged' },
+                          { count: uniquePaths.length }
+                        )}
+                      </span>
+                      <span className="font-label-xs text-on-surface-variant truncate font-mono">
+                        {uniquePaths.join(', ')}
+                      </span>
+                    </div>
+                    {uniquePaths.length > 1 && (
+                      <button
+                        type="button"
+                        className="shrink-0 flex items-center gap-xs px-sm py-xs rounded-md text-tertiary hover:bg-tertiary/10 font-label-sm transition-colors"
+                        onClick={() => onViewDiffMulti?.(uniquePaths)}
+                      >
+                        <span className="material-symbols-outlined icon-sm">open_in_new</span>
+                        {t('chat.message.reviewAll')}
+                      </button>
+                    )}
+                  </div>
+                ) : null
+              })()}
               {message.tool_calls.map(tc => (
                 <ToolCallDisplay key={tc.tool_use_id} toolCall={tc} onViewDiff={onViewDiff} />
               ))}
@@ -212,20 +270,20 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
           )}
         </div>
         <ActionToolbar>
-          <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
+          <Button aria-label={t('chat.message.like.aria')} aria-pressed={liked} onClick={() => setLiked(!liked)} className={`flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${liked ? 'text-primary' : 'text-on-surface-variant'}`}>
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">{liked ? 'thumb_up' : 'thumb_up_off_alt'}</span>
           </Button>
-          <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
+          <Button aria-label={t('chat.message.copy.aria')} onClick={handleCopy} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">content_copy</span>
           </Button>
-          <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors">
+          <Button aria-label={t('chat.message.regenerate.aria')} onClick={handleRegenerate} className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30">
             <span className="material-symbols-outlined text-[18px]" aria-hidden="true">refresh</span>
           </Button>
           {hasReport && (
             <Button
               aria-label={t('chat.message.report.aria')}
               onClick={() => setReportOpen(true)}
-              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors"
+              className="flex items-center gap-xs px-sm py-xs rounded-lg hover:bg-surface-container text-on-surface-variant transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <span className="material-symbols-outlined text-[18px]" aria-hidden="true">article</span>
               <span className="text-label-sm">{t('chat.message.report')}</span>
@@ -269,20 +327,20 @@ export const ToolCallDisplay = memo(function ToolCallDisplay({ toolCall, onViewD
   return (
     <Tool name={toolCall.tool_name} status={toolCall.status} className="p-sm">
       <ToolHeader onClick={() => setExpanded(!expanded)}>
-        <span className={`material-symbols-outlined text-[16px] ${statusColor} ${toolCall.status === 'running' ? 'animate-spin' : ''}`}>{statusIcon}</span>
+        <span className={`material-symbols-outlined icon-sm ${statusColor} ${toolCall.status === 'running' ? 'animate-spin' : ''}`}>{statusIcon}</span>
         <span className="font-label-md text-on-surface flex-1 truncate">{toolCall.tool_name}</span>
         {canDiff && (
           <button
             type="button"
             aria-label={intl.formatMessage({ id: 'chat.message.diff.aria' }, { path: filePath })}
-            className="flex items-center gap-xs px-xs py-[2px] rounded-md text-tertiary hover:bg-tertiary-container/40 text-[11px] cursor-pointer"
+            className="flex items-center gap-xs px-xs py-[2px] rounded-md text-tertiary hover:bg-tertiary-container/40 font-label-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             onClick={(e) => { e.stopPropagation(); onViewDiff(filePath!) }}
           >
-            <span className="material-symbols-outlined text-[14px]">difference</span>
+            <span className="material-symbols-outlined icon-sm">difference</span>
             {t('chat.message.diff')}
           </button>
         )}
-        <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{expanded ? 'expand_less' : 'expand_more'}</span>
+        <span className="material-symbols-outlined icon-sm text-on-surface-variant">{expanded ? 'expand_less' : 'expand_more'}</span>
       </ToolHeader>
       {expanded && (
         <ToolContent>

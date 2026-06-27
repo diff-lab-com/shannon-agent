@@ -62,14 +62,14 @@ export default function CalendarSidebarWidget({
         <div className="flex gap-sm">
           <button
             aria-label={t('tasks.calendarSidebarWidget.prevMonth')}
-            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors"
+            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
             onClick={onPrevMonth}
           >
             chevron_left
           </button>
           <button
             aria-label={t('tasks.calendarSidebarWidget.nextMonth')}
-            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors"
+            className="material-symbols-outlined text-on-surface-variant text-[20px] cursor-pointer hover:text-primary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
             onClick={onNextMonth}
           >
             chevron_right
@@ -132,7 +132,7 @@ export default function CalendarSidebarWidget({
                 onClick={() => onSelectRoutine?.(r.id)}
                 aria-label={`Open routine detail for ${r.name}`}
               >
-                <span className="material-symbols-outlined text-[16px] text-primary">
+                <span className="material-symbols-outlined icon-sm text-primary">
                   {r.enabled ? 'bolt' : 'block'}
                 </span>
                 <span className="flex-1 min-w-0">

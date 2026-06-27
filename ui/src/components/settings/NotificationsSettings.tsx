@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -13,7 +14,6 @@ import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
 import SlackWizard from './notifications/SlackWizard'
 import TelegramWizard from './notifications/TelegramWizard'
-import EmailWizard from './notifications/EmailWizard'
 import OutboundSection from './notifications/OutboundSection'
 
 type ChannelType = 'slack' | 'telegram' | 'email' | null
@@ -146,8 +146,7 @@ function WebhookSection() {
       })
       toast.success(t('settings.notifications.saved'))
     } catch (e) {
-      console.warn('saveWebhookConfig error:', e)
-      toast.error(t('settings.notifications.error.saveFailed'))
+      toastError(t('settings.notifications.error.saveFailed'), e)
     }
     setSaving(false)
   }
@@ -165,8 +164,7 @@ function WebhookSection() {
       setIncludeBody(false)
       toast.success(t('settings.notifications.cleared'))
     } catch (e) {
-      console.warn('clearWebhookConfig error:', e)
-      toast.error(t('settings.notifications.error.clearFailed'))
+      toastError(t('settings.notifications.error.clearFailed'), e)
     }
     setClearing(false)
   }
@@ -174,7 +172,7 @@ function WebhookSection() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
-        <span className="material-symbols-outlined text-[32px] text-primary animate-spin" aria-hidden="true">progress_activity</span>
+        <span className="material-symbols-outlined icon-xl text-primary animate-spin" aria-hidden="true">progress_activity</span>
         <span className="sr-only">{t('settings.notifications.loading')}</span>
       </div>
     )
@@ -185,7 +183,7 @@ function WebhookSection() {
   return (
     <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
       <div>
-        <h3 className="font-headline-md text-on-surface">{t('settings.notifications.webhook.title')}</h3>
+        <h4 className="font-headline-md text-on-surface">{t('settings.notifications.webhook.title')}</h4>
         <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
       </div>
 
@@ -209,7 +207,7 @@ function WebhookSection() {
           <SelectContent>
             {PRESET_IDS.map((id) => (
               <SelectItem key={id} value={id}>
-                <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                <span className="material-symbols-outlined icon-sm" aria-hidden="true">
                   {PRESET_META[id].icon}
                 </span>
                 <span>{t(PRESET_META[id].labelKey)}</span>
@@ -229,19 +227,45 @@ function WebhookSection() {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder={presetMeta.urlPlaceholder}
-          aria-describedby="webhook-url-hint"
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          aria-describedby="webhook-url-hint webhook-url-status"
+          className={`w-full px-md py-sm rounded-md border bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-2 focus-visible:ring-primary/20 ${
+            url.trim() ? (validateWebhookUrl(url.trim()).ok ? 'border-tertiary/50' : 'border-error/50') : 'border-outline'
+          }`}
         />
-        <p id="webhook-url-hint" className="mt-xs text-on-surface-variant font-body-sm">
-          {t(presetMeta.urlHintKey)}
-        </p>
+        <div className="mt-xs flex items-center gap-xs">
+          <p id="webhook-url-hint" className="text-on-surface-variant font-body-sm flex-1">
+            {t(presetMeta.urlHintKey)}
+          </p>
+          {url.trim() && (
+            <span
+              id="webhook-url-status"
+              className={`text-label-sm font-bold ${validateWebhookUrl(url.trim()).ok ? 'text-tertiary' : 'text-error'}`}
+            >
+              {validateWebhookUrl(url.trim()).ok ? t('settings.notifications.urlStatus.valid') : t('settings.notifications.urlStatus.invalid')}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-sm pt-md">
-        <Button onClick={handleSave} disabled={saving}>
+        <Button onClick={handleSave} disabled={saving || !url.trim() || !validateWebhookUrl(url.trim()).ok}>
           {saving ? t('settings.notifications.saving') : t('settings.notifications.save')}
         </Button>
-        <Button variant="outline" onClick={handleClear} disabled={clearing}>
+      </div>
+
+      <div className="pt-md mt-sm border-t border-error/20 space-y-sm">
+        <p className="font-label-sm text-error font-bold uppercase tracking-wide">
+          {t('settings.notifications.dangerZone')}
+        </p>
+        <p className="text-on-surface-variant font-body-sm">
+          {t('settings.notifications.clearDescription')}
+        </p>
+        <Button
+          variant="outline"
+          onClick={handleClear}
+          disabled={clearing || !url}
+          className="border-error/40 text-error hover:bg-error/10 hover:border-error"
+        >
           {clearing ? t('settings.notifications.clearing') : t('settings.notifications.clear')}
         </Button>
       </div>
@@ -305,13 +329,21 @@ export default function NotificationsSettings() {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
-        <span className="material-symbols-outlined text-[32px] text-primary animate-spin" aria-hidden="true">progress_activity</span>
+        <span className="material-symbols-outlined icon-xl text-primary animate-spin" aria-hidden="true">progress_activity</span>
         <span className="sr-only">{t('settings.notifications.loading')}</span>
       </div>
     )
   }
 
-  const channels = [
+  type Channel = {
+    id: 'slack' | 'telegram' | 'email'
+    name: string
+    icon: string
+    configured: boolean
+    active: boolean
+    comingSoon?: boolean
+  }
+  const channels: Channel[] = [
     {
       id: 'slack' as const,
       name: 'Slack',
@@ -332,6 +364,7 @@ export default function NotificationsSettings() {
       icon: 'email',
       configured: false,
       active: false,
+      comingSoon: true,
     },
   ]
 
@@ -352,11 +385,16 @@ export default function NotificationsSettings() {
         </p>
       </div>
 
-      <WebhookSection />
-
-      <div className="mt-xl">
-        <OutboundSection />
-      </div>
+      <section className="mt-xl">
+        <div className="mb-lg">
+          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.outbound.sectionTitle')}</h3>
+          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.outbound.sectionDesc')}</p>
+        </div>
+        <div className="space-y-lg">
+          <WebhookSection />
+          <OutboundSection />
+        </div>
+      </section>
 
       <div className="mt-xl">
         <div className="mb-lg">
@@ -369,8 +407,13 @@ export default function NotificationsSettings() {
             {channels.map((channel) => (
               <button
                 key={channel.id}
-                onClick={() => setSelectedChannel(channel.id)}
-                className="p-md rounded-xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/50 transition-colors text-left"
+                onClick={() => { if (!channel.comingSoon) setSelectedChannel(channel.id) }}
+                disabled={!!channel.comingSoon}
+                className={`p-md rounded-xl border bg-surface-container-lowest transition-colors text-left ${
+                  channel.comingSoon
+                    ? 'border-outline-variant/20 opacity-60 cursor-not-allowed'
+                    : 'border-outline-variant/30 hover:border-primary/50'
+                }`}
               >
                 <div className="flex items-center justify-between mb-sm">
                   <div className="flex items-center gap-sm">
@@ -378,6 +421,13 @@ export default function NotificationsSettings() {
                     <span className="font-label-md font-bold text-on-surface">{channel.name}</span>
                   </div>
                   {(() => {
+                    if (channel.comingSoon) {
+                      return (
+                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-surface-container-high text-on-surface-variant font-label-sm" role="status">
+                          {t('settings.notifications.channel.comingSoon')}
+                        </span>
+                      )
+                    }
                     const health = healthFor(channel)
                     if (health === 'connected') {
                       return (
@@ -390,7 +440,7 @@ export default function NotificationsSettings() {
                     if (health === 'inactive') {
                       return (
                         <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-error/15 text-error font-label-sm" role="status" title={t('settings.notifications.wizard.channel.status.inactive')}>
-                          <span className="material-symbols-outlined text-[12px]" aria-hidden="true">warning</span>
+                          <span className="material-symbols-outlined icon-xs" aria-hidden="true">warning</span>
                           {t('settings.notifications.wizard.channel.status.inactive')}
                         </span>
                       )
@@ -398,7 +448,11 @@ export default function NotificationsSettings() {
                     return null
                   })()}
                 </div>
-                {channel.configured ? (
+                {channel.comingSoon ? (
+                  <p className="text-on-surface-variant text-sm">
+                    {t('settings.notifications.wizard.email.comingSoon')}
+                  </p>
+                ) : channel.configured ? (
                   <p className="text-on-surface-variant text-sm">
                     {t('settings.notifications.wizard.channel.status.configured')}
                   </p>
@@ -423,15 +477,6 @@ export default function NotificationsSettings() {
               <TelegramWizard
                 config={inboundConfig?.telegram || null}
                 onSave={handleSaveInbound}
-                onCancel={() => setSelectedChannel(null)}
-              />
-            )}
-            {selectedChannel === 'email' && (
-              <EmailWizard
-                onSave={async () => {
-                  // Email not implemented in backend yet
-                  toast.info(t('settings.notifications.wizard.email.comingSoon'))
-                }}
                 onCancel={() => setSelectedChannel(null)}
               />
             )}

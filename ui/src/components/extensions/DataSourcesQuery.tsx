@@ -6,12 +6,13 @@ import {
   type InstalledDataSource,
 } from "@/lib/tauri-api";
 import type { DataSourceResult, DataSourceItem } from "@/types";
+import LoadingState from "@/components/ui/loading-state";
 
 /**
  * Query panel for installed data sources.
  * Allows users to search across their personal data (Obsidian vaults, email, etc.)
  */
-export default function DataSourcesQuery() {
+export default function DataSourcesQuery({ onSwitchToAdapters }: { onSwitchToAdapters?: () => void }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, string | number>) => intl.formatMessage({ id }, values)
 
@@ -51,10 +52,7 @@ export default function DataSourcesQuery() {
   if (installedLoading) {
     return (
       <div className="p-lg max-w-5xl mx-auto">
-        <div className="text-center py-lg text-on-surface-variant">
-          <span className="material-symbols-outlined animate-spin align-middle mr-xs">progress_activity</span>
-          {t('extensions.datasources.loadingInstalled')}
-        </div>
+        <LoadingState size="sm" label={t('extensions.datasources.loadingInstalled')} />
       </div>
     );
   }
@@ -63,8 +61,18 @@ export default function DataSourcesQuery() {
     return (
       <div className="p-lg max-w-5xl mx-auto">
         <div className="text-center py-3xl text-on-surface-variant text-body-md">
-          <span className="material-symbols-outlined text-[48px] text-outline mb-md">database_off</span>
-          <p>{t('extensions.datasources.query.noDataSourcesInstalled')}</p>
+          <span className="material-symbols-outlined icon-2xl text-outline mb-md">database_off</span>
+          <p className="mb-md">{t('extensions.datasources.query.noDataSourcesInstalled')}</p>
+          {onSwitchToAdapters && (
+            <button
+              type="button"
+              onClick={onSwitchToAdapters}
+              className="inline-flex items-center gap-xs px-md py-sm rounded-lg bg-primary text-on-primary text-label-md font-bold hover:bg-primary/90 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">addon</span>
+              {t('extensions.datasources.query.installCta')}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -73,7 +81,7 @@ export default function DataSourcesQuery() {
   return (
     <div className="p-lg max-w-5xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">
           {t('extensions.datasources.query.title')}
         </h2>
         <p className="text-body-md text-on-surface-variant">
@@ -90,7 +98,7 @@ export default function DataSourcesQuery() {
             id="dataSourceSelect"
             value={selectedSlug}
             onChange={(e) => setSelectedSlug(e.target.value)}
-            className="w-full px-sm py-sm rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-md focus:outline-none focus:border-primary"
+            className="w-full px-sm py-sm rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-md focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <option value="">{t('extensions.datasources.query.selectSourcePlaceholder')}</option>
             {installed.map((source) => (
@@ -111,7 +119,7 @@ export default function DataSourcesQuery() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('extensions.datasources.query.queryPlaceholder')}
-            className="w-full px-sm py-sm rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-md focus:outline-none focus:border-primary"
+            className="w-full px-sm py-sm rounded-lg bg-surface-container-lowest border border-outline-variant/50 text-label-md focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </div>
 
@@ -192,7 +200,7 @@ function ResultCard({ item }: { item: DataSourceItem }) {
             rel="noreferrer"
             className="text-label-xs px-sm py-xs rounded-lg bg-primary-container/20 text-on-primary-container font-bold hover:bg-primary-container/40 flex items-center gap-xs"
           >
-            <span className="material-symbols-outlined text-[16px]">open_in_new</span>
+            <span className="material-symbols-outlined icon-sm">open_in_new</span>
             {t('extensions.datasources.query.openLink')}
           </a>
         )}
@@ -204,11 +212,11 @@ function ResultCard({ item }: { item: DataSourceItem }) {
 
       <div className="flex items-center gap-md text-label-xs text-on-surface-variant">
         <div className="flex items-center gap-xs">
-          <span className="material-symbols-outlined text-[16px]">category</span>
+          <span className="material-symbols-outlined icon-sm">category</span>
           <span>{item.kind}</span>
         </div>
         <div className="flex items-center gap-xs">
-          <span className="material-symbols-outlined text-[16px]">schedule</span>
+          <span className="material-symbols-outlined icon-sm">schedule</span>
           <span>{formatDate(item.updated_at)}</span>
         </div>
       </div>

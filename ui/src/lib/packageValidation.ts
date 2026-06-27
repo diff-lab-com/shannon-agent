@@ -73,6 +73,7 @@ export function safeErrorMessage(e: unknown, fallback: string): string {
   if (e instanceof Error) {
     const msg = e.message;
     if (/api[_-]?key|token|password|secret|bearer/i.test(msg)) return fallback;
+    if (/^\[mock\]/.test(msg)) return fallback;
     if (msg.length > 200) return fallback;
     return msg;
   }

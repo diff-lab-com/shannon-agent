@@ -1,10 +1,22 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { open } from '@tauri-apps/plugin-dialog'
+import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useApp } from '@/context/AppContext'
+import { useVoice } from '@/hooks/useVoice'
+import { MicButton } from '@/components/voice/MicButton'
+import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import * as api from '@/lib/tauri-api'
+
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
+
+function isImageFile(path: string): boolean {
+  const dot = path.lastIndexOf('.')
+  if (dot < 0) return false
+  return IMAGE_EXTENSIONS.has(path.slice(dot + 1).toLowerCase())
+}
 
 interface ChatInputProps {
   value: string
@@ -43,6 +55,12 @@ export default function ChatInput({
   const modelList = models ?? []
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const voice = useVoice({
+    onTranscript: (text) => {
+      const merged = value ? `${value} ${text}` : text
+      onChange(merged)
+    },
+  })
 
   const handleChangeWorkingDir = async () => {
     if (!currentSessionId) return
@@ -122,7 +140,13 @@ export default function ChatInput({
 
   const handleAttachClick = async () => {
     try {
-      const selected = await open({ multiple: true })
+      const selected = await open({
+        multiple: true,
+        filters: [
+          { name: t('chat.input.attach.filter.images'), extensions: Array.from(IMAGE_EXTENSIONS) },
+          { name: t('chat.input.attach.filter.all'), extensions: ['*'] },
+        ],
+      })
       if (!selected) return
       const paths = (Array.isArray(selected) ? selected : [selected]) as string[]
       if (paths.length > 0) onAttach(paths)
@@ -134,6 +158,28 @@ export default function ChatInput({
   const currentMode = config?.approval_mode || 'suggest'
   const currentModelId = modelList.find(m => m.name === config?.model && m.provider === config?.provider)?.id || ''
   const workingDirBasename = sessionWorkingDir ? sessionWorkingDir.split('/').pop() || sessionWorkingDir.split('\\').pop() || '' : ''
+  const planModeActive = currentMode === 'plan'
+
+  const handlePlanToggle = async () => {
+    try {
+      await api.configure({ key: 'approval_mode', value: planModeActive ? 'suggest' : 'plan' })
+      await refreshConfig()
+    } catch (err) {
+      console.warn('Failed to toggle plan mode:', err)
+    }
+  }
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
+        e.preventDefault()
+        void handlePlanToggle()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planModeActive])
 
   const modeOptions = [
     { value: 'readonly', label: t('chat.input.mode.readonly'), icon: 'lock', color: 'border-green-500/50' },
@@ -155,32 +201,73 @@ export default function ChatInput({
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 rounded-2xl backdrop-blur-sm pointer-events-none">
           <div className="flex flex-col items-center gap-sm text-primary">
-            <span className="material-symbols-outlined text-[32px]">cloud_upload</span>
+            <span className="material-symbols-outlined icon-xl">cloud_upload</span>
             <p className="font-label-md">{t('chat.input.attach.dropHint')}</p>
           </div>
+        </div>
+      )}
+
+      {planModeActive && (
+        <div
+          role="status"
+          className="flex items-center gap-xs px-md py-xs bg-tertiary-container/60 border-b border-tertiary/30 rounded-t-2xl text-on-tertiary-container"
+        >
+          <span className="material-symbols-outlined icon-sm shrink-0">route</span>
+          <span className="font-label-sm truncate flex-1">{t('chat.input.planMode.banner')}</span>
+          <button
+            type="button"
+            onClick={handlePlanToggle}
+            aria-label={t('chat.input.planMode.exit')}
+            title={t('chat.input.planMode.exit')}
+            className="p-xs rounded hover:bg-tertiary/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 shrink-0"
+          >
+            <span className="material-symbols-outlined icon-sm">close</span>
+          </button>
+        </div>
+      )}
+
+      {voice.state !== 'idle' && (
+        <div className="flex items-center justify-center py-sm bg-primary/5 rounded-t-2xl">
+          <VoiceOrb state={voice.state} />
         </div>
       )}
 
       <div className="flex flex-col">
         {attachedFiles.length > 0 && (
           <div className="flex flex-wrap items-center gap-xs px-md pt-md">
-            {attachedFiles.map((path, i) => (
-              <span key={i} className="inline-flex items-center gap-xs px-sm py-xs bg-primary/10 text-primary rounded-lg font-label-sm">
-                <span className="material-symbols-outlined text-[14px]">description</span>
-                {path.split('/').pop()}
-                <button
-                  type="button"
-                  className="hover:text-error cursor-pointer"
-                  aria-label={t('chat.input.attach.remove')}
-                  onClick={() => {
-                    const newFiles = attachedFiles.filter((_, idx) => idx !== i)
-                    onAttach(newFiles)
-                  }}
+            {attachedFiles.map((path, i) => {
+              const name = path.split(/[/\\]/).pop() || path
+              const isImage = isImageFile(path)
+              return (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-xs px-sm py-xs bg-primary/10 text-primary rounded-lg font-label-sm"
                 >
-                  <span className="material-symbols-outlined text-[14px]">close</span>
-                </button>
-              </span>
-            ))}
+                  {isImage ? (
+                    <img
+                      src={convertFileSrc(path)}
+                      alt={name}
+                      className="w-5 h-5 rounded object-cover shrink-0"
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span className="material-symbols-outlined text-[14px]">description</span>
+                  )}
+                  {name}
+                  <button
+                    type="button"
+                    className="hover:text-error cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 rounded"
+                    aria-label={t('chat.input.attach.remove')}
+                    onClick={() => {
+                      const newFiles = attachedFiles.filter((_, idx) => idx !== i)
+                      onAttach(newFiles)
+                    }}
+                  >
+                    <span className="material-symbols-outlined text-[14px]">close</span>
+                  </button>
+                </span>
+              )
+            })}
             {attachedFiles.length > 1 && (
               <button
                 type="button"
@@ -224,11 +311,27 @@ export default function ChatInput({
                   : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
               } disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              <span className="material-symbols-outlined text-[16px]">folder_open</span>
+              <span className="material-symbols-outlined icon-sm">folder_open</span>
               <span className="max-w-[120px] truncate font-mono">
                 {workingDirBasename || t('chat.input.wd.title')}
               </span>
               <span className="material-symbols-outlined text-[14px] opacity-50 group-hover/wd:opacity-100 group-hover/wd:text-primary transition-opacity">change_folder</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePlanToggle}
+              aria-pressed={planModeActive}
+              aria-label={t('chat.input.planMode.aria')}
+              title={t('chat.input.planMode.tooltip')}
+              className={`flex items-center gap-xs px-sm py-xs rounded-full text-label-sm border transition-all shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 ${
+                planModeActive
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'border-outline-variant/30 bg-surface-container-lowest/60 text-on-surface-variant hover:bg-surface-container-low hover:border-outline-variant hover:text-primary'
+              }`}
+            >
+              <span className="material-symbols-outlined icon-sm">route</span>
+              <span>{t('chat.input.planMode.label')}</span>
             </button>
 
             <Select value={currentMode} onValueChange={handleModeChange}>
@@ -237,14 +340,14 @@ export default function ChatInput({
                 aria-label={t('chat.input.mode.label')}
                 className={`border ${selectedMode.color} bg-transparent hover:bg-surface-container-low/50 transition-colors`}
               >
-                <span className="material-symbols-outlined text-[16px]">{selectedMode.icon}</span>
+                <span className="material-symbols-outlined icon-sm">{selectedMode.icon}</span>
                 <SelectValue placeholder={t('chat.input.mode.label')} />
               </SelectTrigger>
               <SelectContent>
                 {modeOptions.map(mode => (
                   <SelectItem key={mode.value} value={mode.value}>
                     <div className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined text-[16px]">{mode.icon}</span>
+                      <span className="material-symbols-outlined icon-sm">{mode.icon}</span>
                       <span>{mode.label}</span>
                     </div>
                   </SelectItem>
@@ -258,14 +361,14 @@ export default function ChatInput({
                 aria-label={t('chat.input.model.label')}
                 className="border border-outline-variant/30 bg-transparent hover:bg-surface-container-low/50 transition-colors"
               >
-                <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                <span className="material-symbols-outlined icon-sm">auto_awesome</span>
                 <SelectValue placeholder={t('chat.input.model.label')} />
               </SelectTrigger>
               <SelectContent>
                 {modelList.map(model => (
                   <SelectItem key={model.id} value={model.id}>
                     <div className="flex items-center gap-xs">
-                      <span className="material-symbols-outlined text-[16px]">auto_awesome</span>
+                      <span className="material-symbols-outlined icon-sm">auto_awesome</span>
                       <div className="flex flex-col">
                         <span className="text-sm">{model.name}</span>
                         <span className="text-xs text-on-surface-variant">{model.provider}</span>
@@ -285,7 +388,7 @@ export default function ChatInput({
               className="p-md text-on-surface-variant hover:text-primary"
               onClick={handleAttachClick}
             >
-              <span className="material-symbols-outlined text-[20px]">attach_file</span>
+              <span className="material-symbols-outlined icon-md">attach_file</span>
             </Button>
 
             <Button
@@ -295,7 +398,7 @@ export default function ChatInput({
               className="p-md text-on-surface-variant hover:text-primary"
               onClick={onOpenQuickFix}
             >
-              <span className="material-symbols-outlined text-[20px]">build</span>
+              <span className="material-symbols-outlined icon-md">build</span>
             </Button>
 
             <Button
@@ -305,8 +408,15 @@ export default function ChatInput({
               className="p-md text-on-surface-variant hover:text-primary"
               onClick={onOpenEditor}
             >
-              <span className="material-symbols-outlined text-[20px]">code</span>
+              <span className="material-symbols-outlined icon-md">code</span>
             </Button>
+
+            <MicButton
+              state={voice.state}
+              disabled={disabled}
+              onStart={() => void voice.startRecording()}
+              onStop={() => void voice.stopRecording()}
+            />
 
             {isQuerying ? (
               <Button
@@ -314,7 +424,7 @@ export default function ChatInput({
                 className="bg-error/80 text-on-error p-3 rounded-xl active:scale-95 transition-all"
                 onClick={onCancelQuery}
               >
-                <span className="material-symbols-outlined text-[20px]">stop</span>
+                <span className="material-symbols-outlined icon-md">stop</span>
               </Button>
             ) : (
               <Button
@@ -323,7 +433,7 @@ export default function ChatInput({
                 onClick={onSend}
                 disabled={!value.trim()}
               >
-                <span className="material-symbols-outlined text-[20px]">arrow_upward</span>
+                <span className="material-symbols-outlined icon-md">arrow_upward</span>
               </Button>
             )}
           </div>

@@ -7,10 +7,20 @@ import { createElement, type ReactElement } from 'react'
 vi.mock('@testing-library/react', async () => {
   const actual = await vi.importActual<typeof import('@testing-library/react')>('@testing-library/react')
   const { I18nProvider } = await import('@/i18n')
+  const wrap = (ui: ReactElement) => createElement(I18nProvider, null, ui)
   return {
     ...actual,
-    render: (ui: ReactElement, options?: Parameters<typeof actual.render>[1]) =>
-      actual.render(createElement(I18nProvider, null, ui), options),
+    render: (ui: ReactElement, options?: Parameters<typeof actual.render>[1]) => {
+      const result = actual.render(wrap(ui), options)
+      // Also wrap `rerender` — it bypasses render() and would otherwise drop
+      // the provider (e.g. open→closed Modal transitions inside tests).
+      const originalRerender = result.rerender
+      result.rerender = (
+        rerenderUi: ReactElement,
+        rerenderOptions?: Parameters<typeof originalRerender>[1],
+      ) => originalRerender(wrap(rerenderUi), rerenderOptions)
+      return result
+    },
   }
 })
 
@@ -79,6 +89,7 @@ vi.mock('@/lib/tauri-api', () => ({
   }),
   configure: vi.fn().mockResolvedValue(undefined),
   switchProvider: vi.fn().mockResolvedValue(undefined),
+  testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
   listModels: vi.fn().mockResolvedValue([
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
   ]),
@@ -137,6 +148,10 @@ vi.mock('@/lib/tauri-api', () => ({
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
   installAgentFromRepo: vi.fn().mockResolvedValue({ id: 'agent-1', name: 'Test Agent', install_path: '/path/to/agent' }),
+  listSkillCandidates: vi.fn().mockResolvedValue([]),
+  approveSkillCandidate: vi.fn().mockResolvedValue({ id: 'skill-x', name: '', description: '', trigger: '', procedure: [], created_at: '', originating_sessions: [] }),
+  rejectSkillCandidate: vi.fn().mockResolvedValue(undefined),
+  listAgentAuthoredSkills: vi.fn().mockResolvedValue([]),
   listDataSourceCatalog: vi.fn().mockResolvedValue([]),
   listInstalledDataSources: vi.fn().mockResolvedValue([]),
   queryDataSource: vi.fn().mockResolvedValue({ items: [], total: 0, has_more: false }),
@@ -157,4 +172,6 @@ vi.mock('@/lib/tauri-api', () => ({
   getMemoryStats: vi.fn().mockResolvedValue({
     total: 0, by_category: {}, by_project: {}, most_recent_at: null,
   }),
+  markTriageRead: vi.fn().mockResolvedValue(undefined),
+  archiveTriageItem: vi.fn().mockResolvedValue(undefined),
 }))

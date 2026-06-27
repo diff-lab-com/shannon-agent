@@ -132,7 +132,7 @@ export default function Featured() {
   return (
     <div className="p-lg max-w-7xl mx-auto">
       <div className="mb-xl">
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">{t('extensions.featured.title')}</h2>
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">{t('extensions.featured.title')}</h2>
         <p className="text-body-md text-on-surface-variant">
           {t('extensions.featured.subtitle')}
         </p>
@@ -201,7 +201,7 @@ export default function Featured() {
                   >
                     {isBusy ? (
                       <>
-                        <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                        <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>
                         {vendor.install_kind.type === "oauth_remote"
                           ? t('extensions.featured.authorizing')
                           : t('extensions.featured.installing')}

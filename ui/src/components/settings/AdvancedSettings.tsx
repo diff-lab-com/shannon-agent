@@ -1,10 +1,14 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { useApp } from '@/context/AppContext'
+import { useModalFocus } from '@/hooks/useModalFocus'
+import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
+import type { SkillCandidate } from '@/lib/tauri-api'
 
 export default function AdvancedSettings() {
   const intl = useIntl()
@@ -15,6 +19,7 @@ export default function AdvancedSettings() {
   const [encryptionEnabled, setEncryptionEnabled] = useState(config?.encryption_enabled ?? true)
   const [debugConsole, setDebugConsole] = useState(config?.debug_console ?? false)
   const [skillLoopEnabled, setSkillLoopEnabled] = useState(config?.skill_loop_enabled ?? false)
+  const [skillDetectionEnabled, setSkillDetectionEnabled] = useState(config?.skill_detection_enabled ?? true)
   const [clearing, setClearing] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [showLogs, setShowLogs] = useState(false)
@@ -22,26 +27,59 @@ export default function AdvancedSettings() {
   const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
+  const [candidates, setCandidates] = useState<SkillCandidate[]>([])
+  const [candidateIndex, setCandidateIndex] = useState(0)
+  const [approvalOpen, setApprovalOpen] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    listSkillCandidatesSafe(!cancelled)
+    return () => { cancelled = true }
+
+    function listSkillCandidatesSafe(active: boolean) {
+      api.listSkillCandidates()
+        .then((rows) => { if (active) setCandidates(rows) })
+        .catch(() => { if (active) setCandidates([]) })
+    }
+  }, [])
+
+  const logsRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showLogs, logsRef)
+  const apiKeysRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showApiKeys, apiKeysRef)
+  const clearConfirmRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showClearConfirm, clearConfirmRef)
+  const resetConfirmRef = useRef<HTMLDivElement>(null)
+  useModalFocus(showResetConfirm, resetConfirmRef)
+
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
     try {
       await api.configure({ key, value: String(value) })
       await refreshConfig()
       toast.success(intl.formatMessage({ id: 'settings.advanced.toggled' }, { key: key.replace(/_/g, ' '), state: value ? t('settings.advanced.enabled') : t('settings.advanced.disabled') }))
-    } catch (e) { console.warn("AdvancedSettings error:", e); toast.error(t('settings.advanced.updateFailed')) }
+    } catch (e) { toastError(t('settings.advanced.updateFailed'), e) }
   }
 
   const handleClearCache = async () => {
     setClearing(true)
-    try { await api.configure({ key: 'clear_cache', value: 'true' }); toast.success(t('settings.advanced.cacheCleared')) } catch (e) { console.warn("AdvancedSettings error:", e); toast.error(t('settings.advanced.clearCacheFailed')) }
+    try { await api.configure({ key: 'clear_cache', value: 'true' }); toast.success(t('settings.advanced.cacheCleared')) } catch (e) { toastError(t('settings.advanced.clearCacheFailed'), e) }
     setClearing(false)
   }
 
   const handleFactoryReset = async () => {
     setResetting(true)
-    try { await api.configure({ key: 'factory_reset', value: 'true' }); toast.success(t('settings.advanced.resetComplete')) } catch (e) { console.warn("AdvancedSettings error:", e); toast.error(t('settings.advanced.resetFailed')) }
+    try { await api.configure({ key: 'factory_reset', value: 'true' }); toast.success(t('settings.advanced.resetComplete')) } catch (e) { toastError(t('settings.advanced.resetFailed'), e) }
     setResetting(false)
     setShowResetConfirm(false)
+  }
+
+  function advanceCandidate() {
+    setCandidates((prev) => {
+      const next = prev.slice(1)
+      if (next.length === 0) setApprovalOpen(false)
+      return next
+    })
   }
 
   return (
@@ -59,6 +97,11 @@ export default function AdvancedSettings() {
               <span className="material-symbols-outlined">auto_awesome</span>
             </div>
             <h3 className="font-headline-md text-[24px] font-bold text-on-surface">{t('settings.skillLoop.title')}</h3>
+            {candidates.length > 0 && (
+              <span className="ml-auto px-sm py-[2px] rounded-full bg-tertiary-container text-on-tertiary-container text-label-xs font-bold">
+                {intl.formatMessage({ id: 'settings.skillLoop.pendingCount' }, { count: candidates.length })}
+              </span>
+            )}
           </div>
           <p className="text-on-surface-variant text-body-sm mb-lg">{t('settings.skillLoop.description')}</p>
           <div className="flex items-center justify-between gap-md">
@@ -68,6 +111,23 @@ export default function AdvancedSettings() {
             </div>
             <Switch checked={skillLoopEnabled} onCheckedChange={v => handleToggle('skill_loop_enabled', v, setSkillLoopEnabled)} className="shrink-0" />
           </div>
+          <div className="flex items-center justify-between gap-md mt-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">{t('settings.skillLoop.detectionEnabled')}</div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">{t('settings.skillLoop.detectionEnabledDesc')}</div>
+            </div>
+            <Switch checked={skillDetectionEnabled} onCheckedChange={v => handleToggle('skill_detection_enabled', v, setSkillDetectionEnabled)} className="shrink-0" />
+          </div>
+          {candidates.length > 0 && (
+            <Button
+              variant="ghost"
+              className="w-full mt-md py-sm border border-tertiary/30 rounded-lg text-tertiary font-label-md font-bold text-[14px] hover:bg-tertiary-container/30 transition-colors cursor-pointer"
+              onClick={() => { setCandidateIndex(0); setApprovalOpen(true) }}
+            >
+              <span className="material-symbols-outlined icon-sm mr-xs">rate_review</span>
+              {t('settings.skillLoop.review')}
+            </Button>
+          )}
         </div>
 
         {/* Memory Management */}
@@ -138,12 +198,12 @@ export default function AdvancedSettings() {
               <p className="text-on-surface-variant text-body-sm mb-md">{t('settings.advanced.devOptionsDesc')}</p>
               <div className="flex items-center gap-md">
                 <Button variant="ghost" className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowLogs(true)}>
-                  <span className="material-symbols-outlined text-[16px]">description</span>
+                  <span className="material-symbols-outlined icon-sm">description</span>
                   {t('settings.advanced.viewLogs')}
                 </Button>
                 <span className="text-outline-variant">|</span>
                 <Button variant="ghost" className="flex items-center gap-xs text-primary font-label-md text-[14px] hover:underline cursor-pointer" onClick={() => setShowApiKeys(true)}>
-                  <span className="material-symbols-outlined text-[16px]">api</span>
+                  <span className="material-symbols-outlined icon-sm">api</span>
                   {t('settings.advanced.manageApiKeys')}
                 </Button>
               </div>
@@ -180,7 +240,7 @@ export default function AdvancedSettings() {
 
       {/* System Logs Modal */}
       {showLogs && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLogs(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLogs(false) }}>
+        <div ref={logsRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLogs(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLogs(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-2xl w-full mx-lg shadow-2xl max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-lg">
               <h3 className="font-headline-md text-on-surface">{t('settings.advanced.systemLogs')}</h3>
@@ -199,7 +259,7 @@ export default function AdvancedSettings() {
 
       {/* API Keys Modal */}
       {showApiKeys && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowApiKeys(false)} onKeyDown={e => { if (e.key === 'Escape') setShowApiKeys(false) }}>
+        <div ref={apiKeysRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowApiKeys(false)} onKeyDown={e => { if (e.key === 'Escape') setShowApiKeys(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-lg w-full mx-lg shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex justify-between items-center mb-lg">
               <h3 className="font-headline-md text-on-surface">{t('settings.advanced.manageApiKeys')}</h3>
@@ -217,7 +277,7 @@ export default function AdvancedSettings() {
 
       {/* Clear Cache Confirmation */}
       {showClearConfirm && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowClearConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowClearConfirm(false) }}>
+        <div ref={clearConfirmRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowClearConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowClearConfirm(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-secondary text-[24px]">cleaning_services</span>
@@ -234,7 +294,7 @@ export default function AdvancedSettings() {
 
       {/* Factory Reset Confirmation */}
       {showResetConfirm && (
-        <div role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowResetConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowResetConfirm(false) }}>
+        <div ref={resetConfirmRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowResetConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowResetConfirm(false) }}>
           <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-sm mb-md">
               <span className="material-symbols-outlined text-error text-[24px]">warning</span>
@@ -248,6 +308,14 @@ export default function AdvancedSettings() {
           </div>
         </div>
       )}
+
+      <SkillApprovalModal
+        open={approvalOpen}
+        candidate={candidates[candidateIndex] ?? null}
+        onClose={() => setApprovalOpen(false)}
+        onApproved={() => advanceCandidate()}
+        onRejected={() => advanceCandidate()}
+      />
     </div>
   )
 }

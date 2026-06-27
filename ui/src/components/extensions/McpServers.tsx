@@ -9,6 +9,43 @@ import {
 import { safeErrorMessage } from "@/lib/packageValidation";
 import type { McpServerInfo } from "@/types";
 import McpAddServerDialog from "./McpAddServerDialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import LoadingState from "@/components/ui/loading-state";
+
+/** Semantic icon per known MCP server. Falls back to a hub/storage icon. */
+const MCP_SERVER_ICONS: Record<string, string> = {
+  filesystem: 'folder',
+  fs: 'folder',
+  github: 'hub',
+  gitlab: 'hub',
+  playwright: 'theater_comedy',
+  puppeteer: 'web',
+  sqlite: 'database',
+  postgres: 'database',
+  postgresql: 'database',
+  mysql: 'database',
+  redis: 'bolt',
+  memory: 'psychology',
+  fetch: 'cloud_download',
+  slack: 'tag',
+  linear: 'linear_scale',
+  notion: 'description',
+  obsidian: 'book',
+  imap: 'mail',
+  smtp: 'mail',
+  brave: 'shield',
+  google: 'travel_explore',
+  sequential: 'route',
+  time: 'schedule',
+};
+
+function mcpServerIcon(name: string): string {
+  const key = name.toLowerCase().trim();
+  for (const [k, v] of Object.entries(MCP_SERVER_ICONS)) {
+    if (key.includes(k)) return v;
+  }
+  return 'cloud';
+}
 
 /**
  * MCP Servers page — Cursor-style click-install UX.
@@ -41,6 +78,7 @@ export default function McpServers() {
   const [installedLoading, setInstalledLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   const refreshInstalled = () => {
     listMcpServers()
@@ -78,7 +116,7 @@ export default function McpServers() {
   return (
     <div className="p-lg max-w-6xl mx-auto space-y-xl">
       <header>
-        <h2 className="text-headline-md font-bold text-on-surface mb-xs">
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-xs">
           {t("extensions.mcp.title")}
         </h2>
         <p className="text-body-md text-on-surface-variant">
@@ -90,7 +128,21 @@ export default function McpServers() {
         servers={installed}
         loading={installedLoading}
         busyId={busyId}
-        onUninstall={handleUninstall}
+        onUninstall={(name) => setRemoveTarget(name)}
+      />
+
+      <ConfirmDialog
+        open={removeTarget !== null}
+        title={t("extensions.mcp.removeConfirm.title")}
+        message={t("extensions.mcp.removeConfirm.message", { name: removeTarget ?? "" })}
+        confirmLabel={t("extensions.mcp.removeConfirm.confirm")}
+        cancelLabel={t("extensions.mcp.removeConfirm.cancel")}
+        destructive
+        busy={busyId?.startsWith("uninstall:") ?? false}
+        onConfirm={() => {
+          if (removeTarget) void handleUninstall(removeTarget).finally(() => setRemoveTarget(null))
+        }}
+        onCancel={() => setRemoveTarget(null)}
       />
 
       <div className="flex justify-center pt-sm">
@@ -140,12 +192,10 @@ function InstalledSection({
         {t("extensions.mcp.installedSection")} · {servers.length}
       </h3>
       {loading ? (
-        <div className="text-center py-md text-on-surface-variant text-label-sm">
-          {t("extensions.mcp.loading")}
-        </div>
+        <LoadingState size="sm" label={t("extensions.mcp.loading")} />
       ) : servers.length === 0 ? (
         <div className="border border-dashed border-outline-variant/40 rounded-2xl p-lg text-center bg-surface-container-low/30">
-          <span className="material-symbols-outlined text-[32px] text-on-surface-variant mb-xs inline-block">
+          <span className="material-symbols-outlined icon-xl text-on-surface-variant mb-xs inline-block">
             dns
           </span>
           <div className="font-bold text-label-md text-on-surface mb-xs">
@@ -170,8 +220,8 @@ function InstalledSection({
                     : "border-b border-outline-variant/15"
                 }`}
               >
-                <span className="material-symbols-outlined text-primary text-[20px]">
-                  cloud
+                <span className="material-symbols-outlined text-primary text-[20px]" aria-hidden="true">
+                  {mcpServerIcon(srv.name)}
                 </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-xs">

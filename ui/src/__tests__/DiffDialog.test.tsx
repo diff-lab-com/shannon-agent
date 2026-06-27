@@ -74,7 +74,7 @@ describe('DiffDialog — Apply flow (Day 4-5)', () => {
     vi.mocked(api.getFileDiff).mockResolvedValue(sampleDiff)
     render(<DiffDialog open={true} filePath="src/app.ts" onClose={() => {}} />)
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
-    const applyBtn = screen.getByRole('button', { name: /apply accepted hunks to disk/i })
+    const applyBtn = await screen.findByRole('button', { name: /apply accepted hunks to disk/i })
     expect(applyBtn).toBeDisabled()
   })
 
@@ -85,7 +85,7 @@ describe('DiffDialog — Apply flow (Day 4-5)', () => {
     render(<DiffDialog open={true} filePath="src/app.ts" onClose={onClose} />)
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
 
-    fireEvent.click(screen.getByText('Accept all'))
+    fireEvent.click(await screen.findByText('Accept all'))
 
     const applyBtn = screen.getByRole('button', { name: /apply accepted hunks to disk/i })
     expect(applyBtn).not.toBeDisabled()
@@ -104,7 +104,7 @@ describe('DiffDialog — Apply flow (Day 4-5)', () => {
     render(<DiffDialog open={true} filePath="src/app.ts" onClose={() => {}} />)
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
 
-    fireEvent.click(screen.getByText('Reject all'))
+    fireEvent.click(await screen.findByText('Reject all'))
 
     const applyBtn = screen.getByRole('button', { name: /apply accepted hunks to disk/i })
     expect(applyBtn).toBeDisabled()
@@ -117,7 +117,7 @@ describe('DiffDialog — Apply flow (Day 4-5)', () => {
     render(<DiffDialog open={true} filePath="src/app.ts" onClose={onClose} />)
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
 
-    fireEvent.click(screen.getByText('Accept all'))
+    fireEvent.click(await screen.findByText('Accept all'))
     fireEvent.click(screen.getByRole('button', { name: /apply accepted hunks to disk/i }))
 
     await waitFor(() => expect(api.saveTextFile).toHaveBeenCalledTimes(1))
@@ -136,7 +136,7 @@ describe('DiffDialog — Apply flow (Day 4-5)', () => {
     render(<DiffDialog open={true} filePath="src/app.ts" onClose={onClose} />)
     await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
 
-    fireEvent.click(screen.getByText('Cancel'))
+    fireEvent.click(await screen.findByText('Cancel'))
 
     expect(onClose).toHaveBeenCalledTimes(1)
     expect(api.saveTextFile).not.toHaveBeenCalled()

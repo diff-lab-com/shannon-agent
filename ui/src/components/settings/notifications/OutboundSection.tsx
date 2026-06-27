@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 
 interface ResultRowProps {
   provider: string
@@ -96,8 +97,7 @@ export default function OutboundSection() {
       await api.saveOutboundConfig(dto)
       toast.success(t('settings.notifications.outbound.saved'))
     } catch (e) {
-      console.warn('saveOutboundConfig error:', e)
-      toast.error(t('settings.notifications.outbound.error.saveFailed'))
+      toastError(t('settings.notifications.outbound.error.saveFailed'), e)
     }
     setSaving(false)
   }
@@ -113,8 +113,7 @@ export default function OutboundSection() {
       setResults(null)
       toast.success(t('settings.notifications.outbound.cleared'))
     } catch (e) {
-      console.warn('clearOutboundConfig error:', e)
-      toast.error(t('settings.notifications.outbound.error.clearFailed'))
+      toastError(t('settings.notifications.outbound.error.clearFailed'), e)
     }
     setClearing(false)
   }
@@ -135,10 +134,7 @@ export default function OutboundSection() {
         toast.error(t('settings.notifications.outbound.test.allFailed'))
       }
     } catch (e) {
-      console.warn('sendOutboundTest error:', e)
-      toast.error(
-        typeof e === 'string' ? e : t('settings.notifications.outbound.test.allFailed'),
-      )
+      toastError(t('settings.notifications.outbound.test.allFailed'), e)
     }
     setSending(false)
   }
@@ -151,7 +147,7 @@ export default function OutboundSection() {
         aria-live="polite"
       >
         <span
-          className="material-symbols-outlined text-[32px] text-primary animate-spin"
+          className="material-symbols-outlined icon-xl text-primary animate-spin"
           aria-hidden="true"
         >
           progress_activity
@@ -164,9 +160,9 @@ export default function OutboundSection() {
   return (
     <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
       <div>
-        <h3 className="font-headline-md text-on-surface">
+        <h4 className="font-headline-md text-on-surface">
           {t('settings.notifications.outbound.title')}
-        </h3>
+        </h4>
         <p className="text-on-surface-variant font-body-sm">
           {t('settings.notifications.outbound.subtitle')}
         </p>
@@ -188,7 +184,7 @@ export default function OutboundSection() {
             onChange={(e) => setSlackToken(e.target.value)}
             placeholder="xoxb-••••••"
             aria-label={t('settings.notifications.outbound.slack.token')}
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
           <input
             type="text"
@@ -196,7 +192,7 @@ export default function OutboundSection() {
             onChange={(e) => setSlackChannel(e.target.value)}
             placeholder="#general or C012345"
             aria-label={t('settings.notifications.outbound.slack.channel')}
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </div>
 
@@ -215,7 +211,7 @@ export default function OutboundSection() {
             onChange={(e) => setTelegramToken(e.target.value)}
             placeholder="1234567890:ABC..."
             aria-label={t('settings.notifications.outbound.telegram.token')}
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
           <input
             type="text"
@@ -223,7 +219,7 @@ export default function OutboundSection() {
             onChange={(e) => setTelegramChat(e.target.value)}
             placeholder="@channel or -1001234567890"
             aria-label={t('settings.notifications.outbound.telegram.chatId')}
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </div>
       </div>
@@ -252,7 +248,7 @@ export default function OutboundSection() {
             onChange={(e) => setTestMessage(e.target.value)}
             placeholder={t('settings.notifications.outbound.test.placeholder')}
             aria-label={t('settings.notifications.outbound.test.messageLabel')}
-            className="flex-1 px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="flex-1 px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
           <Button onClick={handleSendTest} disabled={sending}>
             {sending ? (

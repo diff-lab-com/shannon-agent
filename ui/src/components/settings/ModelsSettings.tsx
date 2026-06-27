@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 
 export default function ModelsSettings() {
   const intl = useIntl()
@@ -17,9 +18,12 @@ export default function ModelsSettings() {
 
   const setStrategy = (s: 'speed' | 'balanced' | 'high-quality') => {
     setStrategyState(s)
-    api.configure({ key: 'performance_strategy', value: s }).then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s }))).catch(e => { console.warn('ModelsSettings error:', e); toast.error(t('settings.models.strategyFailed')) })
+    api.configure({ key: 'performance_strategy', value: s }).then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s }))).catch((e) => { toastError(t('settings.models.strategyFailed'), e) })
   }
   const [showKey, setShowKey] = useState(false)
+  const [keyDraft, setKeyDraft] = useState<string | null>(null)
+  const [keySaving, setKeySaving] = useState(false)
+  const [keyTesting, setKeyTesting] = useState(false)
 
   const handleModelSwitch = async (modelId: string) => {
     if (!status) return
@@ -28,8 +32,61 @@ export default function ModelsSettings() {
       await api.switchProvider({ provider: status.provider, model: modelId })
       await Promise.all([refreshModels(), refreshStatus()])
       toast.success(intl.formatMessage({ id: 'settings.models.switched' }, { model: modelId }))
-    } catch (e) { console.warn("ModelsSettings error:", e); toast.error(t('settings.models.switchFailed')) }
+    } catch (e) { toastError(t('settings.models.switchFailed'), e) }
     setSwitching(null)
+  }
+
+  const handleSaveKey = async () => {
+    const trimmed = (keyDraft ?? '').trim()
+    if (!trimmed) return
+    setKeySaving(true)
+    try {
+      await api.configure({ key: 'api_key', value: trimmed })
+      toast.success(t('settings.models.apiKeySaved'))
+      setKeyDraft(null)
+    } catch (e) {
+      toastError(t('settings.models.apiKeySaveFailed'), e)
+    } finally {
+      setKeySaving(false)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    // The bottom "API Key" box owns the active provider's key: test the key
+    // actually entered (draft), falling back to the stored key. Routes through
+    // testProviderConnection so the result is real, not a silent refreshModels.
+    const provider = config?.provider ?? status?.provider
+    const apiKey = (keyDraft ?? '').trim() || config?.api_key || ''
+    if (!provider || !apiKey) return
+    setKeyTesting(true)
+    try {
+      const result = await api.testProviderConnection(provider, apiKey)
+      switch (result.kind) {
+        case 'success':
+          toast.success(t('settings.models.testResult.success'))
+          await refreshModels()
+          return
+        case 'invalid_key':
+          toast.error(t('settings.models.testResult.invalidKey'))
+          return
+        case 'rate_limited':
+          toast.warning(t('settings.models.testResult.rateLimited'))
+          return
+        case 'provider_error':
+          toast.error(intl.formatMessage({ id: 'settings.models.testResult.providerError' }, { provider, status: result.status }))
+          return
+        case 'network_unreachable':
+          toast.error(intl.formatMessage({ id: 'settings.models.testResult.networkUnreachable' }, { provider }))
+          return
+        case 'unknown':
+          toast.error(intl.formatMessage({ id: 'settings.models.testResult.unknown' }, { message: result.message }))
+          return
+      }
+    } catch (e) {
+      toastError(t('settings.models.testResult.failed'), e)
+    } finally {
+      setKeyTesting(false)
+    }
   }
 
   const currentModel = status?.model
@@ -59,12 +116,12 @@ export default function ModelsSettings() {
                     : 'text-on-surface-variant hover:bg-surface-container-high'
                 }`}
               >
-                {s.charAt(0).toUpperCase() + s.slice(1).replace('-', ' ')}
+                {s === 'high-quality' ? t('settings.models.stratLabel.highQuality') : s === 'speed' ? t('settings.models.stratLabel.speed') : t('settings.models.stratLabel.balanced')}
               </button>
             ))}
           </div>
           <p className="mt-md text-label-sm text-on-surface-variant opacity-70 flex items-center gap-xs">
-            <span className="material-symbols-outlined text-[16px]">info</span>
+            <span className="material-symbols-outlined icon-sm">info</span>
             {strategy === 'high-quality' ? t('settings.models.stratHighQuality') : strategy === 'speed' ? t('settings.models.stratSpeed') : t('settings.models.stratBalanced')}
           </p>
         </section>
@@ -173,21 +230,41 @@ export default function ModelsSettings() {
               <span className="material-symbols-outlined text-primary">key</span>
               <h4 className="font-label-md font-bold text-on-surface">{intl.formatMessage({ id: 'settings.models.apiConnection' }, { provider: (config?.provider ?? t('settings.models.providerDefault')) })}</h4>
             </div>
-            <div className="flex gap-md max-w-xl">
+            <div className="flex gap-md max-w-2xl">
               <div className="relative flex-1">
-                <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all font-body-sm pr-10" type={showKey ? 'text' : 'password'} value={config?.api_key ? 'sk-••••••••••••' : ''} readOnly />
-                <Button variant="ghost" className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => setShowKey(v => !v)}>
-                  <span className="material-symbols-outlined text-[20px]">{showKey ? 'visibility_off' : 'visibility'}</span>
+                <Input
+                  className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all font-body-sm pr-10 font-mono"
+                  type={showKey ? 'text' : 'password'}
+                  value={keyDraft ?? (config?.api_key ? '••••••••••••••••' : '')}
+                  placeholder={t('settings.models.apiKeyPlaceholder')}
+                  onChange={e => setKeyDraft(e.target.value)}
+                  onFocus={() => { if (!keyDraft && config?.api_key) setKeyDraft('') }}
+                />
+                <Button variant="ghost" className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => setShowKey(v => !v)} aria-label={showKey ? t('settings.models.hideKey') : t('settings.models.showKey')}>
+                  <span className="material-symbols-outlined icon-md">{showKey ? 'visibility_off' : 'visibility'}</span>
                 </Button>
               </div>
               <Button
-                className="px-lg py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer"
-                onClick={() => refreshModels()}
+                className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer disabled:opacity-50"
+                onClick={handleTestConnection}
+                disabled={keyTesting || !((keyDraft ?? '').trim() || config?.api_key)}
+                aria-label={t('settings.models.testConnection')}
               >
-                <span className="material-symbols-outlined text-[18px]">sync</span>
-                {t('settings.models.refresh')}
+                <span className="material-symbols-outlined text-[18px]">{keyTesting ? 'progress_activity' : 'cable'}</span>
+                {keyTesting ? t('settings.models.testing') : t('settings.models.testConnection')}
+              </Button>
+              <Button
+                className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer disabled:opacity-50"
+                onClick={handleSaveKey}
+                disabled={keySaving || !keyDraft || !keyDraft.trim()}
+              >
+                <span className="material-symbols-outlined text-[18px]">{keySaving ? 'progress_activity' : 'save'}</span>
+                {keySaving ? t('settings.models.saving') : t('settings.models.save')}
               </Button>
             </div>
+            <p className="mt-sm text-label-sm text-on-surface-variant opacity-70">
+              {t('settings.models.apiKeyHelp')}
+            </p>
           </div>
         </section>
 
@@ -196,8 +273,8 @@ export default function ModelsSettings() {
           <h3 className="font-headline-md text-on-surface mb-lg">{t('settings.models.globalParams')}</h3>
           <p className="text-body-sm text-on-surface-variant mb-xl -mt-md">{t('settings.models.globalParamsDesc')}</p>
           <div className="space-y-xl max-w-2xl">
-            <ParameterSlider label={t('settings.models.temperature')} value={0.7} min={0} max={1} step={0.1} lowLabel={t('settings.models.precise')} highLabel={t('settings.models.creative')} configKey="temperature" />
-            <ParameterSlider label={t('settings.models.maxTokens')} value={4096} min={256} max={128000} step={256} formatValue={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} lowLabel={t('settings.models.short')} highLabel={t('settings.models.longContext')} configKey="max_tokens" />
+            <ParameterSlider label={t('settings.models.temperature')} value={config?.temperature ?? 0.7} min={0} max={1} step={0.1} lowLabel={t('settings.models.precise')} highLabel={t('settings.models.creative')} configKey="temperature" />
+            <ParameterSlider label={t('settings.models.maxTokens')} value={config?.max_tokens ?? 4096} min={256} max={128000} step={256} formatValue={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} lowLabel={t('settings.models.short')} highLabel={t('settings.models.longContext')} configKey="max_tokens" />
           </div>
         </section>
       </div>
@@ -217,10 +294,12 @@ interface ProviderPreset {
 
 const PROVIDER_PRESETS: ProviderPreset[] = [
   { id: 'openai', label: 'OpenAI', icon: 'bolt', desc: 'GPT-4.1 · o3', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', keyHint: 'sk-...' },
+  { id: 'anthropic', label: 'Anthropic', icon: 'auto_awesome', desc: 'Claude Sonnet 4.6 · Opus', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-6', keyHint: 'sk-ant-...' },
   { id: 'deepseek', label: 'DeepSeek', icon: 'psychology', desc: 'Chat · Reasoner', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', keyHint: 'sk-...' },
   { id: 'glm', label: 'GLM (Zhipu)', icon: 'auto_awesome', desc: 'GLM-4-Plus', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus', keyHint: '<api_key>.<secret>' },
   { id: 'minimax', label: 'MiniMax', icon: 'group', desc: 'abab6.5s', baseUrl: 'https://api.minimax.chat/v1', model: 'abab6.5s-chat', keyHint: '<group_id>.<api_key>' },
   { id: 'kimi', label: 'Kimi (Moonshot)', icon: 'dark_mode', desc: 'Long context', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k', keyHint: 'sk-...' },
+  { id: 'ollama', label: 'Ollama (local)', icon: 'dns', desc: 'Self-hosted models', baseUrl: 'http://localhost:11434/v1', model: 'llama3.2', keyHint: 'not required' },
 ]
 
 function QuickSetupPresets({
@@ -286,7 +365,7 @@ function QuickSetupPresets({
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-sm">
                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'}`}>
-                    <span className="material-symbols-outlined text-[20px]">{preset.icon}</span>
+                    <span className="material-symbols-outlined icon-md">{preset.icon}</span>
                   </div>
                   <div>
                     <div className="flex items-center gap-xs">
@@ -361,7 +440,7 @@ function QuickSetupPresets({
   )
 }
 
-function ParameterSlider({ label, value: initialValue, min, max, step, formatValue, lowLabel, highLabel, configKey }: {
+function ParameterSlider({ label, value, min, max, step, formatValue, lowLabel, highLabel, configKey }: {
   label: string
   value: number
   min: number
@@ -372,11 +451,14 @@ function ParameterSlider({ label, value: initialValue, min, max, step, formatVal
   highLabel?: string
   configKey?: string
 }) {
-  const [value, setValue] = useState(initialValue)
-  const display = formatValue ? formatValue(value) : String(value)
+  const [local, setLocal] = useState(value)
+  // Keep the slider in sync with the persisted config value so it reflects
+  // reality (initial load + external updates) instead of a stale literal.
+  useEffect(() => { setLocal(value) }, [value])
+  const display = formatValue ? formatValue(local) : String(local)
 
   const handleChange = (newValue: number) => {
-    setValue(newValue)
+    setLocal(newValue)
     if (configKey) {
       api.configure({ key: configKey, value: String(newValue) }).catch(e => console.warn('ParameterSlider error:', e))
     }
@@ -390,7 +472,7 @@ function ParameterSlider({ label, value: initialValue, min, max, step, formatVal
       </div>
       <input
         className="w-full appearance-none bg-outline-variant/30 h-1 rounded-full cursor-pointer outline-none slider-thumb-primary"
-        min={min} max={max} step={step} type="range" value={value}
+        min={min} max={max} step={step} type="range" value={local}
         onChange={e => handleChange(Number(e.target.value))}
       />
       {lowLabel && highLabel ? (

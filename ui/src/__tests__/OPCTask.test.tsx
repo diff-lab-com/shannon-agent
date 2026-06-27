@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { I18nProvider } from '@/i18n'
 import OPCTask from '@/pages/OPCTask'
@@ -8,6 +8,7 @@ const ctx = vi.hoisted(() => ({
   tasks: [] as any[],
   agents: [] as any[],
   usage: { input_tokens: 100, output_tokens: 50, cost_usd: 0.05 },
+  permissionRequest: null as any,
   respondPermission: vi.fn(),
 }))
 
@@ -31,6 +32,7 @@ function renderOPCTask(path = '/opc/task') {
 function resetCtx() {
   ctx.tasks = []
   ctx.agents = []
+  ctx.permissionRequest = null
   ctx.respondPermission = vi.fn()
 }
 
@@ -83,15 +85,17 @@ describe('OPCTask', () => {
     expect(screen.getByText('0 Agents')).toBeInTheDocument()
   })
 
-  it('does not show Human-in-the-Loop when no running tasks', () => {
+  it('does not show Human-in-the-Loop when no permission request pending', () => {
     resetCtx()
+    ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
     renderOPCTask()
     expect(screen.queryByText(/Human-in-the-Loop/)).not.toBeInTheDocument()
   })
 
-  it('shows Human-in-the-Loop when running tasks exist', () => {
+  it('shows Human-in-the-Loop when a permission request is pending', () => {
     resetCtx()
     ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium' }
     renderOPCTask()
     expect(screen.getByText(/Human-in-the-Loop Review/)).toBeInTheDocument()
   })
@@ -117,25 +121,44 @@ describe('OPCTask', () => {
   it('calls respondPermission on Approve click', () => {
     resetCtx()
     ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium' }
     renderOPCTask()
     fireEvent.click(screen.getByText('Approve Final Merge'))
+    const dialog = screen.getByRole('alertdialog', { name: /Approve final merge\?/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Approve merge$/ }))
     expect(ctx.respondPermission).toHaveBeenCalledWith('1', true)
   })
 
   it('calls respondPermission on Rollback click', () => {
     resetCtx()
     ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium' }
     renderOPCTask()
     fireEvent.click(screen.getByText('Rollback'))
+    const dialog = screen.getByRole('alertdialog', { name: /Rollback task\?/i })
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Rollback$/ }))
     expect(ctx.respondPermission).toHaveBeenCalledWith('1', false)
   })
 
   it('shows revision input on Request Revision click', () => {
     resetCtx()
     ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium' }
     renderOPCTask()
     fireEvent.click(screen.getByText('Request Revision'))
     expect(screen.getByPlaceholderText(/Describe what needs to change/)).toBeInTheDocument()
+  })
+
+  it('disables Submit revision until the note has non-empty text', () => {
+    resetCtx()
+    ctx.tasks = [{ id: '1', title: 'Test', status: 'running' }]
+    ctx.permissionRequest = { request_id: 'r1', tool: 'bash', input: {}, risk: 'medium' }
+    renderOPCTask()
+    fireEvent.click(screen.getByText('Request Revision'))
+    const submit = screen.getByText('Submit revision')
+    expect(submit).toBeDisabled()
+    fireEvent.change(screen.getByPlaceholderText(/Describe what needs to change/), { target: { value: 'fix the bug' } })
+    expect(submit).not.toBeDisabled()
   })
 
   it('shows Related Tasks in sidebar', () => {

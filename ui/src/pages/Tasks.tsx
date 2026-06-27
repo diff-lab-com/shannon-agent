@@ -19,12 +19,14 @@
 
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { useIntl } from 'react-intl'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import { useScheduledTasks } from '@/hooks/scheduled-tasks'
 import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
+import { Banner } from '@/components/ui/banner'
 import TasksHeader from '@/components/tasks/TasksHeader'
 import RoutineTemplatesBrowser from '@/components/routines/RoutineTemplatesBrowser'
 import TasksFilters from '@/components/tasks/TasksFilters'
@@ -113,7 +115,7 @@ export default function Tasks() {
         ? intl.formatMessage({ id: 'tasks.toast.assigned' }, { name: rich.assignee })
         : t('tasks.toast.created'))
       await refreshTasks()
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.create')); toast.error(t('tasks.toast.failed.create')) }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.create')); toastError(t('tasks.toast.failed.create'), e) }
   }
 
   const handleCreateSchedule = async (payload: CreateTaskPayload) => {
@@ -128,7 +130,7 @@ export default function Tasks() {
         }
         setShowSchedule(false)
       }
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.createRoutine')); toast.error(t('tasks.toast.failed.createRoutine')) }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.createRoutine')); toastError(t('tasks.toast.failed.createRoutine'), e) }
   }
 
   const handleCancelTask = async (id: string) => {
@@ -136,7 +138,7 @@ export default function Tasks() {
       setErrorMsg(null)
       await api.cancelBackgroundTask(id)
       toast.success(t('tasks.toast.cancelled'))
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.cancel')); toast.error(t('tasks.toast.failed.cancel')) }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.cancel')); toastError(t('tasks.toast.failed.cancel'), e) }
     setCancelTarget(null)
     await refreshTasks()
   }
@@ -155,7 +157,7 @@ export default function Tasks() {
         toast.success(t('tasks.toast.started'))
       }
       await refreshTasks()
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.run')); toast.error(t('tasks.toast.failed.run')) }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.run')); toastError(t('tasks.toast.failed.run'), e) }
     setTimeout(() => setRunning(null), 1500)
   }
 
@@ -203,16 +205,16 @@ export default function Tasks() {
         ) : (
           <>
         {errorMsg && (
-          <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md mb-lg">
-            <span className="material-symbols-outlined text-[18px]">error</span>
-            {errorMsg}
-            <button
-              className="ml-auto text-error/60 hover:text-error cursor-pointer"
-              onClick={() => setErrorMsg(null)}
-            >
-              <span className="material-symbols-outlined text-[18px]">close</span>
-            </button>
-          </div>
+          <Banner
+            variant="card"
+            tone="error"
+            onDismiss={() => setErrorMsg(null)}
+            dismissLabel={t('common.dismiss')}
+            className="mb-lg text-error font-label-md"
+          >
+            <span className="material-symbols-outlined icon-md text-error">error</span>
+            <span className="flex-1">{errorMsg}</span>
+          </Banner>
         )}
 
         {showNewTask && (

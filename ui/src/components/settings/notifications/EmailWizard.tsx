@@ -1,10 +1,19 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 
+export interface EmailImapConfig {
+  imap_server: string
+  imap_port: number
+  username: string
+  password: string
+  folder: string
+}
+
 interface EmailWizardProps {
-  onSave: (config: any) => Promise<void>
+  onSave: (config: EmailImapConfig) => Promise<void>
   onCancel: () => void
 }
 
@@ -31,8 +40,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
       // For now, we'll just validate inputs - real IMAP connection test would be a backend call
       toast.success(t('settings.notifications.wizard.email.testSuccess'))
     } catch (e) {
-      console.warn('Email connection test error:', e)
-      toast.error(t('settings.notifications.wizard.email.testFailed'))
+      toastError(t('settings.notifications.wizard.email.testFailed'), e)
     }
     setTesting(false)
   }
@@ -55,8 +63,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
       await onSave(dto)
       toast.success(t('settings.notifications.wizard.email.saved'))
     } catch (e) {
-      console.warn('Save Email config error:', e)
-      toast.error(t('settings.notifications.wizard.saveFailed'))
+      toastError(t('settings.notifications.wizard.saveFailed'), e)
     }
     setSaving(false)
   }
@@ -83,7 +90,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
               value={imapServer}
               onChange={(e) => setImapServer(e.target.value)}
               placeholder="imap.gmail.com"
-              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
             />
           </div>
 
@@ -96,7 +103,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
               value={imapPort}
               onChange={(e) => setImapPort(e.target.value)}
               placeholder="993"
-              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+              className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
             />
           </div>
         </div>
@@ -110,7 +117,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             placeholder="user@example.com"
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </div>
 
@@ -123,7 +130,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
           <p className="text-on-surface-variant text-xs mt-sm">
             {t('settings.notifications.wizard.email.passwordHint')}
@@ -139,7 +146,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
             value={folder}
             onChange={(e) => setFolder(e.target.value)}
             placeholder="INBOX"
-            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
         </div>
 

@@ -9,6 +9,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { OpcMetrics } from '@/types'
+import LoadingState from '@/components/ui/loading-state'
+import ErrorState from '@/components/ui/error-state'
 
 const STATUS_TONES: Record<string, string> = {
   completed: 'bg-tertiary/15 text-tertiary border-tertiary/40',
@@ -49,7 +51,7 @@ export default function OpcAnalyticsDashboard() {
   if (loading && !metrics) {
     return (
       <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
-        <p className="text-body-sm text-on-surface-variant text-center py-md">{t('opc.analytics.loading')}</p>
+        <LoadingState label={t('opc.analytics.loading')} size="sm" />
       </div>
     )
   }
@@ -57,17 +59,11 @@ export default function OpcAnalyticsDashboard() {
   if (error) {
     return (
       <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
-        <div className="font-label-sm text-error flex items-center gap-sm">
-          <span className="material-symbols-outlined text-[14px]">error</span>
-          {error}
-        </div>
-        <button
-          type="button"
-          onClick={refresh}
-          className="mt-sm font-label-sm text-primary hover:bg-primary/10 rounded px-sm py-xs cursor-pointer"
-        >
-          {t('opc.analytics.retry')}
-        </button>
+        <ErrorState
+          title={t('opc.analytics.loadFailed')}
+          description={error}
+          action={{ label: t('opc.analytics.retry'), onClick: refresh }}
+        />
       </div>
     )
   }
@@ -83,7 +79,7 @@ export default function OpcAnalyticsDashboard() {
     >
       <header className="flex items-center justify-between">
         <div className="flex items-center gap-sm">
-          <span className="material-symbols-outlined text-[20px] text-primary">monitoring</span>
+          <span className="material-symbols-outlined icon-md text-primary">monitoring</span>
           <h3 className="font-headline-md text-[16px] font-bold text-on-surface">{t('opc.analytics.title')}</h3>
         </div>
         <button
@@ -156,10 +152,10 @@ export default function OpcAnalyticsDashboard() {
         <div>
           <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
             <span className="material-symbols-outlined text-[14px] text-on-surface-variant">bubble_chart</span>
-            By status
+            {t('opc.analytics.byStatus')}
           </h4>
           {metrics.by_status.length === 0 ? (
-            <p className="font-label-sm text-on-surface-variant italic">No tasks.</p>
+            <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noTasks')}</p>
           ) : (
             <ul className="flex flex-col gap-xs">
               {metrics.by_status.map(s => (
@@ -183,10 +179,10 @@ export default function OpcAnalyticsDashboard() {
         <div>
           <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
             <span className="material-symbols-outlined text-[14px] text-on-surface-variant">priority_high</span>
-            By priority
+            {t('opc.analytics.byPriority')}
           </h4>
           {metrics.by_priority.length === 0 ? (
-            <p className="font-label-sm text-on-surface-variant italic">No priority set on any task.</p>
+            <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noPriority')}</p>
           ) : (
             <ul className="flex flex-col gap-xs">
               {metrics.by_priority.map(p => (
@@ -209,10 +205,10 @@ export default function OpcAnalyticsDashboard() {
       <div>
         <h4 className="font-label-md text-on-surface mb-sm flex items-center gap-xs">
           <span className="material-symbols-outlined text-[14px] text-on-surface-variant">group</span>
-          Workload by assignee
+          {t('opc.analytics.workloadByAssignee')}
         </h4>
         {metrics.by_assignee.length === 0 ? (
-          <p className="font-label-sm text-on-surface-variant italic">No assignees yet.</p>
+          <p className="font-label-sm text-on-surface-variant italic">{t('opc.analytics.noAssignees')}</p>
         ) : (
           <ul className="flex flex-col gap-xs">
             {metrics.by_assignee.map(a => (
@@ -220,9 +216,9 @@ export default function OpcAnalyticsDashboard() {
                 <span className="material-symbols-outlined text-[14px] text-on-surface-variant">person</span>
                 <span className="font-label-md text-on-surface flex-1 truncate">{a.assignee}</span>
                 <span className="font-label-sm text-[11px] text-on-surface-variant">
-                  <strong className="text-primary">{a.in_progress}</strong> in progress ·{' '}
-                  <strong className="text-tertiary">{a.done}</strong> done ·{' '}
-                  <strong className="text-on-surface">{a.total}</strong> total
+                  <strong className="text-primary">{a.in_progress}</strong> {t('opc.analytics.inProgressLabel')} ·{' '}
+                  <strong className="text-tertiary">{a.done}</strong> {t('opc.analytics.doneLabel')} ·{' '}
+                  <strong className="text-on-surface">{a.total}</strong> {t('opc.analytics.totalLabel')}
                 </span>
               </li>
             ))}
@@ -236,7 +232,7 @@ export default function OpcAnalyticsDashboard() {
 function StatCard({ label, value, icon }: { label: string; value: string | number; icon: string }) {
   return (
     <div className="bg-surface-container-low rounded-xl p-md flex items-center gap-sm border border-outline-variant/20">
-      <span className="material-symbols-outlined text-[20px] text-primary">{icon}</span>
+      <span className="material-symbols-outlined icon-md text-primary">{icon}</span>
       <div className="min-w-0">
         <div className="font-headline-md text-[20px] font-bold text-on-surface leading-none">{value}</div>
         <div className="font-label-sm text-[11px] text-on-surface-variant mt-1">{label}</div>

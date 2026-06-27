@@ -12,8 +12,8 @@ export type TaskStatusFamily = 'queued' | 'active' | 'blocked' | 'done' | 'faile
 
 export interface StatusFamilyMeta {
   key: TaskStatusFamily
-  /** Canonical English title shown in column headers. */
-  title: string
+  /** i18n key for the column header title. */
+  titleKey: string
   /** Material Symbols icon name. */
   icon: string
   /** All raw backend statuses that map to this family (lowercase compare). */
@@ -27,7 +27,7 @@ export interface StatusFamilyMeta {
 export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   queued: {
     key: 'queued',
-    title: 'Queued',
+    titleKey: 'taskStatus.queued.title',
     icon: 'inbox',
     statuses: ['pending', 'queued', 'ready', 'todo', 'backlog'],
     dotClass: 'bg-outline',
@@ -35,7 +35,7 @@ export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   },
   active: {
     key: 'active',
-    title: 'In Progress',
+    titleKey: 'taskStatus.active.title',
     icon: 'play_circle',
     statuses: ['in_progress', 'running', 'active', 'doing'],
     dotClass: 'bg-primary',
@@ -43,7 +43,7 @@ export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   },
   blocked: {
     key: 'blocked',
-    title: 'Blocked',
+    titleKey: 'taskStatus.blocked.title',
     icon: 'block',
     statuses: ['blocked', 'waiting', 'review', 'pending_review', 'pending'],
     dotClass: 'bg-warning',
@@ -51,7 +51,7 @@ export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   },
   done: {
     key: 'done',
-    title: 'Completed',
+    titleKey: 'taskStatus.done.title',
     icon: 'check_circle',
     statuses: ['completed', 'done', 'succeeded', 'shipped'],
     dotClass: 'bg-tertiary',
@@ -59,7 +59,7 @@ export const STATUS_FAMILY: Record<TaskStatusFamily, StatusFamilyMeta> = {
   },
   failed: {
     key: 'failed',
-    title: 'Failed',
+    titleKey: 'taskStatus.failed.title',
     icon: 'error',
     statuses: ['failed', 'error', 'canceled', 'cancelled', 'deprecated', 'abandoned'],
     dotClass: 'bg-error',
@@ -90,15 +90,39 @@ export function canonicalStatusFor(family: TaskStatusFamily): string {
 export const PRIORITY_RANK: Record<string, number> = {
   critical: 0,
   high: 1,
+  medium: 2,
   normal: 2,
   low: 3,
+}
+
+export type Priority = 'critical' | 'high' | 'medium' | 'normal' | 'low'
+
+/**
+ * Normalize arbitrary backend priority strings to a canonical Priority.
+ * Handles case variants ("High", "HIGH"), numeric variants ("p1", "P1"),
+ * and common synonyms ("urgent" → critical). Unknown values → 'normal'.
+ */
+export function normalizePriority(raw: string | undefined | null): Priority {
+  if (!raw) return 'normal'
+  const s = String(raw).toLowerCase().trim()
+  if (s === 'critical' || s === 'urgent' || s === 'p0' || s === 'blocker') return 'critical'
+  if (s === 'high' || s === 'p1') return 'high'
+  if (s === 'medium' || s === 'med' || s === 'p2') return 'medium'
+  if (s === 'low' || s === 'p3' || s === 'minor' || s === 'backlog') return 'low'
+  if (s === 'normal' || s === 'default' || s === '') return 'normal'
+  return 'normal'
+}
+
+/** Display rank for a normalized priority. */
+export function priorityRank(p: Priority): number {
+  return PRIORITY_RANK[p] ?? 2
 }
 
 /** Sort tasks within a column: priority desc, then title asc. Stable. */
 export function sortTasksByPriorityThenTitle<T extends { priority?: string; title: string }>(tasks: T[]): T[] {
   return [...tasks].sort((a, b) => {
-    const pa = PRIORITY_RANK[a.priority ?? 'normal'] ?? 2
-    const pb = PRIORITY_RANK[b.priority ?? 'normal'] ?? 2
+    const pa = priorityRank(normalizePriority(a.priority))
+    const pb = priorityRank(normalizePriority(b.priority))
     if (pa !== pb) return pa - pb
     return a.title.localeCompare(b.title)
   })

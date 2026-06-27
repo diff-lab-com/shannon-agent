@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AppProvider } from '@/context/AppContext'
 import { MemoryRouter } from 'react-router-dom'
 import AdvancedSettings from '@/components/settings/AdvancedSettings'
+import * as api from '@/lib/tauri-api'
 
 function wrap(ui: React.ReactElement) {
   return (
@@ -99,5 +100,56 @@ describe('AdvancedSettings', () => {
   it('renders skill extraction description', () => {
     render(wrap(<AdvancedSettings />))
     expect(screen.getByText(/After complex tasks, Shannon evaluates/)).toBeInTheDocument()
+  })
+})
+
+describe('AdvancedSettings — Self-improvement approval', () => {
+  beforeEach(() => {
+    vi.mocked(api.listSkillCandidates).mockReset()
+    vi.mocked(api.approveSkillCandidate).mockReset()
+    vi.mocked(api.rejectSkillCandidate).mockReset()
+  })
+
+  it('hides Review button when no candidates pending', async () => {
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([])
+    render(wrap(<AdvancedSettings />))
+    await waitFor(() => { expect(api.listSkillCandidates).toHaveBeenCalled() })
+    expect(screen.queryByText('Review pending')).not.toBeInTheDocument()
+  })
+
+  it('shows pending count badge and Review button when candidates exist', async () => {
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([
+      {
+        id: 'cand-1',
+        proposed_name: 'Wrap commits',
+        proposed_trigger: 'when committing',
+        occurrence_count: 3,
+        procedure: ['step 1', 'step 2'],
+        last_seen_at: '',
+        originating_sessions: [],
+      },
+    ])
+    render(wrap(<AdvancedSettings />))
+    await waitFor(() => { expect(screen.getByText('Review pending')).toBeInTheDocument() })
+    expect(screen.getByText('1 pending')).toBeInTheDocument()
+  })
+
+  it('opens SkillApprovalModal on Review click', async () => {
+    vi.mocked(api.listSkillCandidates).mockResolvedValue([
+      {
+        id: 'cand-1',
+        proposed_name: 'Wrap commits',
+        proposed_trigger: 'when committing',
+        occurrence_count: 3,
+        procedure: ['step 1', 'step 2'],
+        last_seen_at: '',
+        originating_sessions: [],
+      },
+    ])
+    render(wrap(<AdvancedSettings />))
+    await waitFor(() => { expect(screen.getByText('Review pending')).toBeInTheDocument() })
+    fireEvent.click(screen.getByText('Review pending'))
+    await waitFor(() => { expect(screen.getByText('Save as skill?')).toBeInTheDocument() })
+    expect(screen.getByDisplayValue('Wrap commits')).toBeInTheDocument()
   })
 })

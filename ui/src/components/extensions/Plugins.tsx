@@ -3,6 +3,9 @@ import { FormattedMessage, useIntl } from "react-intl";
 import { useOutletContext } from "react-router-dom";
 import * as api from "@/lib/tauri-api";
 import type { CatalogUpstream } from "@/lib/tauri-api";
+import { CardSkeleton } from "@/components/SkeletonLoader";
+import ErrorState from "@/components/ui/error-state";
+import EmptyState from "@/components/ui/empty-state";
 import type { CatalogEntry, CatalogSource, TrustLevel } from "@/types";
 import InstallDialog from "./InstallDialog";
 
@@ -193,7 +196,7 @@ export default function Plugins() {
         <div className="flex items-start justify-between gap-sm">
           <div className="flex items-start gap-sm min-w-0">
             <div className="w-9 h-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-[20px]">workspaces</span>
+              <span className="material-symbols-outlined icon-md">workspaces</span>
             </div>
             <div className="min-w-0">
               <h4 className="font-bold text-label-md text-on-surface truncate">{entry.name}</h4>
@@ -204,7 +207,7 @@ export default function Plugins() {
             className={`inline-flex items-center gap-xs px-xs py-[2px] rounded-full text-label-xs font-bold shrink-0 ${TRUST_BADGE_CLASS[trust]}`}
             title={t(TRUST_LABEL_KEY[trust])}
           >
-            <span className="material-symbols-outlined text-[12px]">{TRUST_ICON[trust]}</span>
+            <span className="material-symbols-outlined icon-xs">{TRUST_ICON[trust]}</span>
             {t(TRUST_LABEL_KEY[trust])}
           </span>
         </div>
@@ -216,24 +219,24 @@ export default function Plugins() {
         <div className="flex flex-wrap items-center gap-xs text-label-xs text-on-surface-variant">
           {license && (
             <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
-              <span className="material-symbols-outlined text-[12px]">gavel</span>
+              <span className="material-symbols-outlined icon-xs">gavel</span>
               {license}
             </span>
           )}
           {typeof stars === "number" && (
             <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
-              <span className="material-symbols-outlined text-[12px]">star</span>
+              <span className="material-symbols-outlined icon-xs">star</span>
               {stars >= 1000 ? `${(stars / 1000).toFixed(1)}k` : stars}
             </span>
           )}
           {entry.version && (
             <span className="inline-flex items-center gap-[2px] px-xs py-[1px] rounded bg-surface-container-high">
-              <span className="material-symbols-outlined text-[12px]">tag</span>
+              <span className="material-symbols-outlined icon-xs">tag</span>
               {entry.version}
             </span>
           )}
           <span className="inline-flex items-center gap-[2px] truncate" title={sourceLabel(entry.source)}>
-            <span className="material-symbols-outlined text-[12px]">link</span>
+            <span className="material-symbols-outlined icon-xs">link</span>
             <span className="truncate">{sourceLabel(entry.source)}</span>
           </span>
         </div>
@@ -254,7 +257,7 @@ export default function Plugins() {
           )}
           <button
             onClick={() => handleInstall(entry)}
-            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 inline-flex items-center gap-xs cursor-pointer"
+            className="px-md py-xs rounded-lg bg-primary text-on-primary text-label-sm font-bold hover:bg-primary/90 inline-flex items-center gap-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             <span className="material-symbols-outlined text-[14px]">download</span>
             {t("extensions.plugins.install")}
@@ -270,7 +273,7 @@ export default function Plugins() {
         <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-md">
           <span className="material-symbols-outlined text-primary text-[32px]">workspaces</span>
         </div>
-        <h2 className="text-headline-md font-bold text-on-surface mb-sm">
+        <h2 className="text-headline-md font-headline-md text-on-surface mb-sm">
           {intl.formatMessage({ id: "extensions.plugins.title" })}
         </h2>
         <p className="text-body-md text-on-surface-variant max-w-xl mx-auto">
@@ -367,7 +370,7 @@ export default function Plugins() {
           {activeFilterCount > 0 && (
             <button
               onClick={resetFilters}
-              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors text-label-sm font-bold"
+              className="inline-flex items-center gap-xs px-sm py-xs rounded-lg bg-surface-container-low text-on-surface-variant hover:bg-surface-container-high transition-colors text-label-sm font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
               <span className="material-symbols-outlined text-[14px]">filter_alt_off</span>
               {t("extensions.plugins.filter.reset")}
@@ -377,21 +380,20 @@ export default function Plugins() {
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center py-xl">
-          <span className="material-symbols-outlined animate-spin text-[32px] text-primary">progress_activity</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
+          {Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}
         </div>
       ) : error ? (
-        <div className="text-center py-xl text-on-surface-variant">
-          <span className="material-symbols-outlined text-[32px] mb-sm block">cloud_off</span>
-          <p className="text-label-md">{error}</p>
-        </div>
+        <ErrorState
+          icon="cloud_off"
+          title={t("extensions.plugins.loadFailed")}
+          description={error}
+        />
       ) : filtered.length === 0 ? (
-        <div className="text-center py-xl text-on-surface-variant">
-          <span className="material-symbols-outlined text-[32px] mb-sm block">search_off</span>
-          <p className="text-label-md">
-            {search ? t("extensions.plugins.noMatch") : t("extensions.plugins.empty")}
-          </p>
-        </div>
+        <EmptyState
+          icon="search_off"
+          title={search ? t("extensions.plugins.noMatch") : t("extensions.plugins.empty")}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-md">
           {sorted.map(renderCard)}

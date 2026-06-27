@@ -109,7 +109,7 @@ export function KanbanBoard({
               <KanbanColumn
                 key={col}
                 family={col}
-                title={meta.title}
+                title={intl.formatMessage({ id: meta.titleKey })}
                 icon={meta.icon}
                 dotClass={meta.dotClass}
                 bgClass={meta.bgClass}
@@ -172,7 +172,7 @@ function KanbanColumn({ title, icon, dotClass, bgClass, count, observe, emptyLab
           <span className={`w-2 h-2 rounded-full ${dotClass}`} />
           {observe ? (
             <span className="font-label-md text-label-md text-on-surface font-bold uppercase tracking-wider flex items-center gap-xs">
-              <span className="material-symbols-outlined text-[16px]">{icon}</span>
+              <span className="material-symbols-outlined icon-sm">{icon}</span>
               {title}
             </span>
           ) : (

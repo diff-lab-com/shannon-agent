@@ -54,6 +54,7 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
   const tabs = ALL_TABS.filter(tab => !tab.devOnly || isDev)
   const [tab, setTab] = useState<TabKey>(loadInitialTab)
   const [localSelectedId, setLocalSelectedId] = useState<string | null>(null)
+  const [boardFilter, setBoardFilter] = useState<TaskStatusFamily | null>(null)
   // If the active tab is dev-only but the user is in simple mode, fall back.
   const activeTab: TabKey = tab === 'board' && !isDev ? 'all' : tab
   const selectedTask = localSelectedId ? tasks.find(task => task.id === localSelectedId) ?? null : null
@@ -87,15 +88,23 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
     <div className="flex gap-xs flex-wrap">
       {(Object.keys(STATUS_FAMILY) as TaskStatusFamily[]).map(key => {
         const meta = STATUS_FAMILY[key]
+        const active = boardFilter === key
         return (
-          <div
+          <button
             key={key}
-            className={`flex items-center gap-xs px-sm py-xs rounded-full text-label-sm font-label-md ${meta.bgClass}`}
+            type="button"
+            aria-pressed={active}
+            title={active ? t('missionControl.filter.clear') : t('missionControl.filter.focus', { family: t(meta.titleKey) })}
+            onClick={() => {
+              if (activeTab !== 'board') handleTabChange('board')
+              setBoardFilter(active ? null : key)
+            }}
+            className={`flex items-center gap-xs px-sm py-xs rounded-full text-label-sm font-label-md transition-all cursor-pointer hover:scale-[1.03] ${meta.bgClass} ${active ? 'ring-2 ring-primary ring-offset-1 ring-offset-surface-container-lowest' : ''}`}
           >
             <span className={`w-2 h-2 rounded-full ${meta.dotClass}`} />
-            <span className="text-on-surface-variant">{meta.title}</span>
+            <span className="text-on-surface-variant">{t(meta.titleKey)}</span>
             <span className="text-on-surface font-bold">{totals[key]}</span>
-          </div>
+          </button>
         )
       })}
     </div>
@@ -119,7 +128,7 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
       </header>
 
       <nav
-        aria-label="Conversations view tabs"
+        aria-label={t('missionControl.conversations.tabs.aria')}
         className="flex items-center gap-xs px-lg pt-md border-b border-outline-variant/20 bg-surface-container-lowest/40"
       >
         {tabs.map(tab => {
@@ -152,6 +161,7 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
           <KanbanBoard
             tasks={tasks}
             mode="observe"
+            columns={boardFilter ? [boardFilter] : undefined}
             onSelectTask={handleSelect}
           />
         </div>

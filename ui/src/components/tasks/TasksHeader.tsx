@@ -101,7 +101,7 @@ export default function TasksHeader({
           className="px-md py-sm bg-primary text-on-primary rounded-xl flex items-center gap-sm font-label-md cursor-pointer hover:shadow-md active:scale-95 transition-all"
           onClick={onToggleNewTask}
         >
-          <span className="material-symbols-outlined text-[20px]">add</span>
+          <span className="material-symbols-outlined icon-md">add</span>
           {t('tasks.tasksHeader.newBackgroundTask')}
         </Button>
       </div>

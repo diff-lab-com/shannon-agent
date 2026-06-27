@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 
 export default function MyAgents() {
   const intl = useIntl()
@@ -76,11 +77,12 @@ export default function MyAgents() {
       </div>
 
       {/* Agents Bento Grid */}
-      {agents.length === 0 ? (
+      {agents.length === 0 && !showAddAgent ? (
         <EmptyState
           icon="smart_toy"
           title={t('extensions.myAgents.emptyTitle')}
           description={t('extensions.myAgents.emptyDesc')}
+          action={{ label: t('extensions.myAgents.createFirstCta'), onClick: () => setShowAddAgent(true) }}
         />
       ) : (
         <>
@@ -144,8 +146,8 @@ export default function MyAgents() {
                       <span className="material-symbols-outlined">more_horiz</span>
                       {showMenu === agent.id && (
                         <div ref={menuRef} className="absolute right-0 top-full mt-1 bg-surface-container-lowest border border-outline-variant/30 rounded-lg shadow-lg py-xs z-10 min-w-[140px]">
-                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>{t('extensions.myAgents.viewStatus')}</button>
-                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors text-error" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(intl.formatMessage({ id: 'extensions.myAgents.stopped' }, { name: agent.name })) } catch (e) { console.warn('Failed to stop agent:', e); toast.error(t('extensions.myAgents.stopFailed')) } }}>{t('extensions.myAgents.stopAgent')}</button>
+                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onClick={() => { setConfiguring(configuring === agent.id ? null : agent.id); setShowMenu(null) }}>{t('extensions.myAgents.viewStatus')}</button>
+                          <button className="w-full text-left px-md py-sm text-label-md hover:bg-surface-container-high transition-colors text-error focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30" onClick={async () => { setShowMenu(null); try { await api.cancelBackgroundTask(agent.id); toast.success(intl.formatMessage({ id: 'extensions.myAgents.stopped' }, { name: agent.name })) } catch (e) { toastError(t('extensions.myAgents.stopFailed'), e) } }}>{t('extensions.myAgents.stopAgent')}</button>
                         </div>
                       )}
                     </Button>
@@ -164,7 +166,7 @@ export default function MyAgents() {
             {!showAddAgent ? (
               <div className="border-2 border-dashed border-outline-variant p-lg rounded-xl flex flex-col items-center justify-center text-center group cursor-pointer hover:border-primary/50 transition-colors" onClick={() => setShowAddAgent(true)}>
                 <div className="w-12 h-12 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant group-hover:bg-primary-container/20 group-hover:text-primary transition-colors mb-md">
-                  <span className="material-symbols-outlined text-[32px]">add</span>
+                  <span className="material-symbols-outlined icon-xl">add</span>
                 </div>
                 <h3 className="text-body-lg font-bold">{t('extensions.myAgents.newSpecialization')}</h3>
                 <p className="text-label-md text-on-surface-variant max-w-[200px]">{t('extensions.myAgents.newSpecializationDesc')}</p>

@@ -46,9 +46,9 @@ pub async fn instantiate_routine_template(
     let trigger_type = payload
         .trigger_type
         .as_deref()
-        .and_then(|s| match s {
-            "cron" => Some(shannon_core::scheduled_routines::TriggerType::Cron),
-            _ => Some(shannon_core::scheduled_routines::TriggerType::Interval),
+        .map(|s| match s {
+            "cron" => shannon_core::scheduled_routines::TriggerType::Cron,
+            _ => shannon_core::scheduled_routines::TriggerType::Interval,
         })
         .unwrap_or_default();
 
@@ -92,7 +92,7 @@ mod tests {
         }
         let ids: Vec<&str> = templates.iter().map(|t| t.id.as_str()).collect();
         assert!(
-            ids.iter().any(|id| *id == "daily-standup-summary"),
+            ids.contains(&"daily-standup-summary"),
             "expected the daily-standup-summary template to be present, got {ids:?}"
         );
     }

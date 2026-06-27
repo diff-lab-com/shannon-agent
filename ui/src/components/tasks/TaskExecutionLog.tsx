@@ -37,7 +37,7 @@ export default function TaskExecutionLog({ tasks, onCancel }: TaskExecutionLogPr
                 </div>
                 {bt.status === 'running' ? (
                   <Button
-                    aria-label="Cancel background task"
+                    aria-label={t('tasks.taskExecutionLog.cancelAria')}
                     className="p-2 rounded-lg hover:bg-error/10 text-error cursor-pointer"
                     onClick={() => onCancel(bt.task_id)}
                   >

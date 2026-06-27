@@ -82,7 +82,7 @@ export default function AgentLoadPanel({ agents }: AgentLoadPanelProps) {
     <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
       <div className="flex items-center justify-between mb-md">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[20px] text-on-surface">speed</span>
+          <span className="material-symbols-outlined icon-md text-on-surface">speed</span>
           <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.agentLoadPanel.title')}</h3>
         </div>
         <span className="text-label-sm text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full border border-outline-variant/20">

@@ -8,6 +8,7 @@ import { useApp } from '@/context/AppContext';
 import type { SessionInfo } from '@/types';
 import { useSidebar } from './Layout';
 import { useTriageStats } from '@/hooks/scheduled-tasks';
+import { formatShortcut } from '@/lib/platform';
 
 const MIN_W = 200
 const MAX_W = 400
@@ -107,7 +108,7 @@ function SessionsSection({ sessions, currentSessionId, switchSession, closeMobil
         onChange={e => setQuery(e.target.value)}
         placeholder={intl.formatMessage({ id: 'sidebar.sessions.search.placeholder' })}
         aria-label={intl.formatMessage({ id: 'sidebar.sessions.search.aria' })}
-        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary"
+        className="w-full mb-xs px-2 py-1 rounded-md bg-surface-container-lowest border border-outline-variant/30 font-label-md text-label-md text-on-surface placeholder:text-outline-variant focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
       />
       {visible.length === 0 ? (
         <div className="px-2 py-3 text-center font-label-sm text-label-sm text-outline-variant">
@@ -234,7 +235,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
   return (
     <aside data-sidebar className={cn(
-      "fixed left-0 top-0 h-full bg-surface-container-lowest/70 backdrop-blur-[20px] border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_rgba(0,0,0,0.1)] transition-transform duration-300",
+      "fixed left-0 top-0 h-full bg-surface-container-lowest/70 backdrop-blur-[20px] border-r border-outline-variant/30 flex flex-col py-lg px-md shadow-[4px_0_24px_-12px_color-mix(in_srgb,var(--color-inverse-surface)_15%,transparent)] transition-transform duration-300",
       mobile ? "z-[70] w-[280px]" : "z-50",
     )} style={mobile ? undefined : { width }}>
       {/* Drag handle */}
@@ -261,7 +262,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         className="mb-xs w-full py-3 px-4 bg-primary text-on-primary rounded-xl font-bold flex items-center justify-center gap-2 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all"
         onClick={createSession}
       >
-        <span className="material-symbols-outlined text-[20px]">add</span>
+        <span className="material-symbols-outlined icon-md">add</span>
         <span>{intl.formatMessage({ id: 'nav.newChat' })}</span>
       </Button>
       <Button
@@ -271,7 +272,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         className="mb-lg w-full py-2 px-3 text-on-surface-variant hover:text-primary rounded-lg font-label-md text-label-md flex items-center justify-center gap-1.5 hover:bg-surface-container-low transition-all"
         onClick={createSessionInWorktree}
       >
-        <span className="material-symbols-outlined text-[16px]">account_tree</span>
+        <span className="material-symbols-outlined icon-sm">account_tree</span>
         <span>{intl.formatMessage({ id: 'sidebar.worktree.new' })}</span>
       </Button>
 
@@ -289,12 +290,12 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <NavLink to="/chat" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">chat_bubble</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.chat' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘1</kbd>
+           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">{formatShortcut('1')}</kbd>
         </NavLink>
         <NavLink to="/tasks" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">task_alt</span>
            <span className="flex-1">{intl.formatMessage({ id: 'nav.scheduled' })}</span>
-           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">⌘2</kbd>
+           <kbd className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono opacity-60">{formatShortcut('2')}</kbd>
         </NavLink>
         <NavLink to="/memory" className={getNavClass} onClick={handleNavClick}>
            <span className="material-symbols-outlined">psychology</span>
@@ -329,7 +330,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
               <span className="material-symbols-outlined">grid_view</span>
               <span>{intl.formatMessage({ id: 'nav.extensions' })}</span>
             </div>
-            <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: extensionsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+            <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: extensionsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
           </Button>
 
           {extensionsOpen && (
@@ -374,7 +375,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
                 {intl.formatMessage({ id: 'nav.experiment' })}
               </span>
             </div>
-            <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: opcOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+            <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: opcOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
           </Button>
 
           {opcOpen && (
@@ -423,7 +424,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
             <span className="material-symbols-outlined" style={{fontVariationSettings: "'FILL' 1"}}>settings</span>
             <span>{intl.formatMessage({ id: 'nav.settings' })}</span>
           </div>
-          <span className="material-symbols-outlined text-[20px] transition-transform duration-200" style={{ transform: settingsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
+          <span className="material-symbols-outlined icon-md transition-transform duration-200" style={{ transform: settingsOpen ? 'rotate(180deg)' : 'rotate(0deg)' }} aria-hidden="true">expand_more</span>
         </Button>
 
         {settingsOpen && (

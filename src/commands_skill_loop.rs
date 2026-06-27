@@ -9,10 +9,8 @@ use std::path::{Path, PathBuf};
 use tauri::Emitter;
 
 use crate::commands::AppState;
-use shannon_core::api::client::LlmClient;
-use shannon_core::skill_loop::{
-    self,
-};
+use shannon_core::skill_loop::{self};
+use shannon_engine::api::client::LlmClient;
 
 // Re-export types for frontend (via Tauri auto-serialization)
 pub use shannon_core::skill_loop::{
@@ -117,7 +115,10 @@ pub async fn skill_loop_generate(
     // Emit proposal count event
     let pending_count = count_pending_proposals(proposals_dir.as_path())?;
     let payload = SkillProposalCountPayload { pending_count };
-    let _ = app_handle.emit(crate::events::event_names::SKILL_PROPOSAL_AVAILABLE, payload);
+    let _ = app_handle.emit(
+        crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,
+        payload,
+    );
 
     Ok(proposal)
 }
@@ -153,8 +154,8 @@ pub async fn skill_loop_approve(
     let proposals_dir = proposals_directory()?;
 
     // Parse UUID
-    let uuid = uuid::Uuid::parse_str(&proposal_id)
-        .map_err(|e| format!("Invalid proposal ID: {e}"))?;
+    let uuid =
+        uuid::Uuid::parse_str(&proposal_id).map_err(|e| format!("Invalid proposal ID: {e}"))?;
 
     // Load proposal
     let proposals = skill_loop::load_proposals(&proposals_dir)
@@ -199,7 +200,10 @@ pub async fn skill_loop_approve(
     // Emit updated count event
     let pending_count = count_pending_proposals(proposals_dir.as_path())?;
     let payload = SkillProposalCountPayload { pending_count };
-    let _ = app_handle.emit(crate::events::event_names::SKILL_PROPOSAL_AVAILABLE, payload);
+    let _ = app_handle.emit(
+        crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,
+        payload,
+    );
 
     Ok(skill_path)
 }
@@ -213,8 +217,8 @@ pub async fn skill_loop_reject(
     let proposals_dir = proposals_directory()?;
 
     // Parse UUID
-    let uuid = uuid::Uuid::parse_str(&proposal_id)
-        .map_err(|e| format!("Invalid proposal ID: {e}"))?;
+    let uuid =
+        uuid::Uuid::parse_str(&proposal_id).map_err(|e| format!("Invalid proposal ID: {e}"))?;
 
     // Delete proposal
     skill_loop::delete_proposal(&proposals_dir, uuid)
@@ -223,7 +227,10 @@ pub async fn skill_loop_reject(
     // Emit updated count event
     let pending_count = count_pending_proposals(proposals_dir.as_path())?;
     let payload = SkillProposalCountPayload { pending_count };
-    let _ = app_handle.emit(crate::events::event_names::SKILL_PROPOSAL_AVAILABLE, payload);
+    let _ = app_handle.emit(
+        crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,
+        payload,
+    );
 
     Ok(())
 }
@@ -287,9 +294,12 @@ mod tests {
 
     #[test]
     fn test_task_outcome_parsing() {
-        assert_eq!(match "Success".into() {
-            o if matches!(o, "Success") => TaskOutcome::Success,
-            _ => unreachable!(),
-        }, TaskOutcome::Success);
+        assert_eq!(
+            match "Success" {
+                "Success" => TaskOutcome::Success,
+                _ => unreachable!(),
+            },
+            TaskOutcome::Success
+        );
     }
 }

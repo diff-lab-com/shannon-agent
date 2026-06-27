@@ -22,7 +22,7 @@ pub async fn new_session(
 
     // Create empty session file using StateManager
     let model = state.model.lock().await.clone();
-    let metadata = shannon_core::state::SessionPersistMetadata {
+    let metadata = shannon_engine::state::SessionPersistMetadata {
         model,
         turn_count: 0,
         title: Some(title.clone()),
@@ -135,12 +135,12 @@ pub async fn search_sessions(
         if let Ok(uuid) = uuid::Uuid::parse_str(&s.id) {
             if let Ok(Some(data)) = state.state_manager.load_session(&uuid) {
                 let hit = data.messages.iter().any(|m| match &m.content {
-                    shannon_core::api::MessageContent::Text(t) => {
+                    shannon_engine::api::MessageContent::Text(t) => {
                         t.to_lowercase().contains(&query_lower)
                     }
-                    shannon_core::api::MessageContent::Blocks(blocks) => {
+                    shannon_engine::api::MessageContent::Blocks(blocks) => {
                         blocks.iter().any(|b| match b {
-                            shannon_core::api::ContentBlock::Text { text } => {
+                            shannon_engine::api::ContentBlock::Text { text } => {
                                 text.to_lowercase().contains(&query_lower)
                             }
                             _ => false,
@@ -181,13 +181,13 @@ pub async fn load_session(
         .map(|msg| ChatMessage {
             role: msg.role,
             content: match msg.content {
-                shannon_core::api::MessageContent::Text(t) => t,
-                shannon_core::api::MessageContent::Blocks(blocks) => {
+                shannon_engine::api::MessageContent::Text(t) => t,
+                shannon_engine::api::MessageContent::Blocks(blocks) => {
                     // For blocks, extract text content
                     blocks
                         .iter()
                         .filter_map(|b| match b {
-                            shannon_core::api::ContentBlock::Text { text } => Some(text.clone()),
+                            shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()
@@ -266,11 +266,11 @@ pub async fn export_session(
                     other => &format!("**{other}**"),
                 };
                 let content = match &msg.content {
-                    shannon_core::api::MessageContent::Text(t) => t.clone(),
-                    shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                    shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                    shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                         .iter()
                         .filter_map(|b| match b {
-                            shannon_core::api::ContentBlock::Text { text } => Some(text.clone()),
+                            shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()
@@ -286,11 +286,11 @@ pub async fn export_session(
                 .iter()
                 .map(|msg| {
                     let content = match &msg.content {
-                        shannon_core::api::MessageContent::Text(t) => t.clone(),
-                        shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                        shannon_engine::api::MessageContent::Text(t) => t.clone(),
+                        shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                             .iter()
                             .filter_map(|b| match b {
-                                shannon_core::api::ContentBlock::Text { text } => {
+                                shannon_engine::api::ContentBlock::Text { text } => {
                                     Some(text.clone())
                                 }
                                 _ => None,
@@ -335,14 +335,14 @@ pub async fn switch_session(
             let messages = state.messages.lock().await.clone();
             if let Ok(uuid) = uuid::Uuid::parse_str(sid) {
                 let model = state.model.lock().await.clone();
-                let core_msgs: Vec<shannon_core::api::Message> = messages
+                let core_msgs: Vec<shannon_engine::api::Message> = messages
                     .iter()
-                    .map(|m| shannon_core::api::Message {
+                    .map(|m| shannon_engine::api::Message {
                         role: m.role.clone(),
-                        content: shannon_core::api::MessageContent::Text(m.content.clone()),
+                        content: shannon_engine::api::MessageContent::Text(m.content.clone()),
                     })
                     .collect();
-                let meta = shannon_core::state::SessionPersistMetadata {
+                let meta = shannon_engine::state::SessionPersistMetadata {
                     model,
                     turn_count: core_msgs.len() / 2,
                     ..Default::default()
@@ -364,11 +364,11 @@ pub async fn switch_session(
             .map(|msg| ChatMessage {
                 role: msg.role,
                 content: match msg.content {
-                    shannon_core::api::MessageContent::Text(t) => t,
-                    shannon_core::api::MessageContent::Blocks(blocks) => blocks
+                    shannon_engine::api::MessageContent::Text(t) => t,
+                    shannon_engine::api::MessageContent::Blocks(blocks) => blocks
                         .iter()
                         .filter_map(|b| match b {
-                            shannon_core::api::ContentBlock::Text { text } => Some(text.clone()),
+                            shannon_engine::api::ContentBlock::Text { text } => Some(text.clone()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()
@@ -619,15 +619,15 @@ pub async fn rename_session(
         // Update persisted session metadata
         let model = state.model.lock().await.clone();
         let messages = state.messages.lock().await.clone();
-        let core_msgs: Vec<shannon_core::api::Message> = messages
+        let core_msgs: Vec<shannon_engine::api::Message> = messages
             .iter()
-            .map(|m| shannon_core::api::Message {
+            .map(|m| shannon_engine::api::Message {
                 role: m.role.clone(),
-                content: shannon_core::api::MessageContent::Text(m.content.clone()),
+                content: shannon_engine::api::MessageContent::Text(m.content.clone()),
             })
             .collect();
 
-        let metadata = shannon_core::state::SessionPersistMetadata {
+        let metadata = shannon_engine::state::SessionPersistMetadata {
             model,
             turn_count: core_msgs.len() / 2,
             title: Some(title),
@@ -677,7 +677,7 @@ pub async fn duplicate_session(
     let now = chrono_timestamp();
 
     let model_name = state.model.lock().await.clone();
-    let metadata = shannon_core::state::SessionPersistMetadata {
+    let metadata = shannon_engine::state::SessionPersistMetadata {
         model: model_name,
         turn_count: session_data.messages.len() / 2,
         title: Some(new_title.clone()),
@@ -763,7 +763,7 @@ pub(crate) async fn branch_session_internal(
     }
 
     // Slice messages to include only up to branch point
-    let branch_messages: Vec<shannon_core::api::Message> = session_data
+    let branch_messages: Vec<shannon_engine::api::Message> = session_data
         .messages
         .iter()
         .take(branch_point + 1)
@@ -771,7 +771,7 @@ pub(crate) async fn branch_session_internal(
         .collect();
 
     let model_name = state.model.lock().await.clone();
-    let metadata = shannon_core::state::SessionPersistMetadata {
+    let metadata = shannon_engine::state::SessionPersistMetadata {
         model: model_name,
         turn_count: branch_messages.len() / 2,
         title: Some(new_title.clone()),

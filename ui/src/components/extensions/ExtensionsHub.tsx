@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useIntl } from 'react-intl'
-import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
+import { CardSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
 import type { SkillInfo } from '@/types'
 
@@ -15,12 +16,17 @@ export default function ExtensionsHub() {
   const [selectedSkill, setSelectedSkill] = useState<SkillInfo | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  useEffect(() => {
+  const reload = useCallback(() => {
+    setLoading(true)
     api.listSkills()
       .then(setSkills)
-      .catch(e => { console.warn('Failed to load skills:', e); toast.error(t('extensions.hub.loadFailed')) })
+      .catch((e) => { toastError(t('extensions.hub.loadFailed'), e) })
       .finally(() => setLoading(false))
-  }, [])
+  }, [t])
+
+  useEffect(() => {
+    reload()
+  }, [reload])
 
   useEffect(() => {
     if (!selectedSkill) return
@@ -89,14 +95,17 @@ export default function ExtensionsHub() {
         </div>
 
         {loading ? (
-          <div className="flex items-center justify-center py-xl">
-            <span className="material-symbols-outlined animate-spin text-[32px] text-primary">progress_activity</span>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-md">
+            {Array.from({ length: 6 }).map((_, i) => <CardSkeleton key={i} />)}
           </div>
         ) : filteredSkills.length === 0 ? (
           <EmptyState
             icon="extension_off"
             title={searchQuery ? t('extensions.hub.noMatchTitle') : t('extensions.hub.noneAvailableTitle')}
             description={searchQuery ? t('extensions.hub.noMatchDesc') : t('extensions.hub.noneAvailableDesc')}
+            action={searchQuery
+              ? { label: t('extensions.hub.noMatchCta'), onClick: () => setSearchQuery('') }
+              : { label: t('extensions.hub.noneAvailableCta'), onClick: reload }}
           />
         ) : (
           sortedCategories.map(cat => (
@@ -113,7 +122,7 @@ export default function ExtensionsHub() {
                       <p className="text-label-sm font-label-sm text-on-surface-variant truncate">{skill.description || intl.formatMessage({ id: 'extensions.hub.triggerFallback' }, { trigger: skill.trigger })}</p>
                     </div>
                     <span className="px-sm py-xs bg-surface-container-low rounded-full text-label-sm font-label-sm text-on-surface-variant">{skill.source}</span>
-                    <span className="material-symbols-outlined text-[16px] text-on-surface-variant">{selectedSkill?.name === skill.name ? 'expand_less' : 'expand_more'}</span>
+                    <span className="material-symbols-outlined icon-sm text-on-surface-variant">{selectedSkill?.name === skill.name ? 'expand_less' : 'expand_more'}</span>
                   </div>
                 ))}
                 {sortedSkills(cat).map(skill => selectedSkill?.name === skill.name && (

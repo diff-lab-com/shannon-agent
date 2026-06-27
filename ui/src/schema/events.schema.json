@@ -1,0 +1,694 @@
+{
+  "BackgroundTaskInfo": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "BackgroundTaskInfo",
+    "type": "object",
+    "required": [
+      "output",
+      "prompt",
+      "started_at",
+      "status",
+      "task_id"
+    ],
+    "properties": {
+      "completed_at": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "int64"
+      },
+      "output": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "started_at": {
+        "type": "integer",
+        "format": "int64"
+      },
+      "status": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      }
+    }
+  },
+  "BackgroundTaskUpdate": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "BackgroundTaskUpdate",
+    "type": "object",
+    "required": [
+      "output",
+      "prompt",
+      "started_at",
+      "status",
+      "task_id"
+    ],
+    "properties": {
+      "completed_at": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "int64"
+      },
+      "output": {
+        "type": "string"
+      },
+      "prompt": {
+        "type": "string"
+      },
+      "started_at": {
+        "type": "integer",
+        "format": "int64"
+      },
+      "status": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      }
+    }
+  },
+  "ChatMessage": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ChatMessage",
+    "type": "object",
+    "required": [
+      "content",
+      "role",
+      "timestamp"
+    ],
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "role": {
+        "type": "string"
+      },
+      "timestamp": {
+        "type": "integer",
+        "format": "int64"
+      }
+    }
+  },
+  "ConfigUpdatedPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ConfigUpdatedPayload",
+    "type": "object",
+    "required": [
+      "key",
+      "value"
+    ],
+    "properties": {
+      "key": {
+        "type": "string"
+      },
+      "value": {
+        "type": "string"
+      }
+    }
+  },
+  "DiffFileInfo": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "DiffFileInfo",
+    "type": "object",
+    "required": [
+      "hunks",
+      "path",
+      "status"
+    ],
+    "properties": {
+      "hunks": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/DiffHunk"
+        }
+      },
+      "path": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      }
+    },
+    "definitions": {
+      "DiffHunk": {
+        "type": "object",
+        "required": [
+          "content",
+          "newLines",
+          "newStart",
+          "oldLines",
+          "oldStart"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "newLines": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          },
+          "newStart": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          },
+          "oldLines": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          },
+          "oldStart": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0.0
+          }
+        }
+      }
+    }
+  },
+  "DiffHunk": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "DiffHunk",
+    "type": "object",
+    "required": [
+      "content",
+      "newLines",
+      "newStart",
+      "oldLines",
+      "oldStart"
+    ],
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "newLines": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      },
+      "newStart": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      },
+      "oldLines": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      },
+      "oldStart": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      }
+    }
+  },
+  "EventEnvelope": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "EventEnvelope_for_AnyValue",
+    "type": "object",
+    "required": [
+      "event",
+      "payload",
+      "schema_version"
+    ],
+    "properties": {
+      "event": {
+        "type": "string"
+      },
+      "payload": true,
+      "schema_version": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      }
+    }
+  },
+  "HunkAction": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "HunkAction",
+    "type": "object",
+    "required": [
+      "action",
+      "line_end",
+      "line_start"
+    ],
+    "properties": {
+      "action": {
+        "type": "string"
+      },
+      "line_end": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      },
+      "line_start": {
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0.0
+      }
+    }
+  },
+  "PermissionRequest": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "PermissionRequest",
+    "type": "object",
+    "required": [
+      "input",
+      "request_id",
+      "risk",
+      "tool"
+    ],
+    "properties": {
+      "input": true,
+      "request_id": {
+        "type": "string"
+      },
+      "risk": {
+        "type": "string"
+      },
+      "tool": {
+        "type": "string"
+      }
+    }
+  },
+  "QueryCancelledPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "QueryCancelledPayload",
+    "type": "object",
+    "required": [
+      "query_id"
+    ],
+    "properties": {
+      "query_id": {
+        "type": "string"
+      }
+    }
+  },
+  "QueryCompletedPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "QueryCompletedPayload",
+    "type": "object",
+    "required": [
+      "query_id"
+    ],
+    "properties": {
+      "query_id": {
+        "type": "string"
+      }
+    }
+  },
+  "QueryFailedPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "QueryFailedPayload",
+    "type": "object",
+    "required": [
+      "error",
+      "query_id"
+    ],
+    "properties": {
+      "error": {
+        "type": "string"
+      },
+      "query_id": {
+        "type": "string"
+      }
+    }
+  },
+  "QueryTextPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "QueryTextPayload",
+    "type": "object",
+    "required": [
+      "content",
+      "query_id"
+    ],
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "query_id": {
+        "type": "string"
+      }
+    }
+  },
+  "SessionInfo": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "SessionInfo",
+    "type": "object",
+    "required": [
+      "created_at",
+      "id",
+      "message_count",
+      "title"
+    ],
+    "properties": {
+      "branch_point": {
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint",
+        "minimum": 0.0
+      },
+      "created_at": {
+        "type": "integer",
+        "format": "int64"
+      },
+      "id": {
+        "type": "string"
+      },
+      "message_count": {
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0.0
+      },
+      "parent_id": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "title": {
+        "type": "string"
+      },
+      "working_dir": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    }
+  },
+  "SessionLoaded": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "SessionLoaded",
+    "type": "object",
+    "required": [
+      "messages"
+    ],
+    "properties": {
+      "messages": {
+        "type": "array",
+        "items": {
+          "$ref": "#/definitions/ChatMessage"
+        }
+      }
+    },
+    "definitions": {
+      "ChatMessage": {
+        "type": "object",
+        "required": [
+          "content",
+          "role",
+          "timestamp"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      }
+    }
+  },
+  "TaskRetryPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "TaskRetryPayload",
+    "type": "object",
+    "required": [
+      "attempt",
+      "delay_ms",
+      "last_error",
+      "max_attempts",
+      "run_id",
+      "task_id",
+      "timestamp_ms"
+    ],
+    "properties": {
+      "attempt": {
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0.0
+      },
+      "delay_ms": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0.0
+      },
+      "last_error": {
+        "type": "string"
+      },
+      "max_attempts": {
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0.0
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "timestamp_ms": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0.0
+      }
+    }
+  },
+  "TaskStepPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "TaskStepPayload",
+    "type": "object",
+    "required": [
+      "run_id",
+      "status",
+      "step_index",
+      "step_label",
+      "step_total",
+      "task_id",
+      "timestamp_ms"
+    ],
+    "properties": {
+      "error": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "step_index": {
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0.0
+      },
+      "step_label": {
+        "type": "string"
+      },
+      "step_total": {
+        "type": "integer",
+        "format": "uint",
+        "minimum": 0.0
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "timestamp_ms": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0.0
+      }
+    }
+  },
+  "ThinkingPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ThinkingPayload",
+    "type": "object",
+    "required": [
+      "content",
+      "query_id"
+    ],
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "query_id": {
+        "type": "string"
+      }
+    }
+  },
+  "ToolProgressPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ToolProgressPayload",
+    "type": "object",
+    "required": [
+      "message",
+      "progress",
+      "query_id",
+      "tool_name",
+      "tool_use_id"
+    ],
+    "properties": {
+      "message": {
+        "type": "string"
+      },
+      "progress": {
+        "type": "number",
+        "format": "float"
+      },
+      "query_id": {
+        "type": "string"
+      },
+      "tool_name": {
+        "type": "string"
+      },
+      "tool_use_id": {
+        "type": "string"
+      }
+    }
+  },
+  "ToolResultPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ToolResultPayload",
+    "type": "object",
+    "required": [
+      "is_error",
+      "query_id",
+      "result",
+      "tool_name",
+      "tool_use_id"
+    ],
+    "properties": {
+      "is_error": {
+        "type": "boolean"
+      },
+      "query_id": {
+        "type": "string"
+      },
+      "result": {
+        "type": "string"
+      },
+      "tool_name": {
+        "type": "string"
+      },
+      "tool_use_id": {
+        "type": "string"
+      }
+    }
+  },
+  "ToolStartPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "ToolStartPayload",
+    "type": "object",
+    "required": [
+      "query_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id"
+    ],
+    "properties": {
+      "query_id": {
+        "type": "string"
+      },
+      "tool_input": true,
+      "tool_name": {
+        "type": "string"
+      },
+      "tool_use_id": {
+        "type": "string"
+      }
+    }
+  },
+  "UpdateAvailablePayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "UpdateAvailablePayload",
+    "type": "object",
+    "required": [
+      "version"
+    ],
+    "properties": {
+      "body": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "date": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "version": {
+        "type": "string"
+      }
+    }
+  },
+  "UpdateProgressPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "UpdateProgressPayload",
+    "type": "object",
+    "required": [
+      "progress",
+      "status"
+    ],
+    "properties": {
+      "progress": {
+        "type": "number",
+        "format": "float"
+      },
+      "status": {
+        "type": "string"
+      }
+    }
+  },
+  "UsagePayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "UsagePayload",
+    "type": "object",
+    "required": [
+      "cost_usd",
+      "input_tokens",
+      "output_tokens",
+      "query_id"
+    ],
+    "properties": {
+      "cost_usd": {
+        "type": "number",
+        "format": "double"
+      },
+      "input_tokens": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0.0
+      },
+      "output_tokens": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0.0
+      },
+      "query_id": {
+        "type": "string"
+      }
+    }
+  }
+}

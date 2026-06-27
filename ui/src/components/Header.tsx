@@ -1,41 +1,71 @@
 import { useState, useEffect, useRef } from 'react';
 import { useIntl } from 'react-intl';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { useApp } from '@/context/AppContext';
+import { useModalFocus } from '@/hooks/useModalFocus';
+import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
+import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
 import { useSidebar } from './Layout';
 import * as api from '@/lib/tauri-api';
+import { toastError } from '@/lib/errorToast';
 
 const TITLE_MAP: [string, string][] = [
-  ['/opc/task', 'OPC Task'],
-  ['/opc', 'One Person Company'],
-  ['/settings', 'Settings'],
-  ['/tasks', 'Scheduled'],
-  ['/extensions', 'Extensions'],
-  ['/chat', 'Chat'],
+  ['/opc/task', 'header.title.opcTask'],
+  ['/opc', 'header.title.opc'],
+  ['/settings', 'header.title.settings'],
+  ['/tasks', 'header.title.tasks'],
+  ['/extensions', 'header.title.extensions'],
+  ['/memory', 'header.title.memory'],
+  ['/triage', 'header.title.triage'],
+  ['/editor', 'header.title.editor'],
+  ['/quickfix', 'header.title.quickfix'],
+  ['/welcome', 'header.title.welcome'],
+  ['/chat', 'header.title.chat'],
 ]
 
-function getTitle(pathname: string): string {
-  for (const [prefix, title] of TITLE_MAP) {
-    if (pathname.includes(prefix)) return title
+function getTitleKey(pathname: string): string {
+  for (const [prefix, key] of TITLE_MAP) {
+    if (pathname.includes(prefix)) return key
   }
-  return 'Chat'
+  return 'header.title.chat'
 }
 
 export function Header() {
   const intl = useIntl()
   const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
   const location = useLocation();
+  const navigate = useNavigate();
   const { status, models, permissionRequest, respondPermission } = useApp();
   const { toggle: toggleSidebar } = useSidebar();
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);
   const [modelFocus, setModelFocus] = useState(-1);
 
-  const title = getTitle(location.pathname);
-  const isOpc = location.pathname.includes('/opc') && !location.pathname.includes('/opc/task');
+  const permissionRef = useRef<HTMLDivElement>(null);
+  useModalFocus(!!permissionRequest, permissionRef);
+
+  const { candidates, refetch } = usePendingSkillCandidates();
+  const [approvalOpen, setApprovalOpen] = useState(false);
+  const pendingCount = candidates.length;
+
+  const handleBellClick = () => {
+    if (pendingCount > 0) setApprovalOpen(true)
+    else navigate('/triage')
+  }
+
+  const onApprovalClose = () => {
+    setApprovalOpen(false)
+    refetch()
+  }
+
+  const advanceCandidate = () => {
+    if (candidates.length <= 1) setApprovalOpen(false)
+    refetch()
+  }
+
+  const title = t(getTitleKey(location.pathname));
   const isOpcTask = location.pathname.includes('/opc/task');
 
   // Click outside to close model selector
@@ -56,14 +86,14 @@ export function Header() {
       await api.switchProvider({ provider: status.provider, model: modelId })
       setModelOpen(false)
       toast.success(t('header.permRequest.toast.switched', { modelId }))
-    } catch (e) { console.warn("Header error:", e); toast.error(t('header.permRequest.error')) }
+    } catch (e) { toastError(t('header.permRequest.error'), e) }
   }
 
   return (
     <>
       <header className="fixed top-0 right-0 z-40 flex justify-between items-center h-16 px-lg bg-surface/80 backdrop-blur-md shadow-sm border-b border-outline-variant/10" style={{ left: 'var(--sidebar-w)' }}>
-        <Button variant="ghost" aria-label="Toggle sidebar" className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
-          <span className="material-symbols-outlined text-[24px]">menu</span>
+        <Button variant="ghost" aria-label={t('header.toggleSidebar.aria')} className="md:hidden p-2 mr-sm text-on-surface-variant hover:text-primary" onClick={toggleSidebar}>
+          <span className="material-symbols-outlined icon-lg">menu</span>
         </Button>
         <div className="flex items-center gap-md relative w-full overflow-hidden">
           {isOpcTask ? (
@@ -73,17 +103,6 @@ export function Header() {
             </div>
           ) : (
             <h2 className="font-headline-md text-[24px] font-extrabold text-on-surface whitespace-nowrap">{title}</h2>
-          )}
-
-          {isOpc && (
-            <div className="flex-1 max-w-[400px] ml-auto mr-lg relative hidden md:block">
-              <Input
-                type="text"
-                placeholder={t('header.search.placeholder')}
-                className="w-full bg-surface-container-low border-none rounded-full py-2 pl-4 pr-10 text-sm font-body-md focus:ring-2 focus:ring-primary/20 transition-all outline-none"
-              />
-              <span className="material-symbols-outlined absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant text-[20px]">search</span>
-            </div>
           )}
 
           {isOpcTask && (
@@ -104,7 +123,7 @@ export function Header() {
             >
               <span className={`w-2 h-2 rounded-full shrink-0 ${status?.querying ? 'bg-secondary animate-pulse' : 'bg-tertiary'}`}></span>
               <span className="font-label-sm text-[12px] whitespace-nowrap max-w-[120px] truncate">{status?.model || t('header.model.noModel')}</span>
-              <span className="material-symbols-outlined text-[16px]">expand_more</span>
+              <span className="material-symbols-outlined icon-sm">expand_more</span>
             </Button>
             {modelOpen && models.length > 0 && (
               <div className="absolute right-0 top-full mt-sm w-[280px] bg-surface-container-lowest/95 backdrop-blur-lg rounded-xl border border-outline-variant/20 shadow-xl z-50 py-sm" role="listbox" onKeyDown={e => {
@@ -130,11 +149,19 @@ export function Header() {
             )}
           </div>
 
-          <Button variant="ghost" aria-label={t('header.notifications')} title={t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative">
-            <span className="material-symbols-outlined text-[20px]" aria-hidden="true">notifications</span>
+          <Button variant="ghost" aria-label={t('header.notifications')} title={pendingCount > 0 ? t('header.notifications.pending', { count: pendingCount }) : t('header.notifications.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors relative" onClick={handleBellClick}>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">notifications</span>
+            {pendingCount > 0 && (
+              <span
+                aria-hidden="true"
+                className="absolute top-0 right-0 min-w-[16px] h-4 px-[4px] rounded-full bg-error text-on-error text-[10px] font-bold flex items-center justify-center leading-none"
+              >
+                {pendingCount > 9 ? '9+' : pendingCount}
+              </span>
+            )}
           </Button>
           <Button variant="ghost" aria-label={t('header.help')} title={t('header.help.aria')} className="p-2 rounded-lg hover:bg-surface-container-low text-on-surface-variant hover:text-primary transition-colors" onClick={() => window.dispatchEvent(new CustomEvent('shannon:toggle-help'))}>
-            <span className="material-symbols-outlined text-[20px]" aria-hidden="true">help</span>
+            <span className="material-symbols-outlined icon-md" aria-hidden="true">help</span>
           </Button>
           <div className="h-8 w-8 rounded-full overflow-hidden bg-surface-container flex items-center justify-center ring-2 ring-primary/10">
             <span className="material-symbols-outlined text-on-surface-variant text-[18px]" aria-hidden="true">person</span>
@@ -145,7 +172,7 @@ export function Header() {
       {/* Permission Modal */}
       {permissionRequest && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/30 backdrop-blur-sm" onKeyDown={e => { if (e.key === 'Escape') respondPermission(permissionRequest.request_id, false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/20 p-xl max-w-md w-full mx-md" role="dialog" aria-modal="true">
+          <div ref={permissionRef} className="bg-surface-container-lowest rounded-2xl shadow-2xl border border-outline-variant/20 p-xl max-w-md w-full mx-md" role="dialog" aria-modal="true">
             <div className="flex items-center gap-md mb-lg">
               <div className="h-10 w-10 rounded-full bg-tertiary-container flex items-center justify-center">
                 <span className="material-symbols-outlined text-on-tertiary-container">shield</span>
@@ -185,6 +212,14 @@ export function Header() {
           </div>
         </div>
       )}
+
+      <SkillApprovalModal
+        open={approvalOpen}
+        candidate={candidates[0] ?? null}
+        onClose={onApprovalClose}
+        onApproved={advanceCandidate}
+        onRejected={advanceCandidate}
+      />
     </>
   );
 }

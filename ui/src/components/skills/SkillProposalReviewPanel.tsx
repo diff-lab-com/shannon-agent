@@ -3,10 +3,12 @@
 // Displays proposal details (name, description, triggers, workflow) with
 // Approve/Reject buttons. Fetches proposals on mount and refreshes after actions.
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { skillLoop } from '@/lib/tauri-api'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import type { SkillProposal } from '@/types'
 
 interface SkillProposalReviewPanelProps {
@@ -24,6 +26,9 @@ export default function SkillProposalReviewPanel({
   const [currentIndex, setCurrentIndex] = useState(0)
   const [loading, setLoading] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, containerRef)
 
   useEffect(() => {
     if (!open) return
@@ -54,8 +59,7 @@ export default function SkillProposalReviewPanel({
       })
       .catch((err) => {
         if (!cancelled) {
-          console.error('Failed to load proposals:', err)
-          toast.error(t('skillProposals.review.loadError'))
+          toastError(t('skillProposals.review.loadError'), err)
         }
       })
       .finally(() => {
@@ -134,20 +138,21 @@ export default function SkillProposalReviewPanel({
       onClick={onClose}
     >
       <div
-        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+        ref={containerRef}
+        className="bg-surface-container-lowest rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col border border-outline-variant/30"
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b dark:border-gray-700">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
+        <div className="flex items-center justify-between p-6 border-b border-outline-variant">
+          <h2 className="text-xl font-semibold text-on-surface">
             {t('skillProposals.review.title')}
           </h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-            aria-label="Close"
+            className="text-on-surface-variant hover:text-on-surface"
+            aria-label={t('skillProposals.review.closeAria')}
           >
             <span className="material-symbols-outlined">close</span>
           </button>
@@ -157,13 +162,13 @@ export default function SkillProposalReviewPanel({
         <div className="flex-1 overflow-y-auto p-6">
           {loading ? (
             <div className="flex items-center justify-center py-12">
-              <span className="material-symbols-outlined text-[32px] text-primary animate-spin">
+              <span className="material-symbols-outlined icon-xl text-primary animate-spin">
                 progress_activity
               </span>
             </div>
           ) : !current ? (
             <div className="text-center py-12">
-              <p className="text-gray-600 dark:text-gray-400">
+              <p className="text-on-surface-variant">
                 {t('skillProposals.review.empty')}
               </p>
             </div>
@@ -171,34 +176,34 @@ export default function SkillProposalReviewPanel({
             <div className="space-y-6">
               {/* Name */}
               <div>
-                <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
+                <h3 className="text-sm font-medium text-on-surface-variant mb-1">
                   {t('skillProposals.review.card.name')}
                 </h3>
-                <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                <p className="text-lg font-semibold text-on-surface">
                   {current.name}
                 </p>
               </div>
 
               {/* Description */}
               <div>
-                <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
+                <h3 className="text-sm font-medium text-on-surface-variant mb-1">
                   {t('skillProposals.review.card.description')}
                 </h3>
-                <p className="text-gray-700 dark:text-gray-300">
+                <p className="text-on-surface">
                   {current.description}
                 </p>
               </div>
 
               {/* Trigger Patterns */}
               <div>
-                <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
+                <h3 className="text-sm font-medium text-on-surface-variant mb-2">
                   {t('skillProposals.review.card.triggers')}
                 </h3>
                 <div className="flex flex-wrap gap-2">
                   {current.trigger_patterns.map((pattern, i) => (
                     <span
                       key={i}
-                      className="px-2 py-1 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 text-xs rounded-md"
+                      className="px-2 py-1 bg-primary/10 text-primary text-xs rounded-md"
                     >
                       {pattern}
                     </span>
@@ -208,16 +213,16 @@ export default function SkillProposalReviewPanel({
 
               {/* Example Workflow */}
               <div>
-                <h3 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
+                <h3 className="text-sm font-medium text-on-surface-variant mb-1">
                   {t('skillProposals.review.card.example')}
                 </h3>
-                <pre className="mt-1 p-3 bg-gray-50 dark:bg-gray-900 rounded text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap overflow-x-auto">
+                <pre className="mt-1 p-3 bg-surface-container-low rounded text-sm text-on-surface whitespace-pre-wrap overflow-x-auto">
                   {current.example_workflow}
                 </pre>
               </div>
 
               {/* Created At */}
-              <div className="text-xs text-gray-500 dark:text-gray-400">
+              <div className="text-xs text-on-surface-variant">
                 {intl.formatMessage(
                   { id: 'skillProposals.review.card.created' },
                   {
@@ -236,21 +241,21 @@ export default function SkillProposalReviewPanel({
           <>
             {/* Navigation */}
             {proposals.length > 1 && (
-              <div className="flex items-center justify-center gap-2 px-6 py-3 border-t dark:border-gray-700">
+              <div className="flex items-center justify-center gap-2 px-6 py-3 border-t border-outline-variant">
                 <button
                   onClick={handlePrevious}
                   disabled={actionLoading}
-                  className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md disabled:opacity-50 transition-colors"
+                  className="px-3 py-1.5 text-sm text-on-surface-variant hover:bg-surface-container rounded-md disabled:opacity-50 transition-colors"
                 >
                   {t('skillProposals.review.previous')}
                 </button>
-                <span className="text-sm text-gray-500">
+                <span className="text-sm text-on-surface-variant">
                   {currentIndex + 1} / {proposals.length}
                 </span>
                 <button
                   onClick={handleNext}
                   disabled={actionLoading}
-                  className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md disabled:opacity-50 transition-colors"
+                  className="px-3 py-1.5 text-sm text-on-surface-variant hover:bg-surface-container rounded-md disabled:opacity-50 transition-colors"
                 >
                   {t('skillProposals.review.next')}
                 </button>
@@ -258,18 +263,18 @@ export default function SkillProposalReviewPanel({
             )}
 
             {/* Actions */}
-            <div className="flex justify-end gap-3 p-6 border-t dark:border-gray-700">
+            <div className="flex justify-end gap-3 p-6 border-t border-outline-variant">
               <button
                 onClick={handleReject}
                 disabled={actionLoading}
-                className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md disabled:opacity-50 transition-colors"
+                className="px-4 py-2 text-on-surface hover:bg-surface-container rounded-md disabled:opacity-50 transition-colors"
               >
                 {t('skillProposals.review.rejectButton')}
               </button>
               <button
                 onClick={handleApprove}
                 disabled={actionLoading}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md disabled:opacity-50 transition-colors"
+                className="px-4 py-2 bg-primary hover:bg-primary/90 text-on-primary rounded-md disabled:opacity-50 transition-colors"
               >
                 {actionLoading
                   ? t('skillProposals.review.approving')

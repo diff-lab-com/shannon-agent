@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useIntl } from 'react-intl'
-import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { HookEventInfo } from '@/types'
 
@@ -38,8 +38,7 @@ export default function Hooks() {
       try {
         setEvents(await api.listHookEvents())
       } catch (e) {
-        console.warn('Failed to load hook events:', e)
-        toast.error(t('hooks.error.load'))
+        toastError(t('hooks.error.load'), e)
       }
       setLoading(false)
     })()
@@ -88,7 +87,7 @@ export default function Hooks() {
             className="w-full pl-xl pr-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
           />
         </div>
-        <div className="flex items-center gap-xs flex-wrap" role="tablist" aria-label="Filter by category">
+        <div className="flex items-center gap-xs flex-wrap" role="tablist" aria-label={t('hooks.filter.aria')}>
           <CategoryChip active={activeCategory === 'all'} onClick={() => setActiveCategory('all')}>
             {t('hooks.filter.all')}
           </CategoryChip>
@@ -102,11 +101,11 @@ export default function Hooks() {
 
       {loading ? (
         <div className="flex items-center justify-center py-xl">
-          <span className="material-symbols-outlined text-[32px] text-primary animate-spin">progress_activity</span>
+          <span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span>
         </div>
       ) : filtered.length === 0 ? (
         <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-xl text-center">
-          <span className="material-symbols-outlined text-[48px] text-outline-variant block mb-sm">search_off</span>
+          <span className="material-symbols-outlined icon-2xl text-outline-variant block mb-sm">search_off</span>
           <p className="font-headline-md text-on-surface mb-xs">{t('hooks.empty.title')}</p>
           <p className="font-body-sm text-on-surface-variant">{t('hooks.empty.description')}</p>
         </div>

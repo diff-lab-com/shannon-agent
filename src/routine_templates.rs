@@ -133,11 +133,7 @@ mod tests {
     /// where the crate was compiled elsewhere).
     fn real_templates_dir() -> Option<PathBuf> {
         let dir = resolve_templates_dir();
-        if dir.is_dir() {
-            Some(dir)
-        } else {
-            None
-        }
+        if dir.is_dir() { Some(dir) } else { None }
     }
 
     #[test]
@@ -187,7 +183,11 @@ mod tests {
                 t.trigger_type
             );
             if t.trigger_type == "cron" {
-                assert!(t.cron_expr.is_some(), "{}: cron trigger missing cron_expr", t.id);
+                assert!(
+                    t.cron_expr.is_some(),
+                    "{}: cron trigger missing cron_expr",
+                    t.id
+                );
             }
             if t.trigger_type == "interval" {
                 assert!(

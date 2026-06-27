@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import QRCode from './QRCode'
 import * as api from '@/lib/tauri-api'
@@ -37,8 +38,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
       toast.success(t('settings.notifications.wizard.telegram.verifySuccess'))
       setStep(3)
     } catch (e) {
-      console.warn('Telegram verify error:', e)
-      toast.error(t('settings.notifications.wizard.telegram.verifyFailed'))
+      toastError(t('settings.notifications.wizard.telegram.verifyFailed'), e)
     }
     setVerifying(false)
   }
@@ -49,8 +49,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
       // This would call getUpdates API to capture the latest message's chat_id
       toast.success(t('settings.notifications.wizard.telegram.captureSuccess'))
     } catch (e) {
-      console.warn('Capture chat ID error:', e)
-      toast.error(t('settings.notifications.wizard.telegram.captureFailed'))
+      toastError(t('settings.notifications.wizard.telegram.captureFailed'), e)
     }
     setCapturing(false)
   }
@@ -71,8 +70,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
       await onSave(dto)
       toast.success(t('settings.notifications.wizard.telegram.saved'))
     } catch (e) {
-      console.warn('Save Telegram config error:', e)
-      toast.error(t('settings.notifications.wizard.saveFailed'))
+      toastError(t('settings.notifications.wizard.saveFailed'), e)
     }
     setSaving(false)
   }
@@ -137,7 +135,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
           value={botToken}
           onChange={(e) => setBotToken(e.target.value)}
           placeholder="123456789:ABC..."
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.telegram.botTokenHint')}
@@ -170,7 +168,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
           value={triggerWord}
           onChange={(e) => setTriggerWord(e.target.value)}
           placeholder="shannon"
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.telegram.triggerWordHint')}
@@ -186,7 +184,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
           value={allowedChats}
           onChange={(e) => setAllowedChats(e.target.value)}
           placeholder="-1001234567890, 123456789"
-          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+          className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
         />
         <p className="text-on-surface-variant text-xs mt-sm">
           {t('settings.notifications.wizard.telegram.allowedChatsHint')}

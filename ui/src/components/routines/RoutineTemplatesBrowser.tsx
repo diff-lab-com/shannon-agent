@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { ScheduledRoutine } from '@/types'
 
@@ -61,10 +62,7 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
       toast.success(t('routines.templates.instantiated'), { description: created.name })
       onInstantiated(created)
     } catch (e) {
-      console.warn('instantiateRoutineTemplate error:', e)
-      toast.error(
-        typeof e === 'string' ? e : t('routines.templates.error.instantiateFailed'),
-      )
+      toastError(t('routines.templates.error.instantiateFailed'), e)
     }
     setInstantiating(null)
   }
@@ -106,7 +104,7 @@ export default function RoutineTemplatesBrowser({ onInstantiated }: Props) {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             aria-label={t('routines.templates.filter.ariaLabel')}
-            className="px-md py-xs rounded-md border border-outline bg-surface text-on-surface focus:outline-none focus:border-primary"
+            className="px-md py-xs rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           >
             {categories.map((c) => (
               <option key={c} value={c}>

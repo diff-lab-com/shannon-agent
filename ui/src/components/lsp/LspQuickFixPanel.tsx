@@ -10,6 +10,13 @@ import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { CodeActionDto } from '@/lib/tauri-api'
 
+// Capitalise the first character of an LSP diagnostic message so the panel
+// reads as a sentence (servers often report lowercase, e.g. "expected ';'").
+function sentenceCase(s: string): string {
+  if (!s) return s
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
 export interface LspQuickFixDiagnostic {
   file_path: string
   start_line: number
@@ -110,7 +117,7 @@ export default function LspQuickFixPanel({
     <div
       className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
       role="region"
-      aria-label="LSP quick-fix panel"
+      aria-label={intl.formatMessage({ id: 'lsp.quickFixPanel.aria' })}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-sm min-w-0">
@@ -134,7 +141,7 @@ export default function LspQuickFixPanel({
               aria-label={intl.formatMessage({ id: 'lsp.quickFix.close.aria' })}
               className="text-on-surface-variant hover:bg-surface-container-high rounded-full p-xs cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
             >
-              <span className="material-symbols-outlined text-[16px]">close</span>
+              <span className="material-symbols-outlined icon-sm">close</span>
             </button>
           ) : null}
         </div>
@@ -142,7 +149,7 @@ export default function LspQuickFixPanel({
 
       <p className="font-label-sm text-[11px] text-on-surface-variant line-clamp-2">
         <code className="font-mono bg-surface-container-low px-1 rounded">{diagnostic.file_path.split('/').pop()}</code>
-        :{diagnostic.start_line + 1}:{diagnostic.start_character + 1} — {diagnostic.message}
+        :{diagnostic.start_line + 1}:{diagnostic.start_character + 1} — {sentenceCase(diagnostic.message)}
       </p>
 
       {error ? (

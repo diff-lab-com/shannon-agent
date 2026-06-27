@@ -2,10 +2,12 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { useApp } from '@/context/AppContext'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
+import { formatShortcut } from '@/lib/platform'
 
 // ─── Task taxonomy ──────────────────────────────────────────────────────────
 // Drives Step 0 (primary use case). Each task carries a model recommendation
@@ -75,11 +77,11 @@ const TOOL_CATALOG: Record<string, { labelKey: string; icon: string; descKey: st
 }
 
 const SHORTCUT_ROWS = [
-  { keys: '⌘ K', actionKey: 'shortcuts.openPalette' },
-  { keys: '⌘ N', actionKey: 'shortcuts.newChat' },
-  { keys: '⌘ 1 / 2 / 3', actionKey: 'shortcuts.jumpTabs' },
-  { keys: '?', actionKey: 'shortcuts.showAll' },
-  { keys: 'Esc', actionKey: 'shortcuts.cancel' },
+  { keys: () => `${formatShortcut('K')}`, actionKey: 'shortcuts.openPalette' },
+  { keys: () => `${formatShortcut('N')}`, actionKey: 'shortcuts.newChat' },
+  { keys: () => `${formatShortcut('1')} / ${formatShortcut('2')} / ${formatShortcut('3')}`, actionKey: 'shortcuts.jumpTabs' },
+  { keys: () => '?', actionKey: 'shortcuts.showAll' },
+  { keys: () => 'Esc', actionKey: 'shortcuts.cancel' },
 ] as const
 
 // ─── Documents skill recommendations (P2.4) ─────────────────────────────────
@@ -217,8 +219,7 @@ export default function Welcome() {
           return
       }
     } catch (e) {
-      console.warn('testProviderConnection failed:', e)
-      toast.error(intl.formatMessage({ id: 'welcome.testConnection.failed' }))
+      toastError(intl.formatMessage({ id: 'welcome.testConnection.failed' }), e)
     } finally {
       setTesting(false)
     }
@@ -249,13 +250,11 @@ export default function Welcome() {
           await refreshConfig()
           toast.success(intl.formatMessage({ id: 'welcome.toast.workingDir.updated' }))
         } catch (e) {
-          console.warn('configure working_dir failed:', e)
-          toast.error(intl.formatMessage({ id: 'welcome.toast.workingDir.failed' }))
+          toastError(intl.formatMessage({ id: 'welcome.toast.workingDir.failed' }), e)
         }
       }
     } catch (e) {
-      console.warn('Welcome folder picker failed:', e)
-      toast.error(intl.formatMessage({ id: 'welcome.toast.folderPicker.failed' }))
+      toastError(intl.formatMessage({ id: 'welcome.toast.folderPicker.failed' }), e)
     }
   }
 
@@ -273,8 +272,7 @@ export default function Welcome() {
       setEnabledTools(prev => ({ ...initial, ...prev }))
       setStep(2)
     } catch (e) {
-      console.warn('Welcome provider setup failed:', e)
-      toast.error(intl.formatMessage({ id: 'welcome.toast.provider.failed' }))
+      toastError(intl.formatMessage({ id: 'welcome.toast.provider.failed' }), e)
     }
     setSaving(false)
   }
@@ -294,7 +292,7 @@ export default function Welcome() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setSkillState(prev => ({ ...prev, [skill.id]: { status: 'failed', error: msg } }))
-      toast.error(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }))
+      toastError(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }), e)
     }
   }
 
@@ -426,7 +424,7 @@ export default function Welcome() {
                     type="password"
                     value={apiKey}
                     onChange={e => setApiKey(e.target.value)}
-                    placeholder={envHasKey ? '(loaded from environment)' : 'sk-...'}
+                    placeholder={envHasKey ? intl.formatMessage({ id: 'welcome.model.apiKey.placeholderEnv' }) : intl.formatMessage({ id: 'welcome.model.apiKey.placeholder' })}
                     autoComplete="off"
                     className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
                   />
@@ -440,7 +438,7 @@ export default function Welcome() {
                       disabled={testing || !apiKey}
                       className="shrink-0 px-md py-xs rounded-lg font-label-md cursor-pointer transition-all bg-surface-container-low hover:bg-surface-container-high border border-outline-variant/50 text-on-surface disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary flex items-center gap-xs"
                     >
-                      {testing && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
+                      {testing && <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>}
                       {testing
                         ? intl.formatMessage({ id: 'welcome.testConnection.testing' })
                         : intl.formatMessage({ id: 'welcome.testConnection.button' })}
@@ -581,12 +579,15 @@ export default function Welcome() {
               {/* Shortcuts */}
               <div className="space-y-sm">
                 <div className="font-label-md text-on-surface-variant mb-xs">{intl.formatMessage({ id: 'welcome.done.shortcuts.label' })}</div>
-                {SHORTCUT_ROWS.map(s => (
-                  <div key={s.keys} className="flex items-center justify-between py-xs">
+                {SHORTCUT_ROWS.map(s => {
+                  const keys = s.keys()
+                  return (
+                  <div key={s.actionKey} className="flex items-center justify-between py-xs">
                     <span className="font-body-sm text-on-surface-variant">{intl.formatMessage({ id: s.actionKey })}</span>
-                    <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{s.keys}</kbd>
+                    <kbd className="text-[11px] px-1.5 py-0.5 rounded bg-surface-container-high text-on-surface-variant font-mono shrink-0">{keys}</kbd>
                   </div>
-                ))}
+                  )
+                })}
               </div>
               <p className="font-body-sm text-on-surface-variant mt-md">
                 {intl.formatMessage(

@@ -25,17 +25,18 @@ use tauri::Emitter;
 pub use shannon_types::events::event_names;
 pub use shannon_types::events::{
     BackgroundTaskInfo, BackgroundTaskUpdate, ChatMessage, ConfigUpdatedPayload, DiffFileInfo,
-    DiffHunk, EventEnvelope, HunkAction, PermissionRequest, QueryCancelledPayload,
-    QueryCompletedPayload, QueryFailedPayload, QueryTextPayload, SessionInfo, SessionLoaded,
-    TaskRetryPayload, TaskStepPayload, ThinkingPayload, ToolProgressPayload, ToolResultPayload,
-    ToolStartPayload, UpdateAvailablePayload, UpdateProgressPayload, UsagePayload,
-    EVENT_SCHEMA_VERSION,
+    DiffHunk, EVENT_SCHEMA_VERSION, EventEnvelope, HunkAction, PermissionRequest,
+    QueryCancelledPayload, QueryCompletedPayload, QueryFailedPayload, QueryTextPayload,
+    SessionInfo, SessionLoaded, TaskRetryPayload, TaskStepPayload, ThinkingPayload,
+    ToolProgressPayload, ToolResultPayload, ToolStartPayload, UpdateAvailablePayload,
+    UpdateProgressPayload, UsagePayload,
 };
 
 /// Workflow streaming — helper to emit a `task:step` event from
 /// anywhere with an `AppHandle`. Silently no-ops on emit error so a
 /// frontend disconnect never breaks task execution.
 #[cfg(feature = "tauri")]
+#[allow(clippy::too_many_arguments)] // event helper: payload fields are inherent
 pub fn emit_task_step<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     task_id: &str,
@@ -106,7 +107,10 @@ mod tests {
         assert_eq!(event_names::QUERY_TEXT, "query:text");
         assert_eq!(event_names::TASK_STEP, "task:step");
         assert_eq!(event_names::TASK_RETRY, "task:retry");
-        assert_eq!(event_names::SKILL_PROPOSAL_AVAILABLE, "skill-proposal-available");
+        assert_eq!(
+            event_names::SKILL_PROPOSAL_AVAILABLE,
+            "skill-proposal-available"
+        );
     }
 
     #[test]

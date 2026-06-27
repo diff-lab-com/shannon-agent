@@ -10,12 +10,13 @@
 // Click outside / Esc / Close button dismisses. Errors surface as a
 // friendly inline message rather than throwing.
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import DiffViewer from '@/components/diff/DiffViewer'
 import { useDiffKeyboard } from '@/hooks/useDiffKeyboard'
+import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { computeHunks, mergeFile, type HunkDecision } from '@/lib/diff-merge'
 import type { FileDiff } from '@/types'
@@ -40,6 +41,9 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [decisions, setDecisions] = useState<Map<string, HunkDecision>>(new Map())
+
+  const containerRef = useRef<HTMLDivElement>(null)
+  useModalFocus(open, containerRef)
 
   useEffect(() => {
     if (!open || !filePath) {
@@ -156,6 +160,7 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
       onClick={onClose}
     >
       <div
+        ref={containerRef}
         className="bg-surface-container-lowest rounded-2xl border border-outline-variant/20 shadow-2xl w-full max-w-5xl max-h-[85vh] flex flex-col"
         role="dialog"
         aria-modal="true"
@@ -164,7 +169,7 @@ export default function DiffDialog({ open, filePath, onClose }: DiffDialogProps)
       >
         <header className="flex items-center justify-between px-lg py-md border-b border-outline-variant/30">
           <div className="flex items-center gap-md min-w-0">
-            <span className="material-symbols-outlined text-[20px] text-on-surface-variant">difference</span>
+            <span className="material-symbols-outlined icon-md text-on-surface-variant">difference</span>
             <h3 className="font-headline-md text-on-surface truncate">{intl.formatMessage({ id: 'diff.dialog.title' })}</h3>
             {filePath ? (
               <code className="font-label-sm text-on-surface-variant bg-surface-container-low px-sm py-xs rounded truncate">{filePath}</code>

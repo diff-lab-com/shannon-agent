@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
 import type { BuiltinProfileInfo, CustomProfileInfo } from '@/types'
 
@@ -48,6 +50,13 @@ function parseList(s: string): string[] {
     .filter(Boolean)
 }
 
+// Detect tools that are simultaneously denied and allowed (auto-approve or
+// confirm) within a single profile — a contradictory misconfiguration.
+function ruleConflicts(auto: string[], confirm: string[], deny: string[]): string[] {
+  const allowed = new Set([...auto, ...confirm].map(s => s.toLowerCase()))
+  return [...new Set(deny.map(s => s.toLowerCase()))].filter(t => allowed.has(t))
+}
+
 export default function Profiles() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, any>) => intl.formatMessage({ id }, values)
@@ -57,6 +66,7 @@ export default function Profiles() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
 
   const load = async () => {
     try {
@@ -64,8 +74,7 @@ export default function Profiles() {
       setBuiltin(data.builtin)
       setCustom(data.custom)
     } catch (e) {
-      console.warn('Failed to load profiles:', e)
-      toast.error(t('profiles.error.load'))
+      toastError(t('profiles.error.load'), e)
     }
     setLoading(false)
   }
@@ -92,21 +101,24 @@ export default function Profiles() {
       setShowCreate(false)
       await load()
     } catch (e) {
-      console.warn('Failed to save profile:', e)
-      toast.error(typeof e === 'string' ? e : t('profiles.error.save'))
+      toastError(t('profiles.error.save'), e)
     }
     setSaving(false)
   }
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(t('profiles.error.deleteConfirm', { name }))) return
+  const handleDelete = (name: string) => setPendingDelete(name)
+
+  const confirmDelete = async () => {
+    const name = pendingDelete
+    if (!name) return
     try {
       await api.deleteCustomProfile(name)
       toast.success(t('profiles.toast.deleted', { name }))
       await load()
     } catch (e) {
-      console.warn('Failed to delete profile:', e)
-      toast.error(t('profiles.error.delete'))
+      toastError(t('profiles.error.delete'), e)
+    } finally {
+      setPendingDelete(null)
     }
   }
 
@@ -134,12 +146,12 @@ export default function Profiles() {
       </header>
 
       {showCreate && (
-        <CreateForm form={form} setForm={setForm} onSave={handleSave} saving={saving} onCancel={() => setShowCreate(false)} />
+        <CreateForm form={form} setForm={setForm} onSave={handleSave} saving={saving} onCancel={() => setShowCreate(false)} existingNames={[...custom.map(p => p.name), ...builtin.map(p => p.id)]} />
       )}
 
       {loading ? (
         <div className="flex items-center justify-center py-xl">
-          <span className="material-symbols-outlined text-[32px] text-primary animate-spin">progress_activity</span>
+          <span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span>
         </div>
       ) : (
         <>
@@ -184,7 +196,7 @@ export default function Profiles() {
             </div>
             {custom.length === 0 ? (
               <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-xl text-center">
-                <span className="material-symbols-outlined text-[48px] text-outline-variant block mb-sm">person_off</span>
+                <span className="material-symbols-outlined icon-2xl text-outline-variant block mb-sm">person_off</span>
                 <p className="font-headline-md text-on-surface mb-xs">{t('profiles.empty.title')}</p>
                 <p className="font-body-sm text-on-surface-variant">{t('profiles.empty.description')}</p>
               </div>
@@ -198,6 +210,16 @@ export default function Profiles() {
           </section>
         </>
       )}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={t('profiles.confirmDelete.title')}
+        message={t('profiles.confirmDelete.message', { name: pendingDelete ?? '' })}
+        confirmLabel={t('profiles.confirmDelete.confirm')}
+        cancelLabel={t('profiles.confirmDelete.cancel')}
+        destructive
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   )
 }
@@ -205,6 +227,7 @@ export default function Profiles() {
 function ProfileRow({ profile, onDelete }: { profile: CustomProfileInfo; onDelete: (name: string) => void }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, any>) => intl.formatMessage({ id }, values)
+  const conflicts = ruleConflicts(profile.auto_approve, profile.confirm, profile.deny)
   return (
     <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-md">
       <div className="flex items-start justify-between gap-md mb-xs">
@@ -219,7 +242,7 @@ function ProfileRow({ profile, onDelete }: { profile: CustomProfileInfo; onDelet
           aria-label={t('profiles.delete.aria', { name: profile.name })}
           className="p-xs rounded-lg text-on-surface-variant hover:text-error hover:bg-error-container/30 cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
         >
-          <span className="material-symbols-outlined text-[20px]">delete</span>
+          <span className="material-symbols-outlined icon-md">delete</span>
         </button>
       </div>
       <div className="flex flex-wrap gap-md font-label-sm">
@@ -227,6 +250,12 @@ function ProfileRow({ profile, onDelete }: { profile: CustomProfileInfo; onDelet
         <RuleChip labelKey="profiles.rule.confirm" tools={profile.confirm} tone="confirm" />
         <RuleChip labelKey="profiles.rule.deny" tools={profile.deny} tone="deny" />
       </div>
+      {conflicts.length > 0 && (
+        <p className="mt-sm text-[11px] text-error flex items-center gap-xs">
+          <span className="material-symbols-outlined text-[14px]">warning</span>
+          {t('profiles.conflict.ruleConflict', { tools: conflicts.join(', ') })}
+        </p>
+      )}
     </div>
   )
 }
@@ -251,15 +280,20 @@ function RuleChip({ labelKey, tools, tone }: { labelKey: string; tools: string[]
   )
 }
 
-function CreateForm({ form, setForm, onSave, onCancel, saving }: {
+function CreateForm({ form, setForm, onSave, onCancel, saving, existingNames }: {
   form: FormState
   setForm: (f: FormState) => void
   onSave: () => void
   onCancel: () => void
   saving: boolean
+  existingNames: string[]
 }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, any>) => intl.formatMessage({ id }, values)
+  const trimmedName = form.name.trim()
+  const dupName = trimmedName.length > 0 && existingNames.some(n => n.toLowerCase() === trimmedName.toLowerCase())
+  const conflicts = ruleConflicts(parseList(form.auto_approve), parseList(form.confirm), parseList(form.deny))
+  const blocked = dupName || conflicts.length > 0
   return (
     <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg space-y-md">
       <h2 className="font-headline-md text-on-surface">{t('profiles.new.title')}</h2>
@@ -270,8 +304,15 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
             value={form.name}
             onChange={e => setForm({ ...form, name: e.target.value })}
             placeholder={t('profiles.form.name.placeholder')}
+            aria-invalid={dupName}
             className="w-full px-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm font-mono"
           />
+          {dupName && (
+            <span className="font-label-sm text-error flex items-center gap-xs mt-xs">
+              <span className="material-symbols-outlined text-[14px]">warning</span>
+              {t('profiles.conflict.duplicateName')}
+            </span>
+          )}
         </Field>
 
         <Field label={t('profiles.form.description')}>
@@ -311,6 +352,12 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
         </Field>
       </div>
 
+      {blocked && (
+        <div className="text-error font-label-sm flex items-center gap-xs pt-xs">
+          <span className="material-symbols-outlined text-[16px]">warning</span>
+          {conflicts.length > 0 ? t('profiles.conflict.ruleConflict', { tools: conflicts.join(', ') }) : t('profiles.conflict.duplicateName')}
+        </div>
+      )}
       <div className="flex justify-end gap-sm pt-sm">
         <button
           onClick={onCancel}
@@ -321,10 +368,10 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
         </button>
         <button
           onClick={onSave}
-          disabled={saving || !form.name.trim()}
+          disabled={saving || !form.name.trim() || blocked}
           className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-sm"
         >
-          {saving && <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>}
+          {saving && <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>}
           {saving ? t('profiles.form.saving') : t('profiles.form.create')}
         </button>
       </div>

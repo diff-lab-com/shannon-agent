@@ -9,7 +9,8 @@
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import EmptyState from '@/components/ui/empty-state'
-import { CardSkeleton } from '@/components/SkeletonLoader'
+import ErrorState from '@/components/ui/error-state'
+import { RowSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
 import type { TaskExecution, TaskExecutionDetail } from '@/types'
 import { statusBadge, formatUnixDateTime } from './shared'
@@ -27,7 +28,7 @@ function StatusPill({ status }: { status: string }) {
   const badge = statusBadge(status)
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold ${badge.bg}`}>
-      <span className="material-symbols-outlined text-[12px]">{badge.icon}</span>
+      <span className="material-symbols-outlined icon-xs">{badge.icon}</span>
       {badge.label}
     </span>
   )
@@ -53,6 +54,14 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
     return () => { cancelled = true }
   }, [taskId, limit])
 
+  const refresh = () => {
+    setLoading(true); setError(null)
+    api.listTaskExecutions(taskId, limit)
+      .then(setRows)
+      .catch(e => setError(e instanceof Error ? e.message : t('tasks.historyView.loadFailed')))
+      .finally(() => setLoading(false))
+  }
+
   const openDetail = async (id: string) => {
     if (expandedId === id) { setExpandedId(null); setDetail(null); return }
     setExpandedId(id); setDetail(null); setDetailLoading(true)
@@ -71,15 +80,18 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
   if (loading) {
     return (
       <div className="space-y-md">
-        {Array.from({ length: 4 }).map((_, i) => <CardSkeleton key={i} />)}
+        <RowSkeleton count={4} />
       </div>
     )
   }
   if (error) {
     return (
-      <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md">
-        <span className="material-symbols-outlined text-[18px]">error</span>
-        {error}
+      <div className="bg-surface-container-lowest/70 border border-outline-variant/20 rounded-xl p-xl">
+        <ErrorState
+          title={t('tasks.historyView.loadFailed')}
+          description={error}
+          action={{ label: t('tasks.historyView.retry'), onClick: refresh }}
+        />
       </div>
     )
   }
@@ -124,7 +136,7 @@ export default function HistoryView({ taskId, limit = 50, onGoToActive }: { task
                 {row.token_usage != null ? (
                   <span className="font-label-sm text-[11px] text-on-surface-variant whitespace-nowrap">{row.token_usage.toLocaleString()} tok</span>
                 ) : <span className="font-label-sm text-[11px] text-on-surface-variant/60">—</span>}
-                <span className={`material-symbols-outlined text-[16px] text-on-surface-variant transition-transform ${isExpanded ? 'rotate-180' : ''}`}>expand_more</span>
+                <span className={`material-symbols-outlined icon-sm text-on-surface-variant transition-transform ${isExpanded ? 'rotate-180' : ''}`}>expand_more</span>
               </button>
               {isExpanded ? (
                 <div className="px-md pb-md border-t border-outline-variant/10">

@@ -33,9 +33,12 @@ describe('Extensions', () => {
     expect(screen.getByPlaceholderText('Search agents...')).toBeInTheDocument()
   })
 
-  it('shows Create New Agent CTA on agents route', () => {
+  // P0-5: "Create Agent" and "Add Source" CTAs were removed because they
+  // navigated to the current page (no-op). Install/create flows live inside
+  // each tab's content instead.
+  it('does not show dead Create Agent CTA on agents route', () => {
     renderWithRoute('/extensions/agents')
-    expect(screen.getByText('Create Agent')).toBeInTheDocument()
+    expect(screen.queryByText(/Create Agent/)).not.toBeInTheDocument()
   })
 
   it('renders datasources search placeholder on datasources route', () => {
@@ -43,9 +46,9 @@ describe('Extensions', () => {
     expect(screen.getByPlaceholderText('Search data sources...')).toBeInTheDocument()
   })
 
-  it('shows Add Data Source CTA on datasources route', () => {
+  it('does not show dead Add Source CTA on datasources route', () => {
     renderWithRoute('/extensions/datasources')
-    expect(screen.getByText('Add Source')).toBeInTheDocument()
+    expect(screen.queryByText(/Add Source/)).not.toBeInTheDocument()
   })
 
   // US-EXT-05: Search Extensions
@@ -63,16 +66,6 @@ describe('Extensions', () => {
     expect(input.value).toBe('agent1')
   })
 
-  // CTA button navigation
-  it('Create New Agent CTA has add icon', () => {
-    renderWithRoute('/extensions/agents')
-    const btn = screen.getByText('Create Agent').closest('button')!
-    expect(btn.querySelector('.material-symbols-outlined')?.textContent).toBe('add')
-  })
-
-  it('Add Data Source CTA has add_circle icon', () => {
-    renderWithRoute('/extensions/datasources')
-    const btn = screen.getByText('Add Source').closest('button')!
-    expect(btn.querySelector('.material-symbols-outlined')?.textContent).toBe('add_circle')
-  })
+  // CTA button navigation — removed in P0-5 (CTAs were no-ops).
+  // The search input is now the only top-bar widget on all sub-routes.
 })

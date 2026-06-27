@@ -28,3 +28,7 @@ Cargo.lock.bak
 # OMC working state
 /.omc
 **/.omc/
+
+# Shannon runtime artifacts (scheduled worktrees, sessions, etc.)
+/.shannon
+**/.shannon/

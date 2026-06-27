@@ -76,8 +76,8 @@ export function Reasoning({ defaultOpen = false, className = '', header, childre
         aria-expanded={open}
         className="flex w-full items-center gap-xs px-sm py-xs text-on-surface-variant hover:bg-surface-container-low/60 transition-colors"
       >
-        <span className="material-symbols-outlined text-[16px]">{open ? 'expand_less' : 'expand_more'}</span>
-        <span className="material-symbols-outlined text-[16px]">psychology</span>
+        <span className="material-symbols-outlined icon-sm">{open ? 'expand_less' : 'expand_more'}</span>
+        <span className="material-symbols-outlined icon-sm">psychology</span>
         <span className="font-label-md flex-1 text-left">{header ?? 'Reasoning'}</span>
       </button>
       {open && <div className="px-md pb-md text-body-sm text-on-surface-variant prose prose-sm max-w-none">{children}</div>}

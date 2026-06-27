@@ -121,7 +121,7 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
     return (
       <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
         <div className="flex items-center gap-2 mb-md">
-          <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
+          <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
           <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.scheduleDAGView.title')}</h3>
         </div>
         <p className="text-body-sm text-on-surface-variant text-center py-lg">
@@ -134,7 +134,7 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
   return (
     <div className="bg-surface-container-lowest rounded-2xl p-lg border border-outline-variant/30 shadow-sm">
       <div className="flex items-center gap-2 mb-md">
-        <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
+        <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
         <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.scheduleDAGView.title')}</h3>
         <span className="font-label-sm text-[11px] text-on-surface-variant bg-surface-container-low px-xs py-1 rounded-full">
           {intl.formatMessage({ id: 'tasks.scheduleDAGView.routineCount' }, { count: routines.length })}
@@ -142,7 +142,7 @@ export default function ScheduleDAGView({ routines, onSelectRoutine }: ScheduleD
       </div>
 
       <div className="overflow-auto">
-        <svg width={width} height={height} role="img" aria-label="Schedule dependency graph">
+        <svg width={width} height={height} role="img" aria-label={intl.formatMessage({ id: 'tasks.scheduleDAGView.ariaLabel' })}>
           <defs>
             <marker id="sched-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />

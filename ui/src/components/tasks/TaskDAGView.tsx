@@ -99,11 +99,11 @@ function layout(tasks: TaskItem[]): { nodes: PositionedNode[]; width: number; he
 }
 
 function statusFill(status: string): string {
-  if (status === 'completed') return '#10b981' // tertiary
-  if (status === 'running' || status === 'in_progress') return '#6366f1' // primary
-  if (status === 'failed' || status === 'error') return '#ef4444' // error
-  if (status === 'pending') return '#94a3b8' // outline
-  return '#cbd5e1'
+  if (status === 'completed') return 'var(--color-tertiary)'
+  if (status === 'running' || status === 'in_progress') return 'var(--color-primary)'
+  if (status === 'failed' || status === 'error') return 'var(--color-error)'
+  if (status === 'pending') return 'var(--color-outline)'
+  return 'var(--color-outline-variant)'
 }
 
 export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
@@ -128,7 +128,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
     return (
       <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
         <div className="flex items-center gap-2 mb-md">
-          <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
+          <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
           <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.dag.title')}</h3>
         </div>
         <p className="text-body-sm text-on-surface-variant text-center py-lg">
@@ -142,7 +142,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
     <div className="bg-surface-container-lowest rounded-2xl p-xl border border-outline-variant/30 shadow-sm">
       <div className="flex items-center justify-between mb-md">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-[20px] text-on-surface">account_tree</span>
+          <span className="material-symbols-outlined icon-md text-on-surface">account_tree</span>
           <h3 className="font-headline-md text-[18px] font-bold text-on-surface">{t('tasks.dag.title')}</h3>
         </div>
         <span className="text-label-sm text-on-surface-variant">
@@ -169,7 +169,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
               markerHeight="6"
               orient="auto-start-reverse"
             >
-              <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8" />
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--color-outline)" />
             </marker>
           </defs>
 
@@ -187,7 +187,7 @@ export default function TaskDAGView({ tasks, onSelectTask }: TaskDAGViewProps) {
                 key={`edge-${i}`}
                 d={d}
                 fill="none"
-                stroke="#94a3b8"
+                stroke="var(--color-outline)"
                 strokeWidth={1.5}
                 markerEnd="url(#dag-arrow)"
                 opacity={0.7}
