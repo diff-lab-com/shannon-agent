@@ -1,6 +1,9 @@
 {
   "app.name": "Shannon",
   "app.tagline": "Shannon AI Assistant",
+  "artifact.mermaid.loading": "Rendering diagram…",
+  "artifact.mermaid.renderFailed": "Failed to render: ",
+  "artifact.mermaid.diagramTitle": "Mermaid diagram",
   "lsp.quickFixPanel.aria": "LSP quick-fix panel",
   "opcTask.breadcrumb.aria": "Breadcrumb",
   "missionControl.conversations.tabs.aria": "Conversations view tabs",

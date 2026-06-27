@@ -1,6 +1,9 @@
 {
   "app.name": "Shannon",
   "app.tagline": "Shannon AI 助手",
+  "artifact.mermaid.loading": "正在渲染图表…",
+  "artifact.mermaid.renderFailed": "渲染失败：",
+  "artifact.mermaid.diagramTitle": "Mermaid 图表",
   "lsp.quickFixPanel.aria": "LSP 快速修复面板",
   "opcTask.breadcrumb.aria": "面包屑导航",
   "missionControl.conversations.tabs.aria": "对话视图标签页",
