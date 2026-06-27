@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import QRCode from './QRCode'
 import * as api from '@/lib/tauri-api'
@@ -37,8 +38,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
       toast.success(t('settings.notifications.wizard.telegram.verifySuccess'))
       setStep(3)
     } catch (e) {
-      console.warn('Telegram verify error:', e)
-      toast.error(t('settings.notifications.wizard.telegram.verifyFailed'))
+      toastError(t('settings.notifications.wizard.telegram.verifyFailed'), e)
     }
     setVerifying(false)
   }
@@ -49,8 +49,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
       // This would call getUpdates API to capture the latest message's chat_id
       toast.success(t('settings.notifications.wizard.telegram.captureSuccess'))
     } catch (e) {
-      console.warn('Capture chat ID error:', e)
-      toast.error(t('settings.notifications.wizard.telegram.captureFailed'))
+      toastError(t('settings.notifications.wizard.telegram.captureFailed'), e)
     }
     setCapturing(false)
   }
@@ -71,8 +70,7 @@ export default function TelegramWizard({ config, onSave, onCancel }: TelegramWiz
       await onSave(dto)
       toast.success(t('settings.notifications.wizard.telegram.saved'))
     } catch (e) {
-      console.warn('Save Telegram config error:', e)
-      toast.error(t('settings.notifications.wizard.saveFailed'))
+      toastError(t('settings.notifications.wizard.saveFailed'), e)
     }
     setSaving(false)
   }

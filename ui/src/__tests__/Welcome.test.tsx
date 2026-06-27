@@ -502,7 +502,12 @@ describe('Welcome — Test connection button (T7.B + T7.D)', () => {
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'sk-test' } })
     fireEvent.click(screen.getByRole('button', { name: /Test connection/ }))
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/Test failed/))
+      // Migrated to toastError: the title still reads "Test failed", and the
+      // real cause ("invoke boom") now surfaces in the description slot.
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringMatching(/Test failed/),
+        expect.objectContaining({ description: expect.stringMatching(/invoke boom/) }),
+      )
     })
   })
 })

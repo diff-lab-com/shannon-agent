@@ -2,6 +2,42 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — silent-catch error-feedback sweep] — surface the real cause in failure toasts
+
+Branch `s2/silent-catch-sweep`. Follow-up to the shared `toastError` helper
+shipped in the PM-audit-followups batch (commit `023c208`): migrates the
+catch sites that toasted a generic "Failed" message and discarded the caught
+error, so users now see *why* an action failed in the toast description.
+
+### UI
+
+- **Silent-catch → `toastError`.** Every catch block that called
+  `toast.error(t('…failed'))` (or the `intl.formatMessage` equivalent)
+  without passing the error now calls `toastError(key, e)`, which puts the
+  translated title in the toast and the normalised cause in the description.
+  Arrow callbacks that discarded the error entirely (`.catch(() => …)` in
+  MessageBubble, CommandPalette, OPCMissionFocus, ExtensionsHub) now bind and
+  forward it. The now-redundant `console.warn`/`console.error` lines in those
+  blocks were removed (the toast description replaces them). 52 sites across
+  20 modules — scheduled-tasks hook, Tasks/Routines/Hooks/Profiles/Welcome
+  pages, OPC kanban/agent-swarm/mission-focus, the notification wizards,
+  models/notifications settings, extensions hub, skill approval/review,
+  command palette, and the diff/routine-template helpers.
+
+- **Scope set by verifying current code, not the audit estimate.** The PM
+  audit estimated ~64 sites; re-checking against current code, only 52 were
+  genuinely silent. Left untouched: sites that already surface the cause
+  (McpServers/InstallDialog/McpAddServerDialog via `safeErrorMessage`,
+  DiffDialogMulti via a `description` arg, OutboundSection already migrated),
+  pre-API validation guards (`*Required`, `needNameAndCommand`,
+  `noPackageMetadata`, URL-format checks), and the Welcome
+  `switch(result.kind)` result branches that report provider status rather
+  than a caught error.
+
+- No new i18n keys (the existing failure keys are reused as the toast title).
+  One existing Welcome test updated to assert the cause now appears in the
+  description slot.
+
 ## [Unreleased — per-page feature gaps] — Profiles conflict detection, Mission Control board filter, Editor diagnostic format
 
 Branch `s2/perpage-features`. Closes three feature-sized gaps surfaced by the

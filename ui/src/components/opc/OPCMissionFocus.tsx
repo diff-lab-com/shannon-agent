@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 
 interface Props {
@@ -22,7 +23,7 @@ export default function OPCMissionFocus({ config }: Props) {
   const save = () => {
     api.configure({ key: 'strategic_focus', value: text })
       .then(() => toast.success(intl.formatMessage({ id: 'opc.missionFocus.focusSaved' })))
-      .catch(() => toast.error(intl.formatMessage({ id: 'opc.missionFocus.saveFailed' })))
+      .catch((e) => toastError(intl.formatMessage({ id: 'opc.missionFocus.saveFailed' }), e))
     setEditing(false)
   }
 

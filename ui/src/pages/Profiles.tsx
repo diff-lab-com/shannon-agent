@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import * as api from '@/lib/tauri-api'
 import type { BuiltinProfileInfo, CustomProfileInfo } from '@/types'
@@ -73,8 +74,7 @@ export default function Profiles() {
       setBuiltin(data.builtin)
       setCustom(data.custom)
     } catch (e) {
-      console.warn('Failed to load profiles:', e)
-      toast.error(t('profiles.error.load'))
+      toastError(t('profiles.error.load'), e)
     }
     setLoading(false)
   }
@@ -101,8 +101,7 @@ export default function Profiles() {
       setShowCreate(false)
       await load()
     } catch (e) {
-      console.warn('Failed to save profile:', e)
-      toast.error(typeof e === 'string' ? e : t('profiles.error.save'))
+      toastError(t('profiles.error.save'), e)
     }
     setSaving(false)
   }
@@ -117,8 +116,7 @@ export default function Profiles() {
       toast.success(t('profiles.toast.deleted', { name }))
       await load()
     } catch (e) {
-      console.warn('Failed to delete profile:', e)
-      toast.error(t('profiles.error.delete'))
+      toastError(t('profiles.error.delete'), e)
     } finally {
       setPendingDelete(null)
     }

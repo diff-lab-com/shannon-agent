@@ -18,7 +18,7 @@ export default function ModelsSettings() {
 
   const setStrategy = (s: 'speed' | 'balanced' | 'high-quality') => {
     setStrategyState(s)
-    api.configure({ key: 'performance_strategy', value: s }).then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s }))).catch(e => { console.warn('ModelsSettings error:', e); toast.error(t('settings.models.strategyFailed')) })
+    api.configure({ key: 'performance_strategy', value: s }).then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s }))).catch((e) => { toastError(t('settings.models.strategyFailed'), e) })
   }
   const [showKey, setShowKey] = useState(false)
   const [keyDraft, setKeyDraft] = useState<string | null>(null)
@@ -45,8 +45,7 @@ export default function ModelsSettings() {
       toast.success(t('settings.models.apiKeySaved'))
       setKeyDraft(null)
     } catch (e) {
-      console.warn('handleSaveKey error:', e)
-      toast.error(t('settings.models.apiKeySaveFailed'))
+      toastError(t('settings.models.apiKeySaveFailed'), e)
     } finally {
       setKeySaving(false)
     }
@@ -58,8 +57,7 @@ export default function ModelsSettings() {
       await refreshModels()
       toast.success(t('settings.models.testSuccess'))
     } catch (e) {
-      console.warn('handleTestConnection error:', e)
-      toast.error(t('settings.models.testFailed'))
+      toastError(t('settings.models.testFailed'), e)
     } finally {
       setKeyTesting(false)
     }

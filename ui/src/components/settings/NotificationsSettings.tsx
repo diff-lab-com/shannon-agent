@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import {
   Select,
@@ -146,8 +147,7 @@ function WebhookSection() {
       })
       toast.success(t('settings.notifications.saved'))
     } catch (e) {
-      console.warn('saveWebhookConfig error:', e)
-      toast.error(t('settings.notifications.error.saveFailed'))
+      toastError(t('settings.notifications.error.saveFailed'), e)
     }
     setSaving(false)
   }
@@ -165,8 +165,7 @@ function WebhookSection() {
       setIncludeBody(false)
       toast.success(t('settings.notifications.cleared'))
     } catch (e) {
-      console.warn('clearWebhookConfig error:', e)
-      toast.error(t('settings.notifications.error.clearFailed'))
+      toastError(t('settings.notifications.error.clearFailed'), e)
     }
     setClearing(false)
   }

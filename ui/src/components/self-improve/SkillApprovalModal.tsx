@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Modal } from '@/components/ui/modal'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -40,8 +41,7 @@ export function SkillApprovalModal({ open, candidate, onClose, onApproved, onRej
       onApproved?.(skill)
       onClose()
     } catch (err) {
-      console.warn('Approve failed:', err)
-      toast.error(t('skills.approval.approveFailed'))
+      toastError(t('skills.approval.approveFailed'), err)
     } finally {
       setBusy(false)
     }
@@ -55,8 +55,7 @@ export function SkillApprovalModal({ open, candidate, onClose, onApproved, onRej
       onRejected?.(candidate.id)
       onClose()
     } catch (err) {
-      console.warn('Reject failed:', err)
-      toast.error(t('skills.approval.rejectFailed'))
+      toastError(t('skills.approval.rejectFailed'), err)
     } finally {
       setBusy(false)
     }

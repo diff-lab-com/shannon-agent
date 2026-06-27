@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 
 export interface EmailImapConfig {
@@ -39,8 +40,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
       // For now, we'll just validate inputs - real IMAP connection test would be a backend call
       toast.success(t('settings.notifications.wizard.email.testSuccess'))
     } catch (e) {
-      console.warn('Email connection test error:', e)
-      toast.error(t('settings.notifications.wizard.email.testFailed'))
+      toastError(t('settings.notifications.wizard.email.testFailed'), e)
     }
     setTesting(false)
   }
@@ -63,8 +63,7 @@ export default function EmailWizard({ onSave, onCancel }: EmailWizardProps) {
       await onSave(dto)
       toast.success(t('settings.notifications.wizard.email.saved'))
     } catch (e) {
-      console.warn('Save Email config error:', e)
-      toast.error(t('settings.notifications.wizard.saveFailed'))
+      toastError(t('settings.notifications.wizard.saveFailed'), e)
     }
     setSaving(false)
   }

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 
@@ -94,7 +95,7 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
             await refreshConfig()
             toast.success(intl.formatMessage({ id: 'palette.toast.switched' }, { name: m.name }))
           })
-          .catch(() => toast.error(t('palette.toast.switchFailed')))
+          .catch((e) => toastError(t('palette.toast.switchFailed'), e))
       },
     }))
     return [...actions, ...pages, ...taskItems, ...agentItems, ...sessionItems, ...modelItems]
