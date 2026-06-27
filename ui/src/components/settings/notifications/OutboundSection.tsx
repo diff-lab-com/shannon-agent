@@ -160,9 +160,9 @@ export default function OutboundSection() {
   return (
     <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
       <div>
-        <h3 className="font-headline-md text-on-surface">
+        <h4 className="font-headline-md text-on-surface">
           {t('settings.notifications.outbound.title')}
-        </h3>
+        </h4>
         <p className="text-on-surface-variant font-body-sm">
           {t('settings.notifications.outbound.subtitle')}
         </p>
