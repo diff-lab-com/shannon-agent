@@ -1,6 +1,7 @@
 import { useState, useRef, memo } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { useApp } from '@/context/AppContext'
@@ -132,11 +133,11 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const t = (id: string) => intl.formatMessage({ id })
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.content).catch(() => toast.error(t('chat.toast.copyFailed')))
+    navigator.clipboard.writeText(message.content).catch((e) => toastError(t('chat.toast.copyFailed'), e))
   }
 
   const handleRegenerate = () => {
-    sendMessage('Regenerate the previous response').catch(() => toast.error(t('chat.toast.regenerateFailed')))
+    sendMessage('Regenerate the previous response').catch((e) => toastError(t('chat.toast.regenerateFailed'), e))
   }
 
   const handleBranch = () => {
@@ -154,8 +155,7 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
       await switchSession(newSession.id)
       toast.success(t('chat.message.branch.success'))
     } catch (error) {
-      console.error('Branch failed:', error)
-      toast.error(t('chat.message.branch.failed'))
+      toastError(t('chat.message.branch.failed'), error)
     } finally {
       setIsBranching(false)
     }

@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type {
   ScheduledRoutine,
@@ -53,7 +54,7 @@ export function useScheduledTasks() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.create')
       setError(msg)
-      toast.error(t('tasks.toast.failed.create'))
+      toastError(t('tasks.toast.failed.create'), e)
       return null
     }
   }, [refresh, intl])
@@ -67,7 +68,7 @@ export function useScheduledTasks() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.update')
       setError(msg)
-      toast.error(t('tasks.toast.failed.update'))
+      toastError(t('tasks.toast.failed.update'), e)
       return null
     }
   }, [refresh, intl])
@@ -81,7 +82,7 @@ export function useScheduledTasks() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.delete')
       setError(msg)
-      toast.error(t('tasks.toast.failed.delete'))
+      toastError(t('tasks.toast.failed.delete'), e)
       return false
     }
   }, [refresh, intl])
@@ -95,7 +96,7 @@ export function useScheduledTasks() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.toggle')
       setError(msg)
-      toast.error(t('tasks.toast.failed.toggle'))
+      toastError(t('tasks.toast.failed.toggle'), e)
       return null
     }
   }, [refresh, intl])
@@ -108,7 +109,7 @@ export function useScheduledTasks() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.trigger')
       setError(msg)
-      toast.error(t('tasks.toast.failed.trigger'))
+      toastError(t('tasks.toast.failed.trigger'), e)
       return false
     }
   }, [intl])
@@ -150,7 +151,7 @@ export function useTriageItems(initialFilter?: TriageFilter) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.markRead')
       setError(msg)
-      toast.error(t('tasks.toast.failed.markRead'))
+      toastError(t('tasks.toast.failed.markRead'), e)
       return false
     }
   }, [refresh, intl])
@@ -164,7 +165,7 @@ export function useTriageItems(initialFilter?: TriageFilter) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.archive')
       setError(msg)
-      toast.error(t('tasks.toast.failed.archive'))
+      toastError(t('tasks.toast.failed.archive'), e)
       return false
     }
   }, [refresh, intl])
@@ -206,7 +207,7 @@ export function useTaskExecutions(taskId?: string) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.loadExecution')
       setError(msg)
-      toast.error(t('tasks.toast.failed.loadExecution'))
+      toastError(t('tasks.toast.failed.loadExecution'), e)
       return null
     }
   }, [intl])
@@ -307,7 +308,7 @@ export function useTaskWorktrees() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.createWorktree')
       setError(msg)
-      toast.error(t('tasks.toast.failed.createWorktree'))
+      toastError(t('tasks.toast.failed.createWorktree'), e)
       return null
     }
   }, [refresh, intl])
@@ -321,7 +322,7 @@ export function useTaskWorktrees() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.removeWorktree')
       setError(msg)
-      toast.error(t('tasks.toast.failed.removeWorktree'))
+      toastError(t('tasks.toast.failed.removeWorktree'), e)
       return false
     }
   }, [refresh, intl])
@@ -339,7 +340,7 @@ export function useTaskWorktrees() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('tasks.toast.failed.pruneWorktrees')
       setError(msg)
-      toast.error(t('tasks.toast.failed.pruneWorktrees'))
+      toastError(t('tasks.toast.failed.pruneWorktrees'), e)
       return null
     }
   }, [refresh, intl])

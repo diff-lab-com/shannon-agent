@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { TriggeredRoutineDto } from '@/types'
 
@@ -52,8 +53,7 @@ export default function Routines() {
     try {
       setRoutines(await api.listTriggeredRoutines())
     } catch (e) {
-      console.warn('Failed to load routines:', e)
-      toast.error(t('routines.error.load'))
+      toastError(t('routines.error.load'), e)
     }
     setLoading(false)
   }
@@ -67,9 +67,8 @@ export default function Routines() {
       await api.toggleTriggeredRoutine(name, enabled)
       toast.success(t(enabled ? 'routines.toast.enabled' : 'routines.toast.disabled', { name }))
     } catch (e) {
-      console.warn('Failed to toggle routine:', e)
       setRoutines(prev)
-      toast.error(t('routines.error.toggle'))
+      toastError(t('routines.error.toggle'), e)
     }
   }
 
@@ -93,8 +92,7 @@ export default function Routines() {
       setShowCreate(false)
       await load()
     } catch (e) {
-      console.warn('Failed to create routine:', e)
-      toast.error(t('routines.error.create'))
+      toastError(t('routines.error.create'), e)
     }
     setSaving(false)
   }

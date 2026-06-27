@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
 import { useApp } from '@/context/AppContext'
@@ -218,8 +219,7 @@ export default function Welcome() {
           return
       }
     } catch (e) {
-      console.warn('testProviderConnection failed:', e)
-      toast.error(intl.formatMessage({ id: 'welcome.testConnection.failed' }))
+      toastError(intl.formatMessage({ id: 'welcome.testConnection.failed' }), e)
     } finally {
       setTesting(false)
     }
@@ -250,13 +250,11 @@ export default function Welcome() {
           await refreshConfig()
           toast.success(intl.formatMessage({ id: 'welcome.toast.workingDir.updated' }))
         } catch (e) {
-          console.warn('configure working_dir failed:', e)
-          toast.error(intl.formatMessage({ id: 'welcome.toast.workingDir.failed' }))
+          toastError(intl.formatMessage({ id: 'welcome.toast.workingDir.failed' }), e)
         }
       }
     } catch (e) {
-      console.warn('Welcome folder picker failed:', e)
-      toast.error(intl.formatMessage({ id: 'welcome.toast.folderPicker.failed' }))
+      toastError(intl.formatMessage({ id: 'welcome.toast.folderPicker.failed' }), e)
     }
   }
 
@@ -274,8 +272,7 @@ export default function Welcome() {
       setEnabledTools(prev => ({ ...initial, ...prev }))
       setStep(2)
     } catch (e) {
-      console.warn('Welcome provider setup failed:', e)
-      toast.error(intl.formatMessage({ id: 'welcome.toast.provider.failed' }))
+      toastError(intl.formatMessage({ id: 'welcome.toast.provider.failed' }), e)
     }
     setSaving(false)
   }
@@ -295,7 +292,7 @@ export default function Welcome() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setSkillState(prev => ({ ...prev, [skill.id]: { status: 'failed', error: msg } }))
-      toast.error(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }))
+      toastError(intl.formatMessage({ id: 'welcome.skills.toast.failed' }, { name: intl.formatMessage({ id: skill.labelKey }) }), e)
     }
   }
 

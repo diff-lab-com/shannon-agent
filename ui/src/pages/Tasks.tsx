@@ -19,6 +19,7 @@
 
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { useIntl } from 'react-intl'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
@@ -114,7 +115,7 @@ export default function Tasks() {
         ? intl.formatMessage({ id: 'tasks.toast.assigned' }, { name: rich.assignee })
         : t('tasks.toast.created'))
       await refreshTasks()
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.create')); toast.error(t('tasks.toast.failed.create')) }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.create')); toastError(t('tasks.toast.failed.create'), e) }
   }
 
   const handleCreateSchedule = async (payload: CreateTaskPayload) => {
@@ -129,7 +130,7 @@ export default function Tasks() {
         }
         setShowSchedule(false)
       }
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.createRoutine')); toast.error(t('tasks.toast.failed.createRoutine')) }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.createRoutine')); toastError(t('tasks.toast.failed.createRoutine'), e) }
   }
 
   const handleCancelTask = async (id: string) => {
@@ -137,7 +138,7 @@ export default function Tasks() {
       setErrorMsg(null)
       await api.cancelBackgroundTask(id)
       toast.success(t('tasks.toast.cancelled'))
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.cancel')); toast.error(t('tasks.toast.failed.cancel')) }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.cancel')); toastError(t('tasks.toast.failed.cancel'), e) }
     setCancelTarget(null)
     await refreshTasks()
   }
@@ -156,7 +157,7 @@ export default function Tasks() {
         toast.success(t('tasks.toast.started'))
       }
       await refreshTasks()
-    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.run')); toast.error(t('tasks.toast.failed.run')) }
+    } catch (e) { setErrorMsg(e instanceof Error ? e.message : t('tasks.error.run')); toastError(t('tasks.toast.failed.run'), e) }
     setTimeout(() => setRunning(null), 1500)
   }
 

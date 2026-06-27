@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { skillLoop } from '@/lib/tauri-api'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import type { SkillProposal } from '@/types'
@@ -58,8 +59,7 @@ export default function SkillProposalReviewPanel({
       })
       .catch((err) => {
         if (!cancelled) {
-          console.error('Failed to load proposals:', err)
-          toast.error(t('skillProposals.review.loadError'))
+          toastError(t('skillProposals.review.loadError'), err)
         }
       })
       .finally(() => {

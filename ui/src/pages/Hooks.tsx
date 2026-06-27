@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useIntl } from 'react-intl'
-import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
 import type { HookEventInfo } from '@/types'
 
@@ -38,8 +38,7 @@ export default function Hooks() {
       try {
         setEvents(await api.listHookEvents())
       } catch (e) {
-        console.warn('Failed to load hook events:', e)
-        toast.error(t('hooks.error.load'))
+        toastError(t('hooks.error.load'), e)
       }
       setLoading(false)
     })()

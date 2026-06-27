@@ -18,6 +18,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import * as api from '@/lib/tauri-api'
@@ -67,8 +68,7 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
       setQuickTask('')
       toast.success(t('opc.kanban.taskCreated'))
     } catch (e) {
-      console.warn('Failed to start quick task:', e)
-      toast.error(t('opc.kanban.createFailed'))
+      toastError(t('opc.kanban.createFailed'), e)
     }
   }
 
@@ -92,13 +92,12 @@ export default function OPCKanbanBoard({ tasks, refreshTasks }: Props) {
       })
       await refreshTasks()
     } catch (e) {
-      console.warn('updateTask failed, rolling back override:', e)
       setOverrides(prev => {
         const next = { ...prev }
         delete next[taskId]
         return next
       })
-      toast.error(t('opc.kanban.moveFailed'))
+      toastError(t('opc.kanban.moveFailed'), e)
       await refreshTasks()
     }
   }

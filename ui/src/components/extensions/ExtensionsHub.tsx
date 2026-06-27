@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useIntl } from 'react-intl'
-import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
@@ -20,7 +20,7 @@ export default function ExtensionsHub() {
     setLoading(true)
     api.listSkills()
       .then(setSkills)
-      .catch(e => { console.warn('Failed to load skills:', e); toast.error(t('extensions.hub.loadFailed')) })
+      .catch((e) => { toastError(t('extensions.hub.loadFailed'), e) })
       .finally(() => setLoading(false))
   }, [t])
 

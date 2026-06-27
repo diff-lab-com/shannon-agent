@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
 import * as api from '@/lib/tauri-api'
 
@@ -82,8 +83,7 @@ export default function SlackWizard({ config, onSave, onCancel }: SlackWizardPro
       await onSave(dto)
       toast.success(t('settings.notifications.wizard.slack.saved'))
     } catch (e) {
-      console.warn('Save Slack config error:', e)
-      toast.error(t('settings.notifications.wizard.saveFailed'))
+      toastError(t('settings.notifications.wizard.saveFailed'), e)
     }
     setSaving(false)
   }

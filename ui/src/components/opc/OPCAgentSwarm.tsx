@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
@@ -84,8 +85,7 @@ export default function OPCAgentSwarm({ agents, tasks }: Props) {
       await api.cancelBackgroundTask(agentId)
       toast.success(intl.formatMessage({ id: 'opc.agentSwarm.stopSuccess' }, { name }))
     } catch (e) {
-      console.warn('Failed to stop agent:', e)
-      toast.error(intl.formatMessage({ id: 'opc.agentSwarm.stopFailed' }, { name }))
+      toastError(intl.formatMessage({ id: 'opc.agentSwarm.stopFailed' }, { name }), e)
     }
   }
 
