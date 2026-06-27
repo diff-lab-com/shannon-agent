@@ -163,7 +163,7 @@ export default function DiffViewer({ diff, decisions, onToggleHunk, className }:
       </header>
       <div className="overflow-x-auto font-mono text-[12px] leading-[1.5]">
         {hunks.length === 0 ? (
-          <p className="px-md py-lg text-body-sm text-on-surface-variant italic">No changes.</p>
+          <p className="px-md py-lg text-body-sm text-on-surface-variant italic">{intl.formatMessage({ id: 'diff.viewer.noChanges' })}</p>
         ) : (
           <table className="w-full border-collapse">
             <tbody>

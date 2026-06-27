@@ -90,7 +90,7 @@ export default function ModelsSettings() {
                     : 'text-on-surface-variant hover:bg-surface-container-high'
                 }`}
               >
-                {s.charAt(0).toUpperCase() + s.slice(1).replace('-', ' ')}
+                {s === 'high-quality' ? t('settings.models.stratLabel.highQuality') : s === 'speed' ? t('settings.models.stratLabel.speed') : t('settings.models.stratLabel.balanced')}
               </button>
             ))}
           </div>
