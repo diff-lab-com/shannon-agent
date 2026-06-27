@@ -128,7 +128,7 @@ export default function MissionControl({ onSelectTask }: MissionControlProps) {
       </header>
 
       <nav
-        aria-label="Conversations view tabs"
+        aria-label={t('missionControl.conversations.tabs.aria')}
         className="flex items-center gap-xs px-lg pt-md border-b border-outline-variant/20 bg-surface-container-lowest/40"
       >
         {tabs.map(tab => {

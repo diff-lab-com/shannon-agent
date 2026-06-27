@@ -1,6 +1,7 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { X } from "lucide-react"
+import { useIntl } from "react-intl"
 
 import { cn } from "@/lib/utils"
 import { useModalFocus } from "@/hooks/useModalFocus"
@@ -51,6 +52,7 @@ export function Modal({
   children,
 }: ModalProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
+  const intl = useIntl()
   useModalFocus(open, containerRef)
 
   React.useEffect(() => {
@@ -106,7 +108,7 @@ export function Modal({
             {showCloseButton && (
               <button
                 type="button"
-                aria-label="Close"
+                aria-label={intl.formatMessage({ id: 'ui.modal.close.aria' })}
                 disabled={busy}
                 onClick={onClose}
                 className="shrink-0 p-xs rounded-lg text-on-surface-variant hover:bg-surface-container hover:text-on-surface transition-colors disabled:opacity-50 disabled:pointer-events-none"

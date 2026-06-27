@@ -24,7 +24,7 @@ export default function OPCTask() {
 
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">
-      <nav aria-label="Breadcrumb" className="flex items-center gap-xs text-label-sm text-on-surface-variant mb-lg">
+      <nav aria-label={t('opcTask.breadcrumb.aria')} className="flex items-center gap-xs text-label-sm text-on-surface-variant mb-lg">
         <Link to="/opc" className="hover:text-primary transition-colors">{t('opcTask.opcBoard')}</Link>
         <span className="material-symbols-outlined text-[14px]">chevron_right</span>
         <span className="text-on-surface">{t('opcTask.taskDetail')}</span>

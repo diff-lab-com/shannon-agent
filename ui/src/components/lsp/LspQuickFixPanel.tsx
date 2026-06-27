@@ -117,7 +117,7 @@ export default function LspQuickFixPanel({
     <div
       className="bg-surface-container-lowest rounded-2xl p-md border border-outline-variant/30 shadow-sm flex flex-col gap-sm"
       role="region"
-      aria-label="LSP quick-fix panel"
+      aria-label={intl.formatMessage({ id: 'lsp.quickFixPanel.aria' })}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-sm min-w-0">

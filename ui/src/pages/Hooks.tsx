@@ -87,7 +87,7 @@ export default function Hooks() {
             className="w-full pl-xl pr-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm"
           />
         </div>
-        <div className="flex items-center gap-xs flex-wrap" role="tablist" aria-label="Filter by category">
+        <div className="flex items-center gap-xs flex-wrap" role="tablist" aria-label={t('hooks.filter.aria')}>
           <CategoryChip active={activeCategory === 'all'} onClick={() => setActiveCategory('all')}>
             {t('hooks.filter.all')}
           </CategoryChip>
