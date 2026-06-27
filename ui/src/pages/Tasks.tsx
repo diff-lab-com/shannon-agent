@@ -25,6 +25,7 @@ import * as api from '@/lib/tauri-api'
 import { useScheduledTasks } from '@/hooks/scheduled-tasks'
 import type { CreateTaskPayload } from '@/types'
 import { type FilterStatus, statusMatchesFilter, TASKS_PER_PAGE } from '@/components/tasks/shared'
+import { Banner } from '@/components/ui/banner'
 import TasksHeader from '@/components/tasks/TasksHeader'
 import RoutineTemplatesBrowser from '@/components/routines/RoutineTemplatesBrowser'
 import TasksFilters from '@/components/tasks/TasksFilters'
@@ -203,16 +204,16 @@ export default function Tasks() {
         ) : (
           <>
         {errorMsg && (
-          <div className="flex items-center gap-sm px-md py-sm rounded-xl bg-error/10 border border-error/20 text-error font-label-md mb-lg">
-            <span className="material-symbols-outlined text-[18px]">error</span>
-            {errorMsg}
-            <button
-              className="ml-auto text-error/60 hover:text-error cursor-pointer"
-              onClick={() => setErrorMsg(null)}
-            >
-              <span className="material-symbols-outlined text-[18px]">close</span>
-            </button>
-          </div>
+          <Banner
+            variant="card"
+            tone="error"
+            onDismiss={() => setErrorMsg(null)}
+            dismissLabel={t('common.dismiss')}
+            className="mb-lg text-error font-label-md"
+          >
+            <span className="material-symbols-outlined icon-md text-error">error</span>
+            <span className="flex-1">{errorMsg}</span>
+          </Banner>
         )}
 
         {showNewTask && (

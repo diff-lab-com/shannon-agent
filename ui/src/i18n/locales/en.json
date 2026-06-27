@@ -135,6 +135,7 @@
   "settings.notifications.testSent": "Test notification sent.",
   "settings.notifications.testFailed": "Failed to send notification.",
   "app.brandName": "Shannon Code",
+  "common.dismiss": "Dismiss",
   "nav.tagline": "Your AI Workspace",
   "nav.resize.aria": "Resize sidebar",
   "nav.resize.title": "Drag to resize sidebar",

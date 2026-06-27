@@ -2,6 +2,28 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — P1 design-system batch] — label-xs token + Banner primitive
+
+Branch `s2/design-system-p1`. Closes the two genuine gaps in the P1 design
+system (audit tasks 17–20); the rest — elevation/duration/icon-size/headline
+tokens, global `focus-visible` rings, and 18 shared primitives — shipped in
+PR #50.
+
+### UI
+
+- **`--text-label-xs` token (bug fix).** The 11px label token was absent from
+  the `@theme` block, so the `text-label-xs` utility generated no CSS and 86
+  label usages were silently rendering at the inherited font size. Added at
+  11px matching the `--text-label-sm`/`-md` recipe (line-height 1, tracking
+  0.04em, weight 500).
+
+- **`<Banner>` primitive.** The one missing shared primitive — a dismissible
+  status surface with `role=alert` (error tone) / `role=status` (otherwise)
+  and `aria-live=polite`, with bar/card variants and info/warning/error/success
+  tones. Migrates the two hand-rolled banners (Chat "API key missing", Tasks
+  inline error); the Tasks close button gains an `aria-label`. New
+  `common.dismiss` i18n key (en/zh-CN).
+
 ## [Unreleased — PM audit follow-ups batch] — Naming + error feedback + empty states + chat attach + skill drawer
 
 Branch `s2/pm-audit-followups-batch`. Closes the remaining P0 honesty

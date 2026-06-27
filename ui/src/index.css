@@ -85,6 +85,11 @@
   --font-display-lg: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
 
   /* Text Sizing Overrides */
+  --text-label-xs: 11px;
+  --text-label-xs--line-height: 1;
+  --text-label-xs--letter-spacing: 0.04em;
+  --text-label-xs--font-weight: 500;
+
   --text-label-sm: 12px;
   --text-label-sm--line-height: 1;
   --text-label-sm--letter-spacing: 0.04em;

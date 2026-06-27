@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Pagination } from '@/components/ui/pagination'
+import { Banner } from '@/components/ui/banner'
 import WelcomeState from '@/components/WelcomeState'
 import DiffDialog from '@/components/diff/DiffDialog'
 import DiffDialogMulti from '@/components/diff/DiffDialogMulti'
@@ -476,12 +477,13 @@ export default function Chat() {
         </header>
 
         {showApiKeyBanner && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="shannon-apikey-banner shrink-0 flex items-start gap-md px-lg py-sm bg-secondary-container/40 border-b border-secondary/30"
+          <Banner
+            tone="info"
+            className="shannon-apikey-banner"
+            onDismiss={() => setBannerDismissed(true)}
+            dismissLabel={t('chat.banner.apiKeyMissing.dismiss')}
           >
-            <span className="material-symbols-outlined text-secondary text-[20px] shrink-0 mt-[2px]">key_alert</span>
+            <span className="material-symbols-outlined text-secondary icon-md shrink-0 mt-[2px]">key_alert</span>
             <div className="flex-1 min-w-0">
               <p className="font-label-md text-on-surface">{t('chat.banner.apiKeyMissing.title')}</p>
               <p className="font-body-sm text-on-surface-variant mt-xs">{t('chat.banner.apiKeyMissing.body')}</p>
@@ -493,15 +495,7 @@ export default function Chat() {
             >
               {t('chat.banner.apiKeyMissing.cta')}
             </button>
-            <button
-              type="button"
-              onClick={() => setBannerDismissed(true)}
-              aria-label={t('chat.banner.apiKeyMissing.dismiss')}
-              className="shannon-apikey-banner-dismiss shrink-0 p-xs rounded text-on-surface-variant hover:text-on-surface hover:bg-surface-container focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-            >
-              <span className="material-symbols-outlined text-[18px]">close</span>
-            </button>
-          </div>
+          </Banner>
         )}
 
         {/* Message Area — virtualized list for chat history */}
