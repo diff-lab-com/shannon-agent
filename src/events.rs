@@ -36,6 +36,7 @@ pub use shannon_types::events::{
 /// anywhere with an `AppHandle`. Silently no-ops on emit error so a
 /// frontend disconnect never breaks task execution.
 #[cfg(feature = "tauri")]
+#[allow(clippy::too_many_arguments)] // event helper: payload fields are inherent
 pub fn emit_task_step<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     task_id: &str,

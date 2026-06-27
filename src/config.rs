@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn test_skill_loop_config_defaults() {
         let config = DesktopConfig::default();
-        assert_eq!(config.skill_loop_enabled, false);
+        assert!(!config.skill_loop_enabled);
         assert_eq!(config.skill_loop_min_duration_secs, 30);
         assert_eq!(config.skill_loop_min_tool_calls, 2);
     }
