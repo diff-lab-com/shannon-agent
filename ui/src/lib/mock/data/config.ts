@@ -2,6 +2,7 @@
 import type {
   DesktopConfig,
   ModelInfo,
+  ProvidersFile,
   StatusResponse,
   ToolInfo,
 } from '@/types'
@@ -24,6 +25,34 @@ export const MOCK_CONFIG: DesktopConfig = {
   temperature: 0.7,
   max_tokens: 8192,
   plan: 'Pro',
+}
+
+// Managed-providers roster for the Models P2 UI (mirrors the Rust
+// ~/.shannon/desktop/providers.json store). Seeded with the active Anthropic
+// connection plus a second OpenAI-compatible entry so the demo roster isn't
+// empty and the Activate/Edit/Delete flows are exercisable.
+export const MOCK_PROVIDERS: ProvidersFile = {
+  active_provider_id: 'prov-anthropic',
+  providers: [
+    {
+      id: 'prov-anthropic',
+      label: 'Anthropic',
+      provider_kind: 'anthropic',
+      api_key: '***',
+      base_url: null,
+      model: 'claude-sonnet-4-6',
+      created_at: '2026-06-20T10:00:00Z',
+    },
+    {
+      id: 'prov-glm',
+      label: 'GLM (Zhipu)',
+      provider_kind: 'openai-compatible',
+      api_key: '***',
+      base_url: 'https://open.bigmodel.cn/api/paas/v4',
+      model: 'glm-4.6',
+      created_at: '2026-06-25T14:30:00Z',
+    },
+  ],
 }
 
 export const MOCK_MODELS: ModelInfo[] = [
