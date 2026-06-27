@@ -487,6 +487,55 @@ pub enum TestConnectionResult {
     Unknown { message: String },
 }
 
+/// Validate + normalize a user-supplied provider base_url.
+///
+/// Defense-in-depth for the custom-endpoint flow: rejects non-HTTP(S) schemes
+/// (e.g. `file:`, `data:`), URLs with embedded credentials, missing hosts, and
+/// unparseable input; drops any fragment. Returns the normalized base with no
+/// trailing slash.
+///
+/// It deliberately does **not** block private/loopback hosts: pointing the app
+/// at `http://localhost:11434` (Ollama) or a self-hosted model on a private
+/// network is a first-class, intended use case. The URL is supplied by the
+/// local user themselves (the Add Provider modal) — there is no
+/// untrusted/remote input vector reaching this path — so the SSRF scenario of
+/// an attacker steering server-side fetches does not apply here.
+fn validate_base_url(raw: &str) -> Result<String, String> {
+    let raw = raw.trim();
+    let parsed = url::Url::parse(raw).map_err(|e| format!("invalid base_url `{raw}`: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!(
+            "base_url must use http or https, got `{}`",
+            parsed.scheme()
+        ));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("base_url must not contain embedded credentials".into());
+    }
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "base_url must have a host".to_string())?;
+    if host.is_empty() {
+        return Err("base_url must have a host".into());
+    }
+    let mut cleaned = parsed;
+    cleaned.set_fragment(None);
+    let mut out = cleaned.to_string();
+    while out.ends_with('/') {
+        out.pop();
+    }
+    Ok(out)
+}
+
+/// Trim an optional base_url from frontend input, returning `None` for
+/// empty/blank values and validating non-empty ones.
+fn resolve_base_url(raw: &Option<String>) -> Result<Option<String>, String> {
+    match raw.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(b) => Ok(Some(validate_base_url(b)?)),
+        None => Ok(None),
+    }
+}
+
 /// Resolve the list-models probe URL + `Name: value` auth header for a provider
 /// kind and an optional base_url override. Pure (no network) so it is
 /// unit-testable. Ollama is handled by the caller because it uses no auth and
@@ -501,7 +550,11 @@ fn provider_probe_url(
     api_key: &str,
     base_url: Option<&str>,
 ) -> Result<(String, Option<String>), String> {
-    let trimmed = base_url.map(|b| b.trim_end_matches('/'));
+    let validated = match base_url {
+        Some(raw) => Some(validate_base_url(raw)?),
+        None => None,
+    };
+    let trimmed = validated.as_deref();
     Ok(match provider {
         "anthropic" => {
             let base = trimmed.unwrap_or("https://api.anthropic.com");
@@ -552,13 +605,11 @@ pub async fn test_provider_connection(
     // Ollama needs no auth and uses a bespoke tags endpoint whose default host
     // comes from OLLAMA_HOST (or localhost:11434).
     if provider == "ollama" {
-        let host = base_url
-            .map(|b| b.trim_end_matches('/').to_string())
-            .unwrap_or_else(|| {
-                std::env::var("OLLAMA_HOST")
-                    .unwrap_or_else(|_| "http://localhost:11434".to_string())
-            });
-        let host = host.trim_end_matches('/');
+        let host = match base_url.as_deref() {
+            Some(raw) => validate_base_url(raw)?,
+            None => std::env::var("OLLAMA_HOST")
+                .unwrap_or_else(|_| "http://localhost:11434".to_string()),
+        };
         return ping_provider(&format!("{host}/api/tags"), None)
             .await
             .map_err(|e| e.to_string());
@@ -762,6 +813,7 @@ pub async fn save_provider(
     if !is_known_kind(&input.provider_kind) {
         return Err(format!("unknown provider kind: {}", input.provider_kind));
     }
+    let base_url = resolve_base_url(&input.base_url)?;
     let mut file = config::load_providers();
 
     if let Some(id) = input.id.as_deref() {
@@ -777,7 +829,7 @@ pub async fn save_provider(
             Some(k) if !k.is_empty() && k != "***" => conn.api_key = Some(k.to_string()),
             _ => {}
         }
-        conn.base_url = input.base_url.filter(|s| !s.is_empty());
+        conn.base_url = base_url;
         conn.model = input.model.filter(|s| !s.is_empty());
     } else {
         let id = unique_provider_slug(&input.label, &file.providers);
@@ -786,7 +838,7 @@ pub async fn save_provider(
             label: input.label.clone(),
             provider_kind: input.provider_kind.clone(),
             api_key: input.api_key.filter(|s| !s.is_empty()),
-            base_url: input.base_url.filter(|s| !s.is_empty()),
+            base_url,
             model: input.model.filter(|s| !s.is_empty()),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
@@ -952,6 +1004,76 @@ mod tests {
     #[test]
     fn probe_url_rejects_unknown_provider() {
         assert!(provider_probe_url("grok", "sk", None).is_err());
+    }
+
+    #[test]
+    fn probe_url_rejects_unsafe_base_url() {
+        // Validation now runs inside provider_probe_url.
+        assert!(provider_probe_url("openai", "sk", Some("file:///etc/passwd")).is_err());
+        assert!(
+            provider_probe_url(
+                "openai-compatible",
+                "sk",
+                Some("https://user:pass@evil.example.com")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validate_base_url_accepts_http_and_https_and_strips_trailing_slash() {
+        assert_eq!(
+            validate_base_url("https://api.openai.com").unwrap(),
+            "https://api.openai.com"
+        );
+        assert_eq!(
+            validate_base_url("https://open.bigmodel.cn/api/paas/v4/").unwrap(),
+            "https://open.bigmodel.cn/api/paas/v4"
+        );
+        // http + localhost is valid (Ollama / self-hosted models).
+        assert_eq!(
+            validate_base_url("http://localhost:11434").unwrap(),
+            "http://localhost:11434"
+        );
+        // Fragment is dropped.
+        assert_eq!(
+            validate_base_url("https://api.openai.com/v1#section").unwrap(),
+            "https://api.openai.com/v1"
+        );
+    }
+
+    #[test]
+    fn validate_base_url_rejects_non_http_schemes() {
+        assert!(validate_base_url("file:///etc/passwd").is_err());
+        assert!(validate_base_url("data:text/plain,hello").is_err());
+        assert!(validate_base_url("gopher://example.com").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_embedded_credentials() {
+        assert!(validate_base_url("https://user:pass@example.com").is_err());
+        assert!(validate_base_url("https://token@example.com").is_err());
+    }
+
+    #[test]
+    fn validate_base_url_rejects_unparseable_and_schemeless_input() {
+        // No scheme → url::Url cannot parse a relative URL.
+        assert!(validate_base_url("api.openai.com").is_err());
+        assert!(validate_base_url("").is_err());
+        assert!(validate_base_url("   ").is_err());
+        assert!(validate_base_url("ht!tp://bad").is_err());
+    }
+
+    #[test]
+    fn resolve_base_url_handles_none_and_blank() {
+        assert_eq!(resolve_base_url(&None).unwrap(), None);
+        assert_eq!(resolve_base_url(&Some(String::new())).unwrap(), None);
+        assert_eq!(resolve_base_url(&Some("   ".to_string())).unwrap(), None);
+        assert_eq!(
+            resolve_base_url(&Some("https://api.openai.com/".to_string())).unwrap(),
+            Some("https://api.openai.com".to_string())
+        );
+        assert!(resolve_base_url(&Some("file:///x".to_string())).is_err());
     }
 
     #[test]
