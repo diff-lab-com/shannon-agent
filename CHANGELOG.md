@@ -2,6 +2,48 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased] — Models P2 (managed providers, part 1: Rust backend)
+
+### Models P2 — managed providers store + generic OpenAI-compatible test
+
+Branch `s2/models-p2-rust`. First half of the Models P2 split (Rust backend;
+the UI rewrite follows in a second, UI-only PR). Adds a managed multi-provider
+roster so users keep several connections configured and switch between them,
+plus a generic OpenAI-compatible connection test that closes the gap where GLM
+/ MiniMax / Kimi previously fell through to "unknown provider".
+
+#### Rust
+- **New `~/.shannon/desktop/providers.json` store** (`config.rs`):
+  `ProviderConnection` (id / label / provider_kind / api_key / base_url /
+  model / created_at) wrapped in `ProvidersFile` (active_provider_id +
+  providers list). `load_providers` / `save_providers` mirror the existing
+  `mcp-servers.json` pattern, including owner-restricted permissions on write.
+- **Four managed-provider commands** (`commands_config.rs`, registered in
+  `main.rs`):
+  - `list_providers` — masks API keys; lazily migrates the legacy singular
+    config into one seeded entry on first call (so existing users see their
+    current connection, not an empty list).
+  - `save_provider` — insert or upsert by id; preserves the stored key when the
+    frontend sends `"***"` or empty (editing the label never blanks the secret).
+  - `delete_provider` — clears `active_provider_id` if it pointed at the
+    removed entry.
+  - `set_active_provider` — mirrors the connection into `DesktopConfig`'s
+    singular fields, rebuilds the engine client config, persists both stores,
+    and emits `CONFIG_UPDATED` (tray + open windows refresh their label).
+- **`test_provider_connection` gains an optional `base_url`** and a new
+  `openai-compatible` kind (`GET {base_url}/models` with `Authorization:
+  Bearer`), enabling GLM/Zhipu, Moonshot/Kimi, MiniMax, Together, Groq, etc.
+  Built-in kinds (anthropic/openai/deepseek) honor an optional `base_url`
+  override; anthropic keeps `x-api-key`; ollama keeps its authless tags probe.
+  The new arg is optional, so existing two-arg callers stay compatible until
+  the UI PR passes `base_url`. URL/auth resolution is extracted into a pure
+  `provider_probe_url` helper (unit-tested, no network).
+- **No `DesktopConfig` schema change**: the active provider still drives the
+  existing singular fields, so `config.json` and the engine-facing contract are
+  unchanged — this PR is additive.
+- Tests: +13 unit tests (probe-URL/auth matrix, slugify + de-dup id, key
+  masking, `ProvidersFile` round-trip, optional-field deserialization).
+
 ## v0.3.7 (2026-06-27) — UI design overhaul + Week D (Plan Mode, Diff Preview) + PM-audit follow-ups + Settings P1 (Models/Notifications) + i18n completion
 
 ### i18n completion — MermaidRenderer deep audit (last hardcoded strings)

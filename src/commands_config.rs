@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 use crate::commands::AppState;
-use crate::config::{self, DesktopConfig};
+use crate::config::{self, DesktopConfig, ProviderConnection, ProvidersFile};
 use crate::events;
 use crate::events::event_names;
 
@@ -487,41 +487,85 @@ pub enum TestConnectionResult {
     Unknown { message: String },
 }
 
+/// Resolve the list-models probe URL + `Name: value` auth header for a provider
+/// kind and an optional base_url override. Pure (no network) so it is
+/// unit-testable. Ollama is handled by the caller because it uses no auth and
+/// an env-derived default host.
+///
+/// The optional `base_url` lets a user point a built-in kind at a proxy or
+/// self-host, and is **required** for `openai-compatible` (GLM/Zhipu,
+/// Moonshot/Kimi, MiniMax, Together, Groq, …), which closes the gap where
+/// those providers previously fell through to "unknown provider".
+fn provider_probe_url(
+    provider: &str,
+    api_key: &str,
+    base_url: Option<&str>,
+) -> Result<(String, Option<String>), String> {
+    let trimmed = base_url.map(|b| b.trim_end_matches('/'));
+    Ok(match provider {
+        "anthropic" => {
+            let base = trimmed.unwrap_or("https://api.anthropic.com");
+            (
+                format!("{base}/v1/models?limit=1"),
+                Some(format!("x-api-key: {api_key}")),
+            )
+        }
+        "openai" => {
+            let base = trimmed.unwrap_or("https://api.openai.com");
+            (
+                format!("{base}/v1/models"),
+                Some(format!("Authorization: Bearer {api_key}")),
+            )
+        }
+        "deepseek" => {
+            let base = trimmed.unwrap_or("https://api.deepseek.com");
+            (
+                format!("{base}/models"),
+                Some(format!("Authorization: Bearer {api_key}")),
+            )
+        }
+        "openai-compatible" => {
+            let base = trimmed
+                .ok_or_else(|| "openai-compatible provider requires a base_url".to_string())?;
+            (
+                format!("{base}/models"),
+                Some(format!("Authorization: Bearer {api_key}")),
+            )
+        }
+        other => return Err(format!("unknown provider: {other}")),
+    })
+}
+
 /// Ping a provider's "list models" endpoint to verify the API key works.
 ///
 /// Each provider has a cheap GET endpoint that requires auth — we use it as
 /// a liveness check. 200 → Success, 401/403 → InvalidKey, 429 → RateLimited,
 /// 5xx → ProviderError, network failure → NetworkUnreachable, everything
-/// else → Unknown.
+/// else → Unknown. An optional `base_url` overrides the canonical endpoint
+/// (required for `openai-compatible` providers).
 #[tauri::command]
 pub async fn test_provider_connection(
     provider: String,
     api_key: String,
+    base_url: Option<String>,
 ) -> Result<TestConnectionResult, String> {
-    let (url, auth_header) = match provider.as_str() {
-        "anthropic" => (
-            "https://api.anthropic.com/v1/models?limit=1".to_string(),
-            format!("x-api-key: {api_key}"),
-        ),
-        "openai" => (
-            "https://api.openai.com/v1/models".to_string(),
-            format!("Authorization: Bearer {api_key}"),
-        ),
-        "deepseek" => (
-            "https://api.deepseek.com/models".to_string(),
-            format!("Authorization: Bearer {api_key}"),
-        ),
-        "ollama" => {
-            // Ollama doesn't need auth; just ping the tags endpoint.
-            let host = std::env::var("OLLAMA_HOST")
-                .unwrap_or_else(|_| "http://localhost:11434".to_string());
-            return ping_provider(&format!("{}/api/tags", host.trim_end_matches('/')), None)
-                .await
-                .map_err(|e| e.to_string());
-        }
-        other => return Err(format!("unknown provider: {other}")),
-    };
-    ping_provider(&url, Some(&auth_header))
+    // Ollama needs no auth and uses a bespoke tags endpoint whose default host
+    // comes from OLLAMA_HOST (or localhost:11434).
+    if provider == "ollama" {
+        let host = base_url
+            .map(|b| b.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| {
+                std::env::var("OLLAMA_HOST")
+                    .unwrap_or_else(|_| "http://localhost:11434".to_string())
+            });
+        let host = host.trim_end_matches('/');
+        return ping_provider(&format!("{host}/api/tags"), None)
+            .await
+            .map_err(|e| e.to_string());
+    }
+
+    let (url, auth_header) = provider_probe_url(&provider, &api_key, base_url.as_deref())?;
+    ping_provider(&url, auth_header.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -565,6 +609,278 @@ async fn ping_provider(
     })
 }
 
+// ===== Managed providers (Models P2) =====
+//
+// Multiple provider connections are persisted in
+// `~/.shannon/desktop/providers.json`. The active connection is mirrored into
+// DesktopConfig's singular fields, which is what the engine reads. This keeps
+// the engine-facing contract unchanged while letting users manage a roster of
+// providers (built-in + custom OpenAI-compatible endpoints like GLM/Kimi).
+
+/// Provider fields supplied by the frontend when adding or editing a managed
+/// connection. On edit, `id` identifies the entry; on add it is `None` and the
+/// server generates one. An `api_key` of `"***"` or empty means "keep the
+/// existing key", so editing the label never blanks the stored secret.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderInput {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub label: String,
+    pub provider_kind: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+fn is_known_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "anthropic" | "openai" | "deepseek" | "ollama" | "openai-compatible"
+    )
+}
+
+fn kind_label(kind: &str) -> String {
+    match kind {
+        "anthropic" => "Anthropic".to_string(),
+        "openai" => "OpenAI".to_string(),
+        "deepseek" => "DeepSeek".to_string(),
+        "ollama" => "Ollama".to_string(),
+        "openai-compatible" => "OpenAI-compatible".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Lowercase alphanumeric slug from an arbitrary label (mirrors the skill
+/// candidate slugifier, kept local to avoid a cross-module dependency).
+fn slugify_provider(input: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in input.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+/// Derive a slug from `label` that does not collide with any existing id.
+fn unique_provider_slug(label: &str, existing: &[ProviderConnection]) -> String {
+    let base = slugify_provider(label);
+    let base = if base.is_empty() {
+        "provider".to_string()
+    } else {
+        base
+    };
+    let mut candidate = base.clone();
+    let mut n = 2;
+    while existing.iter().any(|p| p.id == candidate) {
+        candidate = format!("{base}-{n}");
+        n += 1;
+    }
+    candidate
+}
+
+/// Return a copy of `file` with every provider's api_key masked to `"***"`
+/// (or left `None`). The UI uses presence to show a "key set" dot without ever
+/// receiving the raw secret.
+fn mask_providers(mut file: ProvidersFile) -> ProvidersFile {
+    for conn in &mut file.providers {
+        if conn.api_key.is_some() {
+            conn.api_key = Some("***".into());
+        }
+    }
+    file
+}
+
+fn emit_providers_changed(app_handle: &tauri::AppHandle, file: &ProvidersFile) {
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "providers".into(),
+            value: file.providers.len().to_string(),
+        },
+    );
+}
+
+/// Build a single-entry `ProvidersFile` from the legacy singular config and
+/// persist it, so existing users see their current connection on first load.
+/// Returns `None` when there is no configured provider to seed from.
+async fn seed_from_legacy_config(
+    state: &tauri::State<'_, AppState>,
+) -> Result<Option<ProvidersFile>, String> {
+    let cfg = state.desktop_config.read().await;
+    let kind = match cfg.provider.as_deref() {
+        Some(k) if !k.is_empty() => k.to_string(),
+        _ => return Ok(None),
+    };
+    let id = unique_provider_slug(&kind, &[]);
+    let file = ProvidersFile {
+        active_provider_id: Some(id.clone()),
+        providers: vec![ProviderConnection {
+            id,
+            label: kind_label(&kind),
+            provider_kind: kind,
+            api_key: cfg.api_key.clone(),
+            base_url: cfg.base_url.clone(),
+            model: cfg.model.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }],
+    };
+    config::save_providers(&file)?;
+    Ok(Some(file))
+}
+
+/// List all managed providers, masking API keys. On first call, lazily migrates
+/// the legacy singular config into a single seeded entry so existing users see
+/// their current connection rather than an empty list.
+#[tauri::command]
+pub async fn list_providers(state: tauri::State<'_, AppState>) -> Result<ProvidersFile, String> {
+    if !config::providers_path().exists() {
+        if let Some(seeded) = seed_from_legacy_config(&state).await? {
+            return Ok(mask_providers(seeded));
+        }
+    }
+    Ok(mask_providers(config::load_providers()))
+}
+
+/// Insert or update a managed provider. Returns the updated (masked) file.
+#[tauri::command]
+pub async fn save_provider(
+    app_handle: tauri::AppHandle,
+    input: ProviderInput,
+) -> Result<ProvidersFile, String> {
+    if !is_known_kind(&input.provider_kind) {
+        return Err(format!("unknown provider kind: {}", input.provider_kind));
+    }
+    let mut file = config::load_providers();
+
+    if let Some(id) = input.id.as_deref() {
+        let conn = file
+            .providers
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| format!("provider not found: {id}"))?;
+        conn.label = input.label.clone();
+        conn.provider_kind = input.provider_kind.clone();
+        // Preserve the existing key unless the frontend sent a fresh value.
+        match input.api_key.as_deref() {
+            Some(k) if !k.is_empty() && k != "***" => conn.api_key = Some(k.to_string()),
+            _ => {}
+        }
+        conn.base_url = input.base_url.filter(|s| !s.is_empty());
+        conn.model = input.model.filter(|s| !s.is_empty());
+    } else {
+        let id = unique_provider_slug(&input.label, &file.providers);
+        let conn = ProviderConnection {
+            id,
+            label: input.label.clone(),
+            provider_kind: input.provider_kind.clone(),
+            api_key: input.api_key.filter(|s| !s.is_empty()),
+            base_url: input.base_url.filter(|s| !s.is_empty()),
+            model: input.model.filter(|s| !s.is_empty()),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        file.providers.push(conn);
+    }
+
+    config::save_providers(&file)?;
+    emit_providers_changed(&app_handle, &file);
+    Ok(mask_providers(file))
+}
+
+/// Delete a managed provider by id. Clears `active_provider_id` if it pointed
+/// at the deleted entry. Returns the updated (masked) file.
+#[tauri::command]
+pub async fn delete_provider(
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<ProvidersFile, String> {
+    let mut file = config::load_providers();
+    let before = file.providers.len();
+    file.providers.retain(|p| p.id != id);
+    if file.providers.len() == before {
+        return Err(format!("provider not found: {id}"));
+    }
+    if file.active_provider_id.as_deref() == Some(id.as_str()) {
+        file.active_provider_id = None;
+    }
+    config::save_providers(&file)?;
+    emit_providers_changed(&app_handle, &file);
+    Ok(mask_providers(file))
+}
+
+/// Activate a managed provider: mirrors its fields into the singular
+/// `DesktopConfig` that the engine reads, rebuilds the client config, and
+/// persists both stores. Emits `CONFIG_UPDATED` so the tray and any open
+/// windows refresh their provider label.
+#[tauri::command]
+pub async fn set_active_provider(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    id: String,
+) -> Result<(), String> {
+    let mut file = config::load_providers();
+    let conn = file
+        .providers
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| format!("provider not found: {id}"))?
+        .clone();
+
+    let provider_kind = conn.provider_kind.clone();
+    let api_key = conn.api_key.clone();
+    let base_url = conn.base_url.clone();
+    let model = conn.model.clone();
+
+    // Mirror into the singular config the engine consumes.
+    let desktop_cfg = {
+        let mut dc = state.desktop_config.write().await;
+        dc.provider = Some(provider_kind.clone());
+        dc.api_key = api_key.clone();
+        dc.base_url = base_url.clone();
+        dc.model = model.clone();
+        dc.clone()
+    };
+
+    let client_config = AppState::build_client_config(&desktop_cfg);
+    {
+        let mut c = state.client_config.write().await;
+        *c = client_config;
+    }
+    {
+        let mut m = state.model.lock().await;
+        *m = model.clone().unwrap_or_default();
+    }
+    {
+        let mut p = state.provider.lock().await;
+        *p = provider_kind.clone();
+    }
+
+    config::save_config(&desktop_cfg)?;
+
+    file.active_provider_id = Some(id);
+    config::save_providers(&file)?;
+
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "provider".into(),
+            value: provider_kind,
+        },
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,5 +909,121 @@ mod tests {
         let back: ProviderSwitchRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back.provider, "openai");
         assert_eq!(back.api_key, Some("sk-test".to_string()));
+    }
+
+    #[test]
+    fn probe_url_uses_canonical_endpoints_by_default() {
+        let (url, auth) = provider_probe_url("anthropic", "sk-1", None).unwrap();
+        assert_eq!(url, "https://api.anthropic.com/v1/models?limit=1");
+        assert_eq!(auth.as_deref(), Some("x-api-key: sk-1"));
+
+        let (url, auth) = provider_probe_url("openai", "sk-2", None).unwrap();
+        assert_eq!(url, "https://api.openai.com/v1/models");
+        assert_eq!(auth.as_deref(), Some("Authorization: Bearer sk-2"));
+
+        let (url, _) = provider_probe_url("deepseek", "sk-3", None).unwrap();
+        assert_eq!(url, "https://api.deepseek.com/models");
+    }
+
+    #[test]
+    fn probe_url_respects_base_url_override() {
+        // Anthropic behind a proxy.
+        let (url, auth) =
+            provider_probe_url("anthropic", "sk-1", Some("https://my-proxy.example.com/")).unwrap();
+        assert_eq!(url, "https://my-proxy.example.com/v1/models?limit=1");
+        assert_eq!(auth.as_deref(), Some("x-api-key: sk-1"));
+    }
+
+    #[test]
+    fn probe_url_openai_compatible_requires_base_url() {
+        let err = provider_probe_url("openai-compatible", "sk-x", None).unwrap_err();
+        assert!(err.contains("base_url"), "unexpected error: {err}");
+
+        let (url, auth) = provider_probe_url(
+            "openai-compatible",
+            "sk-x",
+            Some("https://open.bigmodel.cn/api/paas/v4"),
+        )
+        .unwrap();
+        assert_eq!(url, "https://open.bigmodel.cn/api/paas/v4/models");
+        assert_eq!(auth.as_deref(), Some("Authorization: Bearer sk-x"));
+    }
+
+    #[test]
+    fn probe_url_rejects_unknown_provider() {
+        assert!(provider_probe_url("grok", "sk", None).is_err());
+    }
+
+    #[test]
+    fn slugify_provider_collapses_non_alphanumerics() {
+        assert_eq!(slugify_provider("My GLM Key"), "my-glm-key");
+        assert_eq!(slugify_provider("UPPER_case!"), "upper-case");
+        assert_eq!(slugify_provider("  leading/trailing  "), "leading-trailing");
+        assert_eq!(slugify_provider("😎"), "");
+    }
+
+    #[test]
+    fn unique_provider_slug_appends_suffix_on_collision() {
+        let existing = vec![ProviderConnection {
+            id: "glm".into(),
+            label: "GLM".into(),
+            provider_kind: "openai-compatible".into(),
+            api_key: None,
+            base_url: None,
+            model: None,
+            created_at: "2026-06-27T00:00:00Z".into(),
+        }];
+        // "glm" already exists → first collision gets "-2".
+        assert_eq!(unique_provider_slug("GLM", &existing), "glm-2");
+        // Empty label falls back to the literal "provider".
+        assert_eq!(unique_provider_slug("😎", &[]), "provider");
+    }
+
+    #[test]
+    fn mask_providers_replaces_keys_but_keeps_absence() {
+        let file = ProvidersFile {
+            active_provider_id: Some("a".into()),
+            providers: vec![
+                ProviderConnection {
+                    id: "a".into(),
+                    label: "A".into(),
+                    provider_kind: "anthropic".into(),
+                    api_key: Some("sk-secret".into()),
+                    base_url: None,
+                    model: None,
+                    created_at: "2026-06-27T00:00:00Z".into(),
+                },
+                ProviderConnection {
+                    id: "b".into(),
+                    label: "B".into(),
+                    provider_kind: "ollama".into(),
+                    api_key: None,
+                    base_url: None,
+                    model: None,
+                    created_at: "2026-06-27T00:00:00Z".into(),
+                },
+            ],
+        };
+        let masked = mask_providers(file);
+        assert_eq!(masked.providers[0].api_key.as_deref(), Some("***"));
+        assert!(masked.providers[1].api_key.is_none());
+    }
+
+    #[test]
+    fn provider_input_deserializes_without_optional_fields() {
+        let json = r#"{"label":"GLM","provider_kind":"openai-compatible"}"#;
+        let input: ProviderInput = serde_json::from_str(json).unwrap();
+        assert_eq!(input.label, "GLM");
+        assert!(input.id.is_none());
+        assert!(input.api_key.is_none());
+        assert!(input.base_url.is_none());
+        assert!(input.model.is_none());
+    }
+
+    #[test]
+    fn kind_label_is_human_readable() {
+        assert_eq!(kind_label("anthropic"), "Anthropic");
+        assert_eq!(kind_label("openai-compatible"), "OpenAI-compatible");
+        assert_eq!(kind_label("custom"), "custom");
     }
 }
