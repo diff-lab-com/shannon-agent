@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useIntl } from 'react-intl'
 
 interface MermaidRendererProps {
   source: string
@@ -9,7 +10,7 @@ const MERMAID_CDN = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.mi
 
 const CSP = `default-src 'none'; script-src 'unsafe-inline' ${MERMAID_CDN}; style-src 'unsafe-inline'; font-src data:; img-src data:`
 
-function buildSrcDoc(source: string): string {
+function buildSrcDoc(source: string, loadingLabel: string, failedLabel: string): string {
   const payload = JSON.stringify(source)
   return [
     '<!DOCTYPE html>',
@@ -24,7 +25,7 @@ function buildSrcDoc(source: string): string {
     '</style>',
     '</head>',
     '<body>',
-    '<div class="container"><div id="target"><div class="error">Rendering diagram…</div></div></div>',
+    `<div class="container"><div id="target"><div class="error">${loadingLabel}</div></div></div>`,
     '<script type="module">',
     'const source = ' + payload + ';',
     `import mermaid from '${MERMAID_CDN}';`,
@@ -34,7 +35,7 @@ function buildSrcDoc(source: string): string {
     "  document.getElementById('target').innerHTML = svg;",
     '} catch (err) {',
     "  const msg = (err?.message || String(err)).replace(/[<>&]/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[c]));",
-    "  document.getElementById('target').innerHTML = '<div class=\"error\">Failed to render: ' + msg + '</div>';",
+    `  document.getElementById('target').innerHTML = '<div class="error">${failedLabel}' + msg + '</div>';`,
     '}',
     '<\/script>',
     '</body>',
@@ -43,10 +44,14 @@ function buildSrcDoc(source: string): string {
 }
 
 export function MermaidRenderer({ source, title }: MermaidRendererProps) {
-  const srcDoc = useMemo(() => buildSrcDoc(source), [source])
+  const intl = useIntl()
+  const loadingLabel = intl.formatMessage({ id: 'artifact.mermaid.loading' })
+  const failedLabel = intl.formatMessage({ id: 'artifact.mermaid.renderFailed' })
+  const diagramTitle = intl.formatMessage({ id: 'artifact.mermaid.diagramTitle' })
+  const srcDoc = useMemo(() => buildSrcDoc(source, loadingLabel, failedLabel), [source, loadingLabel, failedLabel])
   return (
     <iframe
-      title={title || 'Mermaid diagram'}
+      title={title || diagramTitle}
       srcDoc={srcDoc}
       sandbox="allow-scripts"
       loading="lazy"
