@@ -2,7 +2,7 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
-## [v0.3.7] — unreleased (next release)
+## v0.3.7 (2026-06-27) — UI design overhaul + Week D (Plan Mode, Diff Preview) + PM-audit follow-ups + Settings P1 (Models/Notifications) + i18n completion
 
 ### i18n completion — MermaidRenderer deep audit (last hardcoded strings)
 
