@@ -2,7 +2,7 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
-## [Unreleased] — Models P2 (managed providers)
+## v0.3.8 (2026-06-28) — Models P2 (managed providers)
 
 ### Models P2 — managed providers store + generic OpenAI-compatible test
 
@@ -92,6 +92,16 @@ Active Model, Performance Strategy, and Global Parameters sections intact.
   deleted and their failure variants).
 - Tests: the `ModelsSettings` suite is updated to assert the new providers
   section and Add-provider button; full vitest suite green (1254 tests).
+
+### Demo mode — managed-providers support
+
+Branch `s2/demo-providers-mock`. The demo build (`VITE_MOCK_MODE=1`) threw
+unhandled-Tauri-command errors on Settings → Models because the mock layer
+predated Models P2. Adds the 5 providers handlers + a seeded `MOCK_PROVIDERS`
+roster (active Anthropic + a GLM openai-compatible entry) to
+`lib/mock/handlers.ts`, backed by mutable state so add / edit / test /
+activate / delete behave live. tsc clean; vitest unaffected (1254 tests — the
+mock layer loads only under `VITE_MOCK_MODE=1`).
 
 ## v0.3.7 (2026-06-27) — UI design overhaul + Week D (Plan Mode, Diff Preview) + PM-audit follow-ups + Settings P1 (Models/Notifications) + i18n completion
 
