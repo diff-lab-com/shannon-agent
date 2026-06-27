@@ -162,6 +162,42 @@ export interface ProviderSwitchRequest {
   model: string
 }
 
+/// A managed provider connection kind. `openai-compatible` covers any
+/// OpenAI-style endpoint (GLM/Zhipu, Moonshot/Kimi, MiniMax, Together, Groq…).
+export type ProviderKind =
+  | 'anthropic'
+  | 'openai'
+  | 'deepseek'
+  | 'ollama'
+  | 'openai-compatible'
+
+export interface ProviderConnection {
+  id: string
+  label: string
+  provider_kind: ProviderKind | string
+  /// Masked to '***' by the backend in list responses when a key is set.
+  api_key?: string | null
+  base_url?: string | null
+  model?: string | null
+  created_at: string
+}
+
+export interface ProvidersFile {
+  active_provider_id?: string | null
+  providers: ProviderConnection[]
+}
+
+/// Payload for adding or editing a managed provider. On edit, `id` identifies
+/// the entry; an `api_key` of '***' or empty means "keep the existing key".
+export interface ProviderInput {
+  id?: string
+  label: string
+  provider_kind: ProviderKind | string
+  api_key?: string
+  base_url?: string
+  model?: string
+}
+
 export interface DesktopConfig {
   provider?: string
   api_key?: string
