@@ -17,6 +17,18 @@ that PR. Grouped by audit severity, then by page.
 
 ## Still open — P1 (per-page)
 
+> **Re-verified 2026-06-27** (after PR #50 / #56 / #57 + the P1 design-system
+> batch). A spot-check of six items found **five already resolved** and one
+> real quick-fix (OPC revision-note empty-submit → shipped; button disabled
+> until the note has non-empty trimmed text). Verified-resolved: Chat has no
+> drag-and-drop surface (attach is a picker) and no token ring; Hooks filters
+> its 5 dead events (`DEAD_EVENTS` in `Hooks.tsx`); OPC efficiency metrics
+> read real backend `usage` data (not fabricated); Settings billing shows a
+> Demo banner. The remaining unmarked items are mostly **feature-sized**
+> (conversation fork, execution-history drawer, conflict-detection UI,
+> keyboard nav, …) and need their own design — re-verify each against current
+> code before acting, as this list predates the recent UI work.
+
 ### Chat
 - Drag-and-drop silent failure: rejected files clear `isDragging` without toast
 - Pinned messages not persisted to session metadata (lost on reload)

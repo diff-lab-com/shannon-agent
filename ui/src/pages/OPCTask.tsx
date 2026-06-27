@@ -186,9 +186,10 @@ export default function OPCTask() {
                         onChange={e => setRevisionNote(e.target.value)}
                       />
                       <button
-                        className="self-end px-md py-xs rounded-lg bg-primary/10 text-primary font-label-sm hover:bg-primary/20 transition-colors"
+                        className="self-end px-md py-xs rounded-lg bg-primary/10 text-primary font-label-sm hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={!revisionNote.trim()}
                         onClick={() => {
-                          respondPermission(taskId, false, revisionNote || undefined)
+                          respondPermission(taskId, false, revisionNote.trim())
                           toast.success(t('opcTask.revisionSubmitted'))
                           setRevisionNote('')
                           setShowRevisionInput(null)
