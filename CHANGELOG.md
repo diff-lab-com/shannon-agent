@@ -2,14 +2,113 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
-## [Unreleased — silent-catch error-feedback sweep] — surface the real cause in failure toasts
+## [v0.3.7] — unreleased (next release)
+
+### i18n completion — MermaidRenderer deep audit (last hardcoded strings)
+
+Branch `s2/i18n-deep-audit`. Final pass of the i18n audit. The deeper sweep
+confirmed the app is otherwise fully internationalized; the only remaining
+hardcoded user-facing strings were three inside `MermaidRenderer`'s sandboxed
+`srcDoc` (loading placeholder, render-failed message) and the diagram `title`
+fallback.
+
+#### UI
+
+- **MermaidRenderer.** The iframe `srcDoc` is now built by a
+  `buildSrcDoc(source, loadingLabel, failedLabel)` helper with the labels
+  pulled from `react-intl`; the SVG `title` fallback uses
+  `artifact.mermaid.diagramTitle`. The `srcDoc` is memoised on
+  `[source, loadingLabel, failedLabel]` so the iframe rebuilds only when
+  something actually changes.
+- 3 new i18n keys (`en` + `zh-CN`): `artifact.mermaid.loading`,
+  `artifact.mermaid.renderFailed`, `artifact.mermaid.diagramTitle`.
+
+### Notifications Phase 1 — one outbound surface + disable dead Email control (N1/N5)
+
+Branch `s2/notifications-p1`. First implementable slice of the Settings
+redesign PM plan (§2): the two trust-eroding issues in Notifications.
+
+#### UI
+
+- **One outbound surface (N1).** `WebhookSection` and `OutboundSection` are
+  now wrapped together under a single `<section>` with a shared "Outbound
+  notifications" header (`settings.notifications.outbound.sectionTitle` +
+  `.sectionDesc`), so the relationship between the two blocks is stated
+  rather than implied. `OutboundSection`'s own title dropped h3 → h4 to read
+  as a sub-heading of the unified surface.
+- **Disable-or-ship Email (N5).** The Email channel card no longer opens a
+  no-op wizard that toasts "coming soon." It is now a clearly-disabled card —
+  `comingSoon: true`, a "Coming soon" badge (`...channel.comingSoon`) and an
+  "Email inbound coming in Phase 2" note — and the dead `<EmailWizard>`
+  render block was removed (`EmailWizard.tsx` retained for Phase 2). The
+  card's onClick guards on `!comingSoon`, so clicking does nothing.
+- New i18n keys (`en` + `zh-CN`): `settings.notifications.outbound.sectionTitle`,
+  `.outbound.sectionDesc`, `.channel.comingSoon`.
+- Test updated: the Email-wizard test now asserts the coming-soon badge and
+  that clicking the card does not open a wizard.
+
+### Models Phase 1 — one API-key path + sliders wired to config + real connection test (M1/M4)
+
+Branch `s2/models-p1`. First implementable slice of the Settings redesign PM
+plan (§1): the two highest-trust fixes in Models.
+
+#### UI
+
+- **One authoritative API-key path (M1).** The "Test connection" button in the
+  bottom API-key box now calls the real `testProviderConnection(provider,
+  apiKey)` — previously it only re-ran `refreshModels`, so a bad key looked
+  healthy. The result is shown via a `switch(result.kind)`
+  (`success` / `invalid_key` / `rate_limited` / `provider_error` /
+  `network_unreachable` / `unknown`), each with its own message
+  (`settings.models.testResult.*`). The button is disabled until a key is
+  present (`(keyDraft ?? '').trim() || config?.api_key`). The presets' inline
+  `switchProvider` path stays for quick setup; the bottom box is the
+  canonical key surface.
+- **Sliders wired to config (M4).** Temperature and max-tokens sliders now
+  read from config (`config?.temperature ?? 0.7`, `config?.max_tokens ?? 4096`)
+  instead of the literal `0.7` / `4096` that reset on every remount.
+  `ParameterSlider` keeps a local copy for the input but re-syncs to the prop
+  via `useEffect`, so external config changes (e.g. `switchProvider`)
+  propagate.
+- 7 new i18n keys (`en` + `zh-CN`): `settings.models.testResult.success` /
+  `.failed` / `.invalidKey` / `.rateLimited` / `.networkUnreachable` /
+  `.providerError` / `.unknown`.
+- Test setup: `testProviderConnection` added to the `tauri-api` mock defaults.
+
+### Settings redesign PM plan (Models + Notifications) + i18n gap fixes
+
+Branch `s2/settings-review`. A senior-PM review of the two Settings areas the
+user flagged as "配置方式和 UI 组件设计不合理" — Models and Notifications —
+delivered as a **proposal doc** (not an implementation): competitor research
+(LibreChat, Cherry Studio, LobeChat, Linear, Slack 2026), a root-cause
+problem table per area, a phased redesign (Phase 1/2/3), and scope-discipline
+notes. The plan drives the Phase-1 implementation in the two entries above.
+
+#### Docs
+
+- **`docs/product-review/settings-redesign-pm-plan.md`** — the PM plan
+  (proposal; P2/P3 awaiting approval).
+
+#### UI
+
+- **i18n gap fixes** bundled with the review: the remaining hardcoded
+  user-facing strings in six components moved to message keys — `DiffViewer`,
+  `LspQuickFixPanel`, `ModelsSettings` (performance-strategy labels), `modal`
+  (close `aria-label`), `Hooks`, `MissionControl`, `OPCTask`.
+- **Test setup hardening.** `__tests__/setup.ts`'s `render()` mock already
+  auto-wrapped each tree in `I18nProvider`; it now also wraps `rerender()`,
+  so tests that exercise `rerender` (e.g. the Modal "restores body scroll on
+  close" case) keep the intl context instead of throwing "Could not find
+  required intl object".
+
+### silent-catch error-feedback sweep — surface the real cause in failure toasts
 
 Branch `s2/silent-catch-sweep`. Follow-up to the shared `toastError` helper
 shipped in the PM-audit-followups batch (commit `023c208`): migrates the
 catch sites that toasted a generic "Failed" message and discarded the caught
 error, so users now see *why* an action failed in the toast description.
 
-### UI
+#### UI
 
 - **Silent-catch → `toastError`.** Every catch block that called
   `toast.error(t('…failed'))` (or the `intl.formatMessage` equivalent)
@@ -38,7 +137,7 @@ error, so users now see *why* an action failed in the toast description.
   One existing Welcome test updated to assert the cause now appears in the
   description slot.
 
-## [Unreleased — per-page feature gaps] — Profiles conflict detection, Mission Control board filter, Editor diagnostic format
+### per-page feature gaps — Profiles conflict detection, Mission Control board filter, Editor diagnostic format
 
 Branch `s2/perpage-features`. Closes three feature-sized gaps surfaced by the
 §P1 per-page PM-audit re-verification (`docs/product-review/pm-audit-followups.md`)
@@ -46,7 +145,7 @@ that were genuinely missing (the rest were already shipped or stale). Two
 other audit items — Routines run-now/history and pinned-message persistence —
 are backend-dependent and remain deferred.
 
-### UI
+#### UI
 
 - **Profiles — within-profile conflict detection + create-form validation.**
   A profile whose Deny list overlaps its Auto-approve or Confirm list now
@@ -68,14 +167,14 @@ are backend-dependent and remain deferred.
   messages now render in sentence case (first letter capitalized) for
   readability. One new LspQuickFixPanel test.
 
-## [Unreleased — P1 design-system batch] — label-xs token + Banner primitive
+### P1 design-system batch — label-xs token + Banner primitive
 
 Branch `s2/design-system-p1`. Closes the two genuine gaps in the P1 design
 system (audit tasks 17–20); the rest — elevation/duration/icon-size/headline
 tokens, global `focus-visible` rings, and 18 shared primitives — shipped in
 PR #50.
 
-### UI
+#### UI
 
 - **`--text-label-xs` token (bug fix).** The 11px label token was absent from
   the `@theme` block, so the `text-label-xs` utility generated no CSS and 86
@@ -90,13 +189,13 @@ PR #50.
   inline error); the Tasks close button gains an `aria-label`. New
   `common.dismiss` i18n key (en/zh-CN).
 
-## [Unreleased — Triage keyboard navigation] — navigate the triage list without the mouse
+### Triage keyboard navigation — navigate the triage list without the mouse
 
 Branch `s2/triage-keyboard-nav`. Accessibility win from the §P1 per-page
 PM-audit sweep: the Triage item list had no keyboard support, so it was
 mouse-only.
 
-### UI
+#### UI
 
 - **Triage list keyboard navigation.** The triage item list is now a
   focusable region (`role="list"`, `tabIndex=0`, descriptive `aria-label`).
@@ -107,13 +206,13 @@ mouse-only.
   working. New `triage.list.aria` i18n key (en/zh-CN). Three new Triage
   tests (j+Enter mark-read, a archive, form-control guard).
 
-## [Unreleased — PM audit follow-ups batch] — Naming + error feedback + empty states + chat attach + skill drawer
+### PM audit follow-ups batch — Naming + error feedback + empty states + chat attach + skill drawer
 
 Branch `s2/pm-audit-followups-batch`. Closes the remaining P0 honesty
 findings and the §A–§C cross-cutting items from the senior PM audit
 (`docs/product-review/03-senior-pm-audit.md`) that PR #50 did not reach.
 
-### UI
+#### UI
 
 - **PM naming pass (audit §A).** Seven user-visible labels renamed to match
   the rename table in `03-senior-pm-audit.md` §A: Extensions → Integrations,
@@ -152,7 +251,7 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   dismiss). The card Install button still works independently; the drawer
   mirrors it for symmetry. (`7823238`)
 
-### Fixes
+#### Fixes
 
 - **DataSources page leaked hardcoded English.** The "Verified" badge, the
   "Query coming soon" notice, and the install/uninstall feedback strings were
@@ -161,9 +260,9 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   three new keys added (en + zh-CN), and the untranslated
   `extensions.datasources.noInstalled` value in `zh-CN.json` corrected.
 
-## [Unreleased — Week D] — Plan Mode + Diff Preview + Voice/Artifact/Self-improve wire-ups
+### Week D — Plan Mode + Diff Preview + Voice/Artifact/Self-improve wire-ups
 
-### Features
+#### Features
 
 - **Plan Mode toggle (D4).** Dedicated `PlanModeToggle` in the chat
   composer area; clicking it switches `approval_mode` to `plan` via
@@ -303,7 +402,7 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   on Web Speech for now; a follow-up will refactor it to consume
   this abstraction.
 
-### Documentation
+#### Documentation
 
 - **Week D design docs.** D1 Voice Mode, D2 Artifact Panel, D6
   Self-Improvement Loop — three planning documents under
@@ -311,9 +410,9 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   for multi-day / cross-repo work.
 
 
-## [Unreleased — P0 PM review fixes] — Demo mode + i18n + Welcome rendering
+### P0 PM review fixes — Demo mode + i18n + Welcome rendering
 
-### Fixes
+#### Fixes
 
 - **Demo-mode crashes on /triage, /memory, /extensions/featured.**
   Three pages threw raw errors when run with `VITE_MOCK_MODE=1`
@@ -352,15 +451,15 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   `define` from `package.json`. `ui/src/vite-env.d.ts` carries the
   global type declaration so TS stays happy.
 
-## [v0.3.7 — DRAFT, pending PR #50 merge] — UI design overhaul
+### UI design overhaul (PR #50)
 
-### Tooling
+#### Tooling
 
 - **Local dev debugging scripts.** `scripts/dev-start.sh` + `dev-stop.sh`
   orchestrate vite + `cargo run` with PID files, port-readiness polling,
   and graceful cleanup. Logs land in `${XDG_RUNTIME_DIR:-/tmp}/shannon-dev/`.
 
-### UI (from PR #50 — full list at the PR description)
+#### UI (from PR #50 — full list at the PR description)
 
 - **P0 honesty pass:** removed misleading buttons, dirty guards on Memory
   + OPC approve/rollback, billing demo-mode locks, ConfirmDialog for all
@@ -373,7 +472,7 @@ findings and the §A–§C cross-cutting items from the senior PM audit
 - **P3 polish:** brand icons, micro-interactions, i18n audit.
 - **Fix:** Tailwind 4 parser bug (stray `)` in `@custom-variant`).
 
-### Documentation
+#### Documentation
 
 - **PM audit follow-ups.** `docs/product-review/pm-audit-followups.md`
   lists all items unresolved after PR #50 with a 4-week recommended
@@ -382,9 +481,9 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   scopes the Q4 2026 extension work — pandoc-based DOCX/PDF generation
   via host tools, no core code.
 
-## [Unreleased — S2 follow-ups] — Engine pin + dev-mode schema validation
+### S2 follow-ups — Engine pin + dev-mode schema validation
 
-### Tooling
+#### Tooling
 
 - **Local dev debugging scripts.** `scripts/dev-start.sh` launches
   vite on :1420, waits for the port to respond (up to 60 s), then
@@ -394,7 +493,7 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   Replaces the two-terminal dance that left tauri caching
   connection-refused state when vite was slow to bind.
 
-### Changes
+#### Changes
 
 - **Engine pin bumped to `d49e7f5`.** Picks up the D1 Phase 3 cleanup
   (shannon-code PRs #58–#64): `shannon-engine` is now a direct dep,
@@ -421,9 +520,9 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   `../shannon-code/crates/shannon-types/schema/`. Wired into the
   `scripts/local-check.sh` pre-push gate so drift fails before push.
 
-## [Unreleased — D-group + P0 fixes] — Skill loop + events refactor
+### D-group + P0 fixes — Skill loop + events refactor
 
-### Fixes
+#### Fixes
 
 - **Skill loop OOM root cause.** `SkillProposalReviewPanel.tsx` had
   `useEffect(..., [open, t])` where `t` was an inline closure recreated
@@ -440,7 +539,7 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   than the configured minimum threshold. The skill loop evaluator now
   has the data it needs to judge task complexity accurately.
 
-### Changes
+#### Changes
 
 - **Events moved to `shannon_types::events` (D4).** All 23 event
   payload structs + the `event_names` module now live in the engine
@@ -458,16 +557,16 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   (D4 events) and #46 (D3 API semver — workspace version aligned to
   0.5.5, `STABILITY.md` policy, advisory `cargo-semver-checks` CI).
 
-### Documentation
+#### Documentation
 
 - **Skill loop setup guide.** New `docs/user/skill-loop.md` covering
   enable/disable, tuning thresholds, dedup behavior, privacy
   contract, and a troubleshooting table. Distinct from the design
   doc (`docs/architecture/e2-skill-loop.md`) which covers internals.
 
-## [Unreleased — P1.1 M1] — Diff review loop (single file)
+### P1.1 M1 — Diff review loop (single file)
 
-### Features
+#### Features
 
 - **Per-hunk accept/reject/undecided controls.** `DiffViewer` renders a
   header pill above each hunk with the current decision (Undecided /
@@ -491,7 +590,7 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   have required a schema change. Toasts success/failure via `sonner`
   and closes the modal on success.
 
-### Added
+#### Added
 
 - `ui/src/lib/diff-merge.ts::mergeFile` — pure function that walks
   hunks and emits a merged file string per the decisions Map. Uses
@@ -504,7 +603,7 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   wires bulk controls + Apply footer, toasts results via `sonner`.
 - 15 i18n keys (`diff.dialog.apply*`, `diff.review.*`) in en + zh-CN.
 
-### Tests
+#### Tests
 
 - `ui/src/__tests__/diff-merge.test.ts` — 18 unit tests covering
   identical content, replacement, pure insertion/deletion anchoring,
@@ -518,9 +617,11 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   new_content, all-reject stays disabled, save failure toasts + keeps
   modal open, Cancel closes without saving).
 
-## [Unreleased — P0.2] — Per-session worktree
+## v0.3.6 (2026-06-22) — S2 P0/P1/P2 + supply-chain hardening
 
-### Features
+### P0.2 — Per-session worktree
+
+#### Features
 
 - **New session → worktree isolation.** A secondary "New in worktree" button
   in the sidebar creates a new session and immediately provisions a git
@@ -529,7 +630,7 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   agent actions in that session are isolated to its own checkout. Mirrors
   Codex Desktop's flagship per-session isolation feature.
 
-### Added
+#### Added
 
 - `src/commands_sessions.rs::create_session_worktree` — new Tauri command
   wrapping the existing `shannon_core::scheduled_worktree::create_for_task`
@@ -541,9 +642,9 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   the primary "New chat" button.
 - `sidebar.worktree.new*` i18n keys (en + zh-CN).
 
-## [Unreleased — P0.3] — Auto-updater config
+### P0.3 — Auto-updater config
 
-### Features
+#### Features
 
 - **Tauri auto-updater configured.** `plugins.updater` in `tauri.conf.json`
   now has an endpoint (`https://gitea.diff-lab.com/.../latest/latest.json`)
@@ -552,16 +653,16 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   placeholder — shipping with the placeholder would let the updater accept
   any signature.
 
-### Docs
+#### Docs
 
 - **`docs/updater-setup.md`** walks through the 5-step activation
   (keypair generation, CI secret configuration, pubkey replacement,
   flag flip, `latest.json` publishing). Without this, every Shannon
   Desktop release required users to manually download + reinstall.
 
-## [Unreleased — P0 iterations] — C1+C2+C3
+### P0 iterations — C1+C2+C3
 
-### Features
+#### Features
 
 - **Sidebar sessions: drag-and-drop reorder + search (C1+C2).** Sessions
   section in the sidebar now supports drag-to-reorder (persisted to
@@ -577,9 +678,9 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   orphan worktrees can be cleaned up via `prune_task_worktrees`.
   (`s2/p0-2-worktree-session`)
 
-## [Unreleased — supply-chain-hardening]
+### supply-chain-hardening
 
-### Security
+#### Security
 
 - **Rustup install hardened.** `release.yml::Install Rust` step in the
   build job no longer pipes `sh.rustup.rs` directly to `sh`. Instead it
@@ -594,14 +695,14 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   and how the hardening measures mitigate supply chain attacks. Includes
   incident response playbook.
 
-### CI/CD
+#### CI/CD
 
 - **`workflow_dispatch` branch filter.** Manual workflow triggers
   restricted to `branches: [main, dev]` — protected branches only.
 
-## [Unreleased] — S2 P1.1 commands.rs split + follow-ups
+### S2 P1.1 commands.rs split + follow-ups
 
-### CI/CD (release pipeline — v0.3.6 betas)
+#### CI/CD (release pipeline — v0.3.6 betas)
 
 - **AppImage bundling fixed in rootless DinD (beta7).** `APPIMAGE_EXTRACT_AND_RUN=1`
   env var tells `linuxdeploy` + plugins to extract their own AppImage to a
@@ -624,11 +725,11 @@ findings and the §A–§C cross-cutting items from the senior PM audit
   - Mirrors scoped to `runner.os != 'Windows'` (Windows runner not yet
     verified for mirror connectivity).
 
-## [Unreleased — superseded by v0.3.6 betas] — S2 P1.1 commands.rs split + follow-ups
+### superseded by v0.3.6 betas — S2 P1.1 commands.rs split + follow-ups
 
 Multiple extraction PRs to shrink `commands.rs` (~140KB → target ~40KB), plus UI cleanup and CI/docs improvements. All based on `dev` @ `87e854b`.
 
-### Refactors (commands.rs split — S2 P1.1)
+#### Refactors (commands.rs split — S2 P1.1)
 
 - **Extracted `commands_chat.rs`** (PR #9) — `get_conversation`, `list_models`, `get_status`, `cancel_query`, `list_tools`.
 - **Extracted `commands_sessions.rs`** (PR #10) — `new_session`, `list_sessions`, `search_sessions`, `load_session`, `export_session`, `switch_session`, `set_session_working_dir`, `delete_session`, `rename_session`, `duplicate_session`, `branch_session`.
@@ -637,7 +738,7 @@ Multiple extraction PRs to shrink `commands.rs` (~140KB → target ~40KB), plus 
 - **Extracted `commands_billing.rs`** (PR #14) — `get_billing_plan`, `get_cost_history`, `get_billing_history`.
 - **Extracted `commands_permissions.rs` + `commands_files.rs`** (PR #18) — `request_permission`, `respond_permission`, `save_text_file`.
 
-### Fixes
+#### Fixes
 
 - Removed stray `.vite/vitest/results.json` artifact and broadened `.gitignore` to cover `.vite` everywhere (was only `/ui/.vite`).
 - Fixed i18n-parity CI workflow to use `https://gitea.com/actions/checkout@v4` mirror (runner can't reach github.com).
@@ -647,7 +748,7 @@ Multiple extraction PRs to shrink `commands.rs` (~140KB → target ~40KB), plus 
 - Added `bundle.icon` array to `tauri.conf.json` — fixes AppImage bundler failure ("couldn't find a square icon").
 - Set `bundle.createUpdaterArtifacts` to `false` — updater plugin has empty pubkey/endpoints, so the signing requirement was failing release builds.
 
-### CI/CD
+#### CI/CD
 
 - **Multi-platform release workflow** (`.gitea/workflows/release.yml`). Matrix builds `.deb`/`.rpm`/`.AppImage` (Linux), `.msi`/`.exe` (Windows), `.dmg` (macOS arm64 + x86_64). GitHub HTTPS traffic routed through `gh-proxy.com` via `git config url.insteadOf`; `shannon-code` sibling cloned at pinned rev `00510a7`. Branch guard rejects non-`main`/non-`v*` tag triggers.
 
