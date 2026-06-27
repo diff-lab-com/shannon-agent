@@ -14,7 +14,6 @@ import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
 import SlackWizard from './notifications/SlackWizard'
 import TelegramWizard from './notifications/TelegramWizard'
-import EmailWizard from './notifications/EmailWizard'
 import OutboundSection from './notifications/OutboundSection'
 
 type ChannelType = 'slack' | 'telegram' | 'email' | null
@@ -184,7 +183,7 @@ function WebhookSection() {
   return (
     <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 space-y-md">
       <div>
-        <h3 className="font-headline-md text-on-surface">{t('settings.notifications.webhook.title')}</h3>
+        <h4 className="font-headline-md text-on-surface">{t('settings.notifications.webhook.title')}</h4>
         <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
       </div>
 
@@ -336,7 +335,15 @@ export default function NotificationsSettings() {
     )
   }
 
-  const channels = [
+  type Channel = {
+    id: 'slack' | 'telegram' | 'email'
+    name: string
+    icon: string
+    configured: boolean
+    active: boolean
+    comingSoon?: boolean
+  }
+  const channels: Channel[] = [
     {
       id: 'slack' as const,
       name: 'Slack',
@@ -357,6 +364,7 @@ export default function NotificationsSettings() {
       icon: 'email',
       configured: false,
       active: false,
+      comingSoon: true,
     },
   ]
 
@@ -377,11 +385,16 @@ export default function NotificationsSettings() {
         </p>
       </div>
 
-      <WebhookSection />
-
-      <div className="mt-xl">
-        <OutboundSection />
-      </div>
+      <section className="mt-xl">
+        <div className="mb-lg">
+          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.outbound.sectionTitle')}</h3>
+          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.outbound.sectionDesc')}</p>
+        </div>
+        <div className="space-y-lg">
+          <WebhookSection />
+          <OutboundSection />
+        </div>
+      </section>
 
       <div className="mt-xl">
         <div className="mb-lg">
@@ -394,8 +407,13 @@ export default function NotificationsSettings() {
             {channels.map((channel) => (
               <button
                 key={channel.id}
-                onClick={() => setSelectedChannel(channel.id)}
-                className="p-md rounded-xl border border-outline-variant/30 bg-surface-container-lowest hover:border-primary/50 transition-colors text-left"
+                onClick={() => { if (!channel.comingSoon) setSelectedChannel(channel.id) }}
+                disabled={!!channel.comingSoon}
+                className={`p-md rounded-xl border bg-surface-container-lowest transition-colors text-left ${
+                  channel.comingSoon
+                    ? 'border-outline-variant/20 opacity-60 cursor-not-allowed'
+                    : 'border-outline-variant/30 hover:border-primary/50'
+                }`}
               >
                 <div className="flex items-center justify-between mb-sm">
                   <div className="flex items-center gap-sm">
@@ -403,6 +421,13 @@ export default function NotificationsSettings() {
                     <span className="font-label-md font-bold text-on-surface">{channel.name}</span>
                   </div>
                   {(() => {
+                    if (channel.comingSoon) {
+                      return (
+                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-surface-container-high text-on-surface-variant font-label-sm" role="status">
+                          {t('settings.notifications.channel.comingSoon')}
+                        </span>
+                      )
+                    }
                     const health = healthFor(channel)
                     if (health === 'connected') {
                       return (
@@ -423,7 +448,11 @@ export default function NotificationsSettings() {
                     return null
                   })()}
                 </div>
-                {channel.configured ? (
+                {channel.comingSoon ? (
+                  <p className="text-on-surface-variant text-sm">
+                    {t('settings.notifications.wizard.email.comingSoon')}
+                  </p>
+                ) : channel.configured ? (
                   <p className="text-on-surface-variant text-sm">
                     {t('settings.notifications.wizard.channel.status.configured')}
                   </p>
@@ -448,15 +477,6 @@ export default function NotificationsSettings() {
               <TelegramWizard
                 config={inboundConfig?.telegram || null}
                 onSave={handleSaveInbound}
-                onCancel={() => setSelectedChannel(null)}
-              />
-            )}
-            {selectedChannel === 'email' && (
-              <EmailWizard
-                onSave={async () => {
-                  // Email not implemented in backend yet
-                  toast.info(t('settings.notifications.wizard.email.comingSoon'))
-                }}
                 onCancel={() => setSelectedChannel(null)}
               />
             )}

@@ -110,11 +110,13 @@ describe('NotificationsSettings - Wizard Layout', () => {
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Create Telegram Bot' })).toBeInTheDocument())
   })
 
-  it('opens Email wizard when Email card is clicked', async () => {
+  it('marks Email channel as coming soon and does not open a wizard', async () => {
     render(wrap(<NotificationsSettings />))
     await waitFor(() => expect(screen.getByText('Email')).toBeInTheDocument())
+    expect(screen.getByText('Coming soon')).toBeInTheDocument()
+    // Clicking the disabled card must not launch the no-op IMAP wizard.
     fireEvent.click(screen.getByText('Email'))
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Email (IMAP)' })).toBeInTheDocument())
+    expect(screen.queryByRole('heading', { name: 'Email (IMAP)' })).not.toBeInTheDocument()
   })
 })
 
@@ -258,20 +260,19 @@ describe('NotificationsSettings - Telegram Wizard', () => {
   })
 })
 
-describe('NotificationsSettings - Email Wizard', () => {
+describe('NotificationsSettings - Email channel (coming soon)', () => {
   beforeEach(() => {
     getWebhookConfig.mockResolvedValue(null)
     getInboundConfig.mockResolvedValue({})
   })
 
-  it('renders Email wizard with IMAP fields', async () => {
+  it('shows a Coming soon badge and never opens the IMAP wizard', async () => {
     render(wrap(<NotificationsSettings />))
     await waitFor(() => expect(screen.getByText('Email')).toBeInTheDocument())
+    expect(screen.getByText('Coming soon')).toBeInTheDocument()
+    expect(screen.getByText('Email inbound coming in Phase 2')).toBeInTheDocument()
     fireEvent.click(screen.getByText('Email'))
-
-    await waitFor(() => expect(screen.getByRole('heading', { name: 'Email (IMAP)' })).toBeInTheDocument())
-    expect(screen.getByPlaceholderText('imap.gmail.com')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('993')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('user@example.com')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Email (IMAP)' })).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('imap.gmail.com')).not.toBeInTheDocument()
   })
 })
