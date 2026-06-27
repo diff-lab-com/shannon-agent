@@ -45,8 +45,14 @@ describe('LspQuickFixPanel', () => {
     render(<LspQuickFixPanel diagnostic={diag} />)
     await waitFor(() => expect(lspCodeActions).toHaveBeenCalled())
     expect(screen.getByText(/lib\.rs/)).toBeInTheDocument()
-    expect(screen.getByText(/unused variable: `x`/)).toBeInTheDocument()
+    expect(screen.getByText(/Unused variable: `x`/)).toBeInTheDocument()
     expect(screen.getByText(/:13:5/)).toBeInTheDocument()
+  })
+
+  it('capitalises a lowercase-starting diagnostic message (sentence case)', async () => {
+    render(<LspQuickFixPanel diagnostic={{ ...diag, message: 'expected semicolon' }} />)
+    await waitFor(() => expect(lspCodeActions).toHaveBeenCalled())
+    expect(screen.getByText(/Expected semicolon/)).toBeInTheDocument()
   })
 
   it('renders an action button per returned action', async () => {

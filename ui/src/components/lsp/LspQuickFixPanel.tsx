@@ -10,6 +10,13 @@ import { useIntl } from 'react-intl'
 import * as api from '@/lib/tauri-api'
 import type { CodeActionDto } from '@/lib/tauri-api'
 
+// Capitalise the first character of an LSP diagnostic message so the panel
+// reads as a sentence (servers often report lowercase, e.g. "expected ';'").
+function sentenceCase(s: string): string {
+  if (!s) return s
+  return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
 export interface LspQuickFixDiagnostic {
   file_path: string
   start_line: number
@@ -142,7 +149,7 @@ export default function LspQuickFixPanel({
 
       <p className="font-label-sm text-[11px] text-on-surface-variant line-clamp-2">
         <code className="font-mono bg-surface-container-low px-1 rounded">{diagnostic.file_path.split('/').pop()}</code>
-        :{diagnostic.start_line + 1}:{diagnostic.start_character + 1} — {diagnostic.message}
+        :{diagnostic.start_line + 1}:{diagnostic.start_character + 1} — {sentenceCase(diagnostic.message)}
       </p>
 
       {error ? (

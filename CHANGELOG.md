@@ -2,6 +2,36 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## [Unreleased — per-page feature gaps] — Profiles conflict detection, Mission Control board filter, Editor diagnostic format
+
+Branch `s2/perpage-features`. Closes three feature-sized gaps surfaced by the
+§P1 per-page PM-audit re-verification (`docs/product-review/pm-audit-followups.md`)
+that were genuinely missing (the rest were already shipped or stale). Two
+other audit items — Routines run-now/history and pinned-message persistence —
+are backend-dependent and remain deferred.
+
+### UI
+
+- **Profiles — within-profile conflict detection + create-form validation.**
+  A profile whose Deny list overlaps its Auto-approve or Confirm list now
+  shows a warning banner naming the conflicting tools (`ruleConflicts()`
+  helper). The create form gains duplicate-name detection and rule-conflict
+  detection: both block save and surface a warning (inline under the name
+  field and in the footer). New `profiles.conflict.ruleConflict` and
+  `profiles.conflict.duplicateName` i18n keys (en/zh-CN). Six new Profiles
+  tests.
+
+- **Mission Control — board column filter.** The status chips in the header
+  are now buttons: clicking one isolates that column on the board
+  (jump-links there first if needed), clicking it again restores all
+  columns. Built on KanbanBoard's existing `columns` prop — no new board
+  state. New `missionControl.filter.focus` / `.clear` i18n keys (en/zh-CN).
+  One new Mission Control test.
+
+- **Editor — LSP diagnostic sentence format.** Quick-fix panel diagnostic
+  messages now render in sentence case (first letter capitalized) for
+  readability. One new LspQuickFixPanel test.
+
 ## [Unreleased — P1 design-system batch] — label-xs token + Banner primitive
 
 Branch `s2/design-system-p1`. Closes the two genuine gaps in the P1 design

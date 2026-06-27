@@ -49,6 +49,13 @@ function parseList(s: string): string[] {
     .filter(Boolean)
 }
 
+// Detect tools that are simultaneously denied and allowed (auto-approve or
+// confirm) within a single profile — a contradictory misconfiguration.
+function ruleConflicts(auto: string[], confirm: string[], deny: string[]): string[] {
+  const allowed = new Set([...auto, ...confirm].map(s => s.toLowerCase()))
+  return [...new Set(deny.map(s => s.toLowerCase()))].filter(t => allowed.has(t))
+}
+
 export default function Profiles() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, any>) => intl.formatMessage({ id }, values)
@@ -141,7 +148,7 @@ export default function Profiles() {
       </header>
 
       {showCreate && (
-        <CreateForm form={form} setForm={setForm} onSave={handleSave} saving={saving} onCancel={() => setShowCreate(false)} />
+        <CreateForm form={form} setForm={setForm} onSave={handleSave} saving={saving} onCancel={() => setShowCreate(false)} existingNames={[...custom.map(p => p.name), ...builtin.map(p => p.id)]} />
       )}
 
       {loading ? (
@@ -222,6 +229,7 @@ export default function Profiles() {
 function ProfileRow({ profile, onDelete }: { profile: CustomProfileInfo; onDelete: (name: string) => void }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, any>) => intl.formatMessage({ id }, values)
+  const conflicts = ruleConflicts(profile.auto_approve, profile.confirm, profile.deny)
   return (
     <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-md">
       <div className="flex items-start justify-between gap-md mb-xs">
@@ -244,6 +252,12 @@ function ProfileRow({ profile, onDelete }: { profile: CustomProfileInfo; onDelet
         <RuleChip labelKey="profiles.rule.confirm" tools={profile.confirm} tone="confirm" />
         <RuleChip labelKey="profiles.rule.deny" tools={profile.deny} tone="deny" />
       </div>
+      {conflicts.length > 0 && (
+        <p className="mt-sm text-[11px] text-error flex items-center gap-xs">
+          <span className="material-symbols-outlined text-[14px]">warning</span>
+          {t('profiles.conflict.ruleConflict', { tools: conflicts.join(', ') })}
+        </p>
+      )}
     </div>
   )
 }
@@ -268,15 +282,20 @@ function RuleChip({ labelKey, tools, tone }: { labelKey: string; tools: string[]
   )
 }
 
-function CreateForm({ form, setForm, onSave, onCancel, saving }: {
+function CreateForm({ form, setForm, onSave, onCancel, saving, existingNames }: {
   form: FormState
   setForm: (f: FormState) => void
   onSave: () => void
   onCancel: () => void
   saving: boolean
+  existingNames: string[]
 }) {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, any>) => intl.formatMessage({ id }, values)
+  const trimmedName = form.name.trim()
+  const dupName = trimmedName.length > 0 && existingNames.some(n => n.toLowerCase() === trimmedName.toLowerCase())
+  const conflicts = ruleConflicts(parseList(form.auto_approve), parseList(form.confirm), parseList(form.deny))
+  const blocked = dupName || conflicts.length > 0
   return (
     <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg space-y-md">
       <h2 className="font-headline-md text-on-surface">{t('profiles.new.title')}</h2>
@@ -287,8 +306,15 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
             value={form.name}
             onChange={e => setForm({ ...form, name: e.target.value })}
             placeholder={t('profiles.form.name.placeholder')}
+            aria-invalid={dupName}
             className="w-full px-md py-sm bg-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none font-body-sm font-mono"
           />
+          {dupName && (
+            <span className="font-label-sm text-error flex items-center gap-xs mt-xs">
+              <span className="material-symbols-outlined text-[14px]">warning</span>
+              {t('profiles.conflict.duplicateName')}
+            </span>
+          )}
         </Field>
 
         <Field label={t('profiles.form.description')}>
@@ -328,6 +354,12 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
         </Field>
       </div>
 
+      {blocked && (
+        <div className="text-error font-label-sm flex items-center gap-xs pt-xs">
+          <span className="material-symbols-outlined text-[16px]">warning</span>
+          {conflicts.length > 0 ? t('profiles.conflict.ruleConflict', { tools: conflicts.join(', ') }) : t('profiles.conflict.duplicateName')}
+        </div>
+      )}
       <div className="flex justify-end gap-sm pt-sm">
         <button
           onClick={onCancel}
@@ -338,7 +370,7 @@ function CreateForm({ form, setForm, onSave, onCancel, saving }: {
         </button>
         <button
           onClick={onSave}
-          disabled={saving || !form.name.trim()}
+          disabled={saving || !form.name.trim() || blocked}
           className="px-lg py-sm bg-primary text-on-primary rounded-lg font-label-md cursor-pointer hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-sm"
         >
           {saving && <span className="material-symbols-outlined icon-sm animate-spin">progress_activity</span>}
