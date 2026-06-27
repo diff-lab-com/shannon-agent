@@ -23,10 +23,10 @@ describe('ModelsSettings', () => {
     expect(screen.getByText('Model Configuration')).toBeInTheDocument()
   })
 
-  it('renders API key visibility toggle', () => {
+  it('renders the managed providers section with an add button', () => {
     render(wrap(<ModelsSettings />))
-    // The visibility toggle button should exist with visibility icon
-    expect(screen.getByText(/API Connection/)).toBeInTheDocument()
+    expect(screen.getByText('Providers')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Add provider/ })).toBeInTheDocument()
   })
 
   it('renders performance strategy selector', () => {

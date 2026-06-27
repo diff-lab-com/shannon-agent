@@ -2,6 +2,107 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## v0.3.8 (2026-06-28) — Models P2 (managed providers)
+
+### Models P2 — managed providers store + generic OpenAI-compatible test
+
+Branch `s2/models-p2-rust`. First half of the Models P2 split (Rust backend;
+the UI rewrite follows in a second, UI-only PR). Adds a managed multi-provider
+roster so users keep several connections configured and switch between them,
+plus a generic OpenAI-compatible connection test that closes the gap where GLM
+/ MiniMax / Kimi previously fell through to "unknown provider".
+
+#### Rust
+- **New `~/.shannon/desktop/providers.json` store** (`config.rs`):
+  `ProviderConnection` (id / label / provider_kind / api_key / base_url /
+  model / created_at) wrapped in `ProvidersFile` (active_provider_id +
+  providers list). `load_providers` / `save_providers` mirror the existing
+  `mcp-servers.json` pattern, including owner-restricted permissions on write.
+- **Four managed-provider commands** (`commands_config.rs`, registered in
+  `main.rs`):
+  - `list_providers` — masks API keys; lazily migrates the legacy singular
+    config into one seeded entry on first call (so existing users see their
+    current connection, not an empty list).
+  - `save_provider` — insert or upsert by id; preserves the stored key when the
+    frontend sends `"***"` or empty (editing the label never blanks the secret).
+  - `delete_provider` — clears `active_provider_id` if it pointed at the
+    removed entry.
+  - `set_active_provider` — mirrors the connection into `DesktopConfig`'s
+    singular fields, rebuilds the engine client config, persists both stores,
+    and emits `CONFIG_UPDATED` (tray + open windows refresh their label).
+- **`test_provider_connection` gains an optional `base_url`** and a new
+  `openai-compatible` kind (`GET {base_url}/models` with `Authorization:
+  Bearer`), enabling GLM/Zhipu, Moonshot/Kimi, MiniMax, Together, Groq, etc.
+  Built-in kinds (anthropic/openai/deepseek) honor an optional `base_url`
+  override; anthropic keeps `x-api-key`; ollama keeps its authless tags probe.
+  The new arg is optional, so existing two-arg callers stay compatible until
+  the UI PR passes `base_url`. URL/auth resolution is extracted into a pure
+  `provider_probe_url` helper (unit-tested, no network).
+- **No `DesktopConfig` schema change**: the active provider still drives the
+  existing singular fields, so `config.json` and the engine-facing contract are
+  unchanged — this PR is additive.
+- Tests: +13 unit tests (probe-URL/auth matrix, slugify + de-dup id, key
+  masking, `ProvidersFile` round-trip, optional-field deserialization).
+
+#### Rust (security hardening)
+- **`validate_base_url` guards every user-supplied `base_url`** (the test
+  probe, the ollama host, and `save_provider` persistence): parses with the
+  `url` crate, requires an `http`/`https` scheme, rejects embedded credentials,
+  missing hosts, and unparseable input, and drops fragments. Private/loopback
+  hosts are **intentionally allowed** — `http://localhost:11434` (Ollama) and
+  self-hosted models on private networks are first-class use cases, and the URL
+  is supplied by the local user (no untrusted/remote input vector reaches this
+  path). +6 unit tests covering rejected schemes / credentials / malformed
+  input and the http+localhost allow case.
+
+### Models P2 — managed-providers UI (provider roster + modal)
+
+Branch `s2/models-p2-ui`. Second half of the Models P2 split — the UI rewrite
+that surfaces the managed-providers store from #70. Replaces the old
+single-provider quick-setup presets and standalone API-key box with a roster
+users add / edit / test / activate / delete through, while keeping the tested
+Active Model, Performance Strategy, and Global Parameters sections intact.
+
+#### UI
+- **`ModelsSettings` rewritten** (`components/settings/ModelsSettings.tsx`):
+  - New `ProvidersSection` lists configured connections as rows — key-set dot,
+    active badge, and Test / Activate / Edit / Delete actions. Loads via
+    `listProviders` on mount and refreshes from each command's returned
+    `ProvidersFile` after a mutation.
+  - New `ProviderModal` (built on the shared `Modal` primitive) collects label
+    / kind / base_url / api_key / model, with one-tap QUICK_FILL chips for
+    anthropic, openai, deepseek, glm, kimi, minimax, ollama, and custom
+    (OpenAI-compatible). Saving re-submits the masked `"***"` so editing a
+    label never blanks the stored secret; the active provider drives the
+    existing Active Model grid unchanged.
+  - Test results surface through a `toastTestResult` helper; activation /
+    deletion toasts confirm the outcome.
+  - Removed `QuickSetupPresets` and the standalone API-key input — superseded
+    by the roster. Performance Strategy, the Active Model provider tabs + grid,
+    and the Global Parameters sliders are preserved verbatim.
+- **Typed bridge** (`lib/tauri-api.ts` + `types/index.ts`): `ProviderKind`
+  union, `ProviderConnection`, `ProvidersFile`, `ProviderInput`; wrappers
+  `listProviders` / `saveProvider` / `deleteProvider` / `setActiveProvider`;
+  `testProviderConnection` now passes the optional `baseUrl`.
+- **Test mock defaults** (`__tests__/setup.ts`): the four new providers
+  commands resolve to an empty `ProvidersFile`; existing suites are unaffected.
+- **i18n** (`en` + `zh-CN`, 43 keys each, parity-checked):
+  `settings.models.providers.*` covers section chrome, modal fields and kind
+  labels, QUICK_FILL, and every toast (added / saved / activated / tested /
+  deleted and their failure variants).
+- Tests: the `ModelsSettings` suite is updated to assert the new providers
+  section and Add-provider button; full vitest suite green (1254 tests).
+
+### Demo mode — managed-providers support
+
+Branch `s2/demo-providers-mock`. The demo build (`VITE_MOCK_MODE=1`) threw
+unhandled-Tauri-command errors on Settings → Models because the mock layer
+predated Models P2. Adds the 5 providers handlers + a seeded `MOCK_PROVIDERS`
+roster (active Anthropic + a GLM openai-compatible entry) to
+`lib/mock/handlers.ts`, backed by mutable state so add / edit / test /
+activate / delete behave live. tsc clean; vitest unaffected (1254 tests — the
+mock layer loads only under `VITE_MOCK_MODE=1`).
+
 ## v0.3.7 (2026-06-27) — UI design overhaul + Week D (Plan Mode, Diff Preview) + PM-audit follow-ups + Settings P1 (Models/Notifications) + i18n completion
 
 ### i18n completion — MermaidRenderer deep audit (last hardcoded strings)

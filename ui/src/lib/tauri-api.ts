@@ -6,6 +6,9 @@ import type {
   ToolInfo,
   ConfigUpdate,
   ProviderSwitchRequest,
+  ProviderConnection,
+  ProvidersFile,
+  ProviderInput,
   DesktopConfig,
   SendMessageResponse,
   HunkAction,
@@ -212,9 +215,36 @@ export type TestConnectionResult =
 export async function testProviderConnection(
   provider: string,
   apiKey: string,
+  baseUrl?: string,
 ): Promise<TestConnectionResult> {
-  return invoke('test_provider_connection', { provider, apiKey })
+  return invoke('test_provider_connection', { provider, apiKey, baseUrl })
 }
+
+// --- Managed providers (Models P2) ---
+
+/// List all managed providers (API keys masked). Lazily migrates the legacy
+/// singular config into a seeded entry on first call.
+export async function listProviders(): Promise<ProvidersFile> {
+  return invoke('list_providers')
+}
+
+/// Insert or update a managed provider. Returns the updated (masked) file.
+export async function saveProvider(input: ProviderInput): Promise<ProvidersFile> {
+  return invoke('save_provider', { input })
+}
+
+/// Delete a managed provider by id. Returns the updated (masked) file.
+export async function deleteProvider(id: string): Promise<ProvidersFile> {
+  return invoke('delete_provider', { id })
+}
+
+/// Activate a managed provider — mirrors it into the active config + rebuilds
+/// the engine client config. Emits `CONFIG_UPDATED`.
+export async function setActiveProvider(id: string): Promise<void> {
+  await invoke('set_active_provider', { id })
+}
+
+export type { ProviderConnection, ProvidersFile, ProviderInput }
 
 // --- Models & Status ---
 

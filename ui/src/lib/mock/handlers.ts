@@ -6,7 +6,8 @@ import { MOCK_SCHEDULED_ROUTINES, MOCK_TRIGGERED_ROUTINES, MOCK_HOOK_EVENTS, MOC
 import { MOCK_TRIAGE_ITEMS, MOCK_TRIAGE_STATS, MOCK_OPC_METRICS, MOCK_BILLING_PLAN,
   MOCK_COST_HISTORY, MOCK_BILLING_HISTORY, MOCK_PERF_TRACES, MOCK_DIAGNOSTICS,
   MOCK_CODE_ACTIONS, MOCK_GOALS } from './data/analytics'
-import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS } from './data/config'
+import { MOCK_CONFIG, MOCK_MODELS, MOCK_STATUS, MOCK_TOOLS, MOCK_PROVIDERS } from './data/config'
+import type { ProviderInput } from '@/types'
 import { MOCK_MEMORIES, MOCK_MEMORY_PROJECTS, MOCK_MEMORY_STATS, MOCK_FEATURED_VENDORS } from './data/memory'
 import {
   MOCK_SKILL_CATALOG,
@@ -24,6 +25,12 @@ const state = {
   tasks: clone(MOCK_TASKS),
   scheduled: clone(MOCK_SCHEDULED_ROUTINES),
   background: clone(MOCK_BACKGROUND_TASKS),
+  providers: clone(MOCK_PROVIDERS),
+}
+
+// Snapshot the managed-providers roster as a cloned ProvidersFile.
+function providersFile() {
+  return clone(state.providers)
 }
 
 function findTask(id: string) {
@@ -48,6 +55,56 @@ export const handlers: Record<string, MockHandler> = {
   async get_config() { await delay(); return clone(MOCK_CONFIG) },
   async configure() { await delay() },
   async switch_provider() { await delay(200) },
+
+  // --- Managed providers (Models P2) ---
+  async test_provider_connection() {
+    // Demo can't reach a real backend, so every probe reports success —
+    // enough to exercise the success toast and the Test button state.
+    await delay(400)
+    return { kind: 'success' }
+  },
+  async list_providers() { await delay(); return providersFile() },
+  async save_provider(args: { input: ProviderInput }) {
+    await delay(120)
+    const input = args.input
+    const existing = input.id
+      ? state.providers.providers.find(p => p.id === input.id)
+      : undefined
+    if (existing) {
+      // Edit: keep the stored key when the frontend re-submits the mask.
+      const keepKey = !input.api_key || input.api_key === '***'
+      Object.assign(existing, {
+        label: input.label,
+        provider_kind: input.provider_kind,
+        api_key: keepKey ? existing.api_key : input.api_key,
+        base_url: input.base_url || null,
+        model: input.model || null,
+      })
+    } else {
+      state.providers.providers.push({
+        id: `prov-${Date.now()}`,
+        label: input.label,
+        provider_kind: input.provider_kind,
+        api_key: input.api_key || null,
+        base_url: input.base_url || null,
+        model: input.model || null,
+        created_at: new Date().toISOString(),
+      })
+    }
+    return providersFile()
+  },
+  async delete_provider(args: { id: string }) {
+    await delay(100)
+    state.providers.providers = state.providers.providers.filter(p => p.id !== args.id)
+    if (state.providers.active_provider_id === args.id) {
+      state.providers.active_provider_id = null
+    }
+    return providersFile()
+  },
+  async set_active_provider(args: { id: string }) {
+    await delay(150)
+    state.providers.active_provider_id = args.id
+  },
 
   // --- Models & Status ---
   async list_models() { await delay(); return clone(MOCK_MODELS) },

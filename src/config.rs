@@ -65,6 +65,42 @@ pub struct McpServerConfig {
     pub enabled: bool,
 }
 
+/// A managed LLM provider connection (Models P2). Users may configure several
+/// providers; the **active** one is mirrored into `DesktopConfig`'s singular
+/// fields, which is what the engine actually reads. The full roster lives in
+/// `~/.shannon/desktop/providers.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderConnection {
+    /// Stable slug id (derived from the label, de-duplicated).
+    pub id: String,
+    /// Human-readable label shown in the list (e.g. "My GLM key").
+    pub label: String,
+    /// Provider kind: `anthropic` | `openai` | `deepseek` | `ollama` |
+    /// `openai-compatible`. Determines the auth scheme + default base_url.
+    pub provider_kind: String,
+    /// API key (stored locally; masked to `"***"` in list responses).
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Base URL override. Required for `openai-compatible`; optional for the
+    /// built-in kinds (falls back to the canonical URL).
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Default model id for this connection.
+    #[serde(default)]
+    pub model: Option<String>,
+    pub created_at: String,
+}
+
+/// Container persisted to `~/.shannon/desktop/providers.json`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProvidersFile {
+    /// Id of the provider whose fields are mirrored into `DesktopConfig`.
+    #[serde(default)]
+    pub active_provider_id: Option<String>,
+    #[serde(default)]
+    pub providers: Vec<ProviderConnection>,
+}
+
 fn default_skill_loop_min_duration_secs() -> u64 {
     30
 }
@@ -159,6 +195,33 @@ pub fn save_mcp_servers(servers: &[McpServerConfig]) -> Result<(), String> {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let content = serde_json::to_string_pretty(servers).map_err(|e| e.to_string())?;
+    std::fs::write(&path, content).map_err(|e| e.to_string())?;
+    crate::file_permissions::restrict_to_owner(&path);
+    Ok(())
+}
+
+/// Resolve the managed-providers file path: `~/.shannon/desktop/providers.json`
+pub fn providers_path() -> PathBuf {
+    let home = dirs_home().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".shannon").join("desktop").join("providers.json")
+}
+
+/// Load managed providers from disk, returning an empty file if not found.
+pub fn load_providers() -> ProvidersFile {
+    let path = providers_path();
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+        Err(_) => ProvidersFile::default(),
+    }
+}
+
+/// Save managed providers to disk.
+pub fn save_providers(file: &ProvidersFile) -> Result<(), String> {
+    let path = providers_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let content = serde_json::to_string_pretty(file).map_err(|e| e.to_string())?;
     std::fs::write(&path, content).map_err(|e| e.to_string())?;
     crate::file_permissions::restrict_to_owner(&path);
     Ok(())
@@ -291,5 +354,62 @@ mod tests {
         // Test deserialization
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.approval_mode, Some("full_auto".into()));
+    }
+
+    #[test]
+    fn providers_file_round_trip() {
+        let file = ProvidersFile {
+            active_provider_id: Some("glm".into()),
+            providers: vec![ProviderConnection {
+                id: "glm".into(),
+                label: "My GLM".into(),
+                provider_kind: "openai-compatible".into(),
+                api_key: Some("sk-x".into()),
+                base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
+                model: Some("glm-4.6".into()),
+                created_at: "2026-06-27T00:00:00Z".into(),
+            }],
+        };
+        let json = serde_json::to_string(&file).unwrap();
+        let back: ProvidersFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.active_provider_id, Some("glm".into()));
+        assert_eq!(back.providers.len(), 1);
+        assert_eq!(back.providers[0].provider_kind, "openai-compatible");
+        assert_eq!(
+            back.providers[0].base_url.as_deref(),
+            Some("https://open.bigmodel.cn/api/paas/v4")
+        );
+    }
+
+    #[test]
+    fn providers_file_defaults_empty() {
+        let file = ProvidersFile::default();
+        assert!(file.active_provider_id.is_none());
+        assert!(file.providers.is_empty());
+    }
+
+    #[test]
+    fn provider_connection_without_optional_fields_deserializes() {
+        // api_key/base_url/model are all #[serde(default)]-Optional — a legacy
+        // or hand-written entry omitting them must still parse.
+        let json = r#"{
+            "id":"anthropic",
+            "label":"Anthropic",
+            "provider_kind":"anthropic",
+            "created_at":"2026-06-27T00:00:00Z"
+        }"#;
+        let conn: ProviderConnection = serde_json::from_str(json).unwrap();
+        assert_eq!(conn.id, "anthropic");
+        assert!(conn.api_key.is_none());
+        assert!(conn.base_url.is_none());
+        assert!(conn.model.is_none());
+    }
+
+    #[test]
+    fn test_providers_path_is_under_shannon_dir() {
+        let path = providers_path();
+        assert!(path.to_string_lossy().contains(".shannon"));
+        assert!(path.to_string_lossy().contains("desktop"));
+        assert!(path.to_string_lossy().contains("providers.json"));
     }
 }
