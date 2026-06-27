@@ -73,10 +73,11 @@ fn extract_tool_signatures(msgs: &[serde_json::Value]) -> Vec<String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown");
             let empty = serde_json::Map::new();
-            let input_obj: &serde_json::Map<String, serde_json::Value> = match block.get("input").or_else(|| block.get("args")) {
-                Some(serde_json::Value::Object(m)) => m,
-                _ => &empty,
-            };
+            let input_obj: &serde_json::Map<String, serde_json::Value> =
+                match block.get("input").or_else(|| block.get("args")) {
+                    Some(serde_json::Value::Object(m)) => m,
+                    _ => &empty,
+                };
             out.push(signature_of(name, input_obj));
         }
     }
@@ -153,7 +154,10 @@ pub fn run_detection(
             None => continue,
         };
         let session_id = if session.session_id.is_empty() {
-            path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string()
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string()
         } else {
             session.session_id
         };
@@ -201,18 +205,32 @@ pub fn run_detection(
         if agg.sessions.len() < min_sessions || agg.total < min_occurrences {
             continue;
         }
-        let id = format!("sig-{:x}", xxhash_simple(&format!("{}|{:?}", agg.sample_tool, agg.sample_session_ids)));
+        let id = format!(
+            "sig-{:x}",
+            xxhash_simple(&format!("{}|{:?}", agg.sample_tool, agg.sample_session_ids))
+        );
         let candidate = SkillCandidate {
             id,
             detected_at: now.clone(),
             occurrence_count: agg.total,
             example_session_ids: agg.sample_session_ids.iter().take(5).cloned().collect(),
             proposed_name: agg.sample_tool.clone(),
-            proposed_trigger: format!("Detected {} call recurring across {} session(s)", agg.sample_tool, agg.sessions.len()),
-            procedure: vec![format!("Invoke {} with the same argument shape", agg.sample_tool)],
+            proposed_trigger: format!(
+                "Detected {} call recurring across {} session(s)",
+                agg.sample_tool,
+                agg.sessions.len()
+            ),
+            procedure: vec![format!(
+                "Invoke {} with the same argument shape",
+                agg.sample_tool
+            )],
             source_tool_calls: vec![SourceToolCall {
                 tool: agg.sample_tool.clone(),
-                args_summary: agg.sample_args.iter().map(|(k, _)| (k.clone(), serde_json::Value::Null)).collect(),
+                args_summary: agg
+                    .sample_args
+                    .iter()
+                    .map(|(k, _)| (k.clone(), serde_json::Value::Null))
+                    .collect(),
             }],
             refined: false,
         };
@@ -283,7 +301,11 @@ mod tests {
         // touch mtime to now so it's "recent"
         let file = std::fs::File::open(&path).unwrap();
         let now = std::time::SystemTime::now();
-        let _ = file.set_times(std::fs::FileTimes::new().set_modified(now).set_accessed(now));
+        let _ = file.set_times(
+            std::fs::FileTimes::new()
+                .set_modified(now)
+                .set_accessed(now),
+        );
     }
 
     #[test]
@@ -323,14 +345,19 @@ mod tests {
         let fake_home = tempdir().unwrap();
         let prev_home = std::env::var_os("HOME");
         // SAFETY: tests run single-threaded by default within this module; we restore HOME in the finally-style block below.
-        unsafe { std::env::set_var("HOME", fake_home.path()); }
+        unsafe {
+            std::env::set_var("HOME", fake_home.path());
+        }
 
         let result = run_detection(dir.path(), 7, 2, 3);
 
         // SAFETY: same single-threaded context.
         unsafe {
-            if let Some(h) = prev_home { std::env::set_var("HOME", h); }
-            else { std::env::remove_var("HOME"); }
+            if let Some(h) = prev_home {
+                std::env::set_var("HOME", h);
+            } else {
+                std::env::remove_var("HOME");
+            }
         }
 
         let appended = result.expect("detection ran");
@@ -345,14 +372,19 @@ mod tests {
         let fake_home = tempdir().unwrap();
         let prev_home = std::env::var_os("HOME");
         // SAFETY: same single-threaded test context as above.
-        unsafe { std::env::set_var("HOME", fake_home.path()); }
+        unsafe {
+            std::env::set_var("HOME", fake_home.path());
+        }
 
         let result = run_detection(dir.path(), 7, 2, 3);
 
         // SAFETY: same single-threaded context.
         unsafe {
-            if let Some(h) = prev_home { std::env::set_var("HOME", h); }
-            else { std::env::remove_var("HOME"); }
+            if let Some(h) = prev_home {
+                std::env::set_var("HOME", h);
+            } else {
+                std::env::remove_var("HOME");
+            }
         }
 
         let appended = result.expect("detection ran");

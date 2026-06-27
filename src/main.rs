@@ -21,11 +21,11 @@ fn main() {
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_routine_templates;
     use shannon_desktop::commands_sessions;
-    use shannon_desktop::commands_skill_loop;
     use shannon_desktop::commands_skill_candidates;
-    use shannon_desktop::skill_pattern_detection;
+    use shannon_desktop::commands_skill_loop;
     use shannon_desktop::commands_tasks;
     use shannon_desktop::extensions_commands;
+    use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
         menu::{MenuBuilder, MenuItemBuilder},

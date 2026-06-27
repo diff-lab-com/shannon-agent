@@ -11,8 +11,8 @@
 //! `~/.shannon/skills/agent-authored/<slug>.json` and removes the candidate.
 //! Rejecting just removes the candidate.
 
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
@@ -66,14 +66,16 @@ pub struct AgentAuthoredSkillEdits {
 fn candidates_file() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let dir = home.join(".shannon").join("desktop");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
     Ok(dir.join("skill-candidates.jsonl"))
 }
 
 fn agent_authored_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let dir = home.join(".shannon").join("skills").join("agent-authored");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
     Ok(dir)
 }
 
@@ -82,7 +84,8 @@ fn load_candidates() -> Result<Vec<SkillCandidate>, String> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let contents = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let contents =
+        std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
     let mut out = Vec::new();
     for (lineno, line) in contents.lines().enumerate() {
         let trimmed = line.trim();
@@ -171,7 +174,12 @@ pub async fn approve_skill_candidate(
     let description = edits
         .as_ref()
         .and_then(|e| non_empty(&e.description))
-        .unwrap_or_else(|| format!("Auto-detected skill from {} recurring session(s)", candidate.occurrence_count));
+        .unwrap_or_else(|| {
+            format!(
+                "Auto-detected skill from {} recurring session(s)",
+                candidate.occurrence_count
+            )
+        });
 
     let slug = slugify(&name);
     if slug.is_empty() {
@@ -201,10 +209,7 @@ pub async fn approve_skill_candidate(
 }
 
 #[tauri::command]
-pub async fn reject_skill_candidate(
-    app: tauri::AppHandle,
-    id: String,
-) -> Result<(), String> {
+pub async fn reject_skill_candidate(app: tauri::AppHandle, id: String) -> Result<(), String> {
     let mut candidates = load_candidates()?;
     let before = candidates.len();
     candidates.retain(|c| c.id != id);
@@ -212,7 +217,10 @@ pub async fn reject_skill_candidate(
         return Err(format!("Candidate {id} not found"));
     }
     save_candidates(&candidates)?;
-    let _ = app.emit("skill-catalog-changed", serde_json::json!({ "action": "rejected" }));
+    let _ = app.emit(
+        "skill-catalog-changed",
+        serde_json::json!({ "action": "rejected" }),
+    );
     Ok(())
 }
 
@@ -251,12 +259,17 @@ pub async fn refine_skill_candidate(
         content: shannon_engine::api::types::MessageContent::Text(user),
     }];
 
-    let refined = match client.send_message(messages, None, Some(system.into())).await {
+    let refined = match client
+        .send_message(messages, None, Some(system.into()))
+        .await
+    {
         Ok(blocks) => {
             let mut out = String::new();
             for block in blocks {
                 if let shannon_engine::api::types::ContentBlock::Text { text } = block {
-                    if !out.is_empty() { out.push('\n'); }
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
                     out.push_str(&text);
                 }
             }
@@ -274,7 +287,10 @@ pub async fn refine_skill_candidate(
     candidates[idx].refined = true;
     save_candidates(&candidates)?;
 
-    let _ = app.emit("skill-catalog-changed", serde_json::json!({ "slug": id, "action": "refined" }));
+    let _ = app.emit(
+        "skill-catalog-changed",
+        serde_json::json!({ "slug": id, "action": "refined" }),
+    );
     Ok(refined)
 }
 
@@ -326,7 +342,10 @@ mod tests {
     fn slugify_handles_spaces_punctuation_and_case() {
         assert_eq!(slugify("My Cool Skill"), "my-cool-skill");
         assert_eq!(slugify("UPPER-case_Test!"), "upper-case-test");
-        assert_eq!(slugify("    leading and trailing   "), "leading-and-trailing");
+        assert_eq!(
+            slugify("    leading and trailing   "),
+            "leading-and-trailing"
+        );
         assert_eq!(slugify("---only-dashes---"), "only-dashes");
         assert_eq!(slugify(" ironic 😎 mixed "), "ironic-mixed");
     }
@@ -386,7 +405,13 @@ mod tests {
             originating_sessions: vec!["s1".into()],
         };
         let json = serde_json::to_string(&skill).expect("serialize");
-        for field in ["agent-daily-report", "Daily report", "Runs query", "step 1", "originating_sessions"] {
+        for field in [
+            "agent-daily-report",
+            "Daily report",
+            "Runs query",
+            "step 1",
+            "originating_sessions",
+        ] {
             assert!(json.contains(field), "expected {field} in JSON: {json}");
         }
     }
@@ -399,8 +424,18 @@ mod tests {
             return;
         }
         let path = candidates_file().expect("path");
-        let components: Vec<_> = path.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
-        assert!(components.iter().any(|c| c == ".shannon"), "expected .shannon in path: {:?}", components);
-        assert!(path.ends_with("skill-candidates.jsonl"), "expected skill-candidates.jsonl suffix: {}", path.display());
+        let components: Vec<_> = path
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            components.iter().any(|c| c == ".shannon"),
+            "expected .shannon in path: {components:?}"
+        );
+        assert!(
+            path.ends_with("skill-candidates.jsonl"),
+            "expected skill-candidates.jsonl suffix: {}",
+            path.display()
+        );
     }
 }

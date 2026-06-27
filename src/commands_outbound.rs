@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn outbound_dto_serializes_to_toml_table() {
-        let dto = OutboundConfigDto {
+        let _dto = OutboundConfigDto {
             slack: Some(SlackOutboundDto {
                 bot_token: "xoxb-1".into(),
                 channel: "#general".into(),

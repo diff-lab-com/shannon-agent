@@ -295,8 +295,8 @@ mod tests {
     #[test]
     fn test_task_outcome_parsing() {
         assert_eq!(
-            match "Success".into() {
-                o if matches!(o, "Success") => TaskOutcome::Success,
+            match "Success" {
+                "Success" => TaskOutcome::Success,
                 _ => unreachable!(),
             },
             TaskOutcome::Success
