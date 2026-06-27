@@ -6,6 +6,12 @@ import { Input } from '@/components/ui/input'
 import { useApp } from '@/context/AppContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
+import type {
+  ProviderConnection,
+  ProviderInput,
+  ProviderKind,
+  ProvidersFile,
+} from '@/types'
 
 export default function ModelsSettings() {
   const intl = useIntl()
@@ -16,14 +22,27 @@ export default function ModelsSettings() {
     (config?.performance_strategy as 'speed' | 'balanced' | 'high-quality') ?? 'high-quality'
   )
 
+  // Managed providers (Models P2). Loaded once on mount; mutations update
+  // local state from each command's returned (masked) file.
+  const [providersFile, setProvidersFile] = useState<ProvidersFile>({
+    active_provider_id: null,
+    providers: [],
+  })
+  const [loadingProviders, setLoadingProviders] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    api.listProviders()
+      .then((f) => { if (!cancelled) setProvidersFile(f) })
+      .catch((e) => console.warn('listProviders error:', e))
+      .finally(() => { if (!cancelled) setLoadingProviders(false) })
+    return () => { cancelled = true }
+  }, [])
+
   const setStrategy = (s: 'speed' | 'balanced' | 'high-quality') => {
     setStrategyState(s)
     api.configure({ key: 'performance_strategy', value: s }).then(() => toast.success(intl.formatMessage({ id: 'settings.models.strategySet' }, { strategy: s }))).catch((e) => { toastError(t('settings.models.strategyFailed'), e) })
   }
-  const [showKey, setShowKey] = useState(false)
-  const [keyDraft, setKeyDraft] = useState<string | null>(null)
-  const [keySaving, setKeySaving] = useState(false)
-  const [keyTesting, setKeyTesting] = useState(false)
 
   const handleModelSwitch = async (modelId: string) => {
     if (!status) return
@@ -34,59 +53,6 @@ export default function ModelsSettings() {
       toast.success(intl.formatMessage({ id: 'settings.models.switched' }, { model: modelId }))
     } catch (e) { toastError(t('settings.models.switchFailed'), e) }
     setSwitching(null)
-  }
-
-  const handleSaveKey = async () => {
-    const trimmed = (keyDraft ?? '').trim()
-    if (!trimmed) return
-    setKeySaving(true)
-    try {
-      await api.configure({ key: 'api_key', value: trimmed })
-      toast.success(t('settings.models.apiKeySaved'))
-      setKeyDraft(null)
-    } catch (e) {
-      toastError(t('settings.models.apiKeySaveFailed'), e)
-    } finally {
-      setKeySaving(false)
-    }
-  }
-
-  const handleTestConnection = async () => {
-    // The bottom "API Key" box owns the active provider's key: test the key
-    // actually entered (draft), falling back to the stored key. Routes through
-    // testProviderConnection so the result is real, not a silent refreshModels.
-    const provider = config?.provider ?? status?.provider
-    const apiKey = (keyDraft ?? '').trim() || config?.api_key || ''
-    if (!provider || !apiKey) return
-    setKeyTesting(true)
-    try {
-      const result = await api.testProviderConnection(provider, apiKey)
-      switch (result.kind) {
-        case 'success':
-          toast.success(t('settings.models.testResult.success'))
-          await refreshModels()
-          return
-        case 'invalid_key':
-          toast.error(t('settings.models.testResult.invalidKey'))
-          return
-        case 'rate_limited':
-          toast.warning(t('settings.models.testResult.rateLimited'))
-          return
-        case 'provider_error':
-          toast.error(intl.formatMessage({ id: 'settings.models.testResult.providerError' }, { provider, status: result.status }))
-          return
-        case 'network_unreachable':
-          toast.error(intl.formatMessage({ id: 'settings.models.testResult.networkUnreachable' }, { provider }))
-          return
-        case 'unknown':
-          toast.error(intl.formatMessage({ id: 'settings.models.testResult.unknown' }, { message: result.message }))
-          return
-      }
-    } catch (e) {
-      toastError(t('settings.models.testResult.failed'), e)
-    } finally {
-      setKeyTesting(false)
-    }
   }
 
   const currentModel = status?.model
@@ -149,13 +115,12 @@ export default function ModelsSettings() {
           )}
         </section>
 
-        {/* Quick Setup Presets */}
-        <QuickSetupPresets
-          currentProvider={status?.provider}
-          currentApiKey={config?.api_key}
-          onConnected={async () => {
-            await Promise.all([refreshModels(), refreshStatus()])
-          }}
+        {/* Providers (managed, Models P2) */}
+        <ProvidersSection
+          providersFile={providersFile}
+          loading={loadingProviders}
+          onChange={setProvidersFile}
+          onActivated={async () => { await Promise.all([refreshModels(), refreshStatus()]) }}
         />
 
         {/* Provider Tabs */}
@@ -223,49 +188,6 @@ export default function ModelsSettings() {
               </div>
             )}
           </div>
-
-          {/* API Key */}
-          <div className="bg-surface-container-low/50 p-lg border-t border-outline-variant/30">
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-primary">key</span>
-              <h4 className="font-label-md font-bold text-on-surface">{intl.formatMessage({ id: 'settings.models.apiConnection' }, { provider: (config?.provider ?? t('settings.models.providerDefault')) })}</h4>
-            </div>
-            <div className="flex gap-md max-w-2xl">
-              <div className="relative flex-1">
-                <Input
-                  className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg focus:ring-2 focus:ring-primary outline-none transition-all font-body-sm pr-10 font-mono"
-                  type={showKey ? 'text' : 'password'}
-                  value={keyDraft ?? (config?.api_key ? '••••••••••••••••' : '')}
-                  placeholder={t('settings.models.apiKeyPlaceholder')}
-                  onChange={e => setKeyDraft(e.target.value)}
-                  onFocus={() => { if (!keyDraft && config?.api_key) setKeyDraft('') }}
-                />
-                <Button variant="ghost" className="absolute right-2 top-1/2 -translate-y-1/2 text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => setShowKey(v => !v)} aria-label={showKey ? t('settings.models.hideKey') : t('settings.models.showKey')}>
-                  <span className="material-symbols-outlined icon-md">{showKey ? 'visibility_off' : 'visibility'}</span>
-                </Button>
-              </div>
-              <Button
-                className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer disabled:opacity-50"
-                onClick={handleTestConnection}
-                disabled={keyTesting || !((keyDraft ?? '').trim() || config?.api_key)}
-                aria-label={t('settings.models.testConnection')}
-              >
-                <span className="material-symbols-outlined text-[18px]">{keyTesting ? 'progress_activity' : 'cable'}</span>
-                {keyTesting ? t('settings.models.testing') : t('settings.models.testConnection')}
-              </Button>
-              <Button
-                className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer disabled:opacity-50"
-                onClick={handleSaveKey}
-                disabled={keySaving || !keyDraft || !keyDraft.trim()}
-              >
-                <span className="material-symbols-outlined text-[18px]">{keySaving ? 'progress_activity' : 'save'}</span>
-                {keySaving ? t('settings.models.saving') : t('settings.models.save')}
-              </Button>
-            </div>
-            <p className="mt-sm text-label-sm text-on-surface-variant opacity-70">
-              {t('settings.models.apiKeyHelp')}
-            </p>
-          </div>
         </section>
 
         {/* Global Parameters */}
@@ -282,161 +204,417 @@ export default function ModelsSettings() {
   )
 }
 
-interface ProviderPreset {
+// ===== Managed providers (Models P2) =====
+
+interface KindInfo {
+  labelKey: string
+  icon: string
+  baseUrlRequired: boolean
+  needsKey: boolean
+}
+
+const KIND_INFO: Record<string, KindInfo> = {
+  anthropic: { labelKey: 'settings.models.providers.kinds.anthropic', icon: 'auto_awesome', baseUrlRequired: false, needsKey: true },
+  openai: { labelKey: 'settings.models.providers.kinds.openai', icon: 'bolt', baseUrlRequired: false, needsKey: true },
+  deepseek: { labelKey: 'settings.models.providers.kinds.deepseek', icon: 'psychology', baseUrlRequired: false, needsKey: true },
+  ollama: { labelKey: 'settings.models.providers.kinds.ollama', icon: 'dns', baseUrlRequired: false, needsKey: false },
+  'openai-compatible': { labelKey: 'settings.models.providers.kinds.openaiCompatible', icon: 'hub', baseUrlRequired: true, needsKey: true },
+}
+
+interface QuickFill {
   id: string
   label: string
   icon: string
-  desc: string
-  baseUrl: string
-  model: string
-  keyHint: string
+  kind: ProviderKind
+  baseUrl?: string
+  model?: string
 }
 
-const PROVIDER_PRESETS: ProviderPreset[] = [
-  { id: 'openai', label: 'OpenAI', icon: 'bolt', desc: 'GPT-4.1 · o3', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', keyHint: 'sk-...' },
-  { id: 'anthropic', label: 'Anthropic', icon: 'auto_awesome', desc: 'Claude Sonnet 4.6 · Opus', baseUrl: 'https://api.anthropic.com/v1', model: 'claude-sonnet-4-6', keyHint: 'sk-ant-...' },
-  { id: 'deepseek', label: 'DeepSeek', icon: 'psychology', desc: 'Chat · Reasoner', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat', keyHint: 'sk-...' },
-  { id: 'glm', label: 'GLM (Zhipu)', icon: 'auto_awesome', desc: 'GLM-4-Plus', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus', keyHint: '<api_key>.<secret>' },
-  { id: 'minimax', label: 'MiniMax', icon: 'group', desc: 'abab6.5s', baseUrl: 'https://api.minimax.chat/v1', model: 'abab6.5s-chat', keyHint: '<group_id>.<api_key>' },
-  { id: 'kimi', label: 'Kimi (Moonshot)', icon: 'dark_mode', desc: 'Long context', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k', keyHint: 'sk-...' },
-  { id: 'ollama', label: 'Ollama (local)', icon: 'dns', desc: 'Self-hosted models', baseUrl: 'http://localhost:11434/v1', model: 'llama3.2', keyHint: 'not required' },
+// Quick-fill chips in the Add/Edit modal. The built-in providers map to their
+// kind; GLM / Kimi / MiniMax are OpenAI-compatible endpoints (kind =
+// `openai-compatible`), which the Rust layer tests with a Bearer token.
+const QUICK_FILL: QuickFill[] = [
+  { id: 'anthropic', label: 'Anthropic', icon: 'auto_awesome', kind: 'anthropic', model: 'claude-sonnet-4-6' },
+  { id: 'openai', label: 'OpenAI', icon: 'bolt', kind: 'openai', model: 'gpt-4.1-mini' },
+  { id: 'deepseek', label: 'DeepSeek', icon: 'psychology', kind: 'deepseek', model: 'deepseek-chat' },
+  { id: 'glm', label: 'GLM (Zhipu)', icon: 'auto_awesome', kind: 'openai-compatible', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus' },
+  { id: 'kimi', label: 'Kimi (Moonshot)', icon: 'dark_mode', kind: 'openai-compatible', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  { id: 'minimax', label: 'MiniMax', icon: 'group', kind: 'openai-compatible', baseUrl: 'https://api.minimax.chat/v1', model: 'abab6.5s-chat' },
+  { id: 'ollama', label: 'Ollama (local)', icon: 'dns', kind: 'ollama', baseUrl: 'http://localhost:11434', model: 'llama3.2' },
+  { id: 'custom', label: 'settings.models.providers.customOpenAI', icon: 'hub', kind: 'openai-compatible' },
 ]
 
-function QuickSetupPresets({
-  currentProvider,
-  currentApiKey,
-  onConnected,
+function kindLabel(intl: ReturnType<typeof useIntl>, kind: string): string {
+  return intl.formatMessage({ id: KIND_INFO[kind]?.labelKey ?? 'settings.models.providers.kinds.openaiCompatible' })
+}
+
+function toastTestResult(
+  intl: ReturnType<typeof useIntl>,
+  result: api.TestConnectionResult,
+  provider: string,
+): void {
+  const t = (id: string) => intl.formatMessage({ id })
+  switch (result.kind) {
+    case 'success':
+      toast.success(t('settings.models.testResult.success'))
+      return
+    case 'invalid_key':
+      toast.error(t('settings.models.testResult.invalidKey'))
+      return
+    case 'rate_limited':
+      toast.warning(t('settings.models.testResult.rateLimited'))
+      return
+    case 'provider_error':
+      toast.error(intl.formatMessage({ id: 'settings.models.testResult.providerError' }, { provider, status: result.status }))
+      return
+    case 'network_unreachable':
+      toast.error(intl.formatMessage({ id: 'settings.models.testResult.networkUnreachable' }, { provider }))
+      return
+    case 'unknown':
+      toast.error(intl.formatMessage({ id: 'settings.models.testResult.unknown' }, { message: result.message }))
+      return
+  }
+}
+
+function ProvidersSection({
+  providersFile,
+  loading,
+  onChange,
+  onActivated,
 }: {
-  currentProvider?: string
-  currentApiKey?: string
-  onConnected: () => Promise<void>
+  providersFile: ProvidersFile
+  loading: boolean
+  onChange: (f: ProvidersFile) => void
+  onActivated: () => Promise<void>
 }) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const [openId, setOpenId] = useState<string | null>(null)
-  const [apiKey, setApiKey] = useState('')
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<ProviderConnection | null>(null)
+  const [testingId, setTestingId] = useState<string | null>(null)
+  const [activatingId, setActivatingId] = useState<string | null>(null)
 
-  const submit = async (preset: ProviderPreset) => {
-    if (!apiKey.trim()) {
-      setError(t('settings.models.presets.needKey'))
+  const handleTest = async (conn: ProviderConnection) => {
+    // Only the active provider's key is mirrored into config; for a connection
+    // we can only test when a key is set on it. Ollama needs no key.
+    const info = KIND_INFO[conn.provider_kind]
+    if (info?.needsKey && !conn.api_key) {
+      toast.error(intl.formatMessage({ id: 'settings.models.providers.needKey' }, { label: conn.label }))
       return
     }
-    setBusyId(preset.id)
-    setError(null)
+    setTestingId(conn.id)
     try {
-      await api.switchProvider({
-        provider: preset.id,
-        api_key: apiKey.trim(),
-        base_url: preset.baseUrl,
-        model: preset.model,
-      })
-      await onConnected()
-      toast.success(intl.formatMessage({ id: 'settings.models.presets.connected' }, { provider: preset.label }))
-      setOpenId(null)
-      setApiKey('')
+      // Use the masked "***" sentinel only when it's the only thing available —
+      // the backend can't test against a masked value, so for non-active
+      // connections without a fresh key we ask the user to re-enter it.
+      const apiKey = conn.api_key && conn.api_key !== '***' ? conn.api_key : ''
+      if (info?.needsKey && !apiKey) {
+        toast.error(intl.formatMessage({ id: 'settings.models.providers.reenterKey' }, { label: conn.label }))
+        return
+      }
+      const result = await api.testProviderConnection(conn.provider_kind, apiKey, conn.base_url ?? undefined)
+      toastTestResult(intl, result, conn.provider_kind)
     } catch (e) {
-      console.warn('QuickSetupPresets error:', e)
-      setError(String(e))
+      toastError(t('settings.models.testResult.failed'), e)
     } finally {
-      setBusyId(null)
+      setTestingId(null)
     }
+  }
+
+  const handleActivate = async (conn: ProviderConnection) => {
+    setActivatingId(conn.id)
+    try {
+      await api.setActiveProvider(conn.id)
+      // Re-fetch to pick up the masked file the backend persisted.
+      const fresh = await api.listProviders()
+      onChange(fresh)
+      await onActivated()
+      toast.success(intl.formatMessage({ id: 'settings.models.providers.activated' }, { label: conn.label }))
+    } catch (e) {
+      toastError(t('settings.models.providers.activateFailed'), e)
+    } finally {
+      setActivatingId(null)
+    }
+  }
+
+  const handleDelete = async (conn: ProviderConnection) => {
+    if (!window.confirm(intl.formatMessage({ id: 'settings.models.providers.confirmDelete' }, { label: conn.label }))) return
+    try {
+      const fresh = await api.deleteProvider(conn.id)
+      onChange(fresh)
+      toast.success(intl.formatMessage({ id: 'settings.models.providers.deleted' }, { label: conn.label }))
+    } catch (e) {
+      toastError(t('settings.models.providers.deleteFailed'), e)
+    }
+  }
+
+  const handleSaved = (fresh: ProvidersFile) => {
+    onChange(fresh)
+    setModalOpen(false)
+    setEditing(null)
+    toast.success(t('settings.models.providers.saved'))
   }
 
   return (
     <section className="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-lg shadow-sm">
-      <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.models.presets.title')}</h3>
-      <p className="text-body-sm text-on-surface-variant mb-md">{t('settings.models.presets.subtitle')}</p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-md">
-        {PROVIDER_PRESETS.map(preset => {
-          const isActive = currentProvider === preset.id
-          const isOpen = openId === preset.id
-          const isBusy = busyId === preset.id
-          return (
-            <div
-              key={preset.id}
-              className={`rounded-xl border p-md flex flex-col gap-sm transition-colors ${
-                isActive
-                  ? 'border-primary bg-primary-container/5'
-                  : 'border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40'
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-sm">
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'}`}>
-                    <span className="material-symbols-outlined icon-md">{preset.icon}</span>
+      <div className="flex items-center justify-between mb-md">
+        <div>
+          <h3 className="font-headline-md text-on-surface">{t('settings.models.providers.title')}</h3>
+          <p className="text-body-sm text-on-surface-variant">{t('settings.models.providers.subtitle')}</p>
+        </div>
+        <Button
+          className="px-md py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer"
+          onClick={() => { setEditing(null); setModalOpen(true) }}
+        >
+          <span className="material-symbols-outlined text-[18px]">add</span>
+          {t('settings.models.providers.add')}
+        </Button>
+      </div>
+
+      {loading ? (
+        <p className="text-body-sm text-on-surface-variant py-lg text-center">{t('settings.models.providers.loading')}</p>
+      ) : providersFile.providers.length === 0 ? (
+        <p className="text-body-sm text-on-surface-variant py-lg text-center">{t('settings.models.providers.empty')}</p>
+      ) : (
+        <div className="grid grid-cols-1 gap-sm">
+          {providersFile.providers.map(conn => {
+            const isActive = providersFile.active_provider_id === conn.id
+            const hasKey = !!conn.api_key
+            const info = KIND_INFO[conn.provider_kind]
+            return (
+              <div
+                key={conn.id}
+                className={`p-md rounded-xl border flex items-center justify-between transition-colors ${
+                  isActive ? 'border-2 border-primary bg-primary-container/5' : 'border-outline-variant/50'
+                }`}
+              >
+                <div className="flex items-center gap-md min-w-0">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${isActive ? 'bg-primary text-on-primary' : 'bg-surface-container-high text-on-surface-variant'}`}>
+                    <span className="material-symbols-outlined icon-md">{info?.icon ?? 'hub'}</span>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-xs">
-                      <span className="font-label-md font-bold text-on-surface">{preset.label}</span>
+                      <span className="font-label-md font-bold text-on-surface truncate">{conn.label}</span>
                       {isActive ? (
-                        <span className="px-xs py-[1px] bg-primary text-on-primary rounded text-[10px] font-bold">
-                          {t('settings.models.activeBadge')}
-                        </span>
+                        <span className="px-xs py-[1px] bg-primary text-on-primary rounded text-[10px] font-bold shrink-0">{t('settings.models.providers.activeBadge')}</span>
                       ) : null}
                     </div>
-                    <span className="font-label-sm text-[11px] text-on-surface-variant">{preset.desc}</span>
+                    <div className="flex items-center gap-xs flex-wrap">
+                      <span className="font-label-xs text-[11px] text-on-surface-variant">{kindLabel(intl, conn.provider_kind)}</span>
+                      {conn.base_url ? (
+                        <span className="font-label-xs text-[11px] text-on-surface-variant font-mono truncate max-w-[260px]" title={conn.base_url ?? undefined}>{conn.base_url}</span>
+                      ) : null}
+                      {conn.model ? (
+                        <span className="font-label-xs text-[11px] text-on-surface-variant font-mono">{conn.model}</span>
+                      ) : null}
+                      <span
+                        className={`inline-flex items-center gap-[2px] font-label-xs text-[10px] ${hasKey ? 'text-primary' : 'text-on-surface-variant opacity-60'}`}
+                        title={hasKey ? t('settings.models.providers.keySet') : t('settings.models.providers.keyMissing')}
+                      >
+                        <span className="material-symbols-outlined text-[12px]">{hasKey ? 'key' : 'key_off'}</span>
+                        {hasKey ? t('settings.models.providers.keySet') : t('settings.models.providers.keyMissing')}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div className="font-label-xs text-[11px] text-on-surface-variant font-mono truncate" title={preset.baseUrl}>
-                {preset.baseUrl}
-              </div>
-              <div className="font-label-xs text-[11px] text-on-surface-variant">
-                {t('settings.models.presets.defaultModel')}: <span className="font-mono">{preset.model}</span>
-              </div>
-
-              {isOpen ? (
-                <div className="flex flex-col gap-xs mt-xs">
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={e => { setApiKey(e.target.value); setError(null) }}
-                    placeholder={`${t('settings.models.presets.apiKey')} (${preset.keyHint})`}
-                    className="bg-surface-container-lowest rounded-lg border border-outline-variant/40 px-sm py-sm text-body-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                    autoFocus
-                    disabled={isBusy}
-                  />
-                  {error ? (
-                    <div className="font-label-sm text-[11px] text-error">{error}</div>
+                <div className="flex items-center gap-xs shrink-0">
+                  {testingId === conn.id ? (
+                    <span className="material-symbols-outlined text-primary animate-spin text-[18px]">progress_activity</span>
+                  ) : (
+                    <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => handleTest(conn)} aria-label={t('settings.models.providers.test')}>
+                      <span className="material-symbols-outlined text-[18px]">cable</span>
+                    </Button>
+                  )}
+                  {!isActive ? (
+                    <Button
+                      variant="ghost"
+                      className="px-sm py-xs text-primary hover:bg-primary/10 cursor-pointer disabled:opacity-50"
+                      onClick={() => handleActivate(conn)}
+                      disabled={activatingId !== null}
+                    >
+                      {activatingId === conn.id ? (
+                        <span className="material-symbols-outlined text-[16px] animate-spin align-middle">progress_activity</span>
+                      ) : t('settings.models.providers.activate')}
+                    </Button>
                   ) : null}
-                  <div className="flex gap-xs">
-                    <button
-                      type="button"
-                      onClick={() => submit(preset)}
-                      disabled={isBusy || !apiKey.trim()}
-                      className="flex-1 px-md py-sm rounded-lg bg-primary text-on-primary font-label-md text-[12px] hover:bg-primary/90 disabled:opacity-40 cursor-pointer"
-                    >
-                      {isBusy ? (
-                        <span className="material-symbols-outlined text-[14px] animate-spin align-middle">progress_activity</span>
-                      ) : t('settings.models.presets.connect')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setOpenId(null); setApiKey(''); setError(null) }}
-                      disabled={isBusy}
-                      className="px-md py-sm rounded-lg border border-outline-variant/40 text-on-surface-variant font-label-md text-[12px] hover:bg-surface-container-low cursor-pointer"
-                    >
-                      {t('settings.models.presets.cancel')}
-                    </button>
-                  </div>
+                  <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => { setEditing(conn); setModalOpen(true) }} aria-label={t('settings.models.providers.edit')}>
+                    <span className="material-symbols-outlined text-[18px]">edit</span>
+                  </Button>
+                  <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer" onClick={() => handleDelete(conn)} aria-label={t('settings.models.providers.delete')}>
+                    <span className="material-symbols-outlined text-[18px]">delete</span>
+                  </Button>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => { setOpenId(preset.id); setApiKey(currentApiKey ?? ''); setError(null) }}
-                  className="mt-xs px-md py-sm rounded-lg border border-primary/30 bg-primary/5 text-primary font-label-md text-[12px] hover:bg-primary/10 cursor-pointer flex items-center justify-center gap-xs"
-                >
-                  <span className="material-symbols-outlined text-[14px]">key</span>
-                  {t('settings.models.presets.setup')}
-                </button>
-              )}
-            </div>
-          )
-        })}
-      </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {modalOpen ? (
+        <ProviderModal
+          editing={editing}
+          onClose={() => { setModalOpen(false); setEditing(null) }}
+          onSaved={handleSaved}
+        />
+      ) : null}
     </section>
+  )
+}
+
+function ProviderModal({
+  editing,
+  onClose,
+  onSaved,
+}: {
+  editing: ProviderConnection | null
+  onClose: () => void
+  onSaved: (f: ProvidersFile) => void
+}) {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const [label, setLabel] = useState(editing?.label ?? '')
+  const [kind, setKind] = useState<string>(editing?.provider_kind ?? 'openai-compatible')
+  const [baseUrl, setBaseUrl] = useState(editing?.base_url ?? '')
+  const [apiKey, setApiKey] = useState('')
+  const [model, setModel] = useState(editing?.model ?? '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const info = KIND_INFO[kind] ?? KIND_INFO['openai-compatible']
+
+  const applyQuickFill = (qf: QuickFill) => {
+    setKind(qf.kind)
+    if (qf.baseUrl) setBaseUrl(qf.baseUrl)
+    if (qf.model) setModel(qf.model)
+    if (!label) setLabel(qf.id === 'custom' ? '' : qf.label)
+  }
+
+  const submit = async () => {
+    const trimmedLabel = label.trim()
+    if (!trimmedLabel) {
+      setError(t('settings.models.providers.needLabel'))
+      return
+    }
+    if (info.baseUrlRequired && !baseUrl.trim()) {
+      setError(t('settings.models.providers.needBaseUrl'))
+      return
+    }
+    setSaving(true)
+    setError(null)
+    const input: ProviderInput = {
+      id: editing?.id,
+      label: trimmedLabel,
+      provider_kind: kind,
+      // For a new connection require a key when the kind needs one; on edit,
+      // an empty value tells the backend to keep the existing key.
+      api_key: apiKey.trim() || undefined,
+      base_url: baseUrl.trim() || undefined,
+      model: model.trim() || undefined,
+    }
+    try {
+      const fresh = await api.saveProvider(input)
+      onSaved(fresh)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-md" onClick={onClose}>
+      <div
+        className="bg-surface-container-lowest border border-outline-variant/40 rounded-2xl shadow-xl w-full max-w-lg p-lg space-y-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="font-headline-md text-on-surface">
+            {editing ? t('settings.models.providers.editTitle') : t('settings.models.providers.addTitle')}
+          </h3>
+          <Button variant="ghost" className="text-on-surface-variant hover:text-primary cursor-pointer" onClick={onClose} aria-label={t('settings.models.providers.cancel')}>
+            <span className="material-symbols-outlined">close</span>
+          </Button>
+        </div>
+
+        {/* Quick fill */}
+        <div>
+          <p className="font-label-sm text-on-surface-variant mb-xs">{t('settings.models.providers.quickFill')}</p>
+          <div className="flex flex-wrap gap-xs">
+            {QUICK_FILL.map(qf => (
+              <button
+                key={qf.id}
+                type="button"
+                onClick={() => applyQuickFill(qf)}
+                className="inline-flex items-center gap-xs px-sm py-xs rounded-lg border border-outline-variant/40 bg-surface-container-low/40 hover:border-primary/40 hover:bg-primary/5 text-on-surface-variant hover:text-primary font-label-sm text-[12px] cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[14px]">{qf.icon}</span>
+                {qf.id === 'custom' ? t(qf.label) : qf.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-sm">
+          <Field label={t('settings.models.providers.labelField')}>
+            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm" value={label} onChange={(e) => { setLabel(e.target.value); setError(null) }} placeholder={t('settings.models.providers.labelPlaceholder')} autoFocus />
+          </Field>
+
+          <Field label={t('settings.models.providers.kindField')}>
+            <select
+              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm cursor-pointer"
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+            >
+              {Object.keys(KIND_INFO).map(k => (
+                <option key={k} value={k}>{kindLabel(intl, k)}</option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label={t(info.baseUrlRequired ? 'settings.models.providers.baseUrlRequired' : 'settings.models.providers.baseUrlOptional')}>
+            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono" value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setError(null) }} placeholder="https://api.example.com/v1" />
+          </Field>
+
+          <Field label={t('settings.models.providers.apiKeyField')}>
+            <Input
+              className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono"
+              type="password"
+              value={apiKey}
+              onChange={(e) => { setApiKey(e.target.value); setError(null) }}
+              placeholder={editing ? t('settings.models.providers.apiKeyKeep') : t('settings.models.providers.apiKeyPlaceholder')}
+              disabled={!info.needsKey}
+            />
+          </Field>
+
+          <Field label={t('settings.models.providers.modelField')}>
+            <Input className="w-full px-md py-sm bg-surface text-on-surface border border-outline-variant/50 rounded-lg outline-none focus:ring-2 focus:ring-primary font-body-sm font-mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="claude-sonnet-4-6" />
+          </Field>
+        </div>
+
+        {error ? (
+          <div className="font-label-sm text-[12px] text-error">{error}</div>
+        ) : null}
+
+        <div className="flex justify-end gap-sm pt-xs">
+          <Button className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container cursor-pointer" onClick={onClose}>
+            {t('settings.models.providers.cancel')}
+          </Button>
+          <Button className="px-lg py-sm bg-primary text-on-primary font-label-md rounded-lg hover:bg-primary/90 transition-colors flex items-center gap-sm cursor-pointer disabled:opacity-50" onClick={submit} disabled={saving}>
+            <span className="material-symbols-outlined text-[18px]">{saving ? 'progress_activity' : 'save'}</span>
+            {saving ? t('settings.models.providers.saving') : t('settings.models.providers.save')}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="block font-label-sm text-on-surface-variant mb-xs">{label}</span>
+      {children}
+    </label>
   )
 }
 

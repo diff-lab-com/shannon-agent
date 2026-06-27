@@ -2,7 +2,7 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
-## [Unreleased] — Models P2 (managed providers, part 1: Rust backend)
+## [Unreleased] — Models P2 (managed providers)
 
 ### Models P2 — managed providers store + generic OpenAI-compatible test
 
@@ -55,7 +55,43 @@ plus a generic OpenAI-compatible connection test that closes the gap where GLM
   path). +6 unit tests covering rejected schemes / credentials / malformed
   input and the http+localhost allow case.
 
+### Models P2 — managed-providers UI (provider roster + modal)
 
+Branch `s2/models-p2-ui`. Second half of the Models P2 split — the UI rewrite
+that surfaces the managed-providers store from #70. Replaces the old
+single-provider quick-setup presets and standalone API-key box with a roster
+users add / edit / test / activate / delete through, while keeping the tested
+Active Model, Performance Strategy, and Global Parameters sections intact.
+
+#### UI
+- **`ModelsSettings` rewritten** (`components/settings/ModelsSettings.tsx`):
+  - New `ProvidersSection` lists configured connections as rows — key-set dot,
+    active badge, and Test / Activate / Edit / Delete actions. Loads via
+    `listProviders` on mount and refreshes from each command's returned
+    `ProvidersFile` after a mutation.
+  - New `ProviderModal` (built on the shared `Modal` primitive) collects label
+    / kind / base_url / api_key / model, with one-tap QUICK_FILL chips for
+    anthropic, openai, deepseek, glm, kimi, minimax, ollama, and custom
+    (OpenAI-compatible). Saving re-submits the masked `"***"` so editing a
+    label never blanks the stored secret; the active provider drives the
+    existing Active Model grid unchanged.
+  - Test results surface through a `toastTestResult` helper; activation /
+    deletion toasts confirm the outcome.
+  - Removed `QuickSetupPresets` and the standalone API-key input — superseded
+    by the roster. Performance Strategy, the Active Model provider tabs + grid,
+    and the Global Parameters sliders are preserved verbatim.
+- **Typed bridge** (`lib/tauri-api.ts` + `types/index.ts`): `ProviderKind`
+  union, `ProviderConnection`, `ProvidersFile`, `ProviderInput`; wrappers
+  `listProviders` / `saveProvider` / `deleteProvider` / `setActiveProvider`;
+  `testProviderConnection` now passes the optional `baseUrl`.
+- **Test mock defaults** (`__tests__/setup.ts`): the four new providers
+  commands resolve to an empty `ProvidersFile`; existing suites are unaffected.
+- **i18n** (`en` + `zh-CN`, 43 keys each, parity-checked):
+  `settings.models.providers.*` covers section chrome, modal fields and kind
+  labels, QUICK_FILL, and every toast (added / saved / activated / tested /
+  deleted and their failure variants).
+- Tests: the `ModelsSettings` suite is updated to assert the new providers
+  section and Add-provider button; full vitest suite green (1254 tests).
 
 ## v0.3.7 (2026-06-27) — UI design overhaul + Week D (Plan Mode, Diff Preview) + PM-audit follow-ups + Settings P1 (Models/Notifications) + i18n completion
 
