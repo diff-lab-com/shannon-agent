@@ -1632,6 +1632,7 @@
   "routines.form.create": "Create routine",
   "triage.unread.title": "Unread",
   "triage.archived.label": "Unread",
+  "triage.list.aria": "Triage items. Use j or k to move focus, Enter to mark read, and a to archive.",
   "triage.markRead.aria": "Mark read",
   "triage.markRead.title": "Mark as read",
   "triage.archive.aria": "Archive item",

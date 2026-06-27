@@ -24,6 +24,23 @@ PR #50.
   inline error); the Tasks close button gains an `aria-label`. New
   `common.dismiss` i18n key (en/zh-CN).
 
+## [Unreleased — Triage keyboard navigation] — navigate the triage list without the mouse
+
+Branch `s2/triage-keyboard-nav`. Accessibility win from the §P1 per-page
+PM-audit sweep: the Triage item list had no keyboard support, so it was
+mouse-only.
+
+### UI
+
+- **Triage list keyboard navigation.** The triage item list is now a
+  focusable region (`role="list"`, `tabIndex=0`, descriptive `aria-label`).
+  When focused: `j`/`↓` move to the next item, `k`/`↑` to the previous,
+  `Enter` marks the focused item read, `a` archives it. The focused card
+  gets a primary focus ring and scrolls into view; keystrokes from form
+  controls (the filter chips and read-filter) are ignored so those keep
+  working. New `triage.list.aria` i18n key (en/zh-CN). Three new Triage
+  tests (j+Enter mark-read, a archive, form-control guard).
+
 ## [Unreleased — PM audit follow-ups batch] — Naming + error feedback + empty states + chat attach + skill drawer
 
 Branch `s2/pm-audit-followups-batch`. Closes the remaining P0 honesty
