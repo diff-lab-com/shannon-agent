@@ -247,4 +247,28 @@ describe('MissionControl — Board tab', () => {
     render(wrap(<MissionControl />))
     expect(screen.getByText(/Aggregated view across 1 task/)).toBeInTheDocument()
   })
+
+  it('clicking a status chip isolates that column, click again restores all', () => {
+    useAppSpy.mockReturnValue({
+      tasks: [
+        makeTask({ id: 'a', title: 'Queued One', status: 'pending' }),
+        makeTask({ id: 'b', title: 'Active One', status: 'in_progress' }),
+      ],
+      sessions: [],
+      agents: [],
+      refreshTasks: vi.fn(),
+    })
+    render(wrap(<MissionControl />))
+    switchToBoard()
+    expect(screen.getByRole('row', { name: 'Queued' })).toBeInTheDocument()
+    expect(screen.getByRole('row', { name: 'In Progress' })).toBeInTheDocument()
+    // isolate In Progress via its header chip
+    fireEvent.click(screen.getByRole('button', { name: /In Progress/ }))
+    expect(screen.queryByRole('row', { name: 'Queued' })).not.toBeInTheDocument()
+    expect(screen.getByRole('row', { name: 'In Progress' })).toBeInTheDocument()
+    // click again clears the filter → all columns return
+    fireEvent.click(screen.getByRole('button', { name: /In Progress/ }))
+    expect(screen.getByRole('row', { name: 'Queued' })).toBeInTheDocument()
+    expect(screen.getByRole('row', { name: 'In Progress' })).toBeInTheDocument()
+  })
 })
