@@ -89,6 +89,7 @@ vi.mock('@/lib/tauri-api', () => ({
   }),
   configure: vi.fn().mockResolvedValue(undefined),
   switchProvider: vi.fn().mockResolvedValue(undefined),
+  testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
   listModels: vi.fn().mockResolvedValue([
     { id: 'claude-sonnet-4-6', name: 'Claude Sonnet', provider: 'anthropic', context_window: 200000 },
   ]),

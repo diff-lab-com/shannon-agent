@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -52,12 +52,38 @@ export default function ModelsSettings() {
   }
 
   const handleTestConnection = async () => {
+    // The bottom "API Key" box owns the active provider's key: test the key
+    // actually entered (draft), falling back to the stored key. Routes through
+    // testProviderConnection so the result is real, not a silent refreshModels.
+    const provider = config?.provider ?? status?.provider
+    const apiKey = (keyDraft ?? '').trim() || config?.api_key || ''
+    if (!provider || !apiKey) return
     setKeyTesting(true)
     try {
-      await refreshModels()
-      toast.success(t('settings.models.testSuccess'))
+      const result = await api.testProviderConnection(provider, apiKey)
+      switch (result.kind) {
+        case 'success':
+          toast.success(t('settings.models.testResult.success'))
+          await refreshModels()
+          return
+        case 'invalid_key':
+          toast.error(t('settings.models.testResult.invalidKey'))
+          return
+        case 'rate_limited':
+          toast.warning(t('settings.models.testResult.rateLimited'))
+          return
+        case 'provider_error':
+          toast.error(intl.formatMessage({ id: 'settings.models.testResult.providerError' }, { provider, status: result.status }))
+          return
+        case 'network_unreachable':
+          toast.error(intl.formatMessage({ id: 'settings.models.testResult.networkUnreachable' }, { provider }))
+          return
+        case 'unknown':
+          toast.error(intl.formatMessage({ id: 'settings.models.testResult.unknown' }, { message: result.message }))
+          return
+      }
     } catch (e) {
-      toastError(t('settings.models.testFailed'), e)
+      toastError(t('settings.models.testResult.failed'), e)
     } finally {
       setKeyTesting(false)
     }
@@ -221,7 +247,7 @@ export default function ModelsSettings() {
               <Button
                 className="px-md py-sm border border-outline-variant bg-surface-container-lowest text-on-surface font-label-md rounded-lg hover:bg-surface-container transition-colors flex items-center gap-sm whitespace-nowrap cursor-pointer disabled:opacity-50"
                 onClick={handleTestConnection}
-                disabled={keyTesting}
+                disabled={keyTesting || !((keyDraft ?? '').trim() || config?.api_key)}
                 aria-label={t('settings.models.testConnection')}
               >
                 <span className="material-symbols-outlined text-[18px]">{keyTesting ? 'progress_activity' : 'cable'}</span>
@@ -247,8 +273,8 @@ export default function ModelsSettings() {
           <h3 className="font-headline-md text-on-surface mb-lg">{t('settings.models.globalParams')}</h3>
           <p className="text-body-sm text-on-surface-variant mb-xl -mt-md">{t('settings.models.globalParamsDesc')}</p>
           <div className="space-y-xl max-w-2xl">
-            <ParameterSlider label={t('settings.models.temperature')} value={0.7} min={0} max={1} step={0.1} lowLabel={t('settings.models.precise')} highLabel={t('settings.models.creative')} configKey="temperature" />
-            <ParameterSlider label={t('settings.models.maxTokens')} value={4096} min={256} max={128000} step={256} formatValue={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} lowLabel={t('settings.models.short')} highLabel={t('settings.models.longContext')} configKey="max_tokens" />
+            <ParameterSlider label={t('settings.models.temperature')} value={config?.temperature ?? 0.7} min={0} max={1} step={0.1} lowLabel={t('settings.models.precise')} highLabel={t('settings.models.creative')} configKey="temperature" />
+            <ParameterSlider label={t('settings.models.maxTokens')} value={config?.max_tokens ?? 4096} min={256} max={128000} step={256} formatValue={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} lowLabel={t('settings.models.short')} highLabel={t('settings.models.longContext')} configKey="max_tokens" />
           </div>
         </section>
       </div>
@@ -414,7 +440,7 @@ function QuickSetupPresets({
   )
 }
 
-function ParameterSlider({ label, value: initialValue, min, max, step, formatValue, lowLabel, highLabel, configKey }: {
+function ParameterSlider({ label, value, min, max, step, formatValue, lowLabel, highLabel, configKey }: {
   label: string
   value: number
   min: number
@@ -425,11 +451,14 @@ function ParameterSlider({ label, value: initialValue, min, max, step, formatVal
   highLabel?: string
   configKey?: string
 }) {
-  const [value, setValue] = useState(initialValue)
-  const display = formatValue ? formatValue(value) : String(value)
+  const [local, setLocal] = useState(value)
+  // Keep the slider in sync with the persisted config value so it reflects
+  // reality (initial load + external updates) instead of a stale literal.
+  useEffect(() => { setLocal(value) }, [value])
+  const display = formatValue ? formatValue(local) : String(local)
 
   const handleChange = (newValue: number) => {
-    setValue(newValue)
+    setLocal(newValue)
     if (configKey) {
       api.configure({ key: configKey, value: String(newValue) }).catch(e => console.warn('ParameterSlider error:', e))
     }
@@ -443,7 +472,7 @@ function ParameterSlider({ label, value: initialValue, min, max, step, formatVal
       </div>
       <input
         className="w-full appearance-none bg-outline-variant/30 h-1 rounded-full cursor-pointer outline-none slider-thumb-primary"
-        min={min} max={max} step={step} type="range" value={value}
+        min={min} max={max} step={step} type="range" value={local}
         onChange={e => handleChange(Number(e.target.value))}
       />
       {lowLabel && highLabel ? (
