@@ -81,7 +81,7 @@ pub async fn send_notification(
 }
 
 /// Saved desktop-notification preferences (master enable + DND window).
-/// Mirrors the four `notifications_*` fields on `DesktopConfig`.
+/// Mirrors the `notifications_*` fields on `DesktopConfig`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NotificationPrefsDto {
     pub master_enabled: bool,
@@ -90,6 +90,8 @@ pub struct NotificationPrefsDto {
     pub dnd_start: Option<String>,
     #[serde(default)]
     pub dnd_end: Option<String>,
+    pub on_completed: bool,
+    pub on_failed: bool,
 }
 
 /// Read the current desktop-notification preferences.
@@ -101,6 +103,8 @@ pub async fn get_notification_prefs() -> Result<NotificationPrefsDto, String> {
         dnd_enabled: c.notifications_dnd_enabled,
         dnd_start: c.notifications_dnd_start,
         dnd_end: c.notifications_dnd_end,
+        on_completed: c.notifications_on_completed,
+        on_failed: c.notifications_on_failed,
     })
 }
 
@@ -125,6 +129,8 @@ pub async fn set_notification_prefs(
         dc.notifications_dnd_enabled = prefs.dnd_enabled;
         dc.notifications_dnd_start = prefs.dnd_start;
         dc.notifications_dnd_end = prefs.dnd_end;
+        dc.notifications_on_completed = prefs.on_completed;
+        dc.notifications_on_failed = prefs.on_failed;
         dc.clone()
     };
     crate::config::save_config(&snapshot)?;
@@ -431,6 +437,8 @@ pub(crate) struct NotificationPrefs {
     pub dnd_enabled: bool,
     dnd_start_min: Option<u32>,
     dnd_end_min: Option<u32>,
+    on_completed: bool,
+    on_failed: bool,
 }
 
 impl NotificationPrefs {
@@ -443,6 +451,8 @@ impl NotificationPrefs {
             dnd_enabled: c.notifications_dnd_enabled,
             dnd_start_min: c.notifications_dnd_start.as_deref().and_then(parse_hhmm),
             dnd_end_min: c.notifications_dnd_end.as_deref().and_then(parse_hhmm),
+            on_completed: c.notifications_on_completed,
+            on_failed: c.notifications_on_failed,
         }
     }
 
@@ -456,6 +466,17 @@ impl NotificationPrefs {
             return false;
         };
         is_within_dnd_window(minutes_since_local_midnight(), start, end)
+    }
+
+    /// Whether the event-type toggles permit a notification of the given
+    /// severity. Error notifications honor `on_failed`; everything else
+    /// (info/success/warning — e.g. query completions) honors `on_completed.
+    pub(crate) fn allows_level(&self, is_error: bool) -> bool {
+        if is_error {
+            self.on_failed
+        } else {
+            self.on_completed
+        }
     }
 }
 
@@ -803,5 +824,41 @@ mod tests {
         assert!(!is_within_dnd_window(0, 600, 600));
         assert!(!is_within_dnd_window(600, 600, 600));
         assert!(!is_within_dnd_window(1439, 600, 600));
+    }
+
+    #[test]
+    fn allows_level_routes_by_severity() {
+        let both = NotificationPrefs {
+            master_enabled: true,
+            dnd_enabled: false,
+            dnd_start_min: None,
+            dnd_end_min: None,
+            on_completed: true,
+            on_failed: true,
+        };
+        assert!(both.allows_level(false)); // completion
+        assert!(both.allows_level(true)); // error
+
+        let only_errors = NotificationPrefs {
+            master_enabled: true,
+            dnd_enabled: false,
+            dnd_start_min: None,
+            dnd_end_min: None,
+            on_completed: false,
+            on_failed: true,
+        };
+        assert!(!only_errors.allows_level(false)); // completions muted
+        assert!(only_errors.allows_level(true)); // errors still fire
+
+        let only_completed = NotificationPrefs {
+            master_enabled: true,
+            dnd_enabled: false,
+            dnd_start_min: None,
+            dnd_end_min: None,
+            on_completed: true,
+            on_failed: false,
+        };
+        assert!(only_completed.allows_level(false));
+        assert!(!only_completed.allows_level(true)); // errors muted
     }
 }

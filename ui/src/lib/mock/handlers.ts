@@ -43,6 +43,8 @@ let notificationPrefs = {
   dnd_enabled: false,
   dnd_start: null as string | null,
   dnd_end: null as string | null,
+  on_completed: true,
+  on_failed: true,
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -446,7 +448,7 @@ export const handlers: Record<string, MockHandler> = {
     await delay()
     return clone(notificationPrefs)
   },
-  async set_notification_prefs(args: { prefs: { master_enabled: boolean; dnd_enabled: boolean; dnd_start: string | null; dnd_end: string | null } }) {
+  async set_notification_prefs(args: { prefs: { master_enabled: boolean; dnd_enabled: boolean; dnd_start: string | null; dnd_end: string | null; on_completed: boolean; on_failed: boolean } }) {
     await delay()
     notificationPrefs = { ...args.prefs }
   },

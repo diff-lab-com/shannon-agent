@@ -61,7 +61,7 @@ beforeEach(() => {
   getInboundConfig.mockResolvedValue({})
   getInboundListenerStatus.mockResolvedValue({ slack_running: false, telegram_running: false })
   getOutboundConfig.mockResolvedValue({ slack: null, telegram: null })
-  getNotificationPrefs.mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null })
+  getNotificationPrefs.mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true })
   setNotificationPrefs.mockResolvedValue(undefined)
 })
 

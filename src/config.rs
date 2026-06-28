@@ -66,6 +66,15 @@ pub struct DesktopConfig {
     /// DND window end, `"HH:MM"` (24h, system-local).
     #[serde(default)]
     pub notifications_dnd_end: Option<String>,
+    /// Surface a desktop notification when a query/task completes (non-error
+    /// notifications, e.g. `NotificationLevel::Info`/`Success`/`Warning`).
+    /// Default: enabled.
+    #[serde(default = "default_true")]
+    pub notifications_on_completed: bool,
+    /// Surface a desktop notification when a query/task fails
+    /// (`NotificationLevel::Error`). Default: enabled.
+    #[serde(default = "default_true")]
+    pub notifications_on_failed: bool,
 }
 
 fn default_skill_detection_enabled() -> bool {
@@ -158,6 +167,8 @@ impl Default for DesktopConfig {
             notifications_dnd_enabled: false,
             notifications_dnd_start: None,
             notifications_dnd_end: None,
+            notifications_on_completed: default_true(),
+            notifications_on_failed: default_true(),
         }
     }
 }
@@ -295,6 +306,8 @@ mod tests {
             notifications_dnd_enabled: false,
             notifications_dnd_start: None,
             notifications_dnd_end: None,
+            notifications_on_completed: true,
+            notifications_on_failed: true,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -347,6 +360,8 @@ mod tests {
             notifications_dnd_enabled: false,
             notifications_dnd_start: None,
             notifications_dnd_end: None,
+            notifications_on_completed: true,
+            notifications_on_failed: true,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -381,6 +396,8 @@ mod tests {
             notifications_dnd_enabled: false,
             notifications_dnd_start: None,
             notifications_dnd_end: None,
+            notifications_on_completed: true,
+            notifications_on_failed: true,
         };
 
         // Test serialization preserves approval_mode
