@@ -32,6 +32,30 @@ export function useSidebarMode(): [SidebarMode, () => void] {
   return [mode, toggle]
 }
 
+const getSubNavClass = ({ isActive }: { isActive: boolean }) =>
+  cn(
+    "flex items-center px-4 py-2 rounded-lg font-label-md text-[13px] transition-all duration-200",
+    isActive
+      ? "text-primary font-bold"
+      : "text-on-surface-variant hover:text-primary"
+  );
+
+// Collapsible sub-navigation link: a leading active/inactive dot + a label.
+// Replaces 9 identical render-prop NavLinks (extensions / opc / settings).
+function SubNavLink({ to, labelId }: { to: string; labelId: string }) {
+  const intl = useIntl()
+  return (
+    <NavLink to={to} className={getSubNavClass}>
+      {({ isActive }) => (
+        <>
+          <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")} />
+          {intl.formatMessage({ id: labelId })}
+        </>
+      )}
+    </NavLink>
+  )
+}
+
 interface SessionsSectionProps {
   sessions: SessionInfo[]
   currentSessionId: string | null
@@ -223,14 +247,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5"
     );
 
-  const getSubNavClass = ({ isActive }: { isActive: boolean }) =>
-    cn(
-      "flex items-center px-4 py-2 rounded-lg font-label-md text-[13px] transition-all duration-200",
-      isActive
-        ? "text-primary font-bold"
-        : "text-on-surface-variant hover:text-primary"
-    );
-
   const handleNavClick = () => { if (mobile) closeMobile() }
 
   return (
@@ -335,30 +351,9 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
           {extensionsOpen && (
             <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.extensions.section.aria' })}>
-               <NavLink to="/extensions/skills" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.skills' })}
-                    </>
-                  )}
-               </NavLink>
-               <NavLink to="/extensions/agents" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.myAgents' })}
-                    </>
-                  )}
-               </NavLink>
-               <NavLink to="/extensions/datasources" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.dataSources' })}
-                    </>
-                  )}
-               </NavLink>
+               <SubNavLink to="/extensions/skills" labelId="nav.skills" />
+               <SubNavLink to="/extensions/agents" labelId="nav.myAgents" />
+               <SubNavLink to="/extensions/datasources" labelId="nav.dataSources" />
             </div>
           )}
         </div>
@@ -380,14 +375,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
           {opcOpen && (
             <div className="pl-4 pr-2 space-y-1 mt-1 transition-all">
-               <NavLink to="/opc" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.onePersonCompany' })}
-                    </>
-                  )}
-               </NavLink>
+               <SubNavLink to="/opc" labelId="nav.onePersonCompany" />
             </div>
           )}
         </div>
@@ -429,54 +417,12 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
         {settingsOpen && (
           <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.settings.section.aria' })}>
-             <NavLink to="/settings/general" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.general' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/theme" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.theme' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/models" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.models' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/billing" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.usageBilling' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/advanced" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.advanced' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/notifications" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.notifications' })}
-                  </>
-                )}
-             </NavLink>
+             <SubNavLink to="/settings/general" labelId="nav.general" />
+             <SubNavLink to="/settings/theme" labelId="nav.theme" />
+             <SubNavLink to="/settings/models" labelId="nav.models" />
+             <SubNavLink to="/settings/billing" labelId="nav.usageBilling" />
+             <SubNavLink to="/settings/advanced" labelId="nav.advanced" />
+             <SubNavLink to="/settings/notifications" labelId="nav.notifications" />
           </div>
         )}
 
