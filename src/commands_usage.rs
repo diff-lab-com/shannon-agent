@@ -7,15 +7,17 @@
 //!
 //! This is local-only, user-inspectable telemetry — there is no billing
 //! backend yet. The write is best-effort (a log failure never breaks the
-//! query stream). No rotation in MVP: a single desktop produces low
-//! volume, so trimming/rotation is deferred.
+//! query stream). The ledger is size-bounded by best-effort rotation (see
+//! [`UsageStore::maybe_rotate`]).
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+
+use shannon_core::scheduled_runs::{ScheduledRun, ScheduledRunsStore};
 
 /// One usage event persisted to `usage.jsonl`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +43,15 @@ pub struct UsageRecord {
 pub struct UsageStore {
     path: PathBuf,
 }
+
+/// Once the on-disk ledger exceeds this size it is trimmed to
+/// [`KEEP_RECORDS`]. Sized so a low-volume desktop rotates rarely.
+const ROTATE_AT_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Records retained after a rotation (the most recent ones). Their typical
+/// on-disk size sits well below [`ROTATE_AT_BYTES`], giving hysteresis so
+/// rotation does not fire on every append.
+const KEEP_RECORDS: usize = 30_000;
 
 impl UsageStore {
     /// Default location: `~/.shannon/usage.jsonl`.
@@ -75,6 +86,10 @@ impl UsageStore {
             .map_err(|e| format!("open usage log: {e}"))?;
         file.write_all(line.as_bytes())
             .map_err(|e| format!("write usage log: {e}"))?;
+
+        // Best-effort rotation: a failure here must never block the append
+        // that just succeeded.
+        let _ = self.maybe_rotate();
         Ok(())
     }
 
@@ -87,6 +102,47 @@ impl UsageStore {
             .lines()
             .filter_map(|line| serde_json::from_str::<UsageRecord>(line).ok())
             .collect()
+    }
+
+    /// Trim the ledger to the most recent [`KEEP_RECORDS`] entries once it
+    /// exceeds [`ROTATE_AT_BYTES`]. Idempotent and a no-op below the
+    /// threshold. Best-effort by contract: callers (append) ignore the
+    /// result so rotation can never break a successful append. The rewrite
+    /// is atomic (temp file + rename in the same directory); a single-process
+    /// desktop makes the append/rotate race negligible.
+    pub fn maybe_rotate(&self) -> Result<(), String> {
+        let size = self.path.metadata().map(|m| m.len()).unwrap_or(0);
+        if size <= ROTATE_AT_BYTES {
+            return Ok(());
+        }
+        let mut records = self.load();
+        if records.len() <= KEEP_RECORDS {
+            return Ok(());
+        }
+        // Keep the most recent KEEP_RECORDS.
+        let drop_count = records.len() - KEEP_RECORDS;
+        records.drain(..drop_count);
+
+        // Atomic rewrite: temp file in the same directory, then rename.
+        let tmp = self.path.with_extension("tmp");
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)
+                .map_err(|e| format!("open usage tmp: {e}"))?;
+            for r in &records {
+                let mut line = serde_json::to_string(r)
+                    .map_err(|e| format!("serialize usage record: {e}"))?;
+                line.push('\n');
+                file.write_all(line.as_bytes())
+                    .map_err(|e| format!("write usage tmp: {e}"))?;
+            }
+            file.flush().map_err(|e| format!("flush usage tmp: {e}"))?;
+        }
+        fs::rename(&tmp, &self.path).map_err(|e| format!("rotate usage log: {e}"))?;
+        Ok(())
     }
 }
 
@@ -249,15 +305,70 @@ fn compute_stats(days: u32, records: &[UsageRecord], now_ms_value: u64) -> Usage
     }
 }
 
+/// Label used for spend that cannot be attributed to a specific model or
+/// provider — today, only scheduled-routine runs (which execute engine-side
+/// and carry no model/provider). Surfaced as its own bucket so the Usage
+/// breakdowns stay consistent with the headline totals.
+const SCHEDULED_LABEL: &str = "Scheduled tasks";
+
+/// Map a scheduled-routine run onto a usage record. Scheduled runs track a
+/// single lump `token_usage` (no input/output/cache split) and no
+/// model/provider, so the lump is counted under `input_tokens` and both
+/// attribution fields fall back to [`SCHEDULED_LABEL`]. Runs that tracked
+/// neither cost nor tokens (e.g. never reached the accounting point) are
+/// dropped.
+fn scheduled_run_to_record(run: &ScheduledRun) -> Option<UsageRecord> {
+    if run.cost_usd.is_none() && run.token_usage.is_none() {
+        return None;
+    }
+    Some(UsageRecord {
+        timestamp_ms: run.started_at.timestamp_millis().max(0) as u64,
+        model: SCHEDULED_LABEL.to_string(),
+        provider: SCHEDULED_LABEL.to_string(),
+        input_tokens: run.token_usage.unwrap_or(0),
+        output_tokens: 0,
+        cache_creation_tokens: 0,
+        cache_read_tokens: 0,
+        cost_usd: run.cost_usd.unwrap_or(0.0),
+    })
+}
+
 /// Read the usage ledger and aggregate by model / provider / day.
 ///
 /// `days` is clamped to `[1, 365]`; records older than the window are
-/// excluded. Stateless beyond the on-disk ledger (path is fixed), so it
-/// mirrors the billing commands rather than taking `AppState`.
+/// excluded. Scheduled-routine spend (engine-side — the desktop never sees
+/// its Usage events) is merged in from the scheduled-runs store under
+/// [`SCHEDULED_LABEL`]. Stateless beyond the on-disk stores (paths are
+/// fixed), so it mirrors the billing commands rather than taking `AppState`.
 #[tauri::command]
 pub async fn get_usage_stats(days: u32) -> Result<UsageStats, String> {
-    let records = UsageStore::new().load();
-    Ok(compute_stats(days, &records, now_ms()))
+    let now = now_ms();
+    let mut records = UsageStore::new().load();
+
+    // Fold scheduled-routine spend into the same aggregation. compute_stats
+    // re-filters by the day window, so a slightly wider fetch here is
+    // harmless. The usage and scheduled-runs stores are independent: if the
+    // scheduled-runs store is unreadable we log it and proceed with chat
+    // usage rather than failing the whole page.
+    let days_clamped = days.clamp(1, 365);
+    let now_dt =
+        DateTime::<Utc>::from_timestamp_millis(now as i64).unwrap_or_else(Utc::now);
+    let start = now_dt - Duration::days(days_clamped as i64);
+    match ScheduledRunsStore::new().list_by_time_range(start, now_dt) {
+        Ok(runs) => {
+            for run in &runs {
+                if let Some(r) = scheduled_run_to_record(run) {
+                    records.push(r);
+                }
+            }
+        }
+        Err(e) => tracing::warn!(
+            error = %e,
+            "scheduled-runs store unreadable; usage page will omit scheduled spend"
+        ),
+    }
+
+    Ok(compute_stats(days, &records, now))
 }
 
 #[cfg(test)]
@@ -377,5 +488,70 @@ mod tests {
     fn day_label_is_utc_date() {
         // 2024-01-02T03:04:05Z = 1704169445000 ms.
         assert_eq!(day_label(1_704_169_445_000), "2024-01-02");
+    }
+
+    #[test]
+    fn maybe_rotate_is_noop_below_threshold() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = UsageStore::with_path(tmp.path().join("usage.jsonl"));
+        store
+            .append(&rec(1, "claude", "anthropic", 0.01))
+            .unwrap();
+        store.maybe_rotate().unwrap();
+        assert_eq!(store.load().len(), 1);
+    }
+
+    #[test]
+    fn maybe_rotate_trims_large_ledger_to_keep_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("usage.jsonl");
+        let store = UsageStore::with_path(path.clone());
+        // Build a ledger well over ROTATE_AT_BYTES via raw lines, bypassing
+        // append's own auto-rotate so maybe_rotate is exercised in isolation.
+        let mut buf = String::new();
+        for i in 0..80_000u64 {
+            let r = rec(i, "claude", "anthropic", 0.01);
+            buf.push_str(&serde_json::to_string(&r).unwrap());
+            buf.push('\n');
+        }
+        fs::write(&path, &buf).unwrap();
+        assert!(
+            path.metadata().unwrap().len() > ROTATE_AT_BYTES,
+            "precondition: ledger must exceed the rotation threshold"
+        );
+
+        store.maybe_rotate().unwrap();
+
+        let loaded = store.load();
+        assert_eq!(loaded.len(), KEEP_RECORDS);
+        // The most recent KEEP_RECORDS are retained.
+        assert_eq!(
+            loaded.first().unwrap().timestamp_ms,
+            80_000 - KEEP_RECORDS as u64
+        );
+        assert_eq!(loaded.last().unwrap().timestamp_ms, 79_999);
+    }
+
+    #[test]
+    fn scheduled_run_maps_to_usage_record() {
+        let mut run = ScheduledRun::start("t1", "Daily digest");
+        run.cost_usd = Some(0.42);
+        run.token_usage = Some(12_345);
+        let r = scheduled_run_to_record(&run).expect("tracked run maps to a record");
+        assert_eq!(r.model, SCHEDULED_LABEL);
+        assert_eq!(r.provider, SCHEDULED_LABEL);
+        assert_eq!(r.input_tokens, 12_345);
+        assert_eq!(r.output_tokens, 0);
+        assert_eq!(r.cache_creation_tokens, 0);
+        assert_eq!(r.cache_read_tokens, 0);
+        assert_eq!(r.cost_usd, 0.42);
+        assert!(r.timestamp_ms > 0);
+    }
+
+    #[test]
+    fn scheduled_run_without_tracking_is_dropped() {
+        // start() yields a Running run with no cost/tokens recorded yet.
+        let run = ScheduledRun::start("t2", "No-op");
+        assert!(scheduled_run_to_record(&run).is_none());
     }
 }
