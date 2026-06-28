@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
+import { toastError } from '@/lib/errorToast'
 import { save } from '@tauri-apps/plugin-dialog'
 import 'highlight.js/styles/github.css'
 import * as api from '@/lib/tauri-api'
@@ -89,8 +90,8 @@ export function ArtifactPanel() {
     try {
       await navigator.clipboard.writeText(active.source)
       toast.success(t('chat.artifact.copied'))
-    } catch {
-      toast.error(t('chat.artifact.copyFailed'))
+    } catch (e) {
+      toastError(t('chat.artifact.copyFailed'), e)
     }
   }
 
@@ -105,8 +106,7 @@ export function ArtifactPanel() {
       await api.saveTextFile(path, active.source)
       toast.success(t('chat.artifact.exported'))
     } catch (err) {
-      console.warn('Export failed:', err)
-      toast.error(t('chat.artifact.exportFailed'))
+      toastError(t('chat.artifact.exportFailed'), err)
     }
   }
 
