@@ -165,8 +165,16 @@ export async function clearOutboundConfig(): Promise<void> {
   await invoke('clear_outbound_config')
 }
 
-export async function sendOutboundTest(message: string): Promise<SendResultDto> {
-  return invoke('send_outbound_test', { message })
+/**
+ * Send an outbound test message. `channel` narrows the send to a single
+ * provider (`'slack'` | `'telegram'`); omit it (or pass `null`) to fan out to
+ * every configured provider.
+ */
+export async function sendOutboundTest(
+  message: string,
+  channel?: 'slack' | 'telegram' | null,
+): Promise<SendResultDto> {
+  return invoke('send_outbound_test', { message, channel: channel ?? null })
 }
 
 export type NotificationLevel = 'info' | 'warning' | 'error' | 'success'

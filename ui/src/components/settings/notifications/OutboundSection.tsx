@@ -48,7 +48,8 @@ export default function OutboundSection() {
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [sending, setSending] = useState(false)
+  // Which test send is in flight: null = idle, 'all' = fan-out, 'slack'/'telegram' = single channel.
+  const [testing, setTesting] = useState<null | 'all' | 'slack' | 'telegram'>(null)
   const [clearing, setClearing] = useState(false)
   const [slackToken, setSlackToken] = useState('')
   const [slackChannel, setSlackChannel] = useState('')
@@ -118,25 +119,54 @@ export default function OutboundSection() {
     setClearing(false)
   }
 
+  // Surface a send outcome as result rows + a toast. `single` is set for a
+  // per-channel test so an empty result (provider not configured) reports a
+  // targeted "{provider} is not configured" message instead of the generic
+  // "no channels" error.
+  const reportResults = (res: api.ChannelResult[], single?: 'slack' | 'telegram') => {
+    setResults(res)
+    if (res.length === 0) {
+      if (single) {
+        toast.info(
+          intl.formatMessage(
+            { id: 'settings.notifications.outbound.test.notConfigured' },
+            { provider: single },
+          ),
+        )
+      } else {
+        toast.error(t('settings.notifications.outbound.error.noChannels'))
+      }
+    } else if (res.every((r) => r.ok)) {
+      toast.success(t('settings.notifications.outbound.test.allOk'))
+    } else if (res.some((r) => r.ok)) {
+      toast.warning(t('settings.notifications.outbound.test.partial'))
+    } else {
+      toast.error(t('settings.notifications.outbound.test.allFailed'))
+    }
+  }
+
   const handleSendTest = async () => {
-    setSending(true)
+    setTesting('all')
     setResults(null)
     try {
       const outcome = await api.sendOutboundTest(testMessage.trim())
-      setResults(outcome.results)
-      if (outcome.results.length === 0) {
-        toast.error(t('settings.notifications.outbound.error.noChannels'))
-      } else if (outcome.results.every((r) => r.ok)) {
-        toast.success(t('settings.notifications.outbound.test.allOk'))
-      } else if (outcome.results.some((r) => r.ok)) {
-        toast.warning(t('settings.notifications.outbound.test.partial'))
-      } else {
-        toast.error(t('settings.notifications.outbound.test.allFailed'))
-      }
+      reportResults(outcome.results)
     } catch (e) {
       toastError(t('settings.notifications.outbound.test.allFailed'), e)
     }
-    setSending(false)
+    setTesting(null)
+  }
+
+  const handleSendTestChannel = async (channel: 'slack' | 'telegram') => {
+    setTesting(channel)
+    setResults(null)
+    try {
+      const outcome = await api.sendOutboundTest(testMessage.trim(), channel)
+      reportResults(outcome.results, channel)
+    } catch (e) {
+      toastError(t('settings.notifications.outbound.test.allFailed'), e)
+    }
+    setTesting(null)
   }
 
   if (loading) {
@@ -194,6 +224,21 @@ export default function OutboundSection() {
             aria-label={t('settings.notifications.outbound.slack.channel')}
             className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
+          <Button
+            variant="outline"
+            onClick={() => handleSendTestChannel('slack')}
+            disabled={testing !== null}
+          >
+            {testing === 'slack' ? (
+              <span
+                className="material-symbols-outlined text-[18px] animate-spin mr-xs"
+                aria-hidden="true"
+              >
+                progress_activity
+              </span>
+            ) : null}
+            {t('settings.notifications.outbound.test.slack')}
+          </Button>
         </div>
 
         <div className="space-y-sm">
@@ -221,6 +266,21 @@ export default function OutboundSection() {
             aria-label={t('settings.notifications.outbound.telegram.chatId')}
             className="w-full px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
+          <Button
+            variant="outline"
+            onClick={() => handleSendTestChannel('telegram')}
+            disabled={testing !== null}
+          >
+            {testing === 'telegram' ? (
+              <span
+                className="material-symbols-outlined text-[18px] animate-spin mr-xs"
+                aria-hidden="true"
+              >
+                progress_activity
+              </span>
+            ) : null}
+            {t('settings.notifications.outbound.test.telegram')}
+          </Button>
         </div>
       </div>
 
@@ -250,8 +310,8 @@ export default function OutboundSection() {
             aria-label={t('settings.notifications.outbound.test.messageLabel')}
             className="flex-1 px-md py-sm rounded-md border border-outline bg-surface text-on-surface focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-primary/30"
           />
-          <Button onClick={handleSendTest} disabled={sending}>
-            {sending ? (
+          <Button onClick={handleSendTest} disabled={testing !== null}>
+            {testing === 'all' ? (
               <span
                 className="material-symbols-outlined text-[18px] animate-spin mr-xs"
                 aria-hidden="true"
