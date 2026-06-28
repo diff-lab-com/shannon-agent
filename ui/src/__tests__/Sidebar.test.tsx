@@ -71,8 +71,10 @@ describe('Sidebar', () => {
     expect(screen.getByText('General')).toBeInTheDocument()
     expect(screen.getByText('Theme')).toBeInTheDocument()
     expect(screen.getByText('Models')).toBeInTheDocument()
-    expect(screen.getByText('Usage & Billing')).toBeInTheDocument()
-    expect(screen.getByText('Advanced')).toBeInTheDocument()
+    expect(screen.getByText('Notifications')).toBeInTheDocument()
+    // Billing + Advanced are dev-only (P3-2): hidden in the default Simple mode.
+    expect(screen.queryByText('Usage & Billing')).not.toBeInTheDocument()
+    expect(screen.queryByText('Advanced')).not.toBeInTheDocument()
   })
 })
 
@@ -166,6 +168,13 @@ describe('Sidebar — Advanced mode', () => {
   it('renders OPC sub-link when expanded', () => {
     render(wrap(<Sidebar />))
     expect(screen.getByText('One Person Company')).toBeInTheDocument()
+  })
+
+  it('shows dev-only Settings sub-links (Billing, Advanced) when expanded', () => {
+    render(wrap(<Sidebar />))
+    fireEvent.click(screen.getByText('Settings'))
+    expect(screen.getByText('Usage & Billing')).toBeInTheDocument()
+    expect(screen.getByText('Advanced')).toBeInTheDocument()
   })
 
   it('collapses and expands Extensions section', () => {
