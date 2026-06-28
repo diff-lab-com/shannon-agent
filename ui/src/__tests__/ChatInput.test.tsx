@@ -3,6 +3,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
 import * as api from '@/lib/tauri-api'
+import { toast } from 'sonner'
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
+}))
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
@@ -284,5 +289,19 @@ describe('ChatInput', () => {
     // Look for auto_awesome icon text
     const autoAwesomeIcons = screen.getAllByText('auto_awesome')
     expect(autoAwesomeIcons.length).toBeGreaterThan(0)
+  })
+
+  it('surfaces a toast when plan mode toggle fails (was silently swallowed)', async () => {
+    vi.mocked(api.configure).mockRejectedValueOnce(new Error('engine down'))
+    renderChatInput()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle plan mode' }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        'Failed to toggle plan mode',
+        expect.objectContaining({ description: 'engine down' }),
+      )
+    })
   })
 })

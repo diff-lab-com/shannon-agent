@@ -9,6 +9,7 @@ import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
 import * as api from '@/lib/tauri-api'
+import { toastError } from '@/lib/errorToast'
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
 
@@ -70,7 +71,7 @@ export default function ChatInput({
       await api.setSessionWorkingDir(currentSessionId, selected as string)
       await refreshConfig()
     } catch (err) {
-      console.warn('Failed to change working dir:', err)
+      toastError(t('chat.input.wd.failed'), err)
     }
   }
 
@@ -80,7 +81,7 @@ export default function ChatInput({
       await api.configure({ key: 'approval_mode', value: mode })
       await refreshConfig()
     } catch (err) {
-      console.warn('Failed to update approval mode:', err)
+      toastError(t('chat.input.mode.failed'), err)
     }
   }
 
@@ -93,7 +94,7 @@ export default function ChatInput({
       await api.configure({ key: 'provider', value: model.provider })
       await refreshConfig()
     } catch (err) {
-      console.warn('Failed to update model:', err)
+      toastError(t('chat.input.model.failed'), err)
     }
   }
 
@@ -151,7 +152,7 @@ export default function ChatInput({
       const paths = (Array.isArray(selected) ? selected : [selected]) as string[]
       if (paths.length > 0) onAttach(paths)
     } catch (err) {
-      console.warn('Attach failed:', err)
+      toastError(t('chat.input.attach.failed'), err)
     }
   }
 
@@ -165,7 +166,7 @@ export default function ChatInput({
       await api.configure({ key: 'approval_mode', value: planModeActive ? 'suggest' : 'plan' })
       await refreshConfig()
     } catch (err) {
-      console.warn('Failed to toggle plan mode:', err)
+      toastError(t('chat.input.planMode.failed'), err)
     }
   }
 
