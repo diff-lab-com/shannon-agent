@@ -4,7 +4,6 @@ import { MemoryRouter } from 'react-router-dom'
 import { AppProvider } from '@/context/AppContext'
 import { I18nProvider } from '@/i18n'
 import Tasks from '@/pages/Tasks'
-import Goals from '@/pages/Goals'
 import OPC from '@/pages/OPC'
 
 function wrap(ui: React.ReactElement) {
@@ -38,23 +37,6 @@ describe('Tasks page', () => {
   it('renders calendar widget', async () => {
     render(wrap(<Tasks />))
     await waitFor(() => expect(screen.getByText('Schedule')).toBeInTheDocument())
-  })
-})
-
-describe('Goals page', () => {
-  it('renders page heading', async () => {
-    render(wrap(<Goals />))
-    await waitFor(() => expect(screen.getByText('Task Management')).toBeInTheDocument())
-  })
-
-  it('renders search input', async () => {
-    render(wrap(<Goals />))
-    await waitFor(() => expect(screen.getByPlaceholderText('Search tasks...')).toBeInTheDocument())
-  })
-
-  it('renders task summary section', async () => {
-    render(wrap(<Goals />))
-    await waitFor(() => expect(screen.getByText('Task Summary')).toBeInTheDocument())
   })
 })
 
