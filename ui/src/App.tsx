@@ -18,6 +18,7 @@ const OPCTask = lazy(() => import('./pages/OPCTask'));
 const QuickFix = lazy(() => import('./pages/QuickFix'));
 const Editor = lazy(() => import('./pages/Editor'));
 const Memory = lazy(() => import('./pages/Memory'));
+const Usage = lazy(() => import('./pages/Usage'));
 const SkillProposalsManager = lazy(() => import('./components/skills/SkillProposalsManager'));
 const DataSources = lazy(() => import('./components/extensions/DataSources'));
 const Featured = lazy(() => import('./components/extensions/Featured'));
@@ -57,6 +58,7 @@ export default function App() {
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/triage" element={<Triage />} />
+                <Route path="/usage" element={<Usage />} />
                 {/* P1 navigation cleanup — these pages are no longer in the
                     sidebar. Routes redirect to /tasks so existing bookmarks
                     and deep links keep working. Pages and their tests remain

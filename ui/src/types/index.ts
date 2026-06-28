@@ -496,6 +496,29 @@ export interface BillingHistory {
   status: 'paid' | 'pending' | 'failed'
 }
 
+// --- Usage Stats Types ---
+//
+// Field names mirror the Rust DTOs in shannon-desktop/src/commands_usage.rs
+// (UsageStats, BucketTotals) exactly — serde serializes them verbatim.
+
+export interface UsageBucket {
+  label: string
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  cost_usd: number
+  requests: number
+}
+
+export interface UsageStats {
+  days: number
+  totals: UsageBucket
+  by_model: UsageBucket[]
+  by_provider: UsageBucket[]
+  by_day: UsageBucket[]
+}
+
 // --- Scheduled Tasks (Sprint 2) ---
 //
 // Field names mirror Rust structs in shannon-desktop/src/scheduled_commands.rs

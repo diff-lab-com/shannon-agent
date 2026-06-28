@@ -136,6 +136,7 @@ vi.mock('@/lib/tauri-api', () => ({
   getBillingPlan: vi.fn().mockResolvedValue({ name: 'Free', price: 0, token_limit: 100000, features: ['Basic models', '5 sessions'] }),
   getCostHistory: vi.fn().mockResolvedValue([]),
   getBillingHistory: vi.fn().mockResolvedValue([]),
+  getUsageStats: vi.fn().mockResolvedValue({ days: 30, totals: { label: 'total', input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0, requests: 0 }, by_model: [], by_provider: [], by_day: [] }),
   requestPermission: vi.fn().mockResolvedValue(true),
   featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
   sendNotification: vi.fn().mockResolvedValue(undefined),
