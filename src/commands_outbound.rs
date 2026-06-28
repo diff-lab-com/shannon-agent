@@ -1,8 +1,9 @@
 //! Outbound Tauri commands — P1.3.
 //!
 //! Read/write `[notifications.outbound]` in the same config file used by the
-//! inbound module, plus a `send_outbound_test` command that fans a test
-//! message to every configured provider and reports the per-channel outcome.
+//! inbound module, plus a `send_outbound_test` command that sends a test
+//! message to every configured provider (or a single one when `channel` is
+//! set) and reports the per-channel outcome.
 
 use crate::outbound::{ChannelResult, OutboundConfigDto, SlackOutboundDto, TelegramOutboundDto};
 use serde::Serialize;
@@ -28,7 +29,10 @@ pub async fn clear_outbound_config() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn send_outbound_test(message: String) -> Result<SendResultDto, String> {
+pub async fn send_outbound_test(
+    message: String,
+    channel: Option<String>,
+) -> Result<SendResultDto, String> {
     let dto = load_outbound().await?;
     if dto.slack.is_none() && dto.telegram.is_none() {
         return Err("no outbound providers configured".into());
@@ -39,7 +43,17 @@ pub async fn send_outbound_test(message: String) -> Result<SendResultDto, String
         message
     };
     let http = crate::outbound::http_client();
-    let outcome = crate::outbound::send_all(&http, &dto, &text).await;
+    // `channel` narrows the test to a single provider ("slack" | "telegram").
+    // Unset / empty / "all" fans out to every configured provider (the original
+    // behavior), so the existing "Send test" button is unchanged.
+    let outcome = match channel
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty() && *c != "all")
+    {
+        Some(provider) => crate::outbound::send_one(&http, &dto, &text, provider).await,
+        None => crate::outbound::send_all(&http, &dto, &text).await,
+    };
     Ok(SendResultDto {
         results: outcome.results,
     })

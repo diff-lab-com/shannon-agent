@@ -93,6 +93,23 @@ describe('OutboundSection', () => {
     })
   })
 
+  it('tests only the chosen channel when its per-row Test button is clicked', async () => {
+    vi.spyOn(api, 'getOutboundConfig').mockResolvedValue({
+      slack: { bot_token: 'x', channel: '#x' },
+    })
+    const sendSpy = vi
+      .spyOn(api, 'sendOutboundTest')
+      .mockResolvedValue({ results: [{ provider: 'slack', ok: true }] })
+    render(<OutboundSection />)
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByText('Test Slack'))
+    await waitFor(() => {
+      // Second arg is the channel narrowed to; message is the (empty) test input.
+      expect(sendSpy).toHaveBeenCalledWith(expect.any(String), 'slack')
+      expect(screen.getByText('slack')).toBeInTheDocument()
+    })
+  })
+
   it('clears fields on clear', async () => {
     vi.spyOn(api, 'getOutboundConfig').mockResolvedValue({
       slack: { bot_token: 'xoxb-x', channel: '#x' },

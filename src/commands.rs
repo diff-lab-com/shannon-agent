@@ -652,9 +652,10 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
-                        let _ = crate::commands_notifications::fire_query_notification(
+                        crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Completed,
+                            "query_completed",
                         );
 
                         // Skill loop evaluation hook (spawned, non-blocking)
@@ -768,9 +769,10 @@ pub async fn send_message(
                                 error: error.clone(),
                             },
                         );
-                        let _ = crate::commands_notifications::fire_query_notification(
+                        crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Failed(error),
+                            "query_failed",
                         );
                     }
                     // Ignore other events in MVP
@@ -784,9 +786,10 @@ pub async fn send_message(
                             error: e.to_string(),
                         },
                     );
-                    let _ = crate::commands_notifications::fire_query_notification(
+                    crate::commands_notifications::fire_query_notification_logged(
                         &notifier_arc,
                         crate::commands_notifications::NotificationKind::Failed(e.to_string()),
+                        "query_failed",
                     );
                 }
             }

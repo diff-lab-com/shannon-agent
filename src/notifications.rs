@@ -34,10 +34,7 @@ impl NotificationHandler for TauriNotificationHandler {
         // delivery still fires.
         let prefs = crate::commands_notifications::NotificationPrefs::load();
         let is_error = matches!(n.level, NotificationLevel::Error);
-        if !prefs.master_enabled
-            || prefs.within_dnd_window()
-            || !prefs.allows_level(is_error)
-        {
+        if !prefs.master_enabled || prefs.within_dnd_window() || !prefs.allows_level(is_error) {
             return Ok(());
         }
         self.app

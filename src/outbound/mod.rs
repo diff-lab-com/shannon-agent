@@ -90,6 +90,55 @@ pub async fn send_all(http: &reqwest::Client, dto: &OutboundConfigDto, text: &st
     SendOutcome { results }
 }
 
+/// Send to a single named provider only (`"slack"` | `"telegram"`). Returns an
+/// empty outcome (no results) when that provider isn't configured, so the UI
+/// can distinguish "nothing to test" from "test failed". An unknown name is
+/// reported as a failed result rather than silently dropped.
+pub async fn send_one(
+    http: &reqwest::Client,
+    dto: &OutboundConfigDto,
+    text: &str,
+    provider: &str,
+) -> SendOutcome {
+    match provider {
+        "slack" => {
+            if let Some(s) = dto.slack.as_ref() {
+                let res = slack::send(http, s, text).await;
+                SendOutcome {
+                    results: vec![ChannelResult {
+                        provider: "slack".into(),
+                        ok: res.is_ok(),
+                        error: res.err(),
+                    }],
+                }
+            } else {
+                SendOutcome { results: vec![] }
+            }
+        }
+        "telegram" => {
+            if let Some(t) = dto.telegram.as_ref() {
+                let res = telegram::send(http, t, text).await;
+                SendOutcome {
+                    results: vec![ChannelResult {
+                        provider: "telegram".into(),
+                        ok: res.is_ok(),
+                        error: res.err(),
+                    }],
+                }
+            } else {
+                SendOutcome { results: vec![] }
+            }
+        }
+        other => SendOutcome {
+            results: vec![ChannelResult {
+                provider: other.into(),
+                ok: false,
+                error: Some(format!("unknown provider: {other}")),
+            }],
+        },
+    }
+}
+
 /// Build the shared HTTP client with sane defaults.
 pub fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
@@ -154,5 +203,37 @@ mod tests {
             }],
         };
         assert!(!all_bad.any_ok());
+    }
+
+    #[tokio::test]
+    async fn send_one_unconfigured_provider_returns_empty_results() {
+        // No network: slack is None, so the provider branch returns early.
+        let http = http_client();
+        let dto = OutboundConfigDto::default();
+        let outcome = send_one(&http, &dto, "hi", "slack").await;
+        assert!(
+            outcome.results.is_empty(),
+            "unconfigured provider yields no results"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_one_unknown_provider_reports_a_failed_result() {
+        // No network: unknown name never reaches a provider client.
+        let http = http_client();
+        let dto = OutboundConfigDto::default();
+        let outcome = send_one(&http, &dto, "hi", "carrier-pigeon").await;
+        assert_eq!(outcome.results.len(), 1);
+        let r = &outcome.results[0];
+        assert_eq!(r.provider, "carrier-pigeon");
+        assert!(!r.ok);
+        assert!(
+            r.error
+                .as_deref()
+                .unwrap_or("")
+                .contains("unknown provider"),
+            "error should mention unknown provider, got: {:?}",
+            r.error
+        );
     }
 }
