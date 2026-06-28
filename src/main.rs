@@ -24,6 +24,7 @@ fn main() {
     use shannon_desktop::commands_skill_candidates;
     use shannon_desktop::commands_skill_loop;
     use shannon_desktop::commands_tasks;
+    use shannon_desktop::commands_usage;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
@@ -236,6 +237,8 @@ fn main() {
             commands_billing::get_billing_plan,
             commands_billing::get_cost_history,
             commands_billing::get_billing_history,
+            // Usage statistics — local usage ledger aggregation
+            commands_usage::get_usage_stats,
             // P2.1 — persistent memory layer (wraps shannon_core::memory::MemoryStore)
             commands_memory::list_memory_projects,
             commands_memory::list_memories,

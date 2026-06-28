@@ -318,6 +318,11 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="flex-1">{intl.formatMessage({ id: 'nav.memory' })}</span>
         </NavLink>
 
+        <NavLink to="/usage" className={getNavClass} onClick={handleNavClick}>
+           <span className="material-symbols-outlined">monitoring</span>
+           <span className="flex-1">{intl.formatMessage({ id: 'nav.usage' })}</span>
+        </NavLink>
+
         {/* Triage full-page navigation */}
         <NavLink
           to="/triage"

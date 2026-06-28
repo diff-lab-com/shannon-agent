@@ -99,6 +99,8 @@ pub struct AppState {
     pub(crate) scheduled_runs_store: Arc<shannon_core::scheduled_runs::ScheduledRunsStore>,
     /// Triage items needing user attention.
     pub(crate) triage_store: Arc<crate::scheduled_commands::TriageStore>,
+    /// Usage ledger (`~/.shannon/usage.jsonl`) — append-only token/cache/cost.
+    pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
     /// Triggered-routine enabled/disabled overrides.
     pub(crate) routine_overrides: Arc<crate::scheduled_commands::RoutineOverrideStore>,
     /// Triggered-routine registry (reloaded on demand).
@@ -279,6 +281,7 @@ impl AppState {
             ),
             scheduled_runs_store: Arc::new(shannon_core::scheduled_runs::ScheduledRunsStore::new()),
             triage_store: Arc::new(crate::scheduled_commands::TriageStore::new()),
+            usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),
             triggered_registry: Arc::new(tokio::sync::RwLock::new(
                 shannon_core::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
@@ -481,6 +484,8 @@ pub async fn send_message(
     let current_session_id_arc = state.current_session_id.clone();
     let state_mgr_arc = state.state_manager.clone();
     let model_arc = state.model.clone();
+    let provider_arc = state.provider.clone();
+    let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
 
     let return_qid = qid_str.clone();
@@ -588,8 +593,23 @@ pub async fn send_message(
                         input_tokens,
                         output_tokens,
                         cost_usd,
+                        cache_creation_tokens,
+                        cache_read_tokens,
                         ..
                     } => {
+                        // Persist to the local usage ledger. Best-effort:
+                        // a log write failure must never break the stream.
+                        let model_now = model_arc.lock().await.clone();
+                        let provider_now = provider_arc.lock().await.clone();
+                        let _ = usage_store_arc.append(&crate::commands_usage::record_event(
+                            &model_now,
+                            &provider_now,
+                            input_tokens,
+                            output_tokens,
+                            cache_creation_tokens,
+                            cache_read_tokens,
+                            cost_usd,
+                        ));
                         let _ = app.emit(
                             event_names::QUERY_USAGE,
                             events::UsagePayload {

@@ -988,6 +988,10 @@ export async function getBillingHistory(): Promise<import('@/types').BillingHist
   return invoke('get_billing_history')
 }
 
+export async function getUsageStats(days: number): Promise<import('@/types').UsageStats> {
+  return invoke('get_usage_stats', { days })
+}
+
 // --- Scheduled Tasks (Sprint 2) ---
 //
 // Thin invoke() wrappers over the 19 Tauri commands in
