@@ -181,13 +181,18 @@ export async function sendNotification(payload: NotificationPayload): Promise<vo
   await invoke('send_notification', { payload })
 }
 
-/** Desktop-notification preferences — master enable + quiet-hours (DND) window. */
+/** Desktop-notification preferences — master enable, quiet-hours (DND) window,
+ *  and per-event-type toggles (completions vs failures). */
 export interface NotificationPrefs {
   master_enabled: boolean
   dnd_enabled: boolean
   /** `"HH:MM"` (24h, system-local) or null. */
   dnd_start: string | null
   dnd_end: string | null
+  /** Surface OS notifications for non-error events (query/task completion). */
+  on_completed: boolean
+  /** Surface OS notifications for error events (query/task failure). */
+  on_failed: boolean
 }
 
 export async function getNotificationPrefs(): Promise<NotificationPrefs> {

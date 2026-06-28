@@ -387,6 +387,8 @@ pub async fn switch_provider(
         notifications_dnd_enabled: existing.notifications_dnd_enabled,
         notifications_dnd_start: existing.notifications_dnd_start.clone(),
         notifications_dnd_end: existing.notifications_dnd_end.clone(),
+        notifications_on_completed: existing.notifications_on_completed,
+        notifications_on_failed: existing.notifications_on_failed,
     };
     drop(existing);
 

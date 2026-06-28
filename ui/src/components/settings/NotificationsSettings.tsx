@@ -285,6 +285,8 @@ function DndSection() {
   const [dnd, setDnd] = useState(false)
   const [start, setStart] = useState('22:00')
   const [end, setEnd] = useState('07:00')
+  const [onCompleted, setOnCompleted] = useState(true)
+  const [onFailed, setOnFailed] = useState(true)
 
   useEffect(() => {
     let cancelled = false
@@ -295,6 +297,8 @@ function DndSection() {
         setDnd(p.dnd_enabled)
         if (p.dnd_start) setStart(p.dnd_start)
         if (p.dnd_end) setEnd(p.dnd_end)
+        setOnCompleted(p.on_completed)
+        setOnFailed(p.on_failed)
       })
       .catch((e) => toastError(t('settings.notifications.dnd.loadFailed'), e))
       .finally(() => {
@@ -313,6 +317,8 @@ function DndSection() {
         dnd_enabled: dnd,
         dnd_start: dnd ? start : null,
         dnd_end: dnd ? end : null,
+        on_completed: onCompleted,
+        on_failed: onFailed,
       })
       toast.success(t('settings.notifications.dnd.saved'))
     } catch (e) {
@@ -342,6 +348,48 @@ function DndSection() {
           aria-label={t('settings.notifications.dnd.master')}
           className="shrink-0"
         />
+      </div>
+
+      <div className="pt-xs">
+        <div className="font-label-sm text-[12px] uppercase tracking-wide text-on-surface-variant mb-sm">
+          {t('settings.notifications.dnd.eventsTitle')}
+        </div>
+        <div className="space-y-md">
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+                {t('settings.notifications.dnd.completed')}
+              </div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+                {t('settings.notifications.dnd.completedDesc')}
+              </div>
+            </div>
+            <Switch
+              checked={onCompleted}
+              onCheckedChange={setOnCompleted}
+              disabled={windowDisabled}
+              aria-label={t('settings.notifications.dnd.completed')}
+              className="shrink-0"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+                {t('settings.notifications.dnd.failed')}
+              </div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+                {t('settings.notifications.dnd.failedDesc')}
+              </div>
+            </div>
+            <Switch
+              checked={onFailed}
+              onCheckedChange={setOnFailed}
+              disabled={windowDisabled}
+              aria-label={t('settings.notifications.dnd.failed')}
+              className="shrink-0"
+            />
+          </div>
+        </div>
       </div>
 
       <div className="flex items-center justify-between gap-md">
