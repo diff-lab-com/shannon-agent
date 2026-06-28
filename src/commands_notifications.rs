@@ -416,6 +416,24 @@ pub(crate) fn fire_query_notification(
     notifier.notify_dedup(&notification, window_ms)
 }
 
+/// Fire a query-event notification and surface the outcome instead of silently
+/// dropping it. Every call site previously used `let _ = fire_query_notification(…)`,
+/// which hid two real conditions: `Ok(false)` — the notifier suppressed the
+/// notification (cooldown/dedup) — and `Err` — the OS-notification dispatch
+/// itself failed. `context` is a short label (e.g. "query_completed") included
+/// in the log line so the source event is identifiable.
+pub(crate) fn fire_query_notification_logged(
+    notifier: &shannon_core::notifier::Notifier,
+    kind: NotificationKind,
+    context: &'static str,
+) {
+    match fire_query_notification(notifier, kind) {
+        Ok(true) => tracing::trace!("{} notification dispatched", context),
+        Ok(false) => tracing::debug!("{} notification suppressed by cooldown/dedup", context),
+        Err(e) => tracing::warn!(error = %e, "{} notification dispatch failed", context),
+    }
+}
+
 /// Best-effort load of `[notifications.webhook]` from `~/.shannon/config.toml`
 /// and `.shannon.toml` (project-local). Returns `None` on any error — never
 /// panics the app on config issues.
