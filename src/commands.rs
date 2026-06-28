@@ -908,6 +908,8 @@ pub async fn start_background_task(
     let tools = state.tools.clone();
     let _qe_config = state.qe_config.read().await.clone();
     let model = state.model.lock().await.clone();
+    let provider = state.provider.lock().await.clone();
+    let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
 
     tokio::spawn(async move {
@@ -933,6 +935,10 @@ pub async fn start_background_task(
 
         let query_id = uuid::Uuid::new_v4();
         let _qid_str = query_id.to_string();
+
+        // Clone before `model` is moved into QueryMetadata so usage events in
+        // the stream below can be attributed (mirrors send_message).
+        let model_for_usage = model.clone();
 
         let context = QueryContext {
             query_id,
@@ -960,6 +966,29 @@ pub async fn start_background_task(
                 Ok(event) => match event {
                     QueryEvent::Text { content, .. } => {
                         final_output.push_str(&content);
+                    }
+                    QueryEvent::Usage {
+                        input_tokens,
+                        output_tokens,
+                        cost_usd,
+                        cache_creation_tokens,
+                        cache_read_tokens,
+                        ..
+                    } => {
+                        // Persist to the local usage ledger. Best-effort: a log
+                        // write failure must never break the task. No QUERY_USAGE
+                        // emit here — background tasks aren't tied to a visible
+                        // chat, so a live-usage signal has no consumer and could
+                        // surface as a phantom UI update.
+                        let _ = usage_store.append(&crate::commands_usage::record_event(
+                            &model_for_usage,
+                            &provider,
+                            input_tokens,
+                            output_tokens,
+                            cache_creation_tokens,
+                            cache_read_tokens,
+                            cost_usd,
+                        ));
                     }
                     QueryEvent::Completed { .. } => break,
                     QueryEvent::Failed { error, .. } => {
