@@ -91,7 +91,7 @@ describe('Sidebar — Simple mode (default)', () => {
 
   it('hides Extensions section in Simple mode', () => {
     render(wrap(<Sidebar />))
-    expect(screen.queryByText('Integrations')).not.toBeInTheDocument()
+    expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
   })
 
   it('hides OPC section in Simple mode', () => {
@@ -115,8 +115,8 @@ describe('Sidebar — Simple mode (default)', () => {
   it('toggles to Advanced mode on mode button click', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
-    // Now in Advanced mode — Integrations visible
-    expect(screen.getByText('Integrations')).toBeInTheDocument()
+    // Now in Advanced mode — Extensions visible
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -129,7 +129,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Integrations')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -150,7 +150,7 @@ describe('Sidebar — Advanced mode', () => {
 
   it('renders Extensions section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Integrations')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
   })
 
   it('renders OPC section', () => {
@@ -179,18 +179,18 @@ describe('Sidebar — Advanced mode', () => {
 
   it('collapses and expands Extensions section', () => {
     render(wrap(<Sidebar />))
-    // Integrations is open by default
+    // Extensions is open by default
     expect(screen.getByText('Skills')).toBeInTheDocument()
 
-    // Click Integrations button to collapse
-    const integrationsButtons = screen.getAllByText('Integrations')
+    // Click Extensions button to collapse
+    const integrationsButtons = screen.getAllByText('Extensions')
     fireEvent.click(integrationsButtons[0])
 
     // Sub-links should be gone
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
 
     // Click again to expand
-    fireEvent.click(screen.getByText('Integrations'))
+    fireEvent.click(screen.getByText('Extensions'))
     expect(screen.getByText('Skills')).toBeInTheDocument()
   })
 

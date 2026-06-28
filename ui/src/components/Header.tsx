@@ -22,6 +22,7 @@ const TITLE_MAP: [string, string][] = [
   ['/editor', 'header.title.editor'],
   ['/quickfix', 'header.title.quickfix'],
   ['/welcome', 'header.title.welcome'],
+  ['/usage', 'header.title.usage'],
   ['/chat', 'header.title.chat'],
 ]
 
