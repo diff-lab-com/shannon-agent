@@ -297,3 +297,72 @@ jobs:
             target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
             target/x86_64-apple-darwin/release/bundle/dmg/*.dmg.sig
             target/*/release/bundle/**/latest.json
+
+  release:
+    needs: build
+    name: Publish Gitea Release
+    runs-on: ubuntu-22.04
+    # build already guards on main/tag, but a downloadable Release only makes
+    # sense for a tag. workflow_dispatch on main/dev must NOT create one.
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all build artifacts
+        # Pulls every platform artifact set (shannon-desktop-{linux,windows,macos})
+        # into artifacts/<name>/... so we can attach them to the Release.
+        uses: https://gitea.com/actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Create release and attach installers
+        shell: bash
+        env:
+          # GITHUB_TOKEN is auto-provided by Gitea Actions and scoped to this
+          # repo. If the repo's Actions token lacks release write permission,
+          # add a RELEASE_TOKEN secret (PAT with write:repository) and point
+          # GITEA_TOKEN at it instead.
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          API="${SERVER_URL}/api/v1/repos/${REPOSITORY}"
+
+          echo "Creating release for tag ${TAG} …"
+          # The tag already exists (it triggered this run), so we only create
+          # the Release object attached to it.
+          RELEASE_ID=$(curl -fsSL -X POST "${API}/releases" \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":\"Shannon Desktop ${TAG}\",\"draft\":false,\"prerelease\":false}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "Release id: ${RELEASE_ID}"
+
+          # latest.json is the Tauri updater manifest; the rest are platform
+          # installers (+ their .sig sidecars).
+          mapfile -t ASSETS < <(find artifacts -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+               -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \
+               -o -name '*.sig'  -o -name 'latest.json' \) | sort -u)
+
+          echo "Attaching ${#ASSETS[@]} asset(s)…"
+          fail=0
+          for asset in "${ASSETS[@]}"; do
+            name="$(basename "${asset}")"
+            # URL-encode the asset name (spaces / special chars break the query).
+            qname="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "${name}")"
+            if curl -fsSL -X POST "${API}/releases/${RELEASE_ID}/assets?name=${qname}" \
+                 -H "Authorization: token ${GITEA_TOKEN}" \
+                 -H "Content-Type: application/octet-stream" \
+                 --data-binary "@${asset}" >/dev/null; then
+              echo "  + ${name}"
+            else
+              echo "  ! ${name} upload failed" >&2
+              fail=1
+            fi
+          done
+          if [ "${fail}" -ne 0 ]; then
+            echo "One or more assets failed to upload." >&2
+            exit 1
+          fi
+          echo "Release ${TAG} published with ${#ASSETS[@]} asset(s)."
