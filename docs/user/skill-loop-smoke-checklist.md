@@ -29,8 +29,10 @@ Estimated time: 10 minutes.
 2. Wait for the task to complete (the AI finishes its response and
    the stop button disappears).
 3. Watch for the toast in the bottom-right: "Found 1 reusable
-   pattern." This appears ~5-30 seconds after completion (one
-   evaluator LLM call runs in the background).
+   pattern." This appears ~10-60 seconds after completion: the
+   auto-evaluation hook first runs the evaluator, and on
+   `suggest=true` runs a second generation call to draft the
+   proposal, then fires the toast.
 4. If the task was too simple or the evaluator returned
    `suggest=false`, no toast appears. Check the log (see Verify
    step 4) and retry with a more complex prompt.
@@ -46,17 +48,16 @@ home directory.
    pipe stderr through `jq 'select(.msg | contains("skill"))'`.
    On failure you will see `skill loop evaluate failed (non-blocking)`.
 
-2. **Proposal file.** After the toast, check whether a proposal
-   draft was written:
+2. **Proposal file.** After the toast, a proposal draft should have
+   been written:
    ```sh
    ls -la ~/.shannon/skill-loop/proposals/
    ```
-   **Known gap:** the auto-evaluation hook currently emits the
-   `skill-proposal-available` event with a hardcoded count of 1
-   but does **not** call `skill_loop_generate`, so this directory
-   may be empty. The toast fires based on the event, not on disk
-   state. If the directory is empty, the review panel will show
-   "No proposals" -- this is expected with the current build.
+   On `suggest=true` the hook now generates and saves a proposal
+   (a second LLM call) before emitting `skill-proposal-available`
+   with the real pending count. If the directory is empty, either
+   the evaluator returned `suggest=false` (check the tracing log)
+   or generation failed non-blocking -- see the stderr warnings.
 
 3. **Scheduled run trace.** The task itself is logged in the
    scheduled-runs store:
@@ -77,12 +78,11 @@ home directory.
 
 ## Approval flow
 
-1. Click **View** on the toast. The review panel opens.
-   - If proposals exist on disk, you see name, description,
-     triggers, and workflow.
-   - If the directory is empty (see Known gap above), the panel
-     shows "No proposals" -- the evaluation signal worked but
-     generation was not triggered.
+1. Click **View** on the toast. The review panel opens and lists
+   the generated proposal(s): name, description, triggers, and
+   workflow. If the panel shows "No proposals", generation failed
+   non-blocking -- check the stderr `skill loop generate proposal
+   failed` warning.
 2. Click **Approve** on a proposal.
    - On success: the TOML file is written to
      `~/.shannon/skills/user-proposed/{slug}.toml` and the

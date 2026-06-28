@@ -264,6 +264,17 @@ fn count_pending_proposals(proposals_dir: &Path) -> Result<usize, String> {
         .count())
 }
 
+/// Save a generated proposal to disk and return the resulting pending count.
+/// Used by the auto-evaluation hook (`commands.rs::send_message`) so it emits
+/// the *real* proposal count instead of a hardcoded placeholder — after an
+/// actual proposal has been generated and persisted.
+pub(crate) fn save_proposal_and_count(proposal: &SkillProposal) -> Result<usize, String> {
+    let proposals_dir = proposals_directory()?;
+    skill_loop::save_proposal(&proposals_dir, proposal)
+        .map_err(|e| format!("Failed to save proposal: {e}"))?;
+    count_pending_proposals(proposals_dir.as_path())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +312,61 @@ mod tests {
             },
             TaskOutcome::Success
         );
+    }
+
+    // Serialize filesystem-touching tests behind a single mutex so the
+    // process-global HOME override can't race across parallel tests.
+    static FS_HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// RAII guard that points HOME at a temp dir for the duration of a test,
+    /// restoring the previous value on drop.
+    struct HomeGuard {
+        prev: Option<String>,
+    }
+    impl HomeGuard {
+        fn new(tmp: &std::path::Path) -> Self {
+            let prev = std::env::var("HOME").ok();
+            // SAFETY: every caller holds FS_HOME_LOCK, serializing HOME mutation.
+            unsafe { std::env::set_var("HOME", tmp) };
+            HomeGuard { prev }
+        }
+    }
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: every caller holds FS_HOME_LOCK.
+            unsafe {
+                match &self.prev {
+                    Some(h) => std::env::set_var("HOME", h),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+
+    fn pending_proposal() -> SkillProposal {
+        SkillProposal {
+            id: uuid::Uuid::new_v4(),
+            name: "Test Skill".into(),
+            slug: "test-skill".into(),
+            description: "desc".into(),
+            trigger_patterns: vec!["when X".into()],
+            example_workflow: "1. do Y".into(),
+            source_task_id: None,
+            created_at: chrono::Utc::now(),
+            status: ProposalStatus::Pending,
+            suggested_metadata: None,
+        }
+    }
+
+    #[test]
+    fn save_proposal_and_count_persists_and_counts() {
+        let _guard = FS_HOME_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _home = HomeGuard::new(tmp.path());
+
+        // first saved proposal => 1 pending
+        assert_eq!(save_proposal_and_count(&pending_proposal()).unwrap(), 1);
+        // a second pending proposal => 2
+        assert_eq!(save_proposal_and_count(&pending_proposal()).unwrap(), 2);
     }
 }

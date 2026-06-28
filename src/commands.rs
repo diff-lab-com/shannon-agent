@@ -696,22 +696,63 @@ pub async fn send_message(
                                             client_config,
                                         );
 
-                                        match shannon_core::skill_loop::evaluate_task(
-                                            &client, evaluation,
+                                        // Reduce the evaluation result to a Send-only bool
+                                        // first: evaluate_task returns Result<_, Box<dyn
+                                        // Error>> and Box<dyn Error> is !Send, so the whole
+                                        // result must be dropped before the generate await
+                                        // below (else the spawned future is !Send).
+                                        let suggest = match shannon_core::skill_loop::evaluate_task(
+                                            &client,
+                                            evaluation.clone(),
                                         )
                                         .await
                                         {
-                                            Ok(result) if result.suggest => {
-                                                let _ = app_clone.emit(
-                                                    crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,
-                                                    crate::commands_skill_loop::SkillProposalCountPayload { pending_count: 1 },
-                                                );
-                                            }
-                                            Ok(_) => {
-                                                // suggest=false, silent skip
-                                            }
+                                            Ok(result) => result.suggest,
                                             Err(e) => {
-                                                tracing::warn!(error = %e, "skill loop evaluate failed (non-blocking)");
+                                                tracing::warn!(
+                                                    error = %e,
+                                                    "skill loop evaluate failed (non-blocking)"
+                                                );
+                                                false
+                                            }
+                                        };
+
+                                        if suggest {
+                                            // Generate a proposal draft so the user can
+                                            // review it. Generation is automatic; only install
+                                            // (approve) is manual. Non-blocking on failure — a
+                                            // failed generation simply won't surface a proposal.
+                                            match shannon_core::skill_loop::generate_skill_proposal(
+                                                &client, evaluation,
+                                            )
+                                            .await
+                                            {
+                                                Ok(proposal) => {
+                                                    match crate::commands_skill_loop::save_proposal_and_count(
+                                                        &proposal,
+                                                    ) {
+                                                        Ok(count) => {
+                                                            let _ = app_clone.emit(
+                                                                crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,
+                                                                crate::commands_skill_loop::SkillProposalCountPayload {
+                                                                    pending_count: count,
+                                                                },
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::warn!(
+                                                                error = %e,
+                                                                "skill loop save proposal failed (non-blocking)"
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        error = %e,
+                                                        "skill loop generate proposal failed (non-blocking)"
+                                                    );
+                                                }
                                             }
                                         }
                                     }
