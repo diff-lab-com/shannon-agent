@@ -7,7 +7,9 @@
 //! in `commands.rs`) and `AppState::new` call them across the module boundary.
 
 use crate::commands::AppState;
+use crate::events::{self, event_names};
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 // === Payloads / DTOs =====================================================
 
@@ -76,6 +78,64 @@ pub async fn send_notification(
         .body(payload.body)
         .show()
         .map_err(|e| format!("notification show failed: {e}"))
+}
+
+/// Saved desktop-notification preferences (master enable + DND window).
+/// Mirrors the four `notifications_*` fields on `DesktopConfig`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationPrefsDto {
+    pub master_enabled: bool,
+    pub dnd_enabled: bool,
+    #[serde(default)]
+    pub dnd_start: Option<String>,
+    #[serde(default)]
+    pub dnd_end: Option<String>,
+}
+
+/// Read the current desktop-notification preferences.
+#[tauri::command]
+pub async fn get_notification_prefs() -> Result<NotificationPrefsDto, String> {
+    let c = crate::config::load_config();
+    Ok(NotificationPrefsDto {
+        master_enabled: c.notifications_master_enabled,
+        dnd_enabled: c.notifications_dnd_enabled,
+        dnd_start: c.notifications_dnd_start,
+        dnd_end: c.notifications_dnd_end,
+    })
+}
+
+/// Persist desktop-notification preferences. Validates the `"HH:MM"` window
+/// bounds when present, then writes through `DesktopConfig` and emits
+/// `CONFIG_UPDATED` so any open settings panel refreshes.
+#[tauri::command]
+pub async fn set_notification_prefs(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    prefs: NotificationPrefsDto,
+) -> Result<(), String> {
+    if let Some(s) = prefs.dnd_start.as_deref() {
+        parse_hhmm(s).ok_or_else(|| format!("invalid dnd_start (expected HH:MM): {s}"))?;
+    }
+    if let Some(e) = prefs.dnd_end.as_deref() {
+        parse_hhmm(e).ok_or_else(|| format!("invalid dnd_end (expected HH:MM): {e}"))?;
+    }
+    let snapshot = {
+        let mut dc = state.desktop_config.write().await;
+        dc.notifications_master_enabled = prefs.master_enabled;
+        dc.notifications_dnd_enabled = prefs.dnd_enabled;
+        dc.notifications_dnd_start = prefs.dnd_start;
+        dc.notifications_dnd_end = prefs.dnd_end;
+        dc.clone()
+    };
+    crate::config::save_config(&snapshot)?;
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "notifications".into(),
+            value: "updated".into(),
+        },
+    );
+    Ok(())
 }
 
 #[tauri::command]
@@ -361,6 +421,78 @@ pub(crate) fn load_desktop_webhook_config() -> Option<shannon_core::notifier::We
     cfg.notifications.and_then(|n| n.webhook)
 }
 
+// === Desktop-notification preferences (master enable + DND) ==============
+
+/// Parsed DND preferences used by the OS-notification handler to decide
+/// whether to suppress a notification. Loaded fresh from `DesktopConfig` on
+/// each call — notifications are infrequent, so the disk read is negligible.
+pub(crate) struct NotificationPrefs {
+    pub master_enabled: bool,
+    pub dnd_enabled: bool,
+    dnd_start_min: Option<u32>,
+    dnd_end_min: Option<u32>,
+}
+
+impl NotificationPrefs {
+    /// Read + parse from `DesktopConfig`. Malformed `"HH:MM"` values are
+    /// dropped (treated as unset), so a bad edit never panics the handler.
+    pub(crate) fn load() -> Self {
+        let c = crate::config::load_config();
+        NotificationPrefs {
+            master_enabled: c.notifications_master_enabled,
+            dnd_enabled: c.notifications_dnd_enabled,
+            dnd_start_min: c.notifications_dnd_start.as_deref().and_then(parse_hhmm),
+            dnd_end_min: c.notifications_dnd_end.as_deref().and_then(parse_hhmm),
+        }
+    }
+
+    /// Whether the current system-local time falls inside the DND window.
+    /// False when DND is off or either bound is unset.
+    pub(crate) fn within_dnd_window(&self) -> bool {
+        if !self.dnd_enabled {
+            return false;
+        }
+        let (Some(start), Some(end)) = (self.dnd_start_min, self.dnd_end_min) else {
+            return false;
+        };
+        is_within_dnd_window(minutes_since_local_midnight(), start, end)
+    }
+}
+
+/// Minutes since midnight in system-local time (0..=1439).
+fn minutes_since_local_midnight() -> u32 {
+    use chrono::Timelike;
+    chrono::Local::now().time().num_seconds_from_midnight() / 60
+}
+
+/// Parse `"HH:MM"` (24h, lenient — `"9:05"` accepted) into minutes-of-day.
+/// `None` when the string is malformed or out of range.
+pub(crate) fn parse_hhmm(s: &str) -> Option<u32> {
+    let (h, m) = s.split_once(':')?;
+    let hours: u32 = h.parse().ok()?;
+    let minutes: u32 = m.parse().ok()?;
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    Some(hours * 60 + minutes)
+}
+
+/// Is `now_min` inside the `[start, end)` quiet window? Handles overnight
+/// wrap (e.g. 22:00 → 07:00). `start == end` means "no window" (returns
+/// false) so a freshly-enabled DND with identical bounds doesn't suppress
+/// everything.
+pub(crate) fn is_within_dnd_window(now_min: u32, start_min: u32, end_min: u32) -> bool {
+    if start_min == end_min {
+        return false;
+    }
+    if start_min < end_min {
+        now_min >= start_min && now_min < end_min
+    } else {
+        // overnight wrap
+        now_min >= start_min || now_min < end_min
+    }
+}
+
 fn template_to_str(t: &shannon_core::notifier::WebhookTemplate) -> String {
     use shannon_core::notifier::WebhookTemplate::*;
     match t {
@@ -619,5 +751,57 @@ mod tests {
         use shannon_core::notifier::WebhookTemplate;
         assert_eq!(template_from_str("unknown"), WebhookTemplate::Raw);
         assert_eq!(template_from_str(""), WebhookTemplate::Raw);
+    }
+
+    // === DND / quiet-hours window parsing + evaluation ===
+
+    #[test]
+    fn parse_hhmm_accepts_zero_padded_and_short_forms() {
+        assert_eq!(parse_hhmm("00:00"), Some(0));
+        assert_eq!(parse_hhmm("23:59"), Some(23 * 60 + 59));
+        assert_eq!(parse_hhmm("9:05"), Some(9 * 60 + 5)); // lenient short form
+        assert_eq!(parse_hhmm("7:30"), Some(7 * 60 + 30));
+    }
+
+    #[test]
+    fn parse_hhmm_rejects_out_of_range_and_malformed() {
+        assert_eq!(parse_hhmm("24:00"), None); // hour > 23
+        assert_eq!(parse_hhmm("12:60"), None); // minute > 59
+        assert_eq!(parse_hhmm("noon"), None);
+        assert_eq!(parse_hhmm("12"), None);
+        assert_eq!(parse_hhmm(""), None);
+        assert_eq!(parse_hhmm("ab:cd"), None);
+    }
+
+    #[test]
+    fn dnd_window_same_day_inclusive_start_exclusive_end() {
+        // 09:00–17:00
+        let (start, end) = (9 * 60, 17 * 60);
+        assert!(is_within_dnd_window(9 * 60, start, end)); // at start
+        assert!(is_within_dnd_window(12 * 60, start, end)); // midday
+        assert!(!is_within_dnd_window(17 * 60, start, end)); // at end (exclusive)
+        assert!(!is_within_dnd_window(8 * 60, start, end)); // before
+        assert!(!is_within_dnd_window(23 * 60, start, end)); // after
+    }
+
+    #[test]
+    fn dnd_window_overnight_wraps_past_midnight() {
+        // 22:00–07:00 (wraps midnight)
+        let (start, end) = (22 * 60, 7 * 60);
+        assert!(is_within_dnd_window(22 * 60, start, end)); // at start
+        assert!(is_within_dnd_window(23 * 60, start, end)); // late night
+        assert!(is_within_dnd_window(0, start, end)); // midnight
+        assert!(is_within_dnd_window(3 * 60, start, end)); // early morning
+        assert!(!is_within_dnd_window(7 * 60, start, end)); // at end (exclusive)
+        assert!(!is_within_dnd_window(12 * 60, start, end)); // midday
+    }
+
+    #[test]
+    fn dnd_window_equal_bounds_is_no_window() {
+        // start == end means "disabled" — never suppress (so a freshly-enabled
+        // DND with identical bounds doesn't suppress everything).
+        assert!(!is_within_dnd_window(0, 600, 600));
+        assert!(!is_within_dnd_window(600, 600, 600));
+        assert!(!is_within_dnd_window(1439, 600, 600));
     }
 }

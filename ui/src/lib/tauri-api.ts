@@ -181,6 +181,23 @@ export async function sendNotification(payload: NotificationPayload): Promise<vo
   await invoke('send_notification', { payload })
 }
 
+/** Desktop-notification preferences — master enable + quiet-hours (DND) window. */
+export interface NotificationPrefs {
+  master_enabled: boolean
+  dnd_enabled: boolean
+  /** `"HH:MM"` (24h, system-local) or null. */
+  dnd_start: string | null
+  dnd_end: string | null
+}
+
+export async function getNotificationPrefs(): Promise<NotificationPrefs> {
+  return invoke('get_notification_prefs')
+}
+
+export async function setNotificationPrefs(prefs: NotificationPrefs): Promise<void> {
+  await invoke('set_notification_prefs', { prefs })
+}
+
 export interface InboundMessage {
   provider: 'slack' | 'telegram'
   source_id: string
