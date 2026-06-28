@@ -383,6 +383,10 @@ pub async fn switch_provider(
         skill_loop_min_duration_secs: existing.skill_loop_min_duration_secs,
         skill_loop_min_tool_calls: existing.skill_loop_min_tool_calls,
         skill_detection_enabled: existing.skill_detection_enabled,
+        notifications_master_enabled: existing.notifications_master_enabled,
+        notifications_dnd_enabled: existing.notifications_dnd_enabled,
+        notifications_dnd_start: existing.notifications_dnd_start.clone(),
+        notifications_dnd_end: existing.notifications_dnd_end.clone(),
     };
     drop(existing);
 

@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import {
   Select,
   SelectContent,
@@ -273,6 +274,135 @@ function WebhookSection() {
   )
 }
 
+/** Desktop-notification master switch + Do-Not-Disturb quiet-hours window.
+ * Desktop-local: webhooks still deliver while DND suppresses OS popups. */
+function DndSection() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [master, setMaster] = useState(true)
+  const [dnd, setDnd] = useState(false)
+  const [start, setStart] = useState('22:00')
+  const [end, setEnd] = useState('07:00')
+
+  useEffect(() => {
+    let cancelled = false
+    api.getNotificationPrefs()
+      .then((p) => {
+        if (cancelled) return
+        setMaster(p.master_enabled)
+        setDnd(p.dnd_enabled)
+        if (p.dnd_start) setStart(p.dnd_start)
+        if (p.dnd_end) setEnd(p.dnd_end)
+      })
+      .catch((e) => toastError(t('settings.notifications.dnd.loadFailed'), e))
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [t])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await api.setNotificationPrefs({
+        master_enabled: master,
+        dnd_enabled: dnd,
+        dnd_start: dnd ? start : null,
+        dnd_end: dnd ? end : null,
+      })
+      toast.success(t('settings.notifications.dnd.saved'))
+    } catch (e) {
+      toastError(t('settings.notifications.dnd.saveFailed'), e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const windowDisabled = loading || !master
+
+  return (
+    <section className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest p-lg space-y-md">
+      <div className="flex items-center justify-between gap-md">
+        <div>
+          <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            {t('settings.notifications.dnd.master')}
+          </div>
+          <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            {t('settings.notifications.dnd.masterDesc')}
+          </div>
+        </div>
+        <Switch
+          checked={master}
+          onCheckedChange={setMaster}
+          disabled={loading}
+          aria-label={t('settings.notifications.dnd.master')}
+          className="shrink-0"
+        />
+      </div>
+
+      <div className="flex items-center justify-between gap-md">
+        <div>
+          <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            {t('settings.notifications.dnd.quietHours')}
+          </div>
+          <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            {t('settings.notifications.dnd.quietHoursDesc')}
+          </div>
+        </div>
+        <Switch
+          checked={dnd}
+          onCheckedChange={setDnd}
+          disabled={windowDisabled}
+          aria-label={t('settings.notifications.dnd.quietHours')}
+          className="shrink-0"
+        />
+      </div>
+
+      {dnd && master && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-md">
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-sm text-[12px] text-on-surface-variant">
+              {t('settings.notifications.dnd.start')}
+            </span>
+            <input
+              type="time"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              disabled={loading}
+              className="rounded-lg border border-outline-variant bg-surface-container-lowest px-md py-sm font-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </label>
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-sm text-[12px] text-on-surface-variant">
+              {t('settings.notifications.dnd.end')}
+            </span>
+            <input
+              type="time"
+              value={end}
+              onChange={(e) => setEnd(e.target.value)}
+              disabled={loading}
+              className="rounded-lg border border-outline-variant bg-surface-container-lowest px-md py-sm font-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </label>
+          <p className="sm:col-span-2 font-label-sm text-[12px] text-on-surface-variant">
+            {t('settings.notifications.dnd.windowHint')}
+          </p>
+        </div>
+      )}
+
+      <div>
+        <Button onClick={handleSave} disabled={loading || saving}>
+          {saving ? t('settings.notifications.dnd.saving') : t('settings.notifications.dnd.save')}
+        </Button>
+      </div>
+    </section>
+  )
+}
+
 export default function NotificationsSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
@@ -384,6 +514,14 @@ export default function NotificationsSettings() {
           {t('settings.notifications.subtitle')}
         </p>
       </div>
+
+      <section className="mt-xl">
+        <div className="mb-lg">
+          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.dnd.sectionTitle')}</h3>
+          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.dnd.sectionDesc')}</p>
+        </div>
+        <DndSection />
+      </section>
 
       <section className="mt-xl">
         <div className="mb-lg">

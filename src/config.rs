@@ -49,9 +49,30 @@ pub struct DesktopConfig {
     /// scanning sessions. Default: true.
     #[serde(default = "default_skill_detection_enabled")]
     pub skill_detection_enabled: bool,
+    /// Master switch for desktop (OS) notifications. When false, the
+    /// `TauriNotificationHandler` silently drops every notification.
+    /// Default: enabled (existing users keep notifications on upgrade).
+    #[serde(default = "default_true")]
+    pub notifications_master_enabled: bool,
+    /// Do-Not-Disturb / quiet-hours switch. When true, desktop notifications
+    /// are suppressed while the current local time is inside the window
+    /// [`notifications_dnd_start`, `notifications_dnd_end`). Webhook delivery
+    /// is unaffected.
+    #[serde(default)]
+    pub notifications_dnd_enabled: bool,
+    /// DND window start, `"HH:MM"` (24h, system-local). Parsed leniently.
+    #[serde(default)]
+    pub notifications_dnd_start: Option<String>,
+    /// DND window end, `"HH:MM"` (24h, system-local).
+    #[serde(default)]
+    pub notifications_dnd_end: Option<String>,
 }
 
 fn default_skill_detection_enabled() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 
@@ -133,6 +154,10 @@ impl Default for DesktopConfig {
             skill_loop_min_duration_secs: default_skill_loop_min_duration_secs(),
             skill_loop_min_tool_calls: default_skill_loop_min_tool_calls(),
             skill_detection_enabled: default_skill_detection_enabled(),
+            notifications_master_enabled: default_true(),
+            notifications_dnd_enabled: false,
+            notifications_dnd_start: None,
+            notifications_dnd_end: None,
         }
     }
 }
@@ -266,6 +291,10 @@ mod tests {
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
             skill_detection_enabled: true,
+            notifications_master_enabled: true,
+            notifications_dnd_enabled: false,
+            notifications_dnd_start: None,
+            notifications_dnd_end: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -314,6 +343,10 @@ mod tests {
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
             skill_detection_enabled: true,
+            notifications_master_enabled: true,
+            notifications_dnd_enabled: false,
+            notifications_dnd_start: None,
+            notifications_dnd_end: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -344,6 +377,10 @@ mod tests {
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
             skill_detection_enabled: true,
+            notifications_master_enabled: true,
+            notifications_dnd_enabled: false,
+            notifications_dnd_start: None,
+            notifications_dnd_end: None,
         };
 
         // Test serialization preserves approval_mode
