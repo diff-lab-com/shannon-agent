@@ -139,6 +139,8 @@ vi.mock('@/lib/tauri-api', () => ({
   requestPermission: vi.fn().mockResolvedValue(true),
   featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
   sendNotification: vi.fn().mockResolvedValue(undefined),
+  getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null }),
+  setNotificationPrefs: vi.fn().mockResolvedValue(undefined),
   getInboundConfig: vi.fn().mockResolvedValue({ slack: null, telegram: null }),
   saveInboundConfig: vi.fn().mockResolvedValue(undefined),
   clearInboundConfig: vi.fn().mockResolvedValue(undefined),

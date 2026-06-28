@@ -215,6 +215,8 @@ fn main() {
             commands_onboarding::seed_sample_data,
             // P3 notifications — native OS notification bridge
             commands_notifications::send_notification,
+            commands_notifications::get_notification_prefs,
+            commands_notifications::set_notification_prefs,
             commands_notifications::get_webhook_config,
             commands_notifications::save_webhook_config,
             commands_notifications::clear_webhook_config,

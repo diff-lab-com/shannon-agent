@@ -28,6 +28,13 @@ impl TauriNotificationHandler {
 
 impl NotificationHandler for TauriNotificationHandler {
     fn send(&self, n: &Notification) -> Result<(), NotifierError> {
+        // Master switch + quiet-hours (DND) suppression — desktop-local only.
+        // Returning Ok(()) silently drops the OS popup; webhook handlers on the
+        // same Notifier are unaffected, so away-from-desk delivery still fires.
+        let prefs = crate::commands_notifications::NotificationPrefs::load();
+        if !prefs.master_enabled || prefs.within_dnd_window() {
+            return Ok(());
+        }
         self.app
             .notification()
             .builder()
