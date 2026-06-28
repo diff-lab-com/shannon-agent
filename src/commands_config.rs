@@ -1339,19 +1339,26 @@ mod tests {
 
     #[test]
     fn build_seed_file_returns_none_without_provider() {
-        let mut cfg = DesktopConfig::default();
-        cfg.provider = None;
+        let cfg = DesktopConfig {
+            provider: None,
+            ..Default::default()
+        };
         assert!(build_seed_file(&cfg).is_none());
-        cfg.provider = Some(String::new()); // empty => treated as unset
+        let cfg = DesktopConfig {
+            provider: Some(String::new()), // empty => treated as unset
+            ..Default::default()
+        };
         assert!(build_seed_file(&cfg).is_none());
     }
 
     #[test]
     fn build_seed_file_mirrors_legacy_singular_config() {
-        let mut cfg = DesktopConfig::default();
-        cfg.provider = Some("anthropic".into());
-        cfg.api_key = Some("sk-legacy".into());
-        cfg.model = Some("claude-sonnet-4-6".into());
+        let cfg = DesktopConfig {
+            provider: Some("anthropic".into()),
+            api_key: Some("sk-legacy".into()),
+            model: Some("claude-sonnet-4-6".into()),
+            ..Default::default()
+        };
         let file = build_seed_file(&cfg).unwrap();
         assert_eq!(file.providers.len(), 1);
         // the active pointer names the sole seeded entry
