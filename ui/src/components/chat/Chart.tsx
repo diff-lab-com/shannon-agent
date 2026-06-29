@@ -47,7 +47,7 @@ function CartesianChart({ spec }: CartesianChartProps) {
         className="w-full h-auto"
         preserveAspectRatio="xMidYMid meet"
         role="img"
-        aria-label={spec.title || 'chart'}
+        aria-label={spec.title || intl.formatMessage({ id: 'chat.chart.aria.chart' })}
       >
         {ticks.map((tv) => {
           const y = y0 - ((tv - min) / yRange) * plotH
@@ -148,7 +148,7 @@ function CartesianChart({ spec }: CartesianChartProps) {
         )}
       </svg>
       <span className="sr-only">
-        {spec.data.length} data points. Range: {formatTick(min)} to {formatTick(max)}.
+        {intl.formatMessage({ id: 'chat.chart.sr.dataSummary' }, { count: spec.data.length, min: formatTick(min), max: formatTick(max) })}
       </span>
     </figure>
   )
@@ -201,7 +201,7 @@ function PieChart({ spec }: PieChartProps) {
           {spec.title}
         </figcaption>
       )}
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full h-auto" role="img" aria-label={spec.title || 'pie chart'}>
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full h-auto" role="img" aria-label={spec.title || intl.formatMessage({ id: 'chat.chart.aria.pieChart' })}>
         {slices.map((s, i) => (
           <path
             key={i}

@@ -56,10 +56,21 @@ export function formatUnixDateTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
-export const DAY_NAMES = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'] as const
-export const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-] as const
+/// Locale-aware long month name for calendar headers (0=January..11=December).
+/// Uses Intl.DateTimeFormat so it follows the active UI locale.
+export function monthName(locale: string, monthIndex: number): string {
+  return new Intl.DateTimeFormat(locale, { month: 'long' }).format(new Date(2024, monthIndex, 1))
+}
+
+/// Locale-aware weekday name. `jsDay` is 0=Sun..6=Sat (JS Date convention);
+/// for a Monday-first grid pass `(index + 1) % 7`.
+export function weekdayName(
+  locale: string,
+  jsDay: number,
+  form: 'long' | 'short' | 'narrow' = 'long',
+): string {
+  // 2024-01-07 is a Sunday (jsDay 0); adding jsDay lands on the right weekday.
+  return new Intl.DateTimeFormat(locale, { weekday: form }).format(new Date(2024, 0, 7 + jsDay))
+}
 
 export const TASKS_PER_PAGE = 10

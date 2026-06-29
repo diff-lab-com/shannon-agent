@@ -88,7 +88,8 @@ describe('Tasks Enhanced', () => {
   it('renders calendar with day names', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
     renderTasks()
-    expect(screen.getByText('Mo')).toBeInTheDocument()
+    // Day headers come from Intl weekday 'short' (locale-aware); en → "Mon".
+    expect(screen.getByText('Mon')).toBeInTheDocument()
   })
 
   it('renders Task Completion card', () => {

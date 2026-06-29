@@ -184,7 +184,7 @@ export default function Skills() {
         <>
           <section>
             <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide mb-sm">
-              Catalog · {filtered.length}
+              {t('extensions.skills.catalogCount', { count: filtered.length })}
             </h3>
             {filtered.length === 0 ? (
               <div className="text-center py-md text-on-surface-variant text-label-md">
@@ -228,7 +228,7 @@ export default function Skills() {
       <section>
         <div className="flex items-center justify-between gap-md mb-sm flex-wrap">
           <h3 className="text-label-lg font-bold text-on-surface-variant uppercase tracking-wide">
-            Installed · {installed.length}
+            {t('extensions.skills.installedCount', { count: installed.length })}
           </h3>
           <div role="tablist" aria-label={t('skills.installed.filter.aria')} className="flex items-center gap-xs">
             {([
@@ -354,7 +354,7 @@ function SkillCard({
           <h4 className="font-bold text-label-md text-on-surface hover:underline truncate">{entry.name}</h4>
         </button>
         <span className={`text-label-xs px-xs py-[1px] rounded-full font-bold ${trustLabel.cls} shrink-0`}>
-          {trustLabel.text}
+          {t(trustLabel.key)}
         </span>
       </div>
       <button
@@ -402,11 +402,9 @@ function SkillCard({
   );
 }
 
-const TRUST_LABELS: Record<SkillCatalogEntry['trust'], { text: string; cls: string }> = {
-  verified: { text: "Verified", cls: "bg-primary-container/50 text-on-primary-container" },
-  official: { text: "Official", cls: "bg-secondary-container/50 text-on-secondary-container" },
-  community: { text: "Community", cls: "bg-tertiary-container/50 text-on-tertiary-container" },
-  unknown: { text: "Unknown", cls: "bg-surface-container-highest text-on-surface-variant" },
+const TRUST_LABELS: Record<SkillCatalogEntry['trust'], { key: string; cls: string }> = {
+  verified: { key: 'extensions.skills.trust.verified', cls: "bg-primary-container/50 text-on-primary-container" },
+  official: { key: 'extensions.skills.trust.official', cls: "bg-secondary-container/50 text-on-secondary-container" },
+  community: { key: 'extensions.skills.trust.community', cls: "bg-tertiary-container/50 text-on-tertiary-container" },
+  unknown: { key: 'extensions.skills.trust.unknown', cls: "bg-surface-container-highest text-on-surface-variant" },
 };
-
-// Trust labels are static — no i18n needed for these constants

@@ -23,6 +23,9 @@ export interface CronDescription {
   id: string
   /** ICU placeholder values for {@link id}. */
   values?: Record<string, string | number>
+  /** Cron day-of-week (0=Sun..6=Sat) for weekly schedules; the caller
+   *  localizes it into the {@code day} value before formatting. */
+  dayOfWeek?: number
 }
 
 export interface NlCronResult {
@@ -66,9 +69,8 @@ function parseTime(s: string): { h: number; m: number } | null {
 function describe(cron: string): CronDescription {
   // Lightweight description for confirmation UI. Returns a translatable
   // descriptor (id under `schedule.*` + ICU values); the caller formats it via
-  // intl.formatMessage. Note: weekday renders as an English abbreviation
-  // (Sun/Mon/…) in the {day} value — localizing weekday names would need the
-  // caller to map dow→name; tracked as a follow-up.
+  // intl.formatMessage. Weekly schedules carry `dayOfWeek` (0=Sun..6=Sat) so
+  // the caller can localize the weekday into the {day} value.
   const parts = cron.split(/\s+/)
   if (parts.length !== 5) return { id: 'schedule.cron', values: { cron } }
   const [min, hour, dom, , dow] = parts
@@ -83,9 +85,9 @@ function describe(cron: string): CronDescription {
   if (hour === '*' && min === '0') return { id: 'schedule.hourly' }
   if (dow === '1-5') return { id: 'schedule.weekdaysAt', values: { time } }
   if (dow !== '*') {
-    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    const day = names[parseInt(dow, 10)] ?? dow
-    return { id: 'schedule.weeklyOnAt', values: { day, time } }
+    // Carry the cron dow (0=Sun..6=Sat) as dayOfWeek; the caller localizes
+    // it into the {day} value via weekdayName() before formatting.
+    return { id: 'schedule.weeklyOnAt', values: { time }, dayOfWeek: parseInt(dow, 10) % 7 }
   }
   if (dom !== '*') return { id: 'schedule.monthlyOnDayAt', values: { day: parseInt(dom, 10), time } }
   return { id: 'schedule.dailyAt', values: { time } }
