@@ -123,10 +123,10 @@ export default function Skills() {
         const ref_ = entry.source.ref_ ?? 'main';
         await installSkillFromRepo(entry.name, repo, ref_);
       } else {
-        setFeedback({ id: entry.id, msg: `Unsupported skill source: ${entry.source.type}`, ok: false });
+        setFeedback({ id: entry.id, msg: t('extensions.skills.unsupportedSource', { type: entry.source.type }), ok: false });
         return;
       }
-      setFeedback({ id: entry.id, msg: `Installed ${entry.name}`, ok: true });
+      setFeedback({ id: entry.id, msg: t('extensions.skills.installSuccess', { name: entry.name }), ok: true });
       refreshInstalled();
     } catch (err) {
       setFeedback({ id: entry.id, msg: String(err), ok: false });
@@ -140,7 +140,7 @@ export default function Skills() {
     setFeedback(null);
     try {
       await uninstallSkillPlugin(name);
-      setFeedback({ id: `uninstall:${name}`, msg: `Removed ${name}`, ok: true });
+      setFeedback({ id: `uninstall:${name}`, msg: t('extensions.skills.removeSuccess', { name }), ok: true });
       refreshInstalled();
     } catch (err) {
       setFeedback({ id: `uninstall:${name}`, msg: String(err), ok: false });

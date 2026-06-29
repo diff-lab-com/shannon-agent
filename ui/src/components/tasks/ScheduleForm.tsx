@@ -9,7 +9,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import ResultRoutingEditor from './ResultRoutingEditor'
 import ScheduleTemplates from './ScheduleTemplates'
-import { parseNlCron } from '@/lib/nl-cron'
+import { parseNlCron, type CronDescription } from '@/lib/nl-cron'
 import * as api from '@/lib/tauri-api'
 import type {
   TriggerType,
@@ -64,7 +64,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
   const [error, setError] = useState<string | null>(null)
   const [nlInput, setNlInput] = useState('')
   const [nlError, setNlError] = useState<string | null>(null)
-  const [nlMatch, setNlMatch] = useState<string | null>(null)
+  const [nlMatch, setNlMatch] = useState<CronDescription | null>(null)
 
   // Live cron preview (debounced via requestIdleCallback-free simple effect)
   useEffect(() => {
@@ -182,7 +182,7 @@ export default function ScheduleForm({ onSubmit, onCancel }: ScheduleFormProps) 
         {nlMatch ? (
           <div className="font-label-sm text-[11px] text-tertiary flex items-center gap-xs">
             <span className="material-symbols-outlined text-[14px]">check_circle</span>
-            {t('tasks.scheduleForm.parsed')} {nlMatch}
+            {t('tasks.scheduleForm.parsed')} {intl.formatMessage({ id: nlMatch.id }, nlMatch.values)}
           </div>
         ) : null}
       </div>

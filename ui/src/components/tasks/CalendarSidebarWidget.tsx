@@ -130,7 +130,7 @@ export default function CalendarSidebarWidget({
                 type="button"
                 className="w-full flex items-center gap-sm text-left py-xs px-sm rounded-lg hover:bg-surface-container-low/60 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                 onClick={() => onSelectRoutine?.(r.id)}
-                aria-label={`Open routine detail for ${r.name}`}
+                aria-label={intl.formatMessage({ id: 'tasks.calendarSidebarWidget.openRoutine.aria' }, { name: r.name })}
               >
                 <span className="material-symbols-outlined icon-sm text-primary">
                   {r.enabled ? 'bolt' : 'block'}

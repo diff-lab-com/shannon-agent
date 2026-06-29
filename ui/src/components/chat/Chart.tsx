@@ -1,4 +1,5 @@
 import { memo, useMemo } from 'react'
+import { useIntl } from 'react-intl'
 
 export interface ChartSpec {
   type: 'bar' | 'line' | 'pie'
@@ -26,8 +27,9 @@ interface CartesianChartProps {
 }
 
 function CartesianChart({ spec }: CartesianChartProps) {
+  const intl = useIntl()
   const geometry = useMemo(() => buildCartesianGeometry(spec), [spec])
-  if (!geometry) return <ChartError message={`Invalid chart spec — type "${spec.type}" needs at least one data point.`} />
+  if (!geometry) return <ChartError message={intl.formatMessage({ id: 'chat.chart.error.invalidSpec' }, { type: spec.type })} />
 
   const { points, bars, max, min, plotW, plotH, x0, y0 } = geometry
   const yRange = max - min || 1
@@ -168,9 +170,10 @@ const PIE_COLORS = [
 ]
 
 function PieChart({ spec }: PieChartProps) {
+  const intl = useIntl()
   const total = spec.data.reduce((s, d) => s + d.value, 0)
   if (spec.data.length === 0 || total === 0) {
-    return <ChartError message="Pie chart needs at least one non-zero value." />
+    return <ChartError message={intl.formatMessage({ id: 'chat.chart.error.pieNeedsValue' })} />
   }
 
   const cx = WIDTH / 2
