@@ -38,24 +38,22 @@ fn stt_endpoint(
     };
     Ok(match provider {
         "groq" => {
-            let base = validated
-                .unwrap_or_else(|| "https://api.groq.com/openai/v1".to_string());
+            let base = validated.unwrap_or_else(|| "https://api.groq.com/openai/v1".to_string());
             (
                 format!("{base}/audio/transcriptions"),
                 Some("whisper-large-v3".to_string()),
             )
         }
         "openai" => {
-            let base = validated
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            let base = validated.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
             (
                 format!("{base}/audio/transcriptions"),
                 Some("whisper-1".to_string()),
             )
         }
         "custom" => {
-            let base = validated
-                .ok_or_else(|| "custom STT provider requires a base_url".to_string())?;
+            let base =
+                validated.ok_or_else(|| "custom STT provider requires a base_url".to_string())?;
             (format!("{base}/audio/transcriptions"), None)
         }
         other => return Err(format!("unknown STT provider: {other}")),
@@ -86,9 +84,7 @@ pub async fn transcribe_audio(
         .map(str::trim)
         .filter(|s| !s.is_empty());
     if provider.is_empty() || api_key.is_none() {
-        return Err(
-            "STT_NOT_CONFIGURED: configure a speech-to-text provider in Settings".into(),
-        );
+        return Err("STT_NOT_CONFIGURED: configure a speech-to-text provider in Settings".into());
     }
     let api_key = api_key.unwrap().to_string();
 
@@ -131,11 +127,7 @@ pub async fn transcribe_audio(
             .mime_str(&mime)
             .map_err(|e| format!("invalid mime type: {e}"))?,
     );
-    if let Some(lang) = language
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
+    if let Some(lang) = language.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         form = form.text("language", lang.to_string());
     }
 
@@ -159,10 +151,7 @@ pub async fn transcribe_audio(
         });
     }
 
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("STT_NETWORK: {e}"))?;
+    let body = resp.text().await.map_err(|e| format!("STT_NETWORK: {e}"))?;
     let text = parse_transcription(&body);
     let text = text.trim().to_string();
     if text.is_empty() {
@@ -340,8 +329,14 @@ mod tests {
 
     #[test]
     fn parse_transcription_handles_json_and_plain() {
-        assert_eq!(parse_transcription(r#"{"text":"hello world"}"#), "hello world");
-        assert_eq!(parse_transcription("bare text response"), "bare text response");
+        assert_eq!(
+            parse_transcription(r#"{"text":"hello world"}"#),
+            "hello world"
+        );
+        assert_eq!(
+            parse_transcription("bare text response"),
+            "bare text response"
+        );
     }
 
     #[test]
@@ -376,7 +371,10 @@ mod tests {
     fn sanitize_error_body_flattens_and_truncates() {
         assert_eq!(sanitize_error_body("ok"), "ok");
         // Control characters become spaces, then trimmed.
-        assert_eq!(sanitize_error_body("\n  line1\nline2\tend \r\n"), "line1 line2 end");
+        assert_eq!(
+            sanitize_error_body("\n  line1\nline2\tend \r\n"),
+            "line1 line2 end"
+        );
         let long = "x".repeat(500);
         let out = sanitize_error_body(&long);
         assert!(out.ends_with('…'));

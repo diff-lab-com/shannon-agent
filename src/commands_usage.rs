@@ -76,8 +76,8 @@ impl UsageStore {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("create usage dir: {e}"))?;
         }
-        let mut line = serde_json::to_string(record)
-            .map_err(|e| format!("serialize usage record: {e}"))?;
+        let mut line =
+            serde_json::to_string(record).map_err(|e| format!("serialize usage record: {e}"))?;
         line.push('\n');
         let mut file = OpenOptions::new()
             .create(true)
@@ -133,8 +133,8 @@ impl UsageStore {
                 .open(&tmp)
                 .map_err(|e| format!("open usage tmp: {e}"))?;
             for r in &records {
-                let mut line = serde_json::to_string(r)
-                    .map_err(|e| format!("serialize usage record: {e}"))?;
+                let mut line =
+                    serde_json::to_string(r).map_err(|e| format!("serialize usage record: {e}"))?;
                 line.push('\n');
                 file.write_all(line.as_bytes())
                     .map_err(|e| format!("write usage tmp: {e}"))?;
@@ -250,8 +250,7 @@ fn aggregate_by(
     key: impl Fn(&UsageRecord) -> String,
 ) -> Vec<BucketTotals> {
     let mut order: Vec<String> = Vec::new();
-    let mut map: std::collections::HashMap<String, BucketTotals> =
-        std::collections::HashMap::new();
+    let mut map: std::collections::HashMap<String, BucketTotals> = std::collections::HashMap::new();
     for r in records {
         let k = key(r);
         if !map.contains_key(&k) {
@@ -351,8 +350,7 @@ pub async fn get_usage_stats(days: u32) -> Result<UsageStats, String> {
     // scheduled-runs store is unreadable we log it and proceed with chat
     // usage rather than failing the whole page.
     let days_clamped = days.clamp(1, 365);
-    let now_dt =
-        DateTime::<Utc>::from_timestamp_millis(now as i64).unwrap_or_else(Utc::now);
+    let now_dt = DateTime::<Utc>::from_timestamp_millis(now as i64).unwrap_or_else(Utc::now);
     let start = now_dt - Duration::days(days_clamped as i64);
     match ScheduledRunsStore::new().list_by_time_range(start, now_dt) {
         Ok(runs) => {
@@ -494,9 +492,7 @@ mod tests {
     fn maybe_rotate_is_noop_below_threshold() {
         let tmp = tempfile::tempdir().unwrap();
         let store = UsageStore::with_path(tmp.path().join("usage.jsonl"));
-        store
-            .append(&rec(1, "claude", "anthropic", 0.01))
-            .unwrap();
+        store.append(&rec(1, "claude", "anthropic", 0.01)).unwrap();
         store.maybe_rotate().unwrap();
         assert_eq!(store.load().len(), 1);
     }
