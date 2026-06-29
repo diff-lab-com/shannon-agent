@@ -89,9 +89,14 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
 
-  it('hides Extensions section in Simple mode', () => {
+  it('shows flat Extensions entry in Simple mode (no dev sub-links)', () => {
     render(wrap(<Sidebar />))
-    expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
+    // P1-2: Simple mode surfaces a flat Extensions link to the Hub index so
+    // general users can reach it without dev mode. The dev-mode collapsible
+    // group (with Skills / My Agents / Connections sub-links) stays hidden.
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
+    expect(screen.queryByText('My Agents')).not.toBeInTheDocument()
   })
 
   it('hides OPC section in Simple mode', () => {
@@ -202,7 +207,10 @@ describe('Sidebar — Advanced mode', () => {
   it('toggles back to Simple mode on click', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Simple mode/ }))
-    expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
+    // P1-2: Simple mode still shows the flat Extensions link; what disappears
+    // is the dev-mode Extensions group and its sub-links (Skills).
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
 })

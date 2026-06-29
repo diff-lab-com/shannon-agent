@@ -60,9 +60,13 @@ jobs:
         run: |
           set -euo pipefail
           # --- Node ---
+          # Retry + fast-fail timeouts recover the documented intermittent
+          # npmmirror egress stalls (run #461 hung ~12 min on this fetch and
+          # hit the job limit) instead of stalling to cancellation. The
+          # fail-closed checksum check below still rejects any tampered bytes.
           TARBALL="node-${NODE_VERSION}-linux-x64.tar.gz"
           echo "Installing Node ${NODE_VERSION} from npmmirror (checksum-pinned)…"
-          curl -fsSL "https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${TARBALL}" -o "${TARBALL}"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 90 "https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${TARBALL}" -o "${TARBALL}"
           # Fail-closed: verify against the pinned official nodejs.org SHA256.
           printf '%s  %s\n' "${NODE_SHA256}" "${TARBALL}" | sha256sum -c -
           mkdir -p "$HOME/node"
@@ -71,7 +75,7 @@ jobs:
           # --- pnpm (verified against the official npmjs.org dist.integrity) ---
           P_TARBALL="pnpm-${PNPM_VERSION}.tgz"
           echo "Installing pnpm ${PNPM_VERSION} from npmmirror (integrity-pinned)…"
-          curl -fsSL "https://registry.npmmirror.com/pnpm/-/pnpm-${PNPM_VERSION}.tgz" -o "${P_TARBALL}"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 90 "https://registry.npmmirror.com/pnpm/-/pnpm-${PNPM_VERSION}.tgz" -o "${P_TARBALL}"
           # Fail-closed: sha512 base64, npm's own dist.integrity format.
           ACTUAL="$(openssl dgst -sha512 -binary "${P_TARBALL}" | openssl base64 -A)"
           if [ "${ACTUAL}" != "${PNPM_SHA512}" ]; then
@@ -106,7 +110,7 @@ jobs:
           set -euo pipefail
           TARBALL="node-${NODE_VERSION}-linux-x64.tar.gz"
           echo "Installing Node ${NODE_VERSION} from npmmirror (checksum-pinned)…"
-          curl -fsSL "https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${TARBALL}" -o "${TARBALL}"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 90 "https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${TARBALL}" -o "${TARBALL}"
           printf '%s  %s\n' "${NODE_SHA256}" "${TARBALL}" | sha256sum -c -
           mkdir -p "$HOME/node"
           tar xzf "${TARBALL}" -C "$HOME/node" --strip-components=1
