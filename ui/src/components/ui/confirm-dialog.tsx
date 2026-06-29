@@ -9,6 +9,7 @@ export interface ConfirmDialogProps {
   cancelLabel: string
   destructive?: boolean
   busy?: boolean
+  busyLabel?: string
   onConfirm: () => void
   onCancel: () => void
 }
@@ -21,6 +22,7 @@ export function ConfirmDialog({
   cancelLabel,
   destructive = false,
   busy = false,
+  busyLabel = '…',
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -63,7 +65,7 @@ export function ConfirmDialog({
           }`}
           onClick={onConfirm}
         >
-          {busy ? '…' : confirmLabel}
+          {busy ? busyLabel : confirmLabel}
         </Button>
       </ModalFooter>
     </Modal>

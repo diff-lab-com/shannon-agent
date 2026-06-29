@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
+import { Modal } from '@/components/ui/modal'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useApp } from '@/context/AppContext'
-import { useModalFocus } from '@/hooks/useModalFocus'
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
@@ -42,15 +43,6 @@ export default function AdvancedSettings() {
         .catch(() => { if (active) setCandidates([]) })
     }
   }, [])
-
-  const logsRef = useRef<HTMLDivElement>(null)
-  useModalFocus(showLogs, logsRef)
-  const apiKeysRef = useRef<HTMLDivElement>(null)
-  useModalFocus(showApiKeys, apiKeysRef)
-  const clearConfirmRef = useRef<HTMLDivElement>(null)
-  useModalFocus(showClearConfirm, clearConfirmRef)
-  const resetConfirmRef = useRef<HTMLDivElement>(null)
-  useModalFocus(showResetConfirm, resetConfirmRef)
 
   const handleToggle = async (key: string, value: boolean, setter: (v: boolean) => void) => {
     setter(value)
@@ -239,75 +231,52 @@ export default function AdvancedSettings() {
       </div>
 
       {/* System Logs Modal */}
-      {showLogs && (
-        <div ref={logsRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLogs(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLogs(false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-2xl w-full mx-lg shadow-2xl max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-lg">
-              <h3 className="font-headline-md text-on-surface">{t('settings.advanced.systemLogs')}</h3>
-              <Button variant="ghost" className="cursor-pointer" onClick={() => setShowLogs(false)}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-            <div className="bg-surface-container-high rounded-xl p-md font-mono text-label-sm text-on-surface-variant max-h-[50vh] overflow-y-auto">
-              <p>Shannon Desktop v0.1.0</p>
-              <p>{t('settings.advanced.logsHelp')}</p>
-              <p className="mt-sm opacity-60">{t('settings.advanced.logsVerbose')}</p>
-            </div>
+      <Modal open={showLogs} onClose={() => setShowLogs(false)} title={t('settings.advanced.systemLogs')} size="2xl">
+        <div className="px-xl pb-xl">
+          <div className="bg-surface-container-high rounded-xl p-md font-mono text-label-sm text-on-surface-variant max-h-[50vh] overflow-y-auto">
+            <p>Shannon Desktop v0.1.0</p>
+            <p>{t('settings.advanced.logsHelp')}</p>
+            <p className="mt-sm opacity-60">{t('settings.advanced.logsVerbose')}</p>
           </div>
         </div>
-      )}
+      </Modal>
 
       {/* API Keys Modal */}
-      {showApiKeys && (
-        <div ref={apiKeysRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowApiKeys(false)} onKeyDown={e => { if (e.key === 'Escape') setShowApiKeys(false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-lg w-full mx-lg shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-lg">
-              <h3 className="font-headline-md text-on-surface">{t('settings.advanced.manageApiKeys')}</h3>
-              <Button variant="ghost" className="cursor-pointer" onClick={() => setShowApiKeys(false)}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-            <p className="text-body-sm text-on-surface-variant mb-md">{t('settings.advanced.apiKeysHelp')}</p>
-            <Button className="w-full py-md bg-primary text-on-primary rounded-xl font-label-md cursor-pointer" onClick={() => setShowApiKeys(false)}>
-              {t('settings.advanced.goToModelSettings')}
-            </Button>
-          </div>
+      <Modal open={showApiKeys} onClose={() => setShowApiKeys(false)} title={t('settings.advanced.manageApiKeys')} size="lg">
+        <div className="px-xl pb-xl">
+          <p className="text-body-sm text-on-surface-variant mb-md">{t('settings.advanced.apiKeysHelp')}</p>
+          <Button className="w-full py-md bg-primary text-on-primary rounded-xl font-label-md cursor-pointer" onClick={() => setShowApiKeys(false)}>
+            {t('settings.advanced.goToModelSettings')}
+          </Button>
         </div>
-      )}
+      </Modal>
 
       {/* Clear Cache Confirmation */}
-      {showClearConfirm && (
-        <div ref={clearConfirmRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowClearConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowClearConfirm(false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-secondary text-[24px]">cleaning_services</span>
-              <h3 className="font-headline-md text-on-surface">{t('settings.advanced.clearSessionCache')}</h3>
-            </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">{t('settings.advanced.clearDesc')}</p>
-            <div className="flex justify-end gap-sm">
-              <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setShowClearConfirm(false)}>{t('settings.advanced.cancel')}</Button>
-              <Button className="px-lg py-sm rounded-xl bg-secondary text-on-secondary hover:bg-secondary/90" onClick={handleClearCache} disabled={clearing}>{clearing ? t('settings.advanced.clearing') : t('settings.advanced.clearCache')}</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={showClearConfirm}
+        title={t('settings.advanced.clearSessionCache')}
+        message={t('settings.advanced.clearDesc')}
+        confirmLabel={t('settings.advanced.clearCache')}
+        busyLabel={t('settings.advanced.clearing')}
+        cancelLabel={t('settings.advanced.cancel')}
+        busy={clearing}
+        onConfirm={handleClearCache}
+        onCancel={() => setShowClearConfirm(false)}
+      />
 
       {/* Factory Reset Confirmation */}
-      {showResetConfirm && (
-        <div ref={resetConfirmRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowResetConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowResetConfirm(false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-error text-[24px]">warning</span>
-              <h3 className="font-headline-md text-on-surface">{t('settings.advanced.factoryReset')}</h3>
-            </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">{t('settings.advanced.factoryResetDesc')}</p>
-            <div className="flex justify-end gap-sm">
-              <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setShowResetConfirm(false)}>{t('settings.advanced.cancel')}</Button>
-              <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={handleFactoryReset} disabled={resetting}>{resetting ? t('settings.advanced.resetting') : t('settings.advanced.reset')}</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={showResetConfirm}
+        title={t('settings.advanced.factoryReset')}
+        message={t('settings.advanced.factoryResetDesc')}
+        confirmLabel={t('settings.advanced.reset')}
+        busyLabel={t('settings.advanced.resetting')}
+        cancelLabel={t('settings.advanced.cancel')}
+        destructive
+        busy={resetting}
+        onConfirm={handleFactoryReset}
+        onCancel={() => setShowResetConfirm(false)}
+      />
 
       <SkillApprovalModal
         open={approvalOpen}

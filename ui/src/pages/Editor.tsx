@@ -7,7 +7,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useIntl } from 'react-intl'
+import { useIntl, type PrimitiveType } from 'react-intl'
 import { open as openDialog } from '@tauri-apps/plugin-dialog'
 import { toast } from 'sonner'
 import CodeEditor, {
@@ -58,7 +58,7 @@ function normalizeSeverity(raw: string): EditorDiagnostic['severity'] {
 
 export default function Editor() {
   const intl = useIntl()
-  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const navigate = useNavigate()
   const [filePath, setFilePath] = useState('')
   const [loading, setLoading] = useState(false)

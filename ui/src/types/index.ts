@@ -41,6 +41,7 @@ export interface UsagePayload {
   output_tokens: number
   cost_usd: number
   cache_hit_rate?: number
+  max_tokens?: number
 }
 
 export interface QueryCompletedPayload {

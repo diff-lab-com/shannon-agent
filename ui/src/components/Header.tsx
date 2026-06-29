@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useIntl } from 'react-intl';
+import { useIntl, type PrimitiveType } from 'react-intl';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -35,7 +35,7 @@ function getTitleKey(pathname: string): string {
 
 export function Header() {
   const intl = useIntl()
-  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const location = useLocation();
   const navigate = useNavigate();
   const { status, models, permissionRequest, respondPermission } = useApp();
