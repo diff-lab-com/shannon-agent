@@ -35,6 +35,9 @@ pub struct DesktopConfig {
     pub max_tokens: Option<u32>,
     /// Billing plan name (local-app echo of provider plan).
     pub plan: Option<String>,
+    /// Speech-to-text (voice input) provider config (D4 cloud STT).
+    #[serde(default)]
+    pub stt: Option<SttConfig>,
     /// Skill loop evaluation enabled (default: false).
     #[serde(default)]
     pub skill_loop_enabled: bool,
@@ -139,6 +142,25 @@ fn default_skill_loop_min_tool_calls() -> usize {
     2
 }
 
+/// Speech-to-text (voice input) provider configuration (D4 cloud STT).
+/// Backs the `transcribe_audio` command. `None`/missing key ⇒ the UI surfaces
+/// a "not configured" toast instead of attempting a provider call.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SttConfig {
+    /// Provider preset: `groq` | `openai` | `custom`.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// API key (stored locally; masked to `"***"` in read-back responses).
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Base URL override. Required for `custom`; optional for the presets.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Whisper model id. Defaults: groq→`whisper-large-v3`, openai→`whisper-1`.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
 impl Default for DesktopConfig {
     fn default() -> Self {
         Self {
@@ -169,6 +191,7 @@ impl Default for DesktopConfig {
             notifications_dnd_end: None,
             notifications_on_completed: default_true(),
             notifications_on_failed: default_true(),
+            stt: None,
         }
     }
 }
@@ -308,6 +331,7 @@ mod tests {
             notifications_dnd_end: None,
             notifications_on_completed: true,
             notifications_on_failed: true,
+            stt: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -362,6 +386,7 @@ mod tests {
             notifications_dnd_end: None,
             notifications_on_completed: true,
             notifications_on_failed: true,
+            stt: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -398,6 +423,7 @@ mod tests {
             notifications_dnd_end: None,
             notifications_on_completed: true,
             notifications_on_failed: true,
+            stt: None,
         };
 
         // Test serialization preserves approval_mode

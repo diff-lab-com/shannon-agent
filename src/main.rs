@@ -25,6 +25,7 @@ fn main() {
     use shannon_desktop::commands_skill_loop;
     use shannon_desktop::commands_tasks;
     use shannon_desktop::commands_usage;
+    use shannon_desktop::commands_voice;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
@@ -78,6 +79,10 @@ fn main() {
             commands_config::save_provider,
             commands_config::delete_provider,
             commands_config::set_active_provider,
+            // D4 — cloud speech-to-text (voice input)
+            commands_voice::transcribe_audio,
+            commands_voice::get_stt_config,
+            commands_voice::save_stt_config,
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,

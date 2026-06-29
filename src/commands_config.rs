@@ -389,6 +389,7 @@ pub async fn switch_provider(
         notifications_dnd_end: existing.notifications_dnd_end.clone(),
         notifications_on_completed: existing.notifications_on_completed,
         notifications_on_failed: existing.notifications_on_failed,
+        stt: existing.stt.clone(),
     };
     drop(existing);
 
@@ -431,6 +432,11 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<DesktopConf
     let mut display = cfg.clone();
     if display.api_key.is_some() {
         display.api_key = Some("***".into());
+    }
+    if let Some(stt) = display.stt.as_mut() {
+        if stt.api_key.is_some() {
+            stt.api_key = Some("***".into());
+        }
     }
     Ok(display)
 }
@@ -506,7 +512,7 @@ pub enum TestConnectionResult {
 /// local user themselves (the Add Provider modal) — there is no
 /// untrusted/remote input vector reaching this path — so the SSRF scenario of
 /// an attacker steering server-side fetches does not apply here.
-fn validate_base_url(raw: &str) -> Result<String, String> {
+pub(crate) fn validate_base_url(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     let parsed = url::Url::parse(raw).map_err(|e| format!("invalid base_url `{raw}`: {e}"))?;
     if !matches!(parsed.scheme(), "http" | "https") {

@@ -181,4 +181,7 @@ vi.mock('@/lib/tauri-api', () => ({
   }),
   markTriageRead: vi.fn().mockResolvedValue(undefined),
   archiveTriageItem: vi.fn().mockResolvedValue(undefined),
+  transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
+  getSttConfig: vi.fn().mockResolvedValue(null),
+  saveSttConfig: vi.fn().mockResolvedValue(undefined),
 }))

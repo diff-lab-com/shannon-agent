@@ -10,6 +10,8 @@ import type {
   ProvidersFile,
   ProviderInput,
   DesktopConfig,
+  SttConfig,
+  TranscriptionResult,
   SendMessageResponse,
   HunkAction,
   SessionInfo,
@@ -1360,5 +1362,27 @@ export const skillLoop = {
 
   reject: (proposalId: string) =>
     invoke<void>('skill_loop_reject', { proposalId }),
+}
+
+// --- Speech-to-text (D4 voice input) ---
+
+export async function transcribeAudio(
+  audioBase64: string,
+  mimeType: string,
+  language?: string | null,
+): Promise<TranscriptionResult> {
+  return invoke('transcribe_audio', {
+    audioBase64,
+    mimeType,
+    language: language ?? null,
+  })
+}
+
+export async function getSttConfig(): Promise<SttConfig | null> {
+  return invoke('get_stt_config')
+}
+
+export async function saveSttConfig(sttConfig: SttConfig): Promise<void> {
+  await invoke('save_stt_config', { sttConfig })
 }
 

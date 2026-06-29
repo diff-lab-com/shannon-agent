@@ -141,6 +141,9 @@ pub mod commands_tasks;
 pub mod commands_usage;
 
 #[cfg(feature = "tauri")]
+pub mod commands_voice;
+
+#[cfg(feature = "tauri")]
 pub mod scheduled_commands;
 
 #[cfg(feature = "tauri")]

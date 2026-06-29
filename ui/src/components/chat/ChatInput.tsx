@@ -61,6 +61,7 @@ export default function ChatInput({
       const merged = value ? `${value} ${text}` : text
       onChange(merged)
     },
+    onError: (msg) => toastError(t('voice.error.title'), msg),
   })
 
   const handleChangeWorkingDir = async () => {

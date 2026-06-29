@@ -1,11 +1,18 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { createTtsSpeaker, type TtsSpeaker } from '@/lib/voice/tts'
+import {
+  createVoiceProvider,
+  defaultVoiceConfig,
+  type VoiceProvider,
+  type VoiceProviderError,
+} from '@/lib/voice'
 
 export type VoiceState = 'idle' | 'recording' | 'transcribing' | 'speaking'
 
 export interface UseVoiceOptions {
   onTranscript?: (text: string) => void
-  simulateLatencyMs?: number
+  /** Non-silent provider failures (rejected mic, bad key, network, …). */
+  onError?: (message: string) => void
   lang?: string
 }
 
@@ -21,32 +28,6 @@ export interface UseVoiceResult {
   reset: () => void
 }
 
-const STUB_PARTIALS = ['Listening...', 'Detected: hello world', 'Processing audio...']
-const STUB_FINAL = 'This is a stub transcript. Real STT backend not configured.'
-
-type SpeechRecognitionInstance = {
-  lang: string
-  continuous: boolean
-  interimResults: boolean
-  maxAlternatives: number
-  start: () => void
-  stop: () => void
-  abort: () => void
-  onresult: ((e: { resultIndex: number; results: { length: number; [i: number]: { 0: { transcript: string }; isFinal: boolean } } }) => void) | null
-  onerror: ((e: { error?: string }) => void) | null
-  onend: (() => void) | null
-}
-
-type AnySpeechRecognition = {
-  new (): SpeechRecognitionInstance
-}
-
-function getSpeechRecognitionCtor(): AnySpeechRecognition | null {
-  if (typeof window === 'undefined') return null
-  const w = window as unknown as { SpeechRecognition?: AnySpeechRecognition; webkitSpeechRecognition?: AnySpeechRecognition }
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null
-}
-
 // Track the active TTS speaker across hook instances so that a new
 // useVoice mount cancels any utterance that is still playing. Without
 // this, navigating away from a spoken assistant reply leaves the audio
@@ -60,15 +41,24 @@ function claimSpeaker(speaker: TtsSpeaker) {
 }
 
 export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
-  const { onTranscript, simulateLatencyMs = 600, lang = 'en-US' } = options
+  const { onTranscript, onError, lang = 'en-US' } = options
   const [state, setState] = useState<VoiceState>('idle')
   const [partialTranscript, setPartialTranscript] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const partialIdxRef = useRef(0)
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
+
   const transcriptRef = useRef(onTranscript)
   transcriptRef.current = onTranscript
+  const errorRef = useRef(onError)
+  errorRef.current = onError
+
+  // Build the provider once. defaultVoiceConfig() picks cloud STT; the
+  // factory falls back to the stub provider when MediaRecorder is unavailable.
+  const providerRef = useRef<VoiceProvider | null>(null)
+  if (!providerRef.current) {
+    providerRef.current = createVoiceProvider(defaultVoiceConfig())
+  }
+  const supported = providerRef.current.isSupported()
+
   const ttsRef = useRef<TtsSpeaker | null>(null)
   if (!ttsRef.current) {
     ttsRef.current = createTtsSpeaker({
@@ -77,23 +67,18 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
     })
   }
 
-  const supported = getSpeechRecognitionCtor() !== null
-
-  const clearTimer = () => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current)
-      timerRef.current = null
+  const handleError = useCallback((err: VoiceProviderError) => {
+    if (!err.silent) {
+      setError(err.message)
+      errorRef.current?.(err.message)
     }
-  }
+  }, [])
 
   useEffect(() => {
     const speaker = ttsRef.current!
     claimSpeaker(speaker)
     return () => {
-      clearTimer()
-      recognitionRef.current?.abort()
-      recognitionRef.current = null
-      // Stop any in-flight TTS when the component unmounts.
+      providerRef.current?.abort()
       speaker.cancel()
       if (activeSpeaker === speaker) activeSpeaker = null
     }
@@ -102,76 +87,50 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   const startRecording = useCallback(async () => {
     setError(null)
     setState('recording')
-    partialIdxRef.current = 0
-
-    const Ctor = getSpeechRecognitionCtor()
-    if (!Ctor) {
-      setPartialTranscript(STUB_PARTIALS[0])
-      return
-    }
-
+    setPartialTranscript('')
+    const provider = providerRef.current
+    if (!provider) return
     try {
-      const recognition = new Ctor()
-      recognition.lang = lang
-      recognition.continuous = true
-      recognition.interimResults = true
-      recognition.maxAlternatives = 1
-
-      recognition.onresult = (e) => {
-        let interim = ''
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const result = e.results[i]
-          if (result.isFinal) {
-            const text = result[0].transcript.trim()
+      await provider.start({
+        onResult: (result) => {
+          if ('transcript' in result) {
+            const text = result.transcript.trim()
             if (text) transcriptRef.current?.(text)
           } else {
-            interim += result[0].transcript
+            setPartialTranscript(result.partial)
           }
-        }
-        setPartialTranscript(interim)
-      }
-
-      recognition.onerror = (e) => {
-        if (e.error && e.error !== 'no-speech' && e.error !== 'aborted') {
-          setError(`Voice recognition error: ${e.error}`)
-        }
-      }
-
-      recognition.onend = () => {
-        setState((s) => (s === 'recording' ? 'idle' : s))
-      }
-
-      recognitionRef.current = recognition
-      recognition.start()
-      setPartialTranscript('')
+        },
+        onError: (err) => {
+          handleError(err)
+          setState((s) => (s === 'recording' ? 'idle' : s))
+        },
+        onEnd: () => {
+          setPartialTranscript('')
+          setState((s) => (s === 'recording' || s === 'transcribing' ? 'idle' : s))
+        },
+      })
     } catch (err) {
-      setError(String(err instanceof Error ? err.message : err))
+      handleError({
+        code: 'engine-error',
+        message: String(err instanceof Error ? err.message : err),
+      })
       setState('idle')
     }
-  }, [lang])
+  }, [handleError])
 
   const stopRecording = useCallback(async () => {
-    const recognition = recognitionRef.current
-    if (recognition) {
-      setState('transcribing')
-      try {
-        recognition.stop()
-      } catch {
-        // ignore double-stop
-      }
-      setPartialTranscript('')
-      setState('idle')
-      return
-    }
-
+    const provider = providerRef.current
+    if (!provider) return
     setState('transcribing')
-    clearTimer()
-    timerRef.current = setTimeout(() => {
-      setPartialTranscript('')
-      setState('idle')
-      transcriptRef.current?.(STUB_FINAL)
-    }, simulateLatencyMs)
-  }, [simulateLatencyMs])
+    setPartialTranscript('')
+    try {
+      await provider.stop()
+    } catch {
+      // ignore double-stop
+    }
+    // State returns to idle via the provider's onEnd once transcription
+    // completes; nothing to do here synchronously.
+  }, [])
 
   const speak = useCallback(async (text: string) => {
     setError(null)
@@ -190,9 +149,7 @@ export function useVoice(options: UseVoiceOptions = {}): UseVoiceResult {
   }, [])
 
   const reset = useCallback(() => {
-    clearTimer()
-    recognitionRef.current?.abort()
-    recognitionRef.current = null
+    providerRef.current?.abort()
     setState('idle')
     setPartialTranscript('')
     setError(null)
