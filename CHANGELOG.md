@@ -4,6 +4,75 @@ All notable changes to Shannon Desktop are documented here. Entries are grouped 
 
 ## Unreleased
 
+Everything below landed on `dev` after the v0.3.8 (Models P2) release and
+ships together in the next tagged release.
+
+### Notifications — Phase 2 + Phase 3
+
+- **P2 do-not-disturb / quiet hours** (#78, `s2/notifications-p2-dnd`): a
+  global DnD window during which non-critical notifications are suppressed.
+- **P2 per-event-type toggles** (#81, `s2/notifications-p2-events-rescue`,
+  T7): notify on completion / failure per event type (rescued from a
+  stranded branch).
+- **P3 outbound per-channel test + surface discarded results** (#84,
+  `s2/notifications-p3`): a "send test notification" action per outbound
+  channel (T8.1) so users verify webhook/chat config without waiting for a
+  real event; discarded notifier results are surfaced instead of swallowed
+  (T8.3).
+
+### Usage — local token / cache / cost statistics
+
+- **Local usage statistics page** (#91, `s2/usage-stats-page`): a new Usage
+  view aggregating token / cache / cost from the local ledger (no network).
+- **Background-task spend captured** (#92, `s2/usage-bg-path`): token / cache
+  / cost from background tasks is written to the usage ledger, not just
+  foreground chat.
+- **Scheduled-routine spend merged + size-bounded ledger** (#93,
+  `s2/usage-hardening`): scheduled-routine spend is folded into the stats, and
+  the JSONL ledger is size-bounded with rotation so it can't grow unbounded.
+
+### UI/UX audit batch — error causes, dead code, information architecture
+
+- **Surface the real cause in failure toasts** (#87, `s2/unify-error-toasts`,
+  audit P0-1): Artifact copy/export errors now show the underlying cause via
+  `toastError` instead of a generic message.
+- **Surface ChatInput silent failures** (#90, `s2/chatinput-silent-fails`,
+  P1-3): plan-mode toggle and other silent failures now toast.
+- **Extract `<SubNavLink>`** (#88, `s2/sidebar-subnav-extract`, P1-4): the
+  sidebar's 10 render-prop nav links are unified behind one component.
+- **Gate demo Billing + dev Advanced behind dev mode** (#89,
+  `s2/simple-settings-gate`, P3-2): demo-only surfaces are hidden outside dev
+  mode.
+- **Remove dead redirected pages** (#86, `s2/remove-dead-pages`): legacy
+  routes that only redirect are deleted.
+- **Remove orphan Conversations components** (#95,
+  `s2/remove-orphan-conversations`): Conversations components with no route
+  and test-only references are deleted.
+- **Unify Extensions label + purge dead nav keys + fix Usage header** (#94,
+  `s2/ui-ia-cleanup`): information-architecture cleanup from the P0 UI review.
+
+### PM-audit P1/P2/P3 — nav gating, confirm dialog, i18n polish
+
+(#97, `s2/pm-audit-p1-p2-p3`) Welcome documentation gate, simplified Sidebar
+Extensions entry, and Worktree dev-mode gate (P1 IA); `ConfirmDialog` replaces
+native `confirm()` (P2); visibility-gated triage polling; i18n context strings
+and dead keys removed (P3).
+
+### Settings refactor — shared Modal/ConfirmDialog + typed i18n `t()` helper
+
+(#99, `s2/d1-d2-modal-types-voice`, audit D1+D2) Seven hand-rolled settings
+modals migrate to the shared `Modal` / `ConfirmDialog` primitives
+(`ConfirmDialog` gains a `busyLabel`); the `t()` i18n helper is typed
+(`PrimitiveType`) replacing `any`, with `UsagePayload` + `max_tokens` arg
+typing. Net −57 lines.
+
+### i18n — Tasks / Agent modules zh-CN
+
+- **Tasks / Agent module strings** (#96, `s2/tasks-module-zh-i18n`): ~244 keys
+  translated to zh-CN (a PM/i18n audit found `zh === en`).
+- **Tasks deep sub-components** (#98, `s2/tasks-i18n-r2`): a second R2 pass
+  translated ~237 keys missed by the first pass in deep sub-components.
+
 ### Voice input — cloud speech-to-text (D4 Phase 1)
 
 Branch `s2/voice-cloud-stt` (PR #100). Replaces the browser Web Speech API
@@ -54,10 +123,19 @@ opt-in and is not touched here.
   `mask_stt_key`, `sanitize_error_body`, …); `cargo clippy` clean.
 - UI: `tsc --noEmit` clean; vitest green; i18n parity OK.
 
-> Note: entries for PRs #81–#99 (usage ledger/stats, notifications P2/P3,
-> release job, CI mirror fix, UI IA cleanup, Tasks i18n, PM-audit P1/P2/P3,
-> settings Modal/`t()` refactor) are not yet recorded here and will be
-> backfilled in a follow-up.
+### Tooling / CI
+
+- **Release job** (#83, `s2/release-job-gitea-release`): publish a Gitea
+  Release (installers + `latest.json`) on `v*` tag push.
+- **CI mirror fix** (#82, `s2/ci-npmmirror-mirror`): route Node + npm through
+  npmmirror (both checksum-verified against upstream) to stop intermittent CI
+  timeouts caused by runner egress.
+- **Models P2 command test coverage** (#76, `s2/models-p2-cmd-tests`): logic
+  coverage for the managed-provider commands.
+- **Skill-loop generate wire** (#77, `s2/skillloop-generate-wire`): generate
+  + persist a proposal on `suggest=true`.
+- **Clippy fix** (#85, `s2/clippy-commands-config`): struct-literal init in
+  `build_seed_file` tests (dev-gate clean).
 
 ## v0.3.8 (2026-06-28) — Models P2 (managed providers)
 
