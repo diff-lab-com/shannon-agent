@@ -130,9 +130,9 @@ export default function TaskCalendarView({
                           {task.assignee ? <span className="font-label-sm text-on-surface-variant">{task.assignee}</span> : null}
                         </div>
                       </div>
-                      <div title={badge.tip} className={`flex items-center gap-xs px-sm py-1 rounded-full border ${badge.bg}`}>
+                      <div title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={`flex items-center gap-xs px-sm py-1 rounded-full border ${badge.bg}`}>
                         <span className={`w-2 h-2 rounded-full ${badge.dot}`} />
-                        <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{badge.label}</span>
+                        <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
                       </div>
                     </div>
                   </div>
