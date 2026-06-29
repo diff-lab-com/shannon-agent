@@ -30,7 +30,7 @@ export default function TaskExecutionLog({ tasks, onCancel }: TaskExecutionLogPr
               <div className="flex justify-between items-start mb-1">
                 <div>
                   <p className={`font-label-sm text-label-sm mb-1 ${badge.bg.includes('primary') ? 'text-primary' : badge.bg.includes('tertiary') ? 'text-tertiary' : badge.bg.includes('error') ? 'text-error' : 'text-on-surface-variant'}`}>
-                    {formatTime(bt.started_at)} — {badge.label.toUpperCase()}
+                    {formatTime(bt.started_at)} — {intl.formatMessage({ id: badge.labelId }, badge.values).toUpperCase()}
                   </p>
                   <p className="text-on-surface-variant text-body-sm italic">{bt.prompt}</p>
                   {bt.output ? <pre className="mt-sm text-body-sm text-on-surface bg-surface-container-low p-sm rounded-lg max-h-[120px] overflow-auto">{bt.output}</pre> : null}

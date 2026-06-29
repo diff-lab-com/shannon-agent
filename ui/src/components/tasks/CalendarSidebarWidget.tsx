@@ -8,7 +8,7 @@
 
 import { useIntl } from 'react-intl'
 import type { TaskItem, ScheduledRoutine } from '@/types'
-import { DAY_NAMES, MONTH_NAMES } from './shared'
+import { monthName, weekdayName } from './shared'
 
 interface CalendarSidebarWidgetProps {
   viewMonth: number
@@ -57,7 +57,7 @@ export default function CalendarSidebarWidget({
       <div className="flex items-center justify-between mb-lg">
         <div>
           <h4 className="font-headline-md text-[18px] text-on-surface">{t('tasks.calendarSidebarWidget.schedule')}</h4>
-          <span className="font-label-sm text-on-surface-variant">{MONTH_NAMES[viewMonth]} {viewYear}</span>
+          <span className="font-label-sm text-on-surface-variant">{monthName(intl.locale, viewMonth)} {viewYear}</span>
         </div>
         <div className="flex gap-sm">
           <button
@@ -77,7 +77,7 @@ export default function CalendarSidebarWidget({
         </div>
       </div>
       <div className="grid grid-cols-7 text-center mb-sm">
-        {DAY_NAMES.map(d => <span key={d} className="text-[10px] font-bold text-outline uppercase">{d}</span>)}
+        {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[10px] font-bold text-outline uppercase">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
       </div>
       <div className="grid grid-cols-7 gap-1 text-center font-label-md">
         {Array.from({ length: startDay }, (_, i) => (
@@ -130,7 +130,7 @@ export default function CalendarSidebarWidget({
                 type="button"
                 className="w-full flex items-center gap-sm text-left py-xs px-sm rounded-lg hover:bg-surface-container-low/60 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                 onClick={() => onSelectRoutine?.(r.id)}
-                aria-label={`Open routine detail for ${r.name}`}
+                aria-label={intl.formatMessage({ id: 'tasks.calendarSidebarWidget.openRoutine.aria' }, { name: r.name })}
               >
                 <span className="material-symbols-outlined icon-sm text-primary">
                   {r.enabled ? 'bolt' : 'block'}
@@ -142,7 +142,7 @@ export default function CalendarSidebarWidget({
                   <span className="block text-[11px] text-on-surface-variant uppercase tracking-wider">
                     {r.trigger_type}
                     {r.depends_on && r.depends_on.length > 0
-                      ? ` · ${r.depends_on.length} dep${r.depends_on.length === 1 ? '' : 's'}`
+                      ? intl.formatMessage({ id: 'tasks.calendarSidebarWidget.deps' }, { count: r.depends_on.length })
                       : ''}
                   </span>
                 </span>

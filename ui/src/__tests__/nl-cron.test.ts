@@ -7,7 +7,7 @@ describe('parseNlCron — every-N-minutes patterns', () => {
   it('parses "every 15 minutes"', () => {
     expect(parseNlCron('every 15 minutes')).toEqual({
       expression: '*/15 * * * *',
-      description: 'Every 15 minutes',
+      description: { id: 'schedule.everyMinutes', values: { count: 15 } },
     })
   })
   it('parses "every minute"', () => {
@@ -106,7 +106,7 @@ describe('parseNlCron — edge cases', () => {
   it('description is provided on every match', () => {
     const out = parseNlCron('daily at 9am')
     expect(out).not.toBeNull()
-    expect(typeof out!.description).toBe('string')
-    expect(out!.description.length).toBeGreaterThan(0)
+    expect(typeof out!.description.id).toBe('string')
+    expect(out!.description.id.length).toBeGreaterThan(0)
   })
 })

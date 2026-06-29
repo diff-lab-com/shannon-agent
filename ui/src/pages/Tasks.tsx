@@ -153,7 +153,7 @@ export default function Tasks() {
         toast.success(intl.formatMessage({ id: 'tasks.toast.triggered' }, { name: routine.name }))
       } else {
         const fallbackTitle = tasks.find(task => task.id === id)?.title ?? id
-        await api.startBackgroundTask(`Execute task: ${fallbackTitle}`)
+        await api.startBackgroundTask(intl.formatMessage({ id: 'tasks.toast.executeTask' }, { name: fallbackTitle }))
         toast.success(t('tasks.toast.started'))
       }
       await refreshTasks()
