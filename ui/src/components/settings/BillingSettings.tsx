@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Modal } from '@/components/ui/modal'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useApp } from '@/context/AppContext'
 import { CardSkeleton } from '@/components/SkeletonLoader'
-import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { BillingPlan, CostRecord, BillingHistory } from '@/types'
@@ -22,13 +23,6 @@ export default function BillingSettings() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [changingPlan, setChangingPlan] = useState<string | null>(null)
-
-  const cancelConfirmRef = useRef<HTMLDivElement>(null)
-  useModalFocus(showCancelConfirm, cancelConfirmRef)
-  const changePlanRef = useRef<HTMLDivElement>(null)
-  useModalFocus(showChangePlan, changePlanRef)
-  const legalRef = useRef<HTMLDivElement>(null)
-  useModalFocus(showLegal, legalRef)
 
   const handleCancelSubscription = async () => {
     setCancelling(true)
@@ -293,62 +287,39 @@ export default function BillingSettings() {
         </div>
       </footer>
 
-      {/* Cancel Subscription Modal */}
-      {showCancelConfirm && (
-        <div ref={cancelConfirmRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowCancelConfirm(false)} onKeyDown={e => { if (e.key === 'Escape') setShowCancelConfirm(false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl p-xl shadow-xl border border-outline-variant/30 max-w-sm w-full mx-md" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-sm mb-md">
-              <span className="material-symbols-outlined text-error text-[24px]">warning</span>
-              <h3 className="font-headline-md text-on-surface">{t('settings.billing.cancelTitle')}</h3>
-            </div>
-            <p className="text-body-md text-on-surface-variant mb-lg">{t('settings.billing.cancelConfirm')}</p>
-            <div className="flex justify-end gap-sm">
-              <Button className="px-lg py-sm rounded-xl text-on-surface-variant hover:bg-surface-container" onClick={() => setShowCancelConfirm(false)}>{t('settings.billing.keepPlan')}</Button>
-              <Button className="px-lg py-sm rounded-xl bg-error text-on-error hover:bg-error/90" onClick={handleCancelSubscription} disabled={cancelling}>{cancelling ? t('settings.billing.cancelling') : t('settings.billing.cancelPlan')}</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Cancel Subscription Confirm */}
+      <ConfirmDialog
+        open={showCancelConfirm}
+        title={t('settings.billing.cancelTitle')}
+        message={t('settings.billing.cancelConfirm')}
+        confirmLabel={t('settings.billing.cancelPlan')}
+        busyLabel={t('settings.billing.cancelling')}
+        cancelLabel={t('settings.billing.keepPlan')}
+        destructive
+        busy={cancelling}
+        onConfirm={handleCancelSubscription}
+        onCancel={() => setShowCancelConfirm(false)}
+      />
 
       {/* Change Plan Modal */}
-      {showChangePlan && (
-        <div ref={changePlanRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowChangePlan(false)} onKeyDown={e => { if (e.key === 'Escape') setShowChangePlan(false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-md w-full mx-lg shadow-2xl" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-lg">
-              <h3 className="font-headline-md text-on-surface">{t('settings.billing.changePlanTitle')}</h3>
-              <Button variant="ghost" className="cursor-pointer" onClick={() => setShowChangePlan(false)}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-            <div className="space-y-md">
-              {(['Free', 'Pro', 'Enterprise'] as const).map(p => (
-                <button key={p} disabled={changingPlan !== null} className={`w-full p-md rounded-xl border text-left cursor-pointer transition-all disabled:opacity-50 ${plan?.name?.toLowerCase() === p.toLowerCase() ? 'border-2 border-primary bg-primary/5' : 'border-outline-variant/30 hover:border-primary/50'}`} onClick={() => handleChangePlan(p)}>
-                  <div className="font-label-md font-bold text-on-surface">{p}</div>
-                  <div className="font-label-sm text-on-surface-variant">{p === 'Free' ? t('settings.billing.planFreeDesc') : p === 'Pro' ? t('settings.billing.planProDesc') : t('settings.billing.planEnterpriseDesc')}</div>
-                </button>
-              ))}
-            </div>
-          </div>
+      <Modal open={showChangePlan} onClose={() => setShowChangePlan(false)} title={t('settings.billing.changePlanTitle')}>
+        <div className="px-xl pb-xl pt-md space-y-md">
+          {(['Free', 'Pro', 'Enterprise'] as const).map(p => (
+            <button key={p} disabled={changingPlan !== null} className={`w-full p-md rounded-xl border text-left cursor-pointer transition-all disabled:opacity-50 ${plan?.name?.toLowerCase() === p.toLowerCase() ? 'border-2 border-primary bg-primary/5' : 'border-outline-variant/30 hover:border-primary/50'}`} onClick={() => handleChangePlan(p)}>
+              <div className="font-label-md font-bold text-on-surface">{p}</div>
+              <div className="font-label-sm text-on-surface-variant">{p === 'Free' ? t('settings.billing.planFreeDesc') : p === 'Pro' ? t('settings.billing.planProDesc') : t('settings.billing.planEnterpriseDesc')}</div>
+            </button>
+          ))}
         </div>
-      )}
+      </Modal>
 
       {/* Legal Modal */}
-      {showLegal && (
-        <div ref={legalRef} role="dialog" aria-modal="true" className="fixed inset-0 bg-black/30 flex items-center justify-center z-50" onClick={() => setShowLegal(false)} onKeyDown={e => { if (e.key === 'Escape') setShowLegal(false) }}>
-          <div className="bg-surface-container-lowest rounded-2xl p-xl max-w-lg w-full mx-lg shadow-2xl max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center mb-lg">
-              <h3 className="font-headline-md text-on-surface">{t('settings.billing.legalPrivacy')}</h3>
-              <Button variant="ghost" className="cursor-pointer" onClick={() => setShowLegal(false)}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
-            <div className="text-body-sm text-on-surface-variant space-y-md">
-              <p>{t('settings.billing.legalBody1')}</p>
-              <p>{t('settings.billing.legalBody2')}</p>
-            </div>
-          </div>
+      <Modal open={showLegal} onClose={() => setShowLegal(false)} title={t('settings.billing.legalPrivacy')} size="lg">
+        <div className="px-xl pb-xl max-h-[60vh] overflow-y-auto text-body-sm text-on-surface-variant space-y-md">
+          <p>{t('settings.billing.legalBody1')}</p>
+          <p>{t('settings.billing.legalBody2')}</p>
         </div>
-      )}
+      </Modal>
     </div>
   )
 }

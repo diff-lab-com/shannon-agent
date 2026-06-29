@@ -1,7 +1,7 @@
 import { useApp } from '@/context/AppContext'
 import { useParams, Link } from 'react-router-dom'
 import { useState } from 'react'
-import { useIntl } from 'react-intl'
+import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import AgentMessagesPanel from '@/components/tasks/AgentMessagesPanel'
 import AgentLoadPanel from '@/components/tasks/AgentLoadPanel'
@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 
 export default function OPCTask() {
   const intl = useIntl()
-  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const { tasks, agents, usage, permissionRequest, respondPermission } = useApp()
   const [revisionNote, setRevisionNote] = useState('')
   const [showRevisionInput, setShowRevisionInput] = useState<string | null>(null)
