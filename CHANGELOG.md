@@ -2,6 +2,63 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## Unreleased
+
+### Voice input — cloud speech-to-text (D4 Phase 1)
+
+Branch `s2/voice-cloud-stt` (PR #100). Replaces the browser Web Speech API
+stub — unavailable in most desktop webviews (Chromium on Linux/macOS; on
+Chromium it also ships audio to a third party for recognition) — with cloud
+speech-to-text via an OpenAI-compatible Whisper endpoint (Groq / OpenAI /
+custom). Audio is captured in the webview and transcribed by a new Rust
+command, so **API keys stay server-side** (no browser CORS, no secret in the
+webview). Phase 2 (local `whisper.cpp` sidecar, offline) remains a later
+opt-in and is not touched here.
+
+#### Backend (Rust)
+- **New `commands_voice.rs`** — `transcribe_audio` (multipart upload + bearer
+  auth + `STT_*` error categorization), `get_stt_config` (key masked to
+  `***`), `save_stt_config` (provider / base_url validation via the shared
+  `validate_base_url`; preserves the stored key when the field is left blank).
+  Emits `CONFIG_UPDATED` so open panels refresh.
+- **`SttConfig` on `DesktopConfig`** (`config.rs`): `provider` / `api_key` /
+  `base_url` / `model`.
+- **`commands_config.rs`** reuses `validate_base_url` for the STT `base_url`
+  and masks `stt.api_key` in `get_config`.
+- **`Cargo.toml`**: reqwest `multipart` feature (pure-Rust, no system deps).
+- Registered the three commands + the module in `main.rs` / `lib.rs`.
+
+#### Backend (security hardening)
+- **External provider error bodies are sanitized** before they reach the UI:
+  control characters are flattened to spaces, surrounding/inner runs are
+  trimmed, and the result is capped at 200 characters — so an untrusted
+  upstream response can't dump a large or noisy blob into a user-facing toast.
+
+#### Frontend
+- **`remoteProvider`** captures audio via `MediaRecorder` and routes the
+  base64 recording through `transcribe_audio`.
+- **`factory`** `defaultVoiceConfig` → cloud STT; the stub stays as the
+  jsdom / headless fallback. The Web Speech provider and `'webspeech'` kind
+  are removed.
+- **`useVoice`** rewritten on the provider abstraction; surfaces non-silent
+  failures via an `onError` callback (wired to a toast in `ChatInput`).
+- **AdvancedSettings**: new Speech-to-text card (provider / key / model /
+  base URL) backed by `get_stt_config` / `save_stt_config`.
+- **i18n**: dropped the "(stub)" mic label and the dead preview banner; added
+  `settings.voice.*` + `voice.error.*` (en + zh-CN, parity-checked).
+- **`tauri-api` / `types`**: `transcribeAudio` / `getSttConfig` /
+  `saveSttConfig` + types.
+
+#### Tests
+- Rust: +7 unit tests (`stt_endpoint`, `parse_transcription`, `extension_for`,
+  `mask_stt_key`, `sanitize_error_body`, …); `cargo clippy` clean.
+- UI: `tsc --noEmit` clean; vitest green; i18n parity OK.
+
+> Note: entries for PRs #81–#99 (usage ledger/stats, notifications P2/P3,
+> release job, CI mirror fix, UI IA cleanup, Tasks i18n, PM-audit P1/P2/P3,
+> settings Modal/`t()` refactor) are not yet recorded here and will be
+> backfilled in a follow-up.
+
 ## v0.3.8 (2026-06-28) — Models P2 (managed providers)
 
 ### Models P2 — managed providers store + generic OpenAI-compatible test
