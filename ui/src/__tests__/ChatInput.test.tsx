@@ -20,8 +20,8 @@ vi.mock('react-router-dom', async () => {
 
 // Mock useApp hook
 const mockRefreshConfig = vi.fn()
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ({
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => ({
     config: {
       approval_mode: 'suggest',
       model: 'claude-sonnet-4-6',

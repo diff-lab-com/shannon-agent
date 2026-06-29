@@ -26,8 +26,14 @@ const ctx = vi.hoisted(() => ({
   renameSession: vi.fn(),
 }))
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ctx,
+vi.mock('@/context/ChatContext', () => ({
+  useChat: () => ctx,
+}))
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => ctx,
+}))
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => ctx,
 }))
 
 function resetCtx() {

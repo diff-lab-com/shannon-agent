@@ -11,8 +11,8 @@ let mockContext: any = {
   refreshTasks: vi.fn(),
 }
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => mockContext,
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => mockContext,
 }))
 
 vi.mock('@/lib/tauri-api', async () => {

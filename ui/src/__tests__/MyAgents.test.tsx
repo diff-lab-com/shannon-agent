@@ -10,8 +10,8 @@ const ctx = vi.hoisted(() => ({
   sendMessage: vi.fn(),
 }))
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ctx,
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => ctx,
 }))
 
 function resetCtx() {

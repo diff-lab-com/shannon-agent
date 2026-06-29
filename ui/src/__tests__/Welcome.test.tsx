@@ -13,9 +13,8 @@ const ctx = vi.hoisted(() => ({
   refreshStatus: vi.fn().mockResolvedValue(undefined),
   config: { working_dir: '/tmp/test' },
 }))
-vi.mock('@/context/AppContext', () => ({
-  AppProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  useApp: () => ctx,
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => ctx,
 }))
 
 // Mock sonner so toast.success/error/warning calls can be asserted.

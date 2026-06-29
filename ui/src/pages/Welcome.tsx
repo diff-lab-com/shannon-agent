@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 import { formatShortcut } from '@/lib/platform'
 
@@ -157,7 +157,7 @@ const STEP_LABEL_KEYS = [
 export default function Welcome() {
   const intl = useIntl()
   const navigate = useNavigate()
-  const { refreshConfig, refreshStatus, config } = useApp()
+  const { refreshConfig, refreshStatus, config } = useCatalog()
   const [step, setStep] = useState(0)
   const [task, setTask] = useState<TaskId>('general')
   const [provider, setProvider] = useState<string>('anthropic')

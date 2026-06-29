@@ -10,10 +10,10 @@ vi.mock('@/lib/tauri-api', () => ({
   updateTask: (...args: unknown[]) => updateTask(...args),
 }))
 
-// useApp is required since G8 added `const { agents } = useApp()` to the drawer.
-const useAppSpy = vi.hoisted(() => vi.fn())
-vi.mock('@/context/AppContext', () => ({
-  useApp: (...args: unknown[]) => useAppSpy(...args),
+// Catalog context provides `agents` to the drawer (split from former useApp).
+const useCatalogSpy = vi.hoisted(() => vi.fn())
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: (...args: unknown[]) => useCatalogSpy(...args),
 }))
 
 const baseTask: TaskItem = {
@@ -31,7 +31,7 @@ const baseTask: TaskItem = {
 beforeEach(() => {
   updateTask.mockReset()
   updateTask.mockResolvedValue(baseTask)
-  useAppSpy.mockReturnValue({ agents: [] })
+  useCatalogSpy.mockReturnValue({ agents: [] })
 })
 
 describe('TaskDetailDrawer edit mode', () => {

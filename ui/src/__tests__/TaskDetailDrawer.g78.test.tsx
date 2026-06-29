@@ -13,10 +13,10 @@ vi.mock('@/lib/tauri-api', () => ({
   updateTask: (...args: unknown[]) => updateTask(...args),
 }))
 
-// Spy on useApp to inject agents.
-const useAppSpy = vi.hoisted(() => vi.fn())
-vi.mock('@/context/AppContext', () => ({
-  useApp: (...args: unknown[]) => useAppSpy(...args),
+// Spy on useCatalog to inject agents.
+const useCatalogSpy = vi.hoisted(() => vi.fn())
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: (...args: unknown[]) => useCatalogSpy(...args),
 }))
 
 const agents: AgentInfo[] = [
@@ -37,7 +37,7 @@ const baseTask: TaskItem = {
 beforeEach(() => {
   updateTask.mockReset()
   updateTask.mockResolvedValue(baseTask)
-  useAppSpy.mockReturnValue({ agents })
+  useCatalogSpy.mockReturnValue({ agents })
 })
 
 describe('TaskDetailDrawer G7+G8', () => {

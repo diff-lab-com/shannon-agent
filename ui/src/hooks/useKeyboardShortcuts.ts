@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useApp } from '@/context/AppContext'
+import { useChat } from '@/context/ChatContext'
 
 interface ShortcutMap {
   [key: string]: () => void
@@ -12,7 +12,7 @@ export function useKeyboardShortcuts(
   onCreateSession?: () => void,
 ) {
   const navigate = useNavigate()
-  const { cancelQuery, isQuerying } = useApp()
+  const { cancelQuery, isQuerying } = useChat()
 
   useEffect(() => {
     const shortcuts: ShortcutMap = {

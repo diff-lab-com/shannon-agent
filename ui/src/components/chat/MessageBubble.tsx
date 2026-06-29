@@ -4,7 +4,8 @@ import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
-import { useApp } from '@/context/AppContext'
+import { useChat } from '@/context/ChatContext'
+import { useSessions } from '@/context/SessionContext'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { Markdown } from '@/components/chat/Markdown'
@@ -128,7 +129,8 @@ export const MessageBubble = memo(function MessageBubble({ message, messageIndex
   const [isBranching, setIsBranching] = useState(false)
   const [pendingBranch, setPendingBranch] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
-  const { sendMessage, currentSessionId, switchSession, refreshSessions } = useApp()
+  const { sendMessage } = useChat()
+  const { currentSessionId, switchSession, refreshSessions } = useSessions()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 

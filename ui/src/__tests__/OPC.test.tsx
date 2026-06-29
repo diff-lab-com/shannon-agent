@@ -10,8 +10,11 @@ const ctx = vi.hoisted(() => ({
   refreshTasks: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ctx,
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => ctx,
+}))
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => ctx,
 }))
 
 function resetCtx() {

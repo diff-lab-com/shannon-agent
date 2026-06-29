@@ -1,4 +1,5 @@
-import { useApp } from '@/context/AppContext'
+import { useChat } from '@/context/ChatContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { useParams, Link } from 'react-router-dom'
 import { useState } from 'react'
 import { useIntl, type PrimitiveType } from 'react-intl'
@@ -12,7 +13,8 @@ import { Badge } from '@/components/ui/badge'
 export default function OPCTask() {
   const intl = useIntl()
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
-  const { tasks, agents, usage, permissionRequest, respondPermission } = useApp()
+  const { usage } = useChat()
+  const { tasks, agents, permissionRequest, respondPermission } = useCatalog()
   const [revisionNote, setRevisionNote] = useState('')
   const [showRevisionInput, setShowRevisionInput] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<'approve' | 'rollback' | null>(null)

@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal'
 import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import * as api from '@/lib/tauri-api'
@@ -15,7 +15,7 @@ import type { SkillCandidate } from '@/lib/tauri-api'
 export default function AdvancedSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { refreshConfig, config } = useApp()
+  const { refreshConfig, config } = useCatalog()
   const [memoryEnabled, setMemoryEnabled] = useState(config?.memory_enabled ?? true)
   const [telemetryEnabled, setTelemetryEnabled] = useState(config?.telemetry_enabled ?? false)
   const [encryptionEnabled, setEncryptionEnabled] = useState(config?.encryption_enabled ?? true)

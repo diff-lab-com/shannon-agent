@@ -17,7 +17,9 @@ import { ArtifactPanel } from '@/components/artifact/ArtifactPanel'
 import ChatInput from '@/components/chat/ChatInput'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import StreamingResponse from '@/components/chat/StreamingResponse'
-import { useApp } from '@/context/AppContext'
+import { useChat } from '@/context/ChatContext'
+import { useSessions } from '@/context/SessionContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import { buildPrintStyles } from '@/lib/printStyles'
@@ -93,9 +95,13 @@ function appendMarkdownToElement(parent: HTMLElement, md: string) {
 export default function Chat() {
   const {
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
-    sessions, currentSessionId, error, config, status,
-    sendMessage, cancelQuery, createSession, switchSession, deleteSession, renameSession,
-  } = useApp()
+    sendMessage, cancelQuery,
+  } = useChat()
+  const {
+    sessions, currentSessionId,
+    createSession, switchSession, deleteSession, renameSession,
+  } = useSessions()
+  const { error, config, status } = useCatalog()
   const intl = useIntl()
   const navigate = useNavigate()
   const location = useLocation()

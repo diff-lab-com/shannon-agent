@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type {
@@ -17,7 +17,7 @@ import type {
 export default function ModelsSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { models, status, config, refreshModels, refreshStatus } = useApp()
+  const { models, status, config, refreshModels, refreshStatus } = useCatalog()
   const [switching, setSwitching] = useState<string | null>(null)
   const [strategy, setStrategyState] = useState<'speed' | 'balanced' | 'high-quality'>(
     (config?.performance_strategy as 'speed' | 'balanced' | 'high-quality') ?? 'high-quality'

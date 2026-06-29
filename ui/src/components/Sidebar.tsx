@@ -4,7 +4,8 @@ import { useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '../lib/utils';
-import { useApp } from '@/context/AppContext';
+import { useSessions } from '@/context/SessionContext';
+import { useCatalog } from '@/context/CatalogContext';
 import type { SessionInfo } from '@/types';
 import { useSidebar } from './Layout';
 import { useTriageStats } from '@/hooks/scheduled-tasks';
@@ -190,7 +191,8 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   });
   const dragging = useRef(false);
   const location = useLocation();
-  const { status, createSession, sessions, currentSessionId, switchSession, createSessionInWorktree } = useApp();
+  const { createSession, sessions, currentSessionId, switchSession, createSessionInWorktree } = useSessions();
+  const { status } = useCatalog();
   const intl = useIntl();
   const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
 
