@@ -1,32 +1,25 @@
 /**
- * Voice provider abstraction (Phase 3 scaffold).
+ * Voice provider abstraction.
  *
- * The goal is to let useVoice stay provider-agnostic so we can swap
- * between local Web Speech API, a remote Whisper endpoint, or a
- * cloud STT (Deepgram / AssemblyAI) without touching call sites.
+ * useVoice stays provider-agnostic so we can swap the STT backend without
+ * touching call sites. The current concrete providers are:
+ *  - `remote`: cloud Whisper STT. Captures audio via MediaRecorder and sends
+ *    it to the Rust `transcribe_audio` command (Groq / OpenAI / custom).
+ *  - `stub`: deterministic fallback for environments without MediaRecorder
+ *    (jsdom tests, headless webviews). Emits a fixed transcript on stop().
  *
- * Phase 2 (current): useVoice uses Web Speech directly.
- * Phase 3 (this file): introduce the interface and concrete providers
- *                     behind a factory; refactor useVoice to consume it.
+ * The legacy Web Speech API provider was removed in favor of cloud STT; the
+ * browser's SpeechRecognition API is unavailable in most desktop webviews
+ * (Chromium on Linux/macOS), which made it an unreliable default.
  */
 
-export type VoiceProviderKind = 'stub' | 'webspeech' | 'remote'
+export type VoiceProviderKind = 'stub' | 'remote'
 
 export interface VoiceProviderConfig {
   /** Which provider implementation to use. */
   kind: VoiceProviderKind
-  /** BCP-47 language code passed to the underlying engine. */
+  /** BCP-47 language code hint (currently unused — cloud STT auto-detects). */
   lang?: string
-  /**
-   * Endpoint URL for the `remote` provider. Audio chunks are POSTed as
-   * binary blobs with `Content-Type: application/octet-stream`.
-   * Must use the `https:` scheme — sending bearer tokens or audio
-   * over plain HTTP leaks them on the network. Providers reject
-   * insecure URLs with error code `insecure-protocol`.
-   */
-  remoteEndpoint?: string
-  /** Optional bearer token sent as `Authorization: Bearer …` over HTTPS. */
-  remoteAuthToken?: string
 }
 
 export interface VoiceInterimResult {
@@ -53,7 +46,7 @@ export interface VoiceProviderError {
 export interface VoiceProvider {
   /** Unique identifier matching `VoiceProviderConfig.kind`. */
   readonly kind: VoiceProviderKind
-  /** True when the runtime supports this provider (e.g. browser has Web Speech). */
+  /** True when the runtime supports this provider (e.g. MediaRecorder present). */
   isSupported(): boolean
   /** Begin capturing audio and emitting results. */
   start(handlers: {

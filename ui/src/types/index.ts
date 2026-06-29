@@ -222,6 +222,18 @@ export interface DesktopConfig {
   skill_loop_min_duration_secs?: number
   skill_loop_min_tool_calls?: number
   skill_detection_enabled?: boolean
+  stt?: SttConfig
+}
+
+export interface SttConfig {
+  provider?: string | null
+  api_key?: string | null
+  base_url?: string | null
+  model?: string | null
+}
+
+export interface TranscriptionResult {
+  text: string
 }
 
 export interface SendMessageResponse {

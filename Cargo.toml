@@ -43,7 +43,7 @@ toml = "0.8"
 lsp-types = "0.95"
 url = "2"
 async-trait = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "multipart"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 sha2 = "0.10"
 rand = "0.8"

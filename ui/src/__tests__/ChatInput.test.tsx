@@ -105,7 +105,7 @@ describe('ChatInput', () => {
 
   it('renders the Voice mic button in idle state', () => {
     renderChatInput()
-    expect(screen.getByLabelText('Start voice recording (stub)')).toBeInTheDocument()
+    expect(screen.getByLabelText('Start voice recording')).toBeInTheDocument()
   })
 
   it('does not render the Voice orb when idle', () => {
@@ -116,7 +116,7 @@ describe('ChatInput', () => {
   it('appends stub transcript to value after recording cycle', async () => {
     const onChange = vi.fn()
     renderChatInput({ value: '', onChange })
-    const mic = screen.getByLabelText('Start voice recording (stub)')
+    const mic = screen.getByLabelText('Start voice recording')
     fireEvent.click(mic)
     expect(screen.getByLabelText('Stop recording')).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Stop recording'))

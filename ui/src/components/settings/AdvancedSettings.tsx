@@ -7,6 +7,7 @@ import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useApp } from '@/context/AppContext'
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal'
+import { VoiceSttSettings } from '@/components/settings/VoiceSttSettings'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type { SkillCandidate } from '@/lib/tauri-api'
@@ -176,6 +177,9 @@ export default function AdvancedSettings() {
             </div>
           </div>
         </div>
+
+        {/* Voice / Speech-to-text (D4 cloud STT) */}
+        <VoiceSttSettings />
 
         {/* Developer Options */}
         <div className="bg-surface-container-lowest p-lg rounded-xl shadow-sm border border-outline-variant/30 lg:col-span-2 group hover:shadow-md transition-shadow">
