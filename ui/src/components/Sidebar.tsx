@@ -194,12 +194,19 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   const intl = useIntl();
   const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
 
-  // Poll triage stats every 30 seconds
+  // Refresh triage stats every 30s, but only while the window is visible —
+  // no point polling a desktop app that's backgrounded. Resumes + immediately
+  // refreshes on focus. (Full event-driven refresh would need a backend
+  // triage-updated emission; see claudedocs/comprehensive-audit-2026-06-29.md P2-6.)
   useEffect(() => {
-    const interval = setInterval(() => {
-      refreshTriageStats();
-    }, 30000);
-    return () => clearInterval(interval);
+    if (typeof document === 'undefined') return;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const stop = () => { if (interval) { clearInterval(interval); interval = undefined; } };
+    const start = () => { stop(); refreshTriageStats(); interval = setInterval(refreshTriageStats, 30000); };
+    const onVisibility = () => { document.hidden ? stop() : start(); };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };
   }, [refreshTriageStats]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -281,6 +288,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <span className="material-symbols-outlined icon-md">add</span>
         <span>{intl.formatMessage({ id: 'nav.newChat' })}</span>
       </Button>
+      {mode === 'dev' && (
       <Button
         variant="ghost"
         aria-label={intl.formatMessage({ id: 'sidebar.worktree.new.aria' })}
@@ -291,6 +299,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <span className="material-symbols-outlined icon-sm">account_tree</span>
         <span>{intl.formatMessage({ id: 'sidebar.worktree.new' })}</span>
       </Button>
+      )}
 
       {sessions.length > 0 && (
         <SessionsSection
@@ -338,6 +347,16 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
             </span>
           )}
         </NavLink>
+
+        {/* Simple mode: flat Extensions entry so普通用户 can reach the
+            Extensions Hub without switching to dev mode (dev mode keeps the
+            collapsible group below). Links to Featured — the hub's index tab. */}
+        {mode === 'simple' && (
+          <NavLink to="/extensions/featured" className={getNavClass} onClick={handleNavClick}>
+            <span className="material-symbols-outlined">extension</span>
+            <span className="flex-1">{intl.formatMessage({ id: 'nav.extensions' })}</span>
+          </NavLink>
+        )}
 
         {mode === 'dev' && (
         <>
