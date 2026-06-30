@@ -4,7 +4,9 @@
 //! instances can interact with Shannon over the network.
 
 use crate::VERSION;
-use crate::query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata};
+use crate::query_engine::{
+    PermissionRequest, QueryContext, QueryEngine, QueryEvent, QueryMetadata,
+};
 use crate::tools::ToolRegistry;
 use axum::Json;
 use axum::extract::State;
@@ -16,12 +18,13 @@ use axum::routing::{get, post};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use shannon_engine::api::{LlmClient, LlmClientConfig, Message};
-use shannon_engine::permissions::PermissionManager;
+use shannon_engine::permissions::{PermissionChoice, PermissionManager};
 use shannon_engine::state::StateManager;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use std::time::Duration;
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
@@ -109,6 +112,38 @@ impl IntoResponse for ApiError {
     }
 }
 
+// ── Approval wire types (P0-b) ─────────────────────────────────────────
+
+/// Wire representation of a human's approval decision for `POST
+/// /api/approval/respond`. Decoupled from the engine's `PermissionChoice` so
+/// the HTTP contract stays stable when the engine enum grows new variants.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    #[serde(rename = "allow_once")]
+    AllowOnce,
+    #[serde(rename = "always_allow")]
+    AlwaysAllow,
+    #[serde(rename = "deny")]
+    Deny,
+}
+
+impl ApprovalDecision {
+    fn to_choice(self) -> PermissionChoice {
+        match self {
+            ApprovalDecision::AllowOnce => PermissionChoice::AllowOnce,
+            ApprovalDecision::AlwaysAllow => PermissionChoice::AlwaysAllow,
+            ApprovalDecision::Deny => PermissionChoice::Deny,
+        }
+    }
+}
+
+/// JSON body for `POST /api/approval/respond`.
+#[derive(Debug, Deserialize)]
+pub struct ApprovalRespondRequest {
+    pub request_id: String,
+    pub choice: ApprovalDecision,
+}
+
 // ── Shared application state ───────────────────────────────────────────
 
 /// Shared state accessible to all route handlers.
@@ -120,6 +155,12 @@ pub struct AppState {
     pub tools: Arc<ToolRegistry>,
     /// Active WebSocket sessions keyed by session ID.
     pub ws_sessions: Arc<RwLock<HashMap<String, Arc<Mutex<WsSession>>>>>,
+    /// Pending tool-approval requests awaiting a `POST /api/approval/respond`
+    /// decision, keyed by permission prompt id. The engine's approval channel
+    /// (the `process_query` 2nd arg) forwards each `PermissionRequest` here via
+    /// the WS handler; a per-request resolver task awaits the client's choice
+    /// (300s timeout → `Deny`) and forwards it back to the engine.
+    pub approval_registry: Arc<Mutex<HashMap<String, oneshot::Sender<PermissionChoice>>>>,
 }
 
 /// A single WebSocket session holding conversation history.
@@ -182,6 +223,17 @@ pub enum WsServerMessage {
     /// Query failed.
     #[serde(rename = "failed")]
     Failed { error: String },
+    /// Engine requests human approval for a tool call. The client responds via
+    /// `POST /api/approval/respond` with the matching `request_id`.
+    #[serde(rename = "approval_request")]
+    ApprovalRequest {
+        request_id: String,
+        tool_name: String,
+        tool_input: serde_json::Value,
+        description: String,
+        is_destructive: bool,
+        diff_preview: Option<String>,
+    },
     /// Session info response.
     #[serde(rename = "session_info")]
     SessionInfo {
@@ -248,11 +300,13 @@ impl ShannonApiServer {
             .route("/api/query/stream", get(query_stream_handler))
             .route("/api/tools/list", post(tools_list_handler))
             .route("/api/ws", get(ws_handler))
+            .route("/api/approval/respond", post(approval_respond_handler))
             .layer(cors)
             .with_state(AppState {
                 client_config: self.client_config.clone(),
                 tools: self.tools.clone(),
                 ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+                approval_registry: Arc::new(Mutex::new(HashMap::new())),
             })
     }
 
@@ -493,6 +547,32 @@ async fn tools_list_handler(State(state): State<AppState>) -> Json<ToolsListResp
 ///
 /// Clients connect via `ws://host:port/api/ws` and send/receive JSON messages
 /// using the [`WsClientMessage`] / [`WsServerMessage`] protocol.
+/// `POST /api/approval/respond` — respond to an approval request previously
+/// emitted as `WsServerMessage::ApprovalRequest`. Resolves the pending
+/// resolver oneshot; if the request is unknown (already resolved, or the 300s
+/// resolver timeout already elapsed and cleaned it up), returns 404.
+async fn approval_respond_handler(
+    State(state): State<AppState>,
+    Json(body): Json<ApprovalRespondRequest>,
+) -> impl IntoResponse {
+    let mut registry = state.approval_registry.lock().await;
+    match registry.remove(&body.request_id) {
+        Some(tx) => {
+            let _ = tx.send(body.choice.to_choice());
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "resolved"})),
+            )
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("approval request not found: {}", body.request_id)
+            })),
+        ),
+    }
+}
+
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws_socket(socket, state))
 }
@@ -589,54 +669,109 @@ async fn handle_ws_socket(mut socket: WebSocket, state: AppState) {
                     },
                 };
 
-                let mut stream = engine.process_query(context, None).await;
+                // Wire the engine's approval channel so tool calls requiring
+                // human approval emit `ApprovalRequest` to the client. The
+                // client responds via `POST /api/approval/respond`; a resolver
+                // task (300s timeout → Deny) forwards the choice back to the
+                // engine. See `claudedocs/social-connection-architecture.md` P0-b.
+                let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermissionRequest>();
+                let mut stream = engine.process_query(context, Some(perm_tx)).await;
 
-                while let Some(result) = stream.next().await {
-                    let server_msg = match result {
-                        Ok(QueryEvent::Text { content, .. }) => {
-                            Some(WsServerMessage::Text { content })
-                        }
-                        Ok(QueryEvent::ToolUseRequest {
-                            tool_name,
-                            tool_input,
-                            ..
-                        }) => Some(WsServerMessage::ToolUse {
-                            name: tool_name,
-                            input: tool_input,
-                        }),
-                        Ok(QueryEvent::ToolUseResult {
-                            tool_name, result, ..
-                        }) => Some(WsServerMessage::ToolResult {
-                            name: tool_name,
-                            output: result,
-                        }),
-                        Ok(QueryEvent::Usage {
-                            input_tokens,
-                            output_tokens,
-                            cost_usd,
-                            ..
-                        }) => Some(WsServerMessage::Usage {
-                            input_tokens,
-                            output_tokens,
-                            cost_usd,
-                        }),
-                        Ok(QueryEvent::Completed { .. }) => Some(WsServerMessage::Completed {
-                            model: config.model.clone(),
-                        }),
-                        Ok(QueryEvent::Failed { error, .. }) => {
-                            Some(WsServerMessage::Failed { error })
-                        }
-                        Ok(_) => None,
-                        Err(e) => Some(WsServerMessage::Failed {
-                            error: e.to_string(),
-                        }),
-                    };
-
-                    if let Some(msg) = server_msg {
-                        if let Ok(json) = serde_json::to_string(&msg) {
-                            if socket.send(WsMsg::Text(json)).await.is_err() {
-                                break;
+                loop {
+                    tokio::select! {
+                        biased;
+                        // QueryEvent stream (priority: drain visible events first).
+                        result_opt = stream.next() => {
+                            let Some(result) = result_opt else { break };
+                            let server_msg = match result {
+                                Ok(QueryEvent::Text { content, .. }) => {
+                                    Some(WsServerMessage::Text { content })
+                                }
+                                Ok(QueryEvent::ToolUseRequest {
+                                    tool_name,
+                                    tool_input,
+                                    ..
+                                }) => Some(WsServerMessage::ToolUse {
+                                    name: tool_name,
+                                    input: tool_input,
+                                }),
+                                Ok(QueryEvent::ToolUseResult {
+                                    tool_name, result, ..
+                                }) => Some(WsServerMessage::ToolResult {
+                                    name: tool_name,
+                                    output: result,
+                                }),
+                                Ok(QueryEvent::Usage {
+                                    input_tokens,
+                                    output_tokens,
+                                    cost_usd,
+                                    ..
+                                }) => Some(WsServerMessage::Usage {
+                                    input_tokens,
+                                    output_tokens,
+                                    cost_usd,
+                                }),
+                                Ok(QueryEvent::Completed { .. }) => Some(WsServerMessage::Completed {
+                                    model: config.model.clone(),
+                                }),
+                                Ok(QueryEvent::Failed { error, .. }) => {
+                                    Some(WsServerMessage::Failed { error })
+                                }
+                                Ok(_) => None,
+                                Err(e) => Some(WsServerMessage::Failed {
+                                    error: e.to_string(),
+                                }),
+                            };
+                            if let Some(msg) = server_msg {
+                                if let Ok(json) = serde_json::to_string(&msg) {
+                                    if socket.send(WsMsg::Text(json)).await.is_err() {
+                                        break;
+                                    }
+                                }
                             }
+                        }
+                        // Engine requests human approval for a tool call.
+                        req_opt = perm_rx.recv() => {
+                            let Some(req) = req_opt else { continue };
+                            let prompt = req.prompt;
+                            let request_id = prompt.id.to_string();
+                            let engine_response_tx = req.response_tx;
+                            let (decision_tx, decision_rx) =
+                                oneshot::channel::<PermissionChoice>();
+                            state.approval_registry
+                                .lock()
+                                .await
+                                .insert(request_id.clone(), decision_tx);
+                            let areq = WsServerMessage::ApprovalRequest {
+                                request_id: request_id.clone(),
+                                tool_name: prompt.tool_name.clone(),
+                                tool_input: prompt.tool_input.clone(),
+                                description: prompt.description.clone(),
+                                is_destructive: prompt.is_destructive,
+                                diff_preview: prompt.diff_preview.clone(),
+                            };
+                            if let Ok(json) = serde_json::to_string(&areq) {
+                                if socket.send(WsMsg::Text(json)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            // Resolver: await the HTTP decision (300s), forward
+                            // the choice to the engine, then clean up the entry.
+                            let registry = state.approval_registry.clone();
+                            let rid = request_id.clone();
+                            tokio::spawn(async move {
+                                let choice = match tokio::time::timeout(
+                                    Duration::from_secs(300),
+                                    decision_rx,
+                                ).await {
+                                    Ok(Ok(c)) => c,
+                                    // Timeout, or the WS handler dropped the
+                                    // resolver on socket close → deny.
+                                    _ => PermissionChoice::Deny,
+                                };
+                                let _ = engine_response_tx.send(choice);
+                                registry.lock().await.remove(&rid);
+                            });
                         }
                     }
                 }
@@ -1610,6 +1745,7 @@ mod tests {
             client_config: test_config(),
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
         };
         let cloned = state.clone();
         assert!(Arc::ptr_eq(&state.tools, &cloned.tools));
@@ -1622,6 +1758,7 @@ mod tests {
             client_config: test_config(),
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
         };
         let sessions = state.ws_sessions.read().await;
         assert!(sessions.is_empty());
@@ -1633,6 +1770,7 @@ mod tests {
             client_config: test_config(),
             tools: Arc::new(ToolRegistry::new()),
             ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
         };
 
         let session = Arc::new(Mutex::new(WsSession {
@@ -1664,6 +1802,130 @@ mod tests {
             let sessions = state.ws_sessions.read().await;
             assert!(sessions.is_empty());
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Approval roundtrip tests (P0-b)
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_approval_decision_maps_to_permission_choice() {
+        assert_eq!(
+            ApprovalDecision::AllowOnce.to_choice(),
+            PermissionChoice::AllowOnce
+        );
+        assert_eq!(
+            ApprovalDecision::AlwaysAllow.to_choice(),
+            PermissionChoice::AlwaysAllow
+        );
+        assert_eq!(ApprovalDecision::Deny.to_choice(), PermissionChoice::Deny);
+    }
+
+    #[test]
+    fn test_approval_decision_serde_round_trip() {
+        for (decision, wire) in [
+            (ApprovalDecision::AllowOnce, "allow_once"),
+            (ApprovalDecision::AlwaysAllow, "always_allow"),
+            (ApprovalDecision::Deny, "deny"),
+        ] {
+            let json = serde_json::to_string(&decision).unwrap();
+            assert_eq!(json, format!("\"{wire}\""));
+            let back: ApprovalDecision = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, decision);
+        }
+    }
+
+    #[test]
+    fn test_ws_server_message_approval_request_serialization() {
+        let msg = WsServerMessage::ApprovalRequest {
+            request_id: "abc-123".to_string(),
+            tool_name: "bash".to_string(),
+            tool_input: serde_json::json!({"command": "ls"}),
+            description: "Run a shell command".to_string(),
+            is_destructive: true,
+            diff_preview: Some("--- old\n+++ new".to_string()),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "approval_request");
+        assert_eq!(parsed["request_id"], "abc-123");
+        assert_eq!(parsed["tool_name"], "bash");
+        assert_eq!(parsed["is_destructive"], true);
+        assert_eq!(parsed["diff_preview"], "--- old\n+++ new");
+    }
+
+    #[tokio::test]
+    async fn test_approval_respond_resolves_pending_request() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let request_id = "test-approval-1".to_string();
+        let (tx, rx) = oneshot::channel::<PermissionChoice>();
+        state
+            .approval_registry
+            .lock()
+            .await
+            .insert(request_id.clone(), tx);
+
+        let body = ApprovalRespondRequest {
+            request_id: request_id.clone(),
+            choice: ApprovalDecision::AllowOnce,
+        };
+        let response = approval_respond_handler(State(state.clone()), Json(body))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // The resolver oneshot must receive the choice.
+        let choice = rx.await.expect("resolver oneshot should resolve");
+        assert_eq!(choice, PermissionChoice::AllowOnce);
+
+        // Registry entry must be removed after resolution.
+        assert!(
+            !state
+                .approval_registry
+                .lock()
+                .await
+                .contains_key(&request_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_approval_respond_unknown_returns_not_found() {
+        let state = AppState {
+            client_config: test_config(),
+            tools: Arc::new(ToolRegistry::new()),
+            ws_sessions: Arc::new(RwLock::new(HashMap::new())),
+            approval_registry: Arc::new(Mutex::new(HashMap::new())),
+        };
+        let body = ApprovalRespondRequest {
+            request_id: "does-not-exist".to_string(),
+            choice: ApprovalDecision::Deny,
+        };
+        let response = approval_respond_handler(State(state), Json(body))
+            .await
+            .into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_approval_respond_endpoint_wired_and_404s_for_unknown() {
+        // End-to-end through the router: proves the route is registered and
+        // the 404 path works without a pre-seeded registry entry.
+        let app = test_app();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/approval/respond")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({"request_id": "missing", "choice": "deny"}).to_string(),
+            ))
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     // ══════════════════════════════════════════════════════════════════════
