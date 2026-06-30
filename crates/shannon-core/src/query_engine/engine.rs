@@ -65,12 +65,62 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 /// Send a query event, logging a warning if the receiver has been dropped.
+///
+/// Note: this only *logs* a closed receiver — it does not stop the producer
+/// loop. Cancellation is handled separately by [`AbortOnDropStream`], which
+/// aborts the spawned task when the consumer drops the [`QueryStream`].
 macro_rules! send_event {
     ($tx:expr, $event:expr) => {
         if let Err(e) = $tx.send(Ok($event)) {
             tracing::warn!("query event dropped (receiver closed): {e}");
         }
     };
+}
+
+/// Stream wrapper that aborts the spawned producer task when the stream is
+/// dropped, so a consumer can cancel an in-progress query simply by dropping
+/// the [`QueryStream`].
+///
+/// Why this is needed: `send_event!` only logs a "receiver closed" warning and
+/// keeps running, so dropping the receiver alone would leave the LLM/tool loop
+/// producing tokens and executing tools after the client cancelled. Capturing
+/// the producer's `JoinHandle` here and calling `abort()` on drop cancels the
+/// task at its next `.await` point (e.g. between streamed tokens, or at the
+/// next tool-call boundary).
+struct AbortOnDropStream<S> {
+    inner: std::pin::Pin<Box<S>>,
+    handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl<S> AbortOnDropStream<S> {
+    fn new(stream: S, handle: tokio::task::JoinHandle<()>) -> Self {
+        Self {
+            inner: Box::pin(stream),
+            handle: Some(handle),
+        }
+    }
+}
+
+impl<S> Drop for AbortOnDropStream<S> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+impl<S: futures::Stream> futures::Stream for AbortOnDropStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        // Both fields are `Unpin`, so the wrapper itself is `Unpin` and we can
+        // project safely onto the inner stream.
+        let this = self.get_mut();
+        this.inner.as_mut().poll_next(cx)
+    }
 }
 
 /// Progress sender that forwards tool output lines as `ToolProgress` events.
@@ -1059,8 +1109,10 @@ impl QueryEngine {
         // Clone memory store for post-query extraction (fire-and-forget)
         let memory_for_extraction = self.memory.clone();
 
-        // Spawn background task to handle query processing
-        tokio::spawn(async move {
+        // Spawn background task to handle query processing. Its `JoinHandle`
+        // is captured by `AbortOnDropStream` below so the task is aborted when
+        // the consumer drops the `QueryStream` (the cancellation path).
+        let producer = tokio::spawn(async move {
             // Prevent OS sleep during long-running queries (drops on exit)
             let _sleep_guard = crate::prevent_sleep::PreventSleepGuard::new();
 
@@ -3424,12 +3476,14 @@ impl QueryEngine {
             }
         });
 
-        // Convert channel receiver to stream
+        // Convert the channel receiver into a stream that aborts the producer
+        // task when dropped, so a consumer can cancel an in-progress query by
+        // dropping the `QueryStream` (used by the API server's WS cancel path).
         let stream = stream::unfold(rx, move |mut receiver| async move {
             receiver.recv().await.map(|event| (event, receiver))
         });
 
-        Box::pin(stream)
+        Box::pin(AbortOnDropStream::new(stream, producer))
     }
 
     /// Get current conversation statistics.
@@ -3541,6 +3595,61 @@ mod tests {
     use std::env;
     use std::fs;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn abort_on_drop_stream_forwards_items_and_aborts_producer_on_drop() {
+        // The whole point of P0-c: dropping the QueryStream must actually stop
+        // the engine's producer task, not just close the channel (send_event!
+        // only logs a closed receiver and keeps running). AbortOnDropStream
+        // guarantees that by calling JoinHandle::abort() on drop.
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::Duration;
+
+        let counter = Arc::new(AtomicU64::new(0));
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<u64>();
+
+        let producer_counter = counter.clone();
+        let handle = tokio::spawn(async move {
+            let mut n = 0u64;
+            loop {
+                n += 1;
+                producer_counter.fetch_add(1, Ordering::SeqCst);
+                // Deliberately ignore send errors — without abort this loop
+                // would keep spinning forever after the receiver drops.
+                let _ = tx.send(n);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        });
+
+        // Wrap an unfold stream (same shape process_query returns) + the handle.
+        use futures::StreamExt as _;
+        use futures::stream::unfold;
+        let inner = unfold(rx, |mut receiver| async move {
+            receiver.recv().await.map(|event| (event, receiver))
+        });
+        let mut stream = AbortOnDropStream::new(inner, handle);
+
+        // The wrapper forwards items from the inner stream.
+        assert!(
+            stream.next().await.is_some(),
+            "wrapper must forward inner stream items"
+        );
+
+        let baseline = counter.load(Ordering::SeqCst);
+        // Dropping the wrapper must abort the producer task.
+        drop(stream);
+
+        // If the producer were still alive it would tick ~every 5ms; after
+        // 50ms that would be ~10 more iterations. Abortion cancels it at its
+        // next await, so the counter stays essentially at the baseline.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let after = counter.load(Ordering::SeqCst);
+        assert!(
+            after <= baseline + 1,
+            "producer kept running after stream drop: baseline={baseline} after={after}"
+        );
+    }
 
     fn create_test_client() -> LlmClient {
         let config = LlmClientConfig {
