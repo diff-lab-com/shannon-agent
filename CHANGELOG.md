@@ -123,6 +123,29 @@ opt-in and is not touched here.
   `mask_stt_key`, `sanitize_error_body`, …); `cargo clippy` clean.
 - UI: `tsc --noEmit` clean; vitest green; i18n parity OK.
 
+### Social connections — desktop ↔ gateway keyring bridge
+
+Branch `feat/connections-keyring` (T5). A new **Settings → Connections** page
+lets users store each chat platform's bot token in the OS keyring and enable
+adapters for the `shannon-gateway`, and edit the engine WebSocket / HTTP
+endpoints. Adds `src/commands_connections.rs` (six Tauri commands:
+`gateway_set_secret` / `get_secret` / `has_secret` / `delete_secret` /
+`read_config` / `write_config`) and the `keyring` crate. Credentials are
+written straight to the OS keyring — same backend the gateway reads at
+`start()` — and **never enter the webview, the repo, or `config.json`**; only
+the keyring *key names* an adapter needs are recorded (`secrets` map). This is
+the F14 contract the gateway already relies on. `gateway_write_config`
+validates and persists atomically (temp file + rename).
+
+- Rust: +5 unit tests (`split_secret_key`, camelCase serde round-trip,
+  gateway-native JSON parse, loopback default); `cargo clippy` clean;
+  `cargo deny` clean.
+- UI: new `ConnectionsSettings.tsx` (engine card + 8-platform roster with
+  presence badge, keyring-key readout, enable Switch, token Input); i18n
+  keys added to both `en` and `zh-CN`; `setup.ts` gains a `PointerEvent`
+  stub so base-ui Switch clicks work under jsdom; 4 vitest cases; `tsc`
+  clean; full suite green.
+
 ### Tooling / CI
 
 - **Release job** (#83, `s2/release-job-gitea-release`): publish a Gitea

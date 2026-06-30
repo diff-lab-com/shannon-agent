@@ -33,6 +33,7 @@ const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings')
 const AdvancedSettings = lazy(() => import('./components/settings/AdvancedSettings'));
 const BillingSettings = lazy(() => import('./components/settings/BillingSettings'));
 const NotificationsSettings = lazy(() => import('./components/settings/NotificationsSettings'));
+const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
 
 function PageLoader() {
   return <div className="flex-1 flex items-center justify-center"><span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span></div>;
@@ -93,6 +94,7 @@ export default function App() {
                   <Route path="billing" element={<BillingSettings />} />
                   <Route path="advanced" element={<AdvancedSettings />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
+                  <Route path="connections" element={<ConnectionsSettings />} />
                 </Route>
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Route>
