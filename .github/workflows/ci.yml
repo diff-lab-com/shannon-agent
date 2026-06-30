@@ -118,21 +118,31 @@ jobs:
   semver-check:
     name: Semver Check
     runs-on: ubuntu-latest
+    # Pre-1.0: semver is advisory, not gating.
+    #  - continue-on-error: breaking changes are routine before 1.0 and must not
+    #    turn the CI run red; the job still reports its result for visibility.
+    #  - this job is intentionally NOT a branch-protection required check, so
+    #    merges never wait on it.
+    #  - baseline-rev (a git tag) replaces the default crates.io lookup because
+    #    the `shannon-cli` crate name is squatted on crates.io.
+    continue-on-error: true
+    env:
+      # Bump this when cutting a new baseline release. It feeds both
+      # `baseline-rev` and the cache `prefix-key`, so a baseline bump always
+      # invalidates the cached baseline rustdoc and never serves a stale one.
+      SEMVER_BASELINE: v0.5.5
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Check semver (baseline rustdoc cached)
+        uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
-          toolchain: "1.88"
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-semver-checks
-      - name: Run semver checks (baseline v0.5.5)
-        run: cargo semver-checks --workspace --baseline-rev v0.5.5 --verbose --default-features --exclude shannon-engine --exclude shannon-stability-attr
-      - name: Note
-        run: |
-          echo "Comparing HEAD against git tag v0.5.5 (baseline)."
-          echo "Default crates.io lookup is bypassed because 'shannon-cli' name is squatted."
+          baseline-rev: ${{ env.SEMVER_BASELINE }}
+          prefix-key: baseline-${{ env.SEMVER_BASELINE }}
+          # No rust-toolchain pin: the action defaults to latest stable, which
+          # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
+          # format). The repo-wide 1.88 pin is intentionally not used here.
+          feature-group: default-features
+          exclude: shannon-engine,shannon-stability-attr
+          verbose: true
