@@ -122,6 +122,24 @@ Default path: `~/.shannon/gateway/config.json`. Override with
 - `secrets` — named OS-keyring entries the adapter needs (map of adapter name →
   keyring key). **Tokens are never inlined here.**
 
+### Adapter platform reference
+
+Each adapter declares its own `options` (non-secret) and `secrets` (keyring
+keys). `threading` platforms split sessions per thread; webhook adapters need a
+publicly-reachable callback URL (reverse proxy / tunnel), and each listens on
+its own local port so several can run side-by-side.
+
+| Platform | Inbound model | Required `options` | Default `secrets` keys | Approval |
+|---|---|---|---|---|
+| `slack` | Events API webhook (`:9873/slack`) | — (port/path optional) | `slack/bot-token`, `slack/signing-secret` | Block Kit buttons |
+| `telegram` | long-poll `getUpdates` | — | `telegram/bot-token` | inline keyboard |
+| `discord` | Gateway WebSocket | — | `discord/bot-token` | button row |
+| `matrix` | `sync` long-poll | `baseUrl` (homeserver) | `matrix/access-token` | text reply |
+| `whatsapp` | Meta Cloud API webhook (`:9876/whatsapp`) | `phoneNumberId`, `verifyToken` | `whatsapp/access-token` (+ `whatsapp/app-secret`) | interactive buttons |
+| `wecom` | 企业微信 callback (`:9877/wecom`, AES+sig) | `corpId`, `agentId`, `callbackToken` | `wecom/corp-secret`, `wecom/encoding-aes-key` | text reply |
+| `feishu` | 飞书 event-subscription (`:9875/feishu`, AES) | `appId` | `feishu/app-secret`, `feishu/encrypt-key` | interactive card |
+| `dingtalk` | 钉钉 custom-robot outgoing (`:9874/dingtalk`) | — | `dingtalk/robot-secret` | text reply |
+
 ### Secrets / OS keyring (F14)
 
 The adapter reads each secret at `start()` via `ctx.getSecret(key)`. Key format
@@ -230,8 +248,10 @@ in the repo). See `src/adapters/__tests__/` and the mock-adapter pattern in
   registry, per-session router + lane, default + approval turn handlers, DM
   pairing + allowlist — done, mock-tested.
 - **Bootstrap** (#8): config loader, secret providers, runnable entry — done.
-- **Adapters**: platform implementations + real-credential smoke in progress
-  (P1-g Slack, T6 Telegram/Discord/Matrix/WhatsApp/WeCom/Feishu/DingTalk).
+- **Adapters**: all eight platform factories (Slack/Telegram/Discord/Matrix/
+  WhatsApp/WeCom/Feishu/DingTalk) are implemented, unit-tested, and wired into
+  `src/index.ts`. Real-credential end-to-end smoke is a separate manual step per
+  platform (bot tokens never enter the repo). See the platform reference above.
 - **Phase 2**: streaming (edit-in-place) replies — done; single-binary
   packaging for desktop distribution — done (Release workflow cross-compiles
   linux/macOS/Windows binaries on every `v*` tag).
