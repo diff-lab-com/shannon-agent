@@ -296,9 +296,8 @@ pub async fn gateway_set_managed(
 }
 
 /// Auto-start the supervised gateway at app launch when `gateway.managed` is on
-/// and no supervisor is already running (E-1 方案 C). Mirrors
-/// `commands_notifications::bootstrap_inbound_listener` — a lib-side helper so
-/// `main.rs::setup()` never touches `AppState`'s private fields directly.
+/// and no supervisor is already running (E-1 方案 C). Kept as a lib-side helper
+/// so `main.rs::setup()` never touches `AppState`'s private fields directly.
 pub async fn bootstrap_gateway_supervisor(
     state: &tauri::State<'_, AppState>,
     app: &tauri::AppHandle,

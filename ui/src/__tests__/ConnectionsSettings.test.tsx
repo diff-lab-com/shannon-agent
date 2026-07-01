@@ -73,6 +73,50 @@ describe('ConnectionsSettings', () => {
     expect(written.engine.httpBaseUrl).toBe('http://new')
   })
 
+  // ── P2 per-platform multi-secret model ─────────────────────────────────────
+
+  it('writes every platform slot into the gateway config when slack is enabled', async () => {
+    const writeSpy = vi.spyOn(api, 'gatewayWriteConfig').mockResolvedValue({
+      engine: { wsUrl: 'ws://x/ws', httpBaseUrl: 'http://x' },
+      adapters: [],
+    })
+    render(<ConnectionsSettings />)
+    await waitFor(() => expect(screen.getByTestId('connection-slack')).toBeInTheDocument())
+    fireEvent.click(within(screen.getByTestId('connection-slack')).getByRole('switch'))
+    await waitFor(() => expect(writeSpy).toHaveBeenCalled())
+    const written = writeSpy.mock.calls[0]![0]
+    expect(written.adapters).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          platform: 'slack',
+          enabled: true,
+          // both the bot-token and the signing-secret slots are mapped
+          secrets: { botToken: 'slack/bot-token', signingSecret: 'slack/signing-secret' },
+        }),
+      ]),
+    )
+  })
+
+  it('saves both slack slots when both are filled', async () => {
+    const setSpy = vi.spyOn(api, 'gatewaySetSecret').mockResolvedValue(undefined)
+    render(<ConnectionsSettings />)
+    await waitFor(() => expect(screen.getByTestId('connection-slack')).toBeInTheDocument())
+    const row = within(screen.getByTestId('connection-slack'))
+    fireEvent.change(row.getByLabelText('Bot token — Slack'), { target: { value: 'xoxb-tok' } })
+    fireEvent.change(row.getByLabelText('Signing secret — Slack'), { target: { value: 'shh' } })
+    fireEvent.click(row.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(setSpy).toHaveBeenCalledTimes(2))
+    expect(setSpy).toHaveBeenCalledWith('slack/bot-token', 'xoxb-tok')
+    expect(setSpy).toHaveBeenCalledWith('slack/signing-secret', 'shh')
+  })
+
+  it('marks every platform connected once all required slots are stored', async () => {
+    vi.spyOn(api, 'gatewayHasSecret').mockResolvedValue(true)
+    render(<ConnectionsSettings />)
+    await waitFor(() => expect(screen.getAllByText('Credential stored').length).toBe(8))
+    expect(screen.queryAllByText('No credential').length).toBe(0)
+  })
+
   // ── E-1 方案 C — gateway process lifecycle card ────────────────────────────
 
   it('renders the gateway process card with managed on by default', async () => {

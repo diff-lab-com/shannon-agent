@@ -1,12 +1,11 @@
 // ResultRoutingEditor — Phase D P2.3.
 //
-// Selects where scheduled-routine results get delivered. Four channel
-// presets (slack / email / notification / log); each entry is a free-form
-// target spec stored as a string in ExecutionPolicy.result_routing. The
-// backend dispatches each entry to its adapter when a run finishes.
+// Selects where scheduled-routine results get delivered. Three channel
+// presets (email / notification / log); each entry is a free-form target
+// spec stored as a string in ExecutionPolicy.result_routing. The backend
+// dispatches each entry to its adapter when a run finishes.
 //
-// Wire format mirrors what the eventual adapters will parse:
-//   slack:#channel      → Slack channel mention
+// Wire format:
 //   email:user@domain   → email recipient
 //   notification        → in-app/desktop notification (no args)
 //   log                 → append to routine log file (no args)
@@ -16,7 +15,7 @@
 import { useState } from 'react'
 import { useIntl } from 'react-intl'
 
-export type RoutingKind = 'slack' | 'email' | 'notification' | 'log'
+export type RoutingKind = 'email' | 'notification' | 'log'
 
 interface ResultRoutingEditorProps {
   value: string[]
@@ -24,7 +23,6 @@ interface ResultRoutingEditorProps {
 }
 
 const KIND_OPTIONS: { kind: RoutingKind; icon: string; label: string; placeholder: string }[] = [
-  { kind: 'slack', icon: 'tag', label: 'Slack', placeholder: '#ops' },
   { kind: 'email', icon: 'mail', label: 'Email', placeholder: 'user@example.com' },
   { kind: 'notification', icon: 'notifications', label: 'Notification', placeholder: '' },
   { kind: 'log', icon: 'description', label: 'Log', placeholder: '' },
@@ -42,7 +40,7 @@ export function parseChannel(entry: string): { kind: RoutingKind; target: string
   const colon = entry.indexOf(':')
   if (colon < 0) return null
   const rawKind = entry.slice(0, colon)
-  if (rawKind === 'slack' || rawKind === 'email') {
+  if (rawKind === 'email') {
     return { kind: rawKind, target: entry.slice(colon + 1) }
   }
   return null
@@ -51,7 +49,7 @@ export function parseChannel(entry: string): { kind: RoutingKind; target: string
 export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEditorProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const [pendingKind, setPendingKind] = useState<RoutingKind>('slack')
+  const [pendingKind, setPendingKind] = useState<RoutingKind>('email')
   const [pendingTarget, setPendingTarget] = useState('')
 
   const addChannel = () => {
@@ -87,7 +85,7 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
               >
                 <span className="material-symbols-outlined text-[14px] text-on-surface-variant">{opt?.icon ?? 'circle'}</span>
                 <span className="font-label-md text-on-surface flex-1 truncate">
-                  {kind === 'slack' || kind === 'email' ? `${kind}: ${target}` : opt?.label ?? kind}
+                  {kind === 'email' ? `${kind}: ${target}` : opt?.label ?? kind}
                 </span>
                 <button
                   type="button"
@@ -117,7 +115,7 @@ export default function ResultRoutingEditor({ value, onChange }: ResultRoutingEd
             {KIND_OPTIONS.map(o => <option key={o.kind} value={o.kind}>{o.label}</option>)}
           </select>
         </label>
-        {pendingKind === 'slack' || pendingKind === 'email' ? (
+        {pendingKind === 'email' ? (
           <input
             type="text"
             aria-label={intl.formatMessage({ id: 'tasks.resultRoutingEditor.targetAria' }, { kind: pendingKind })}

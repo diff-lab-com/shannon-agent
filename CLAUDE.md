@@ -66,7 +66,7 @@ Everything Tauri-related lives behind the `tauri` feature (default-on).
 `src/lib.rs` declares `commands` plus twelve domain-specific
 `commands_*` modules, `scheduled_commands`, `lsp_commands`,
 `automation_commands`, `extensions_commands`, `notifications`, and
-`inbound` under `#[cfg(feature = "tauri")]`. `build.rs` is a no-op
+`gateway_supervisor` under `#[cfg(feature = "tauri")]`. `build.rs` is a no-op
 stub because Tauri's own build script replaces it when the feature
 is enabled.
 
@@ -114,8 +114,8 @@ The app follows the standard Tauri v2 split:
      listener uses to rebuild the status label (no polling).
    - `commands_tasks.rs` — task board (`list_tasks`, `update_task`) plus
      `.claude/tasks/` walker helpers.
-   - `commands_notifications.rs` — native OS notifications + webhook/inbound
-     notification config + inbound listener supervisor. Owns
+   - `commands_notifications.rs` — native OS notifications + webhook
+     notification config + DND preferences. Owns
      `fire_query_notification`, `NotificationKind`, and
      `load_desktop_webhook_config` (all `pub(crate)`) used by
      `commands.rs::send_message` and `AppState::new`.
@@ -135,8 +135,14 @@ The app follows the standard Tauri v2 split:
      profiles.
    - `notifications.rs` — `TauriNotificationHandler` implementation of the
      engine's `NotificationHandler` trait; wired into `AppState.notifier`.
-   - `inbound.rs` — Slack + Telegram inbound listener used by
-     `commands_notifications::restart_inbound_listener`.
+   - `commands_connections.rs` — social-connection settings: reads/writes the
+     gateway config and stores per-platform credentials in the OS keyring
+     (never in the app window, repo, or config). Each platform's keyring keys
+     mirror the adapters in `shannon-gateway` (e.g. `slack/bot-token`,
+     `wecom/corp-secret`).
+   - `gateway_supervisor.rs` — when `gateway.managed` is on, spawns and
+     supervises a local `shannon-gateway` binary; emits
+     `shannon:gateway-exited` on child exit.
 
 4. **`src/events.rs`** — typed payloads for every frontend-bound Tauri event
    (`QueryTextPayload`, `ToolStartPayload`, `UsagePayload`, etc.) plus

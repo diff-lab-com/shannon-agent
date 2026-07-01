@@ -37,12 +37,55 @@ const PLATFORM_LABEL: Record<Platform, string> = {
   dingtalk: 'DingTalk (钉钉)',
 }
 
-// Primary bot-token credential key for a platform. The gateway reads this
-// exact key from the OS keyring at adapter start() (see
-// shannon-gateway/src/secrets/cliKeyring.ts).
-const secretKey = (p: Platform): string => `${p}/bot-token`
+// One credential slot the gateway reads from the OS keyring at adapter
+// start(). The `name` is the adapter-local key (it becomes the entry in
+// GatewayAdapter.secrets), and `key` is the exact OS-keyring key the
+// gateway's ctx.getSecret(...) call reads. These keys are verified against
+// each adapter's start() in shannon-gateway/src/adapters/*.
+//
+// `required` mirrors whether the adapter throws when the slot is missing:
+// a platform is "connected" once every required slot has a stored value.
+interface SecretSlot {
+  name: string
+  key: string
+  labelKey: string
+  required: boolean
+}
 
-const SECRET_NAME = 'botToken'
+const slot = (name: string, key: string, labelKey: string, required: boolean): SecretSlot => ({
+  name,
+  key,
+  labelKey,
+  required,
+})
+
+const S = (n: string) => `settings.connections.secret.${n}.label`
+
+const SECRET_MODEL: Record<Platform, SecretSlot[]> = {
+  slack: [
+    slot('botToken', 'slack/bot-token', S('botToken'), true),
+    slot('signingSecret', 'slack/signing-secret', S('signingSecret'), true),
+  ],
+  telegram: [slot('botToken', 'telegram/bot-token', S('botToken'), true)],
+  discord: [slot('botToken', 'discord/bot-token', S('botToken'), true)],
+  matrix: [slot('accessToken', 'matrix/access-token', S('accessToken'), true)],
+  whatsapp: [
+    slot('accessToken', 'whatsapp/access-token', S('accessToken'), true),
+    slot('appSecret', 'whatsapp/app-secret', S('appSecret'), false),
+  ],
+  wecom: [
+    slot('corpSecret', 'wecom/corp-secret', S('corpSecret'), true),
+    slot('encodingAesKey', 'wecom/encoding-aes-key', S('encodingAesKey'), true),
+  ],
+  feishu: [
+    slot('appSecret', 'feishu/app-secret', S('appSecret'), true),
+    slot('encryptKey', 'feishu/encrypt-key', S('encryptKey'), false),
+  ],
+  dingtalk: [slot('robotSecret', 'dingtalk/robot-secret', S('robotSecret'), true)],
+}
+
+// Flatten once for the keyring-presence probe.
+const ALL_SLOTS = PLATFORMS.flatMap((p) => SECRET_MODEL[p].map((s) => ({ p, s })))
 
 export default function ConnectionsSettings() {
   const intl = useIntl()
@@ -87,13 +130,13 @@ export default function ConnectionsSettings() {
     }
   }, [config])
 
-  // Probe each platform's keyring presence so the UI can show a badge without
+  // Probe each slot's keyring presence so the UI can show a badge without
   // ever pulling the secret value into the webview.
   useEffect(() => {
     let cancelled = false
     Promise.all(
-      PLATFORMS.map((p) =>
-        api.gatewayHasSecret(secretKey(p)).then((present) => [p, present] as [string, boolean]),
+      ALL_SLOTS.map(({ s }) =>
+        api.gatewayHasSecret(s.key).then((present) => [s.key, present] as [string, boolean]),
       ),
     )
       .then((entries) => {
@@ -110,14 +153,31 @@ export default function ConnectionsSettings() {
   const isEnabled = (p: Platform): boolean =>
     config?.adapters.some((a) => a.platform === p && a.enabled) ?? false
 
-  async function saveSecret(p: Platform): Promise<void> {
-    const value = drafts[p] ?? ''
-    if (!value.trim()) return
+  // A platform is "connected" once every required slot has a stored value.
+  const isPlatformConnected = (p: Platform): boolean =>
+    SECRET_MODEL[p].filter((s) => s.required).every((s) => hasSecret[s.key] ?? false)
+
+  const platformHasDraft = (p: Platform): boolean =>
+    SECRET_MODEL[p].some((s) => (drafts[s.key] ?? '').trim())
+
+  async function savePlatform(p: Platform): Promise<void> {
+    const slots = SECRET_MODEL[p]
+    const entries = slots.filter((s) => (drafts[s.key] ?? '').trim())
+    if (!entries.length) return
     setSaving(p)
     try {
-      await api.gatewaySetSecret(secretKey(p), value.trim())
-      setHasSecret((m) => ({ ...m, [p]: true }))
-      setDrafts((d) => ({ ...d, [p]: '' }))
+      await Promise.all(
+        entries.map((s) => api.gatewaySetSecret(s.key, (drafts[s.key] ?? '').trim())),
+      )
+      setHasSecret((m) => ({
+        ...m,
+        ...Object.fromEntries(entries.map((s) => [s.key, true])),
+      }))
+      setDrafts((d) => {
+        const next = { ...d }
+        entries.forEach((s) => delete next[s.key])
+        return next
+      })
       toast.success(t('settings.connections.saved'))
     } catch (e) {
       toastError('keyring: save failed', e)
@@ -134,7 +194,12 @@ export default function ConnectionsSettings() {
           ...config,
           adapters: [
             ...others,
-            { platform: p, enabled: true, secrets: { [SECRET_NAME]: secretKey(p) } },
+            {
+              platform: p,
+              enabled: true,
+              // Every slot's adapter-local name → its OS-keyring key.
+              secrets: Object.fromEntries(SECRET_MODEL[p].map((s) => [s.name, s.key])),
+            },
           ],
         }
       : { ...config, adapters: others }
@@ -346,26 +411,24 @@ export default function ConnectionsSettings() {
         </CardHeader>
         <CardContent className="space-y-md divide-y divide-surface-border">
           {PLATFORMS.map((p) => {
-            const present = hasSecret[p] ?? false
+            const connected = isPlatformConnected(p)
             return (
-              <div key={p} data-testid={`connection-${p}`} className="flex flex-col gap-sm pt-md first:pt-0">
+              <div
+                key={p}
+                data-testid={`connection-${p}`}
+                className="flex flex-col gap-sm pt-md first:pt-0"
+              >
                 <div className="flex items-center justify-between gap-md">
                   <div className="flex items-center gap-sm">
                     <span className="font-label-md text-on-surface">{PLATFORM_LABEL[p]}</span>
-                    <Badge variant={present ? 'success' : 'neutral'}>
-                      {present
+                    <Badge variant={connected ? 'success' : 'neutral'}>
+                      {connected
                         ? t('settings.connections.connected')
                         : t('settings.connections.notConnected')}
                     </Badge>
-                    <code className="font-label-sm text-on-surface-variant">
-                      {secretKey(p)}
-                    </code>
                   </div>
                   <div className="flex items-center gap-sm">
-                    <label
-                      htmlFor={`gw-enable-${p}`}
-                      className="font-label-sm text-on-surface-variant"
-                    >
+                    <label htmlFor={`gw-enable-${p}`} className="font-label-sm text-on-surface-variant">
                       {t('settings.connections.enable')}
                     </label>
                     <Switch
@@ -375,23 +438,39 @@ export default function ConnectionsSettings() {
                     />
                   </div>
                 </div>
-                <div className="flex items-center gap-sm">
-                  <Input
-                    type="password"
-                    aria-label={`${t('settings.connections.tokenLabel')} — ${PLATFORM_LABEL[p]}`}
-                    placeholder={t('settings.connections.tokenPlaceholder')}
-                    value={drafts[p] ?? ''}
-                    onChange={(e) => setDrafts((d) => ({ ...d, [p]: e.target.value }))}
-                    spellCheck={false}
-                  />
-                  <Button
-                    variant="secondary"
-                    onClick={() => saveSecret(p)}
-                    disabled={saving === p || !(drafts[p] ?? '').trim()}
-                  >
-                    {t('settings.connections.save')}
-                  </Button>
-                </div>
+                {SECRET_MODEL[p].map((s) => {
+                  const present = hasSecret[s.key] ?? false
+                  const label = `${t(s.labelKey)}${s.required ? '' : t('settings.connections.secret.optionalSuffix')} — ${PLATFORM_LABEL[p]}`
+                  return (
+                    <div key={s.key} className="flex flex-col gap-xs">
+                      <div className="flex items-center gap-sm">
+                        <Input
+                          type="password"
+                          aria-label={label}
+                          placeholder={t(s.labelKey)}
+                          value={drafts[s.key] ?? ''}
+                          onChange={(e) => setDrafts((d) => ({ ...d, [s.key]: e.target.value }))}
+                          spellCheck={false}
+                        />
+                        <span
+                          aria-hidden="true"
+                          className={`h-2 w-2 shrink-0 rounded-full ${present ? 'bg-primary' : 'bg-outline-variant/50'}`}
+                          title={present ? t('settings.connections.connected') : t('settings.connections.notConnected')}
+                        />
+                        <code className="font-label-sm text-on-surface-variant whitespace-nowrap">
+                          {s.key}
+                        </code>
+                      </div>
+                    </div>
+                  )
+                })}
+                <Button
+                  variant="secondary"
+                  onClick={() => savePlatform(p)}
+                  disabled={saving === p || saving !== null || !platformHasDraft(p)}
+                >
+                  {t('settings.connections.save')}
+                </Button>
               </div>
             )
           })}
