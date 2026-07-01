@@ -87,6 +87,10 @@ fn main() {
             commands_connections::gateway_delete_secret,
             commands_connections::gateway_read_config,
             commands_connections::gateway_write_config,
+            commands_connections::gateway_supervisor_start,
+            commands_connections::gateway_supervisor_stop,
+            commands_connections::gateway_supervisor_status,
+            commands_connections::gateway_set_managed,
             // D4 — cloud speech-to-text (voice input)
             commands_voice::transcribe_audio,
             commands_voice::get_stt_config,
@@ -271,6 +275,13 @@ fn main() {
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
             tauri::async_runtime::block_on(async move {
                 commands_notifications::bootstrap_inbound_listener(&state_ref, &app_handle).await;
+            });
+
+            // E-1 方案 C — auto-start the gateway supervisor when `managed` is on.
+            let app_handle = app.handle().clone();
+            let state_ref: tauri::State<'_, commands::AppState> = app.state();
+            tauri::async_runtime::block_on(async move {
+                commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle).await;
             });
 
             // Bundle A — Click-to-foreground: when a Shannon notification is

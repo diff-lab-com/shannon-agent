@@ -11,6 +11,7 @@ import type {
   ProviderInput,
   DesktopConfig,
   GatewayConfig,
+  GatewayProcessState,
   SttConfig,
   TranscriptionResult,
   SendMessageResponse,
@@ -99,6 +100,32 @@ export async function gatewayReadConfig(): Promise<GatewayConfig> {
 /** Validate + atomically persist the gateway config; returns what was written. */
 export async function gatewayWriteConfig(config: GatewayConfig): Promise<GatewayConfig> {
   return invoke('gateway_write_config', { config })
+}
+
+// --- E-1 方案 C — supervised gateway process lifecycle ---
+
+/** Spawn (or no-op if already running) the local gateway under supervision. */
+export async function gatewaySupervisorStart(): Promise<GatewayProcessState> {
+  return invoke('gateway_supervisor_start')
+}
+
+/** Gracefully stop the supervised gateway (idempotent). */
+export async function gatewaySupervisorStop(): Promise<GatewayProcessState> {
+  return invoke('gateway_supervisor_stop')
+}
+
+/** Snapshot of `managed` + the process status. */
+export async function gatewaySupervisorStatus(): Promise<GatewayProcessState> {
+  return invoke('gateway_supervisor_status')
+}
+
+/**
+ * Persist the 方案 C `managed` flag. Toggling it off also stops a running
+ * gateway. Toggling it on does NOT auto-start — the user clicks Start, or the
+ * next app launch auto-starts via setup().
+ */
+export async function gatewaySetManaged(managed: boolean): Promise<GatewayProcessState> {
+  return invoke('gateway_set_managed', { managed })
 }
 
 export interface WebhookConfigDto {

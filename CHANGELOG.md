@@ -146,6 +146,32 @@ validates and persists atomically (temp file + rename).
   stub so base-ui Switch clicks work under jsdom; 4 vitest cases; `tsc`
   clean; full suite green.
 
+### Social connections — gateway process lifecycle (E-1, 方案 C)
+
+Branch `feat/gateway-supervisor` (stacked on T5). A hybrid lifecycle for the
+`shannon-gateway`: when `gateway.managed` is `true` (default) the desktop app
+spawns and supervises a local gateway binary; flipping it to `false` treats
+the gateway as external (user / ops runs it) and the UI's engine endpoints
+point at the out-of-process instance.
+
+- **Rust** — new `src/gateway_supervisor.rs`: `GatewaySupervisor` owns the
+  child via a `tokio::select!` between an explicit `CancellationToken` and
+  `child.wait()`, emits `shannon:gateway-exited` on any exit (mirrors
+  `src/inbound/mod.rs`). `resolve_binary()` probes `binary_path` → Tauri
+  resource dir → `$PATH`, reporting `NotInstalled` (not an error) when nothing
+  resolves. `GatewayDesktopConfig` (`managed` / `binary_path` / `extra_args`)
+  is persisted under the desktop's own `config.json`. Four new commands
+  (`gateway_supervisor_start` / `stop` / `status` / `gateway_set_managed`) +
+  a `bootstrap_gateway_supervisor` lib helper (lib-side, so `main.rs::setup()`
+  never touches `AppState`'s private fields — same pattern as
+  `bootstrap_inbound_listener`). `managed` auto-starts at launch; the flag is
+  preserved across provider switches. +5 unit tests; `clippy` / `deny` clean.
+- **UI** — a **Gateway process** card in `ConnectionsSettings.tsx`: a managed
+  Switch (方案 C master toggle), a live status Badge (Stopped / Not installed /
+  Running w/ PID / Exited + reason), and Start / Stop buttons. Re-polls status
+  on the `shannon:gateway-exited` event. 15 i18n keys added to both `en` and
+  `zh-CN`; 4 new vitest cases (1179 total green); `tsc` clean.
+
 ### Tooling / CI
 
 - **Release job** (#83, `s2/release-job-gitea-release`): publish a Gitea

@@ -7,9 +7,10 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import { useTauriEvent } from '@/hooks/useTauriEvent'
 import { toastError } from '@/lib/errorToast'
 import * as api from '@/lib/tauri-api'
-import type { GatewayConfig } from '@/types'
+import type { GatewayConfig, GatewayProcessState, GatewaySupervisorStatus } from '@/types'
 
 // The gateway platforms (mirrors the `Platform` enum in
 // shannon-gateway/src/adapters/types.ts). Order = display order.
@@ -53,6 +54,24 @@ export default function ConnectionsSettings() {
   const [saving, setSaving] = useState<Platform | null>(null)
   const [engineDraft, setEngineDraft] = useState({ wsUrl: '', httpBaseUrl: '' })
   const [savingEngine, setSavingEngine] = useState(false)
+
+  // E-1 方案 C — supervised gateway process state.
+  const [procState, setProcState] = useState<GatewayProcessState | null>(null)
+  const [procBusy, setProcBusy] = useState<'start' | 'stop' | 'managed' | null>(null)
+
+  // Pull the initial process snapshot once.
+  useEffect(() => {
+    api
+      .gatewaySupervisorStatus()
+      .then(setProcState)
+      .catch((e) => toastError('gateway supervisor: status failed', e))
+  }, [])
+
+  // When the supervisor reports the child exited (crash, clean exit, or our own
+  // stop), re-poll the status so the badge reflects the new state.
+  useTauriEvent<{ reason: string; code: number | null }>('shannon:gateway-exited', () => {
+    api.gatewaySupervisorStatus().then(setProcState).catch(() => {})
+  })
 
   useEffect(() => {
     api
@@ -145,6 +164,66 @@ export default function ConnectionsSettings() {
     }
   }
 
+  // E-1 方案 C handlers.
+  async function startGateway(): Promise<void> {
+    setProcBusy('start')
+    try {
+      const s = await api.gatewaySupervisorStart()
+      setProcState(s)
+      toast.success(t('settings.connections.process.started'))
+    } catch (e) {
+      toastError('gateway supervisor: start failed', e)
+    } finally {
+      setProcBusy(null)
+    }
+  }
+
+  async function stopGateway(): Promise<void> {
+    setProcBusy('stop')
+    try {
+      const s = await api.gatewaySupervisorStop()
+      setProcState(s)
+      toast.success(t('settings.connections.process.stopped'))
+    } catch (e) {
+      toastError('gateway supervisor: stop failed', e)
+    } finally {
+      setProcBusy(null)
+    }
+  }
+
+  async function toggleManaged(managed: boolean): Promise<void> {
+    setProcBusy('managed')
+    try {
+      const s = await api.gatewaySetManaged(managed)
+      setProcState(s)
+      toast.success(t('settings.connections.process.managedSaved'))
+    } catch (e) {
+      toastError('gateway supervisor: set managed failed', e)
+    } finally {
+      setProcBusy(null)
+    }
+  }
+
+  const procManaged = procState?.managed ?? true
+  const procStatus: GatewaySupervisorStatus = procState?.status ?? 'stopped'
+
+  const procBadge = (() => {
+    const s = procStatus
+    if (s === 'stopped')
+      return { variant: 'neutral' as const, label: t('settings.connections.process.statusStopped') }
+    if (s === 'notInstalled')
+      return { variant: 'warning' as const, label: t('settings.connections.process.statusNotInstalled') }
+    if (typeof s === 'object' && 'running' in s)
+      return {
+        variant: 'success' as const,
+        label: `${t('settings.connections.process.statusRunning')} (PID ${s.running.pid})`,
+      }
+    return {
+      variant: 'error' as const,
+      label: `${t('settings.connections.process.statusExited')}: ${s.exited.reason}`,
+    }
+  })()
+
   if (!config) {
     return (
       <div className="text-on-surface-variant font-body-sm animate-pulse">
@@ -194,6 +273,68 @@ export default function ConnectionsSettings() {
           <Button onClick={saveEngine} disabled={savingEngine}>
             {t('settings.connections.saveEngine')}
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* E-1 方案 C — Gateway process lifecycle */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('settings.connections.process.title')}</CardTitle>
+          <CardDescription>{t('settings.connections.process.description')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-md">
+          <div className="flex items-center justify-between gap-md">
+            <div className="space-y-1">
+              <span className="font-label-md text-on-surface">
+                {t('settings.connections.process.managedLabel')}
+              </span>
+              <p className="font-body-sm text-on-surface-variant max-w-prose">
+                {t('settings.connections.process.managedHint')}
+              </p>
+            </div>
+            <Switch
+              data-testid="gateway-managed-switch"
+              aria-label={t('settings.connections.process.managedLabel')}
+              checked={procManaged}
+              disabled={procBusy === 'managed'}
+              onCheckedChange={toggleManaged}
+            />
+          </div>
+
+          {procManaged && (
+            <div className="flex flex-wrap items-center justify-between gap-md border-t border-surface-border pt-md">
+              <div className="flex items-center gap-sm">
+                <span className="font-label-sm text-on-surface-variant">
+                  {t('settings.connections.process.status')}
+                </span>
+                <Badge variant={procBadge.variant} data-testid="gateway-status-badge">
+                  {procBadge.label}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-sm">
+                <Button
+                  variant="secondary"
+                  onClick={startGateway}
+                  disabled={procBusy !== null}
+                >
+                  {t('settings.connections.process.start')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={stopGateway}
+                  disabled={procBusy !== null}
+                >
+                  {t('settings.connections.process.stop')}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {procManaged && procStatus === 'notInstalled' && (
+            <p className="font-body-sm text-on-surface-variant max-w-prose">
+              {t('settings.connections.process.notInstalledHint')}
+            </p>
+          )}
         </CardContent>
       </Card>
 

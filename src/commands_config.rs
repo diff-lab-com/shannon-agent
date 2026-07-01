@@ -390,6 +390,7 @@ pub async fn switch_provider(
         notifications_on_completed: existing.notifications_on_completed,
         notifications_on_failed: existing.notifications_on_failed,
         stt: existing.stt.clone(),
+        gateway: existing.gateway.clone(),
     };
     drop(existing);
 

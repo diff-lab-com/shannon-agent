@@ -78,6 +78,47 @@ pub struct DesktopConfig {
     /// (`NotificationLevel::Error`). Default: enabled.
     #[serde(default = "default_true")]
     pub notifications_on_failed: bool,
+    /// Gateway process supervision (E-1, 方案 C). When `managed` is true the
+    /// desktop app spawns and supervises a local `shannon-gateway` binary;
+    /// when false, the gateway is treated as external (user/ops runs it and
+    /// the UI's engine endpoints point at it).
+    #[serde(default)]
+    pub gateway: GatewayDesktopConfig,
+}
+
+/// Gateway process supervision config (E-1, 方案 C). Stored under
+/// `~/.shannon/desktop/config.json` (the *desktop's* own config — not the
+/// gateway's `~/.shannon/gateway/config.json`, which the gateway itself reads).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayDesktopConfig {
+    /// 方案 C master switch. `true` (default) → desktop spawns + supervises a
+    /// local gateway binary. `false` → the gateway is external; desktop only
+    /// reads/writes its config + engine endpoints and never starts a process.
+    #[serde(default = "default_gateway_managed")]
+    pub managed: bool,
+    /// Explicit path to the gateway binary. If `None`, the supervisor probes a
+    /// few default locations (Tauri resource dir, then `$PATH`); if none
+    /// resolves, `start()` reports `NotInstalled` rather than erroring.
+    #[serde(default)]
+    pub binary_path: Option<String>,
+    /// Extra CLI args appended to the gateway invocation
+    /// (e.g. `["--log-level", "debug"]`).
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+}
+
+impl Default for GatewayDesktopConfig {
+    fn default() -> Self {
+        Self {
+            managed: default_gateway_managed(),
+            binary_path: None,
+            extra_args: Vec::new(),
+        }
+    }
+}
+
+fn default_gateway_managed() -> bool {
+    true
 }
 
 fn default_skill_detection_enabled() -> bool {
@@ -192,6 +233,7 @@ impl Default for DesktopConfig {
             notifications_on_completed: default_true(),
             notifications_on_failed: default_true(),
             stt: None,
+            gateway: GatewayDesktopConfig::default(),
         }
     }
 }
@@ -332,6 +374,7 @@ mod tests {
             notifications_on_completed: true,
             notifications_on_failed: true,
             stt: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -387,6 +430,7 @@ mod tests {
             notifications_on_completed: true,
             notifications_on_failed: true,
             stt: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -424,6 +468,7 @@ mod tests {
             notifications_on_completed: true,
             notifications_on_failed: true,
             stt: None,
+            ..Default::default()
         };
 
         // Test serialization preserves approval_mode
