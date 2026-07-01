@@ -156,6 +156,31 @@ export interface ConfigUpdate {
   value: string
 }
 
+/// Gateway (shannon-gateway) config — mirrors the on-disk shape of
+/// `~/.shannon/gateway/config.json` (camelCase, same schema the gateway's own
+/// loader validates). Kept structurally identical so the desktop can pass it
+/// through unchanged.
+export interface GatewayEngineConfig {
+  wsUrl: string
+  httpBaseUrl: string
+  model?: string
+}
+
+export interface GatewayAdapterConfig {
+  platform: string
+  enabled: boolean
+  options?: Record<string, unknown>
+  /// adapter-local secret name → OS-keyring key (e.g. `botToken` → `slack/bot-token`).
+  /// Values are keyring key NAMES, never the secrets themselves.
+  secrets?: Record<string, string>
+}
+
+export interface GatewayConfig {
+  engine: GatewayEngineConfig
+  adapters: GatewayAdapterConfig[]
+  logLevel?: string
+}
+
 export interface ProviderSwitchRequest {
   provider: string
   api_key?: string

@@ -11,6 +11,7 @@ fn main() {
     use shannon_desktop::commands_billing;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
+    use shannon_desktop::commands_connections;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_memory;
@@ -79,6 +80,13 @@ fn main() {
             commands_config::save_provider,
             commands_config::delete_provider,
             commands_config::set_active_provider,
+            // T5 — gateway social connections (OS keyring + gateway config.json)
+            commands_connections::gateway_set_secret,
+            commands_connections::gateway_get_secret,
+            commands_connections::gateway_has_secret,
+            commands_connections::gateway_delete_secret,
+            commands_connections::gateway_read_config,
+            commands_connections::gateway_write_config,
             // D4 — cloud speech-to-text (voice input)
             commands_voice::transcribe_audio,
             commands_voice::get_stt_config,

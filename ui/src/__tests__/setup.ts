@@ -75,6 +75,13 @@ class IntersectionObserverMock {
 }
 global.IntersectionObserver = IntersectionObserverMock as any
 
+// jsdom has no PointerEvent constructor; base-ui's Switch onClick constructs
+// `new ownerWindow(input).PointerEvent(...)` (to tell pointer vs keyboard
+// activation). Stub it as a MouseEvent subclass so switch toggles work.
+class PointerEventMock extends MouseEvent {}
+;(globalThis as any).PointerEvent = PointerEventMock
+;(window as any).PointerEvent = PointerEventMock
+
 // Mock tauri-api module
 vi.mock('@/lib/tauri-api', () => ({
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
@@ -88,6 +95,18 @@ vi.mock('@/lib/tauri-api', () => ({
     approval_mode: 'normal',
   }),
   configure: vi.fn().mockResolvedValue(undefined),
+  gatewaySetSecret: vi.fn().mockResolvedValue(undefined),
+  gatewayGetSecret: vi.fn().mockResolvedValue(null),
+  gatewayHasSecret: vi.fn().mockResolvedValue(false),
+  gatewayDeleteSecret: vi.fn().mockResolvedValue(undefined),
+  gatewayReadConfig: vi.fn().mockResolvedValue({
+    engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
+    adapters: [],
+  }),
+  gatewayWriteConfig: vi.fn().mockResolvedValue({
+    engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
+    adapters: [],
+  }),
   switchProvider: vi.fn().mockResolvedValue(undefined),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),

@@ -10,6 +10,7 @@ import type {
   ProvidersFile,
   ProviderInput,
   DesktopConfig,
+  GatewayConfig,
   SttConfig,
   TranscriptionResult,
   SendMessageResponse,
@@ -66,6 +67,38 @@ export async function getConfig(): Promise<DesktopConfig> {
 
 export async function configure(update: ConfigUpdate): Promise<void> {
   await invoke('configure', { update })
+}
+
+// --- Gateway social connections (T5) — OS keyring + gateway config.json ---
+
+/** Store a credential in the OS keyring under `<service>/<account>`. */
+export async function gatewaySetSecret(key: string, value: string): Promise<void> {
+  await invoke('gateway_set_secret', { key, value })
+}
+
+/** Fetch a credential, or null if no keyring entry exists. */
+export async function gatewayGetSecret(key: string): Promise<string | null> {
+  return invoke('gateway_get_secret', { key })
+}
+
+/** Whether a keyring entry exists for `key` (cheaper than fetching the value). */
+export async function gatewayHasSecret(key: string): Promise<boolean> {
+  return invoke('gateway_has_secret', { key })
+}
+
+/** Delete a keyring entry (idempotent — missing entry is success). */
+export async function gatewayDeleteSecret(key: string): Promise<void> {
+  await invoke('gateway_delete_secret', { key })
+}
+
+/** Read the gateway config; returns a loopback default on first run. */
+export async function gatewayReadConfig(): Promise<GatewayConfig> {
+  return invoke('gateway_read_config')
+}
+
+/** Validate + atomically persist the gateway config; returns what was written. */
+export async function gatewayWriteConfig(config: GatewayConfig): Promise<GatewayConfig> {
+  return invoke('gateway_write_config', { config })
 }
 
 export interface WebhookConfigDto {
