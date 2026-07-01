@@ -1189,7 +1189,6 @@
   "settings.connections.secret.optionalSuffix": " (optional)",
   "settings.connections.secret.robotSecret.label": "Robot secret",
   "settings.connections.secret.signingSecret.label": "Signing secret",
-  "settings.connections.keyringKey": "Keyring key",
   "settings.connections.save": "Save",
   "settings.connections.saved": "Credential saved to keyring",
   "settings.connections.enable": "Enable",

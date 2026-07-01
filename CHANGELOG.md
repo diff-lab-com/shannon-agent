@@ -212,7 +212,8 @@ platform's real credentials instead of assuming one bot token.
   config's `secrets` map. Fixes the prior bug where all eight platforms were
   keyed `<platform>/bot-token`. 9 i18n keys added to both `en` and `zh-CN`
   (`settings.connections.secret.*`); the now-dead generic `tokenLabel` /
-  `tokenPlaceholder` keys were removed.
+  `tokenPlaceholder` keys were removed, along with the pre-existing dead
+  `keyringKey` key.
 - **P3 — inbound/outbound hard-delete.** The desktop's own Slack/Telegram
   inbound listener and outbound sender are deleted (`src/inbound/`,
   `src/outbound/`, `commands_outbound.rs`, the `inbound_listener` field on
