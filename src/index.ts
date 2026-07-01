@@ -5,22 +5,37 @@
  * `--config <path>` arg), wires the four layers via `bootstrap()`, and runs
  * until SIGINT/SIGTERM.
  *
- * Platform adapter factories register here. Phase 1 ships the engine-client →
- * router → approval loop, mock-tested end-to-end; real platform adapters
- * (Slack in P1-g, Telegram/Discord/Matrix/WhatsApp/WeCom/Feishu/DingTalk in T6)
- * drop in by importing a factory and adding it to the `factories` map.
+ * All eight platform adapter factories register here. The router looks them up
+ * by `config.platform`; bootstrap throws at startup if an enabled platform has
+ * no factory. Real-credential end-to-end smoke is a separate manual step per
+ * platform (bot tokens live in the OS keyring, never in this repo).
  */
 import { bootstrap, type AdapterFactory } from "./bootstrap.js";
 import { loadConfig } from "./config/loader.js";
 import { createConsoleLogger } from "./logger.js";
 
+import { createSlackAdapter } from "./adapters/slack/slackAdapter.js";
+import { createTelegramAdapter } from "./adapters/telegram/telegramAdapter.js";
+import { createDiscordAdapter } from "./adapters/discord/discordAdapter.js";
+import { createMatrixAdapter } from "./adapters/matrix/matrixAdapter.js";
+import { createWhatsAppAdapter } from "./adapters/whatsapp/whatsappAdapter.js";
+import { createWeComAdapter } from "./adapters/wecom/wecomAdapter.js";
+import { createFeishuAdapter } from "./adapters/feishu/feishuAdapter.js";
+import { createDingTalkAdapter } from "./adapters/dingtalk/dingtalkAdapter.js";
+
 export const GATEWAY_VERSION = "0.1.0";
 
-// Real adapter factories are imported and registered here as they land.
-// (Phase 1 completes the loop with mock-tested adapters; real ones need their
-// platform credentials supplied via the OS keyring, not committed here.)
-const factories = new Map<string, AdapterFactory>();
-// factories.set("slack", createSlackAdapter);   // P1-g — needs real bot token
+/** Platform id → factory. One adapter per platform; the router looks up by id. */
+const factories = new Map<string, AdapterFactory>([
+  ["slack", createSlackAdapter],
+  ["telegram", createTelegramAdapter],
+  ["discord", createDiscordAdapter],
+  ["matrix", createMatrixAdapter],
+  ["whatsapp", createWhatsAppAdapter],
+  ["wecom", createWeComAdapter],
+  ["feishu", createFeishuAdapter],
+  ["dingtalk", createDingTalkAdapter],
+]);
 
 async function main(): Promise<void> {
   const logger = createConsoleLogger("info");
@@ -36,7 +51,7 @@ async function main(): Promise<void> {
   if (factories.size === 0 && config.adapters.some((a) => a.enabled)) {
     logger.warn(
       "no platform adapter factories are registered but the config enables adapters; " +
-        "bootstrap will fail. Register real adapters (P1-g / T6).",
+        "bootstrap will fail.",
     );
   }
 
