@@ -13,12 +13,6 @@ import {
 } from '@/components/ui/select'
 import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
-import SlackWizard from './notifications/SlackWizard'
-import TelegramWizard from './notifications/TelegramWizard'
-import OutboundSection from './notifications/OutboundSection'
-
-type ChannelType = 'slack' | 'telegram' | 'email' | null
-
 /** Channel preset id — stored as the webhook `template` discriminator. */
 type WebhookPreset = 'feishu' | 'dingtalk' | 'wechat' | 'slack' | 'custom'
 
@@ -455,103 +449,6 @@ export default function NotificationsSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
 
-  const [loading, setLoading] = useState(true)
-  const [selectedChannel, setSelectedChannel] = useState<ChannelType>(null)
-  const [inboundConfig, setInboundConfig] = useState<api.InboundConfigDto | null>(null)
-  const [status, setStatus] = useState<api.InboundListenerStatus | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    api
-      .getInboundConfig()
-      .then((cfg) => {
-        if (cancelled) return
-        setInboundConfig(cfg)
-      })
-      .catch((e) => console.warn('getInboundConfig error:', e))
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    api
-      .getInboundListenerStatus()
-      .then((s) => {
-        if (!cancelled) setStatus(s)
-      })
-      .catch((e) => console.warn('getInboundListenerStatus error:', e))
-    const pollId = window.setInterval(() => {
-      api
-        .getInboundListenerStatus()
-        .then((s) => {
-          if (!cancelled) setStatus(s)
-        })
-        .catch((e) => console.warn('getInboundListenerStatus poll error:', e))
-    }, 30000)
-    return () => {
-      cancelled = true
-      window.clearInterval(pollId)
-    }
-  }, [])
-
-  const handleSaveInbound = async (dto: api.SlackInboundDto | api.TelegramInboundDto) => {
-    const config: api.InboundConfigDto = {
-      slack: 'bot_token' in dto ? dto as api.SlackInboundDto : inboundConfig?.slack || null,
-      telegram: 'allowed_chats' in dto ? dto as api.TelegramInboundDto : inboundConfig?.telegram || null,
-    }
-    await api.saveInboundConfig(config)
-    setInboundConfig(config)
-    const updated = await api.getInboundListenerStatus()
-    setStatus(updated)
-    setSelectedChannel(null)
-  }
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
-        <span className="material-symbols-outlined icon-xl text-primary animate-spin" aria-hidden="true">progress_activity</span>
-        <span className="sr-only">{t('settings.notifications.loading')}</span>
-      </div>
-    )
-  }
-
-  type Channel = {
-    id: 'slack' | 'telegram' | 'email'
-    name: string
-    icon: string
-    configured: boolean
-    active: boolean
-    comingSoon?: boolean
-  }
-  const channels: Channel[] = [
-    {
-      id: 'slack' as const,
-      name: 'Slack',
-      icon: 'tag',
-      configured: !!inboundConfig?.slack,
-      active: status?.slack_running || false,
-    },
-    {
-      id: 'telegram' as const,
-      name: 'Telegram',
-      icon: 'send',
-      configured: !!inboundConfig?.telegram,
-      active: status?.telegram_running || false,
-    },
-    {
-      id: 'email' as const,
-      name: 'Email',
-      icon: 'email',
-      configured: false,
-      active: false,
-      comingSoon: true,
-    },
-  ]
-
-  type HealthState = 'connected' | 'inactive' | 'setup'
-  const healthFor = (c: (typeof channels)[number]): HealthState => {
-    if (!c.configured) return 'setup'
-    return c.active ? 'connected' : 'inactive'
-  }
-
   return (
     <div className="pb-xl">
       <div className="mb-xl">
@@ -573,102 +470,11 @@ export default function NotificationsSettings() {
 
       <section className="mt-xl">
         <div className="mb-lg">
-          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.outbound.sectionTitle')}</h3>
-          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.outbound.sectionDesc')}</p>
+          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.webhook.title')}</h3>
+          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
         </div>
-        <div className="space-y-lg">
-          <WebhookSection />
-          <OutboundSection />
-        </div>
+        <WebhookSection />
       </section>
-
-      <div className="mt-xl">
-        <div className="mb-lg">
-          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.inbound.title')}</h3>
-          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.inbound.subtitle')}</p>
-        </div>
-
-        {!selectedChannel ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
-            {channels.map((channel) => (
-              <button
-                key={channel.id}
-                onClick={() => { if (!channel.comingSoon) setSelectedChannel(channel.id) }}
-                disabled={!!channel.comingSoon}
-                className={`p-md rounded-xl border bg-surface-container-lowest transition-colors text-left ${
-                  channel.comingSoon
-                    ? 'border-outline-variant/20 opacity-60 cursor-not-allowed'
-                    : 'border-outline-variant/30 hover:border-primary/50'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-sm">
-                  <div className="flex items-center gap-sm">
-                    <span className="material-symbols-outlined text-primary">{channel.icon}</span>
-                    <span className="font-label-md font-bold text-on-surface">{channel.name}</span>
-                  </div>
-                  {(() => {
-                    if (channel.comingSoon) {
-                      return (
-                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-surface-container-high text-on-surface-variant font-label-sm" role="status">
-                          {t('settings.notifications.channel.comingSoon')}
-                        </span>
-                      )
-                    }
-                    const health = healthFor(channel)
-                    if (health === 'connected') {
-                      return (
-                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-tertiary/20 text-tertiary font-label-sm" role="status">
-                          <span className="w-1 h-1 rounded-full bg-tertiary animate-pulse" aria-hidden="true" />
-                          {t('settings.notifications.wizard.channel.status.connected')}
-                        </span>
-                      )
-                    }
-                    if (health === 'inactive') {
-                      return (
-                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-error/15 text-error font-label-sm" role="status" title={t('settings.notifications.wizard.channel.status.inactive')}>
-                          <span className="material-symbols-outlined icon-xs" aria-hidden="true">warning</span>
-                          {t('settings.notifications.wizard.channel.status.inactive')}
-                        </span>
-                      )
-                    }
-                    return null
-                  })()}
-                </div>
-                {channel.comingSoon ? (
-                  <p className="text-on-surface-variant text-sm">
-                    {t('settings.notifications.wizard.email.comingSoon')}
-                  </p>
-                ) : channel.configured ? (
-                  <p className="text-on-surface-variant text-sm">
-                    {t('settings.notifications.wizard.channel.status.configured')}
-                  </p>
-                ) : (
-                  <p className="text-primary text-sm font-body-md">
-                    + {t('settings.notifications.wizard.channel.status.setup')}
-                  </p>
-                )}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <>
-            {selectedChannel === 'slack' && (
-              <SlackWizard
-                config={inboundConfig?.slack || null}
-                onSave={handleSaveInbound}
-                onCancel={() => setSelectedChannel(null)}
-              />
-            )}
-            {selectedChannel === 'telegram' && (
-              <TelegramWizard
-                config={inboundConfig?.telegram || null}
-                onSave={handleSaveInbound}
-                onCancel={() => setSelectedChannel(null)}
-              />
-            )}
-          </>
-        )}
-      </div>
     </div>
   )
 }

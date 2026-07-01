@@ -148,97 +148,6 @@ export async function clearWebhookConfig(): Promise<void> {
   await invoke('clear_webhook_config')
 }
 
-export interface SlackInboundDto {
-  bot_token: string
-  trigger_word: string
-  allowed_channels: string[]
-}
-
-export interface TelegramInboundDto {
-  bot_token: string
-  trigger_word: string
-  allowed_chats: string[]
-}
-
-export interface InboundConfigDto {
-  slack?: SlackInboundDto | null
-  telegram?: TelegramInboundDto | null
-}
-
-export async function getInboundConfig(): Promise<InboundConfigDto> {
-  return invoke('get_inbound_config')
-}
-
-export async function saveInboundConfig(dto: InboundConfigDto): Promise<void> {
-  await invoke('save_inbound_config', { dto })
-}
-
-export async function clearInboundConfig(): Promise<void> {
-  await invoke('clear_inbound_config')
-}
-
-export interface InboundListenerStatus {
-  telegram_running: boolean
-  slack_running: boolean
-}
-
-export async function getInboundListenerStatus(): Promise<InboundListenerStatus> {
-  return invoke('get_inbound_listener_status')
-}
-
-export async function stopInboundListener(): Promise<void> {
-  await invoke('stop_inbound_listener')
-}
-
-export interface SlackOutboundDto {
-  bot_token: string
-  channel: string
-}
-
-export interface TelegramOutboundDto {
-  bot_token: string
-  chat_id: string
-}
-
-export interface OutboundConfigDto {
-  slack?: SlackOutboundDto | null
-  telegram?: TelegramOutboundDto | null
-}
-
-export interface ChannelResult {
-  provider: string
-  ok: boolean
-  error?: string | null
-}
-
-export interface SendResultDto {
-  results: ChannelResult[]
-}
-
-export async function getOutboundConfig(): Promise<OutboundConfigDto> {
-  return invoke('get_outbound_config')
-}
-
-export async function saveOutboundConfig(dto: OutboundConfigDto): Promise<void> {
-  await invoke('save_outbound_config', { dto })
-}
-
-export async function clearOutboundConfig(): Promise<void> {
-  await invoke('clear_outbound_config')
-}
-
-/**
- * Send an outbound test message. `channel` narrows the send to a single
- * provider (`'slack'` | `'telegram'`); omit it (or pass `null`) to fan out to
- * every configured provider.
- */
-export async function sendOutboundTest(
-  message: string,
-  channel?: 'slack' | 'telegram' | null,
-): Promise<SendResultDto> {
-  return invoke('send_outbound_test', { message, channel: channel ?? null })
-}
-
 export type NotificationLevel = 'info' | 'warning' | 'error' | 'success'
 
 export interface NotificationPayload {
@@ -271,16 +180,6 @@ export async function getNotificationPrefs(): Promise<NotificationPrefs> {
 
 export async function setNotificationPrefs(prefs: NotificationPrefs): Promise<void> {
   await invoke('set_notification_prefs', { prefs })
-}
-
-export interface InboundMessage {
-  provider: 'slack' | 'telegram'
-  source_id: string
-  source_name: string
-  sender_id: string
-  sender_name: string
-  text: string
-  timestamp: number
 }
 
 export async function switchProvider(req: ProviderSwitchRequest): Promise<void> {

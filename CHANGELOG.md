@@ -192,6 +192,40 @@ point at the out-of-process instance.
   on the `shannon:gateway-exited` event. 15 i18n keys added to both `en` and
   `zh-CN`; 4 new vitest cases (1179 total green); `tsc` clean.
 
+### Social connections — per-platform credential model; dead inbound/outbound loop removed
+
+Branch `feat/connections-domestic-thin` (P2 + P3). Closes the loop opened by
+the gateway keyring bridge (T5) and supervisor (E-1): the desktop no longer
+ships its own platform-message plumbing, and the Connections page models each
+platform's real credentials instead of assuming one bot token.
+
+- **P2 — per-platform credential model.** `ConnectionsSettings` now carries a
+  `SECRET_MODEL` map (verified against each adapter's `start()` in
+  `shannon-gateway`) so every platform stores the keys its adapter actually
+  reads: slack needs `slack/bot-token` **and** `slack/signing-secret`; matrix
+  reads `matrix/access-token`; wecom needs `wecom/corp-secret` **and**
+  `wecom/encoding-aes-key`; feishu reads `feishu/app-secret` (+ optional
+  `feishu/encrypt-key`); dingtalk reads `dingtalk/robot-secret`; whatsapp
+  reads `whatsapp/access-token` (+ optional `whatsapp/app-secret`). A platform
+  badge flips to "Credential stored" only once every **required** slot is in
+  the keyring; enabling a platform writes all of its slots into the gateway
+  config's `secrets` map. Fixes the prior bug where all eight platforms were
+  keyed `<platform>/bot-token`. 9 i18n keys added to both `en` and `zh-CN`
+  (`settings.connections.secret.*`); the now-dead generic `tokenLabel` /
+  `tokenPlaceholder` keys were removed, along with the pre-existing dead
+  `keyringKey` key.
+- **P3 — inbound/outbound hard-delete.** The desktop's own Slack/Telegram
+  inbound listener and outbound sender are deleted (`src/inbound/`,
+  `src/outbound/`, `commands_outbound.rs`, the `inbound_listener` field on
+  `AppState`, and the inbound/outbound Tauri commands + setup bootstrap).
+  These were a closed loop — `inbound-message` had zero consumers and
+  `send_outbound_test` was the only non-test caller of the outbound path —
+  and `shannon-gateway` now owns all platform connectivity. The Notifications
+  page keeps its webhook + DnD surfaces; the per-channel "send test" outbound
+  action (#84 T8.1) and its wizard UI go with it. `ResultRoutingEditor` drops
+  the `slack` channel preset (email / notification / log only). ~250 dead
+  i18n keys (inbound / outbound / wizard) were purged from both locales.
+
 ### Tooling / CI
 
 - **Release job** (#83, `s2/release-job-gitea-release`): publish a Gitea

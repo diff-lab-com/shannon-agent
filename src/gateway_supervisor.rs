@@ -4,8 +4,7 @@
 //! `shannon-gateway` binary as a child process and supervises it. A supervisor
 //! task owns the child and `select!`s between an explicit shutdown signal and
 //! the child's natural exit. On any exit it updates the shared status and
-//! emits a `shannon:gateway-exited` Tauri event so the UI can surface a toast
-//! (mirroring the inbound-listener supervisor in `src/inbound/mod.rs`).
+//! emits a `shannon:gateway-exited` Tauri event so the UI can surface a toast.
 //!
 //! 方案 C contract: `managed=true` → desktop owns the lifecycle (spawn / kill /
 //! restart). `managed=false` → the gateway is external (user / ops runs it);

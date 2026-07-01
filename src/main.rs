@@ -17,7 +17,6 @@ fn main() {
     use shannon_desktop::commands_memory;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
-    use shannon_desktop::commands_outbound;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_routine_templates;
@@ -238,18 +237,6 @@ fn main() {
             commands_notifications::get_webhook_config,
             commands_notifications::save_webhook_config,
             commands_notifications::clear_webhook_config,
-            // P5 Phase 1 — inbound notifications (Slack + Telegram) config storage
-            commands_notifications::get_inbound_config,
-            commands_notifications::save_inbound_config,
-            commands_notifications::clear_inbound_config,
-            // P5 Phase 2 — inbound listener supervisor
-            commands_notifications::get_inbound_listener_status,
-            commands_notifications::stop_inbound_listener,
-            // P1.3 — outbound messaging (Slack + Telegram)
-            commands_outbound::get_outbound_config,
-            commands_outbound::save_outbound_config,
-            commands_outbound::clear_outbound_config,
-            commands_outbound::send_outbound_test,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
             commands_billing::get_billing_plan,
             commands_billing::get_cost_history,
@@ -269,13 +256,6 @@ fn main() {
             let mut state = commands::AppState::new();
             state.attach_notification_handler(app.handle().clone());
             app.manage(state);
-
-            // P5 Phase 2 — auto-start inbound listener if config already exists.
-            let app_handle = app.handle().clone();
-            let state_ref: tauri::State<'_, commands::AppState> = app.state();
-            tauri::async_runtime::block_on(async move {
-                commands_notifications::bootstrap_inbound_listener(&state_ref, &app_handle).await;
-            });
 
             // E-1 方案 C — auto-start the gateway supervisor when `managed` is on.
             let app_handle = app.handle().clone();

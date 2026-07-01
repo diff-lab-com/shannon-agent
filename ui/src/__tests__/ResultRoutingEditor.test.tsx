@@ -5,9 +5,6 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import ResultRoutingEditor, { encodeChannel, parseChannel } from '@/components/tasks/ResultRoutingEditor'
 
 describe('encodeChannel / parseChannel helpers', () => {
-  it('encodes slack with target', () => {
-    expect(encodeChannel('slack', '#ops')).toBe('slack:#ops')
-  })
   it('encodes email with target', () => {
     expect(encodeChannel('email', 'a@b.com')).toBe('email:a@b.com')
   })
@@ -15,11 +12,11 @@ describe('encodeChannel / parseChannel helpers', () => {
     expect(encodeChannel('notification', '')).toBe('notification')
     expect(encodeChannel('log', '')).toBe('log')
   })
-  it('returns empty when target missing for slack/email', () => {
-    expect(encodeChannel('slack', '  ')).toBe('')
+  it('returns empty when target missing for email', () => {
+    expect(encodeChannel('email', '  ')).toBe('')
   })
-  it('parses slack entry back to kind+target', () => {
-    expect(parseChannel('slack:#ops')).toEqual({ kind: 'slack', target: '#ops' })
+  it('parses email entry back to kind+target', () => {
+    expect(parseChannel('email:a@b.com')).toEqual({ kind: 'email', target: 'a@b.com' })
   })
   it('parses notification as no-target', () => {
     expect(parseChannel('notification')).toEqual({ kind: 'notification', target: '' })
@@ -31,8 +28,8 @@ describe('encodeChannel / parseChannel helpers', () => {
 
 describe('ResultRoutingEditor UI', () => {
   it('renders configured channels from value', () => {
-    render(<ResultRoutingEditor value={['slack:#ops', 'notification']} onChange={() => {}} />)
-    expect(screen.getByText('slack: #ops')).toBeInTheDocument()
+    render(<ResultRoutingEditor value={['email:a@b.com', 'notification']} onChange={() => {}} />)
+    expect(screen.getByText('email: a@b.com')).toBeInTheDocument()
     // 'notification' channel renders in the configured list with a remove button next to it
     const list = screen.getByLabelText('Configured channels')
     expect(list).toHaveTextContent('Notification')
@@ -43,13 +40,13 @@ describe('ResultRoutingEditor UI', () => {
     expect(screen.getByText(/No channels configured/i)).toBeInTheDocument()
   })
 
-  it('emits updated list when Add clicked (slack channel)', () => {
+  it('emits updated list when Add clicked (email channel)', () => {
     const onChange = vi.fn()
     render(<ResultRoutingEditor value={[]} onChange={onChange} />)
-    fireEvent.change(screen.getByLabelText('Channel type'), { target: { value: 'slack' } })
-    fireEvent.change(screen.getByLabelText('slack target'), { target: { value: '#release' } })
+    fireEvent.change(screen.getByLabelText('Channel type'), { target: { value: 'email' } })
+    fireEvent.change(screen.getByLabelText('email target'), { target: { value: 'a@b.com' } })
     fireEvent.click(screen.getByText('Add'))
-    expect(onChange).toHaveBeenCalledWith(['slack:#release'])
+    expect(onChange).toHaveBeenCalledWith(['email:a@b.com'])
   })
 
   it('hides target input for notification and Add is enabled without target', () => {
@@ -63,9 +60,9 @@ describe('ResultRoutingEditor UI', () => {
 
   it('removes a channel via the Remove button', () => {
     const onChange = vi.fn()
-    render(<ResultRoutingEditor value={['log', 'slack:#ops']} onChange={onChange} />)
+    render(<ResultRoutingEditor value={['log', 'email:a@b.com']} onChange={onChange} />)
     fireEvent.click(screen.getByLabelText('Remove log'))
-    expect(onChange).toHaveBeenCalledWith(['slack:#ops'])
+    expect(onChange).toHaveBeenCalledWith(['email:a@b.com'])
   })
 
   it('does not add duplicates', () => {
@@ -78,7 +75,7 @@ describe('ResultRoutingEditor UI', () => {
 
   it('disables Add button when target required but empty', () => {
     render(<ResultRoutingEditor value={[]} onChange={() => {}} />)
-    // default pendingKind is slack; no target typed → button disabled
+    // default pendingKind is email; no target typed → button disabled
     expect(screen.getByText('Add')).toBeDisabled()
   })
 })
