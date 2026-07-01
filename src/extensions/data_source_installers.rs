@@ -51,6 +51,21 @@ pub fn install_data_source(
     name: &str,
     config: &BTreeMap<String, String>,
 ) -> Result<InstalledDataSource, InstallError> {
+    install_data_source_in(&shannon_data_sources_root(), slug, kind, name, config)
+}
+
+/// Implementation that writes to an explicit `root` directory instead of
+/// resolving `~/.shannon/data-sources/` from `$HOME`. Tests drive this with a
+/// tempdir so they never mutate the process-global `HOME` env var — that
+/// mutation raced with unrelated tests reading `dirs::home_dir()` on another
+/// thread, which was the source of a pre-existing parallel-test flake.
+fn install_data_source_in(
+    root: &Path,
+    slug: &str,
+    kind: &str,
+    name: &str,
+    config: &BTreeMap<String, String>,
+) -> Result<InstalledDataSource, InstallError> {
     if slug.trim().is_empty() {
         return Err(InstallError::Format("data source slug is required".into()));
     }
@@ -59,8 +74,7 @@ pub fn install_data_source(
             "invalid data source slug: {slug}"
         )));
     }
-    let root = shannon_data_sources_root();
-    std::fs::create_dir_all(&root)?;
+    std::fs::create_dir_all(root)?;
 
     let file_path = root.join(format!("{slug}.toml"));
     let body = render_toml(slug, kind, name, config);
@@ -130,9 +144,14 @@ fn toml_encode(s: &str) -> String {
 
 /// Scan `~/.shannon/data-sources/` for installed configs.
 pub fn list_installed_data_sources() -> Vec<InstalledDataSource> {
-    let root = shannon_data_sources_root();
+    list_installed_data_sources_in(&shannon_data_sources_root())
+}
+
+/// `list_installed_data_sources` against an explicit `root` (see
+/// [`install_data_source_in`] for why tests avoid `$HOME`).
+fn list_installed_data_sources_in(root: &Path) -> Vec<InstalledDataSource> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(&root) else {
+    let Ok(entries) = std::fs::read_dir(root) else {
         return out;
     };
     for entry in entries.flatten() {
@@ -220,12 +239,17 @@ fn file_metadata_rfc3339(path: &Path) -> Option<String> {
 /// Remove a data source config file by slug. Refuses paths outside the
 /// data-sources root as a traversal guard.
 pub fn remove_installed_data_source(slug: &str) -> Result<(), InstallError> {
+    remove_installed_data_source_in(&shannon_data_sources_root(), slug)
+}
+
+/// `remove_installed_data_source` against an explicit `root` (see
+/// [`install_data_source_in`] for why tests avoid `$HOME`).
+fn remove_installed_data_source_in(root: &Path, slug: &str) -> Result<(), InstallError> {
     if slug.contains('/') || slug.contains('\\') || slug.contains("..") {
         return Err(InstallError::Format(format!(
             "invalid data source slug: {slug}"
         )));
     }
-    let root = shannon_data_sources_root();
     let file = root.join(format!("{slug}.toml"));
     if !file.exists() {
         return Err(InstallError::Io(format!(
@@ -251,16 +275,28 @@ pub fn remove_installed_data_source(slug: &str) -> Result<(), InstallError> {
 
 /// Best-effort "is this slug already installed?" lookup.
 pub fn is_data_source_installed(slug: &str) -> bool {
-    shannon_data_sources_root()
-        .join(format!("{slug}.toml"))
-        .exists()
+    is_data_source_installed_in(&shannon_data_sources_root(), slug)
+}
+
+/// `is_data_source_installed` against an explicit `root` (see
+/// [`install_data_source_in`] for why tests avoid `$HOME`).
+fn is_data_source_installed_in(root: &Path, slug: &str) -> bool {
+    root.join(format!("{slug}.toml")).exists()
 }
 
 /// Read the config block of an installed data source. Empty map if missing.
 ///
 /// Used by the test-connection command and by the adapter at query time.
 pub fn read_data_source_config(slug: &str) -> Result<BTreeMap<String, String>, InstallError> {
-    let root = shannon_data_sources_root();
+    read_data_source_config_in(&shannon_data_sources_root(), slug)
+}
+
+/// `read_data_source_config` against an explicit `root` (see
+/// [`install_data_source_in`] for why tests avoid `$HOME`).
+fn read_data_source_config_in(
+    root: &Path,
+    slug: &str,
+) -> Result<BTreeMap<String, String>, InstallError> {
     let file = root.join(format!("{slug}.toml"));
     let body = std::fs::read_to_string(&file)
         .map_err(|e| InstallError::Io(format!("read {}: {e}", file.display())))?;
@@ -293,33 +329,32 @@ fn parse_config_section(body: &str) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
 
-    static HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    fn home_lock() -> &'static Mutex<()> {
-        HOME_LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn lock_home() -> std::sync::MutexGuard<'static, ()> {
-        home_lock().lock().unwrap_or_else(|p| p.into_inner())
-    }
+    // NOTE: these tests drive the `_in` variants with a tempdir instead of
+    // mutating `$HOME`. The old form did `std::env::set_var("HOME", …)`, which
+    // is process-global and unsynchronized — it raced with unrelated tests in
+    // other modules that read `dirs::home_dir()` on another thread, causing an
+    // intermittent parallel-test flake. The `_in` variants make the on-disk
+    // root explicit, so no env mutation (and no `unsafe`) is needed.
 
     #[test]
     fn install_data_source_writes_toml_file() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let root = tmp.path();
         let mut config = BTreeMap::new();
         config.insert("vault_path".into(), "/home/user/MyVault".into());
-        let installed =
-            install_data_source("obsidian-vault", "obsidian", "Obsidian Vault", &config)
-                .expect("install");
+        let installed = install_data_source_in(
+            root,
+            "obsidian-vault",
+            "obsidian",
+            "Obsidian Vault",
+            &config,
+        )
+        .expect("install");
         assert_eq!(installed.slug, "obsidian-vault");
         assert_eq!(installed.kind, "obsidian");
         assert!(installed.path.ends_with("obsidian-vault.toml"));
-        assert!(is_data_source_installed("obsidian-vault"));
+        assert!(is_data_source_installed_in(root, "obsidian-vault"));
 
         let body = std::fs::read_to_string(&installed.path).unwrap();
         assert!(body.contains("[data_source]"));
@@ -327,53 +362,39 @@ mod tests {
         assert!(body.contains("[config]"));
         assert!(body.contains("vault_path = \"/home/user/MyVault\""));
 
-        remove_installed_data_source("obsidian-vault").expect("remove");
-        assert!(!is_data_source_installed("obsidian-vault"));
+        remove_installed_data_source_in(root, "obsidian-vault").expect("remove");
+        assert!(!is_data_source_installed_in(root, "obsidian-vault"));
     }
 
     #[test]
     fn install_data_source_rejects_traversal_slug() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let result = install_data_source("../escape", "obsidian", "x", &BTreeMap::new());
+        let result =
+            install_data_source_in(tmp.path(), "../escape", "obsidian", "x", &BTreeMap::new());
         assert!(result.is_err());
     }
 
     #[test]
     fn install_data_source_rejects_empty_slug() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let result = install_data_source("", "obsidian", "x", &BTreeMap::new());
+        let result = install_data_source_in(tmp.path(), "", "obsidian", "x", &BTreeMap::new());
         assert!(result.is_err());
     }
 
     #[test]
     fn list_installed_handles_missing_dir() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let rows = list_installed_data_sources();
+        let rows = list_installed_data_sources_in(tmp.path());
         assert!(rows.is_empty());
     }
 
     #[test]
     fn list_installed_returns_sorted_rows() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        install_data_source("zeta", "obsidian", "Z", &BTreeMap::new()).unwrap();
-        install_data_source("alpha", "obsidian", "A", &BTreeMap::new()).unwrap();
-        let rows = list_installed_data_sources();
+        let root = tmp.path();
+        install_data_source_in(root, "zeta", "obsidian", "Z", &BTreeMap::new()).unwrap();
+        install_data_source_in(root, "alpha", "obsidian", "A", &BTreeMap::new()).unwrap();
+        let rows = list_installed_data_sources_in(root);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].slug, "alpha");
         assert_eq!(rows[1].slug, "zeta");
@@ -381,27 +402,20 @@ mod tests {
 
     #[test]
     fn remove_rejects_missing_slug() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let result = remove_installed_data_source("never-installed");
+        let result = remove_installed_data_source_in(tmp.path(), "never-installed");
         assert!(result.is_err());
     }
 
     #[test]
     fn read_config_round_trips_values() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let root = tmp.path();
         let mut config = BTreeMap::new();
         config.insert("imap_host".into(), "imap.example.com".into());
         config.insert("username".into(), "you@example.com".into());
-        install_data_source("email-imap", "email_imap", "Email", &config).unwrap();
-        let loaded = read_data_source_config("email-imap").expect("read");
+        install_data_source_in(root, "email-imap", "email_imap", "Email", &config).unwrap();
+        let loaded = read_data_source_config_in(root, "email-imap").expect("read");
         assert_eq!(loaded.get("imap_host").unwrap(), "imap.example.com");
         assert_eq!(loaded.get("username").unwrap(), "you@example.com");
     }
