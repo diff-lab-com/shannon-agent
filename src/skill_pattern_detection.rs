@@ -14,7 +14,7 @@
 //!    `min_occurrences`+ total occurrences become new candidates.
 //!
 //! New candidates are appended to the existing JSONL via
-//! [`crate::commands_skill_candidates::append_candidate`]; existing
+//! [`crate::commands_skill_candidates::append_candidate_in`]; existing
 //! candidate ids are left untouched so approval flows aren't disrupted.
 
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 
-use crate::commands_skill_candidates::{SkillCandidate, SourceToolCall, append_candidate};
+use crate::commands_skill_candidates::{SkillCandidate, SourceToolCall, append_candidate_in};
 
 /// Threshold sessions for a pattern to qualify as a candidate.
 const DEFAULT_MIN_SESSIONS: usize = 2;
@@ -138,8 +138,32 @@ struct SignatureAgg {
 }
 
 /// Run pattern detection. Returns the number of new candidates appended.
-/// `sessions_dir` is normally `~/.shannon/sessions/` but injected for testability.
+///
+/// `sessions_dir` is normally `~/.shannon/sessions/` but injected for
+/// testability. Candidates are appended under the real `~/.shannon/desktop/`
+/// (resolved here); tests that need isolation call [`run_detection_in`] with a
+/// tempdir so they never mutate the process-global `HOME` env var.
 pub fn run_detection(
+    sessions_dir: &Path,
+    days_back: u32,
+    min_sessions: usize,
+    min_occurrences: u32,
+) -> Result<usize, String> {
+    let candidates_dir = crate::commands_skill_candidates::desktop_dir()?;
+    run_detection_in(
+        &candidates_dir,
+        sessions_dir,
+        days_back,
+        min_sessions,
+        min_occurrences,
+    )
+}
+
+/// Implementation of [`run_detection`] against an explicit `candidates_dir`
+/// (the `desktop` dir the candidates JSONL lives in). Production resolves it
+/// from `~/.shannon/desktop`; tests pass a tempdir.
+fn run_detection_in(
+    candidates_dir: &Path,
     sessions_dir: &Path,
     days_back: u32,
     min_sessions: usize,
@@ -234,7 +258,7 @@ pub fn run_detection(
             }],
             refined: false,
         };
-        append_candidate(candidate)?;
+        append_candidate_in(candidates_dir, candidate)?;
         appended += 1;
     }
     Ok(appended)
@@ -341,25 +365,11 @@ mod tests {
         write_session(dir.path(), "s2.json", "s2", &[("bash", &["cmd"])]);
         write_session(dir.path(), "s3.json", "s3", &[("bash", &["cmd"])]);
 
-        // Use a throwaway HOME so the candidates file lands somewhere isolated.
-        let fake_home = tempdir().unwrap();
-        let prev_home = std::env::var_os("HOME");
-        // SAFETY: tests run single-threaded by default within this module; we restore HOME in the finally-style block below.
-        unsafe {
-            std::env::set_var("HOME", fake_home.path());
-        }
-
-        let result = run_detection(dir.path(), 7, 2, 3);
-
-        // SAFETY: same single-threaded context.
-        unsafe {
-            if let Some(h) = prev_home {
-                std::env::set_var("HOME", h);
-            } else {
-                std::env::remove_var("HOME");
-            }
-        }
-
+        // Candidates land in an isolated tempdir — no HOME mutation. The old
+        // form set HOME to a throwaway dir, which is process-global and raced
+        // with unrelated tests reading dirs::home_dir() under parallel --lib.
+        let candidates_dir = tempdir().unwrap();
+        let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3);
         let appended = result.expect("detection ran");
         assert_eq!(appended, 1, "expected exactly one new candidate");
     }
@@ -369,32 +379,17 @@ mod tests {
         let dir = tempdir().unwrap();
         write_session(dir.path(), "s1.json", "s1", &[("bash", &["cmd"])]);
 
-        let fake_home = tempdir().unwrap();
-        let prev_home = std::env::var_os("HOME");
-        // SAFETY: same single-threaded test context as above.
-        unsafe {
-            std::env::set_var("HOME", fake_home.path());
-        }
-
-        let result = run_detection(dir.path(), 7, 2, 3);
-
-        // SAFETY: same single-threaded context.
-        unsafe {
-            if let Some(h) = prev_home {
-                std::env::set_var("HOME", h);
-            } else {
-                std::env::remove_var("HOME");
-            }
-        }
-
+        let candidates_dir = tempdir().unwrap();
+        let result = run_detection_in(candidates_dir.path(), dir.path(), 7, 2, 3);
         let appended = result.expect("detection ran");
         assert_eq!(appended, 0, "single-session pattern should not promote");
     }
 
     #[test]
     fn run_detection_returns_zero_when_sessions_dir_missing() {
+        let candidates_dir = tempdir().unwrap();
         let bogus = PathBuf::from("/tmp/shannon-nope-does-not-exist-12345");
-        let result = run_detection(&bogus, 7, 2, 3);
+        let result = run_detection_in(candidates_dir.path(), &bogus, 7, 2, 3);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
     }
