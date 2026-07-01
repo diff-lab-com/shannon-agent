@@ -64,6 +64,10 @@ tokio-test = "0.4"
 tempfile = "3"
 criterion = { version = "0.5", features = ["async_tokio"] }
 mockito = "1"
+libc = "0.2"
+# Enables `tauri::test::mock_app()` for the supervisor E2E test (cfg(test) alone
+# doesn't reach the tauri dependency crate). `test` is an empty gate feature.
+tauri = { version = "2", features = ["test"] }
 
 [build-dependencies]
 tauri-build = { version = "2", optional = true, features = [] }

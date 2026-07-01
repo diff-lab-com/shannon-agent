@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -105,7 +105,7 @@ impl GatewaySupervisor {
     /// - Binary can't be resolved → `NotInstalled` (no task spawned, no error).
     /// - `spawn()` fails → `Exited { reason: "spawn failed: …" }`.
     /// - Otherwise → `Running { pid }` and a supervisor task is watching it.
-    pub fn start(app: &AppHandle, config: &GatewayDesktopConfig) -> Self {
+    pub fn start<R: Runtime>(app: &AppHandle<R>, config: &GatewayDesktopConfig) -> Self {
         let status = Arc::new(std::sync::RwLock::new(GatewaySupervisorStatus::Stopped));
         let resource_dir = app.path().resource_dir().ok();
         let bin = match resolve_binary(config.binary_path.as_deref(), resource_dir.as_deref()) {
@@ -145,7 +145,7 @@ impl GatewaySupervisor {
         *status.write().expect("status lock poisoned") = GatewaySupervisorStatus::Running { pid };
 
         let cancel = CancellationToken::new();
-        let join = tokio::spawn(supervise(
+        let join = tokio::spawn(supervise::<R>(
             app.clone(),
             child,
             cancel.clone(),
@@ -172,8 +172,8 @@ impl GatewaySupervisor {
     }
 }
 
-async fn supervise(
-    app: AppHandle,
+async fn supervise<R: Runtime>(
+    app: AppHandle<R>,
     mut child: tokio::process::Child,
     cancel: CancellationToken,
     status: Arc<std::sync::RwLock<GatewaySupervisorStatus>>,
@@ -270,5 +270,99 @@ mod tests {
         let j2 = serde_json::to_string(&s2).expect("serialize");
         assert!(j2.contains("\"code\":1"));
         assert!(j2.contains("\"reason\":\"boom\""));
+    }
+}
+
+/// End-to-end supervisor smoke against the **real** `shannon-gateway` binary.
+///
+/// Spawns the binary built at `../shannon-gateway/dist/shannon-gateway` under a
+/// `tauri::test::mock_app()` handle, asserts the supervisor reaches `Running`
+/// with a live pid, then `stop()`s and asserts the child is reaped (`Stopped`).
+/// Skips gracefully when the sibling binary isn't built (CI without the
+/// shannon-gateway checkout) so this never breaks the gate there.
+#[cfg(test)]
+mod e2e_tests {
+    use super::*;
+    use tauri::test::mock_app;
+
+    /// Resolve the sibling gateway binary relative to this crate's manifest dir.
+    fn gateway_binary() -> Option<PathBuf> {
+        let candidate = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../shannon-gateway/dist/shannon-gateway");
+        if candidate.is_file() {
+            Some(candidate)
+        } else {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn start_supervises_and_stop_reaps_real_binary() {
+        let bin = match gateway_binary() {
+            Some(b) => b,
+            None => {
+                eprintln!(
+                    "skipping E2E: ../shannon-gateway/dist/shannon-gateway not built \
+                     (run `pnpm build:binary` in shannon-gateway)"
+                );
+                return;
+            }
+        };
+
+        // Loopback config with zero adapters — the gateway boots to its "up"
+        // line and idles, which is exactly what we want the supervisor to keep
+        // alive. The engine URL points at nothing; the gateway logs connection
+        // retries but does not exit.
+        let cfg_dir = tempfile::tempdir().expect("tempdir");
+        let cfg_path = cfg_dir.path().join("gw.json");
+        std::fs::write(
+            &cfg_path,
+            r#"{"engine":{"wsUrl":"ws://127.0.0.1:9999/ws","httpBaseUrl":"http://127.0.0.1:9999"},"adapters":[]}"#,
+        )
+        .expect("write config");
+
+        let app = mock_app();
+        let handle = app.handle().clone();
+        let config = GatewayDesktopConfig {
+            managed: true,
+            binary_path: Some(bin.to_string_lossy().into_owned()),
+            extra_args: vec!["--config".into(), cfg_path.to_string_lossy().into_owned()],
+        };
+
+        let mut sup = GatewaySupervisor::start(&handle, &config);
+        let pid = match sup.status() {
+            GatewaySupervisorStatus::Running { pid } => pid,
+            other => panic!("expected Running after start, got {other:?}"),
+        };
+        assert!(pid > 0, "supervisor reported a non-positive pid");
+
+        // The child must actually exist in the process table.
+        assert!(
+            proc_is_alive(pid),
+            "pid {pid} is not a live process after start"
+        );
+
+        sup.stop().await;
+
+        // stop() cancels + reaps; status flips to Stopped and the pid is gone.
+        assert_eq!(sup.status(), GatewaySupervisorStatus::Stopped);
+        // Give the OS a beat to reap, then confirm the process is gone.
+        for _ in 0..20 {
+            if !proc_is_alive(pid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            !proc_is_alive(pid),
+            "pid {pid} still alive after stop() — supervisor did not kill the child"
+        );
+    }
+
+    /// `kill(pid, 0)` returns true iff the process exists (and we may signal it).
+    fn proc_is_alive(pid: u32) -> bool {
+        // Safety: kill with signal 0 is a standard POSIX existence check; it
+        // performs no action other than error-checking.
+        unsafe { libc::kill(pid as i32, 0) == 0 }
     }
 }
