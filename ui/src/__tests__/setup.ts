@@ -107,6 +107,11 @@ vi.mock('@/lib/tauri-api', () => ({
     engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
     adapters: [],
   }),
+  // E-1 方案 C — default: managed on, not installed (no binary in the test env).
+  gatewaySupervisorStart: vi.fn().mockResolvedValue({ managed: true, status: 'notInstalled' }),
+  gatewaySupervisorStop: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
+  gatewaySupervisorStatus: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
+  gatewaySetManaged: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
   switchProvider: vi.fn().mockResolvedValue(undefined),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),

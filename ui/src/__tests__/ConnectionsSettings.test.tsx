@@ -72,4 +72,58 @@ describe('ConnectionsSettings', () => {
     expect(written.engine.wsUrl).toBe('ws://new/ws')
     expect(written.engine.httpBaseUrl).toBe('http://new')
   })
+
+  // ── E-1 方案 C — gateway process lifecycle card ────────────────────────────
+
+  it('renders the gateway process card with managed on by default', async () => {
+    render(<ConnectionsSettings />)
+    const managedSwitch = await waitFor(() =>
+      screen.getByRole('switch', { name: 'Managed by desktop' }),
+    )
+    expect(managedSwitch).toBeChecked()
+    expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+    // Mock gatewaySupervisorStatus → { managed: true, status: 'stopped' }
+    expect(screen.getByTestId('gateway-status-badge')).toHaveTextContent('Stopped')
+  })
+
+  it('persists the managed flag when the switch is toggled off', async () => {
+    const managedSpy = vi
+      .spyOn(api, 'gatewaySetManaged')
+      .mockResolvedValue({ managed: false, status: 'stopped' })
+    render(<ConnectionsSettings />)
+    await waitFor(() =>
+      expect(screen.getByRole('switch', { name: 'Managed by desktop' })).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByRole('switch', { name: 'Managed by desktop' }))
+    await waitFor(() => expect(managedSpy).toHaveBeenCalledWith(false))
+    // Toggling off hides the start/stop + status row.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument(),
+    )
+  })
+
+  it('starts the supervised gateway and shows the running badge', async () => {
+    const startSpy = vi
+      .spyOn(api, 'gatewaySupervisorStart')
+      .mockResolvedValue({ managed: true, status: { running: { pid: 1234 } } })
+    render(<ConnectionsSettings />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await waitFor(() => expect(startSpy).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.getByTestId('gateway-status-badge')).toHaveTextContent('Running'),
+    )
+    expect(screen.getByTestId('gateway-status-badge')).toHaveTextContent('1234')
+  })
+
+  it('stops the supervised gateway on click', async () => {
+    const stopSpy = vi
+      .spyOn(api, 'gatewaySupervisorStop')
+      .mockResolvedValue({ managed: true, status: 'stopped' })
+    render(<ConnectionsSettings />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    await waitFor(() => expect(stopSpy).toHaveBeenCalled())
+  })
 })

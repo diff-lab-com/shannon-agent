@@ -105,6 +105,8 @@ pub mod commands_billing;
 pub mod commands_config;
 #[cfg(feature = "tauri")]
 pub mod commands_connections;
+#[cfg(feature = "tauri")]
+pub mod gateway_supervisor;
 
 #[cfg(feature = "tauri")]
 pub mod commands_memory;

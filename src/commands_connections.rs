@@ -22,6 +22,10 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 
+use crate::commands::AppState;
+use crate::config::save_config;
+use crate::gateway_supervisor::{GatewayProcessState, GatewaySupervisor, GatewaySupervisorStatus};
+
 /// Default keyring `service` when a secret key has no `/` separator. Matches
 /// `createCliKeyringProvider`'s default in the gateway.
 const DEFAULT_SERVICE: &str = "shannon-gateway";
@@ -198,6 +202,122 @@ pub async fn gateway_write_config(config: GatewayConfig) -> Result<GatewayConfig
 
 fn err(e: keyring::Error) -> String {
     format!("keyring: {e}")
+}
+
+// ── E-1: gateway process supervisor (方案 C) ──────────────────────────────
+//
+// These commands own the supervised gateway process via `AppState`. Lock
+// order: always take `desktop_config` and release it BEFORE
+// `gateway_supervisor` — never hold both at once.
+
+/// Spawn (or no-op if already running) the local gateway under supervision.
+/// Resolves the binary via `gateway.binary_path` → resource dir → `$PATH`;
+/// reports `NotInstalled` when nothing resolves (no error thrown).
+#[tauri::command]
+pub async fn gateway_supervisor_start(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<GatewayProcessState, String> {
+    let gw_cfg = state.desktop_config.read().await.gateway.clone();
+    let mut guard = state.gateway_supervisor.lock().await;
+    if let Some(sup) = guard.as_ref() {
+        if let GatewaySupervisorStatus::Running { .. } = sup.status() {
+            return Ok(GatewayProcessState {
+                managed: gw_cfg.managed,
+                status: sup.status(),
+            });
+        }
+    }
+    let sup = GatewaySupervisor::start(&app, &gw_cfg);
+    let status = sup.status();
+    *guard = Some(sup);
+    Ok(GatewayProcessState {
+        managed: gw_cfg.managed,
+        status,
+    })
+}
+
+/// Gracefully stop the supervised gateway. Idempotent.
+#[tauri::command]
+pub async fn gateway_supervisor_stop(
+    state: tauri::State<'_, AppState>,
+) -> Result<GatewayProcessState, String> {
+    let managed = state.desktop_config.read().await.gateway.managed;
+    let mut guard = state.gateway_supervisor.lock().await;
+    if let Some(mut sup) = guard.take() {
+        sup.stop().await;
+    }
+    Ok(GatewayProcessState {
+        managed,
+        status: GatewaySupervisorStatus::Stopped,
+    })
+}
+
+/// Snapshot of `managed` + the process status (Stopped when no supervisor
+/// exists yet).
+#[tauri::command]
+pub async fn gateway_supervisor_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<GatewayProcessState, String> {
+    let managed = state.desktop_config.read().await.gateway.managed;
+    let guard = state.gateway_supervisor.lock().await;
+    let status = guard
+        .as_ref()
+        .map(|s| s.status())
+        .unwrap_or(GatewaySupervisorStatus::Stopped);
+    Ok(GatewayProcessState { managed, status })
+}
+
+/// Persist the 方案 C `managed` flag. Toggling it **off** also stops a running
+/// supervised gateway (desktop no longer owns its lifecycle). Toggling it on
+/// does **not** auto-start — the user clicks Start, or the next app launch
+/// auto-starts via `setup()`.
+#[tauri::command]
+pub async fn gateway_set_managed(
+    state: tauri::State<'_, AppState>,
+    managed: bool,
+) -> Result<GatewayProcessState, String> {
+    {
+        let mut cfg = state.desktop_config.write().await;
+        cfg.gateway.managed = managed;
+    }
+    let snapshot = state.desktop_config.read().await.clone();
+    save_config(&snapshot).map_err(|e| format!("gateway config: save failed: {e}"))?;
+    if !managed {
+        let mut guard = state.gateway_supervisor.lock().await;
+        if let Some(mut sup) = guard.take() {
+            sup.stop().await;
+        }
+    }
+    Ok(GatewayProcessState {
+        managed,
+        status: GatewaySupervisorStatus::Stopped,
+    })
+}
+
+/// Auto-start the supervised gateway at app launch when `gateway.managed` is on
+/// and no supervisor is already running (E-1 方案 C). Mirrors
+/// `commands_notifications::bootstrap_inbound_listener` — a lib-side helper so
+/// `main.rs::setup()` never touches `AppState`'s private fields directly.
+pub async fn bootstrap_gateway_supervisor(
+    state: &tauri::State<'_, AppState>,
+    app: &tauri::AppHandle,
+) {
+    let gw_cfg = state.desktop_config.read().await.gateway.clone();
+    if !gw_cfg.managed {
+        return;
+    }
+    let mut guard = state.gateway_supervisor.lock().await;
+    let already_running = guard
+        .as_ref()
+        .map(|s| matches!(s.status(), GatewaySupervisorStatus::Running { .. }))
+        .unwrap_or(false);
+    if !already_running {
+        let sup = GatewaySupervisor::start(app, &gw_cfg);
+        let status = sup.status();
+        *guard = Some(sup);
+        tracing::info!("gateway supervisor auto-started: {status:?}");
+    }
 }
 
 #[cfg(test)]

@@ -119,6 +119,8 @@ pub struct AppState {
     /// Inbound listener supervisor (Phase 2). Owns the Slack + Telegram
     /// worker tasks. None until the first config is saved.
     pub(crate) inbound_listener: Arc<tokio::sync::Mutex<Option<crate::inbound::InboundListener>>>,
+    pub(crate) gateway_supervisor:
+        Arc<tokio::sync::Mutex<Option<crate::gateway_supervisor::GatewaySupervisor>>>,
 }
 
 /// Session metadata for session list.
@@ -294,6 +296,7 @@ impl AppState {
             ),
             notifier: Arc::new(shannon_core::notifier::Notifier::new()),
             inbound_listener: Arc::new(tokio::sync::Mutex::new(None)),
+            gateway_supervisor: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 

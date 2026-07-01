@@ -181,6 +181,21 @@ export interface GatewayConfig {
   logLevel?: string
 }
 
+/// E-1 方案 C — supervised gateway process status. Mirrors the Rust
+/// `GatewaySupervisorStatus` enum (externally-tagged serde, camelCase variants).
+export type GatewaySupervisorStatus =
+  | 'stopped'
+  | 'notInstalled'
+  | { running: { pid: number } }
+  | { exited: { code: number | null; reason: string } }
+
+/// `gateway_supervisor_*` command return shape: the 方案 C `managed` flag + the
+/// process status in one round-trip.
+export interface GatewayProcessState {
+  managed: boolean
+  status: GatewaySupervisorStatus
+}
+
 export interface ProviderSwitchRequest {
   provider: string
   api_key?: string
