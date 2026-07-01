@@ -66,12 +66,32 @@ modals migrate to the shared `Modal` / `ConfirmDialog` primitives
 (`PrimitiveType`) replacing `any`, with `UsagePayload` + `max_tokens` arg
 typing. Net −57 lines.
 
+### Architecture — AppContext split (Chat / Session / Catalog)
+
+(#102, `s2/appcontext-split`) The single `AppContext` god-context is split
+into three memoized slice contexts — `ChatContext`, `SessionContext`,
+`CatalogContext` — so a consumer re-renders only when its own slice changes.
+The high-frequency chat-streaming slice (per-token `streamingText`) no longer
+forces re-renders of the Sidebar, Settings, and catalog pages. `useApp()` is
+retained as a facade (composing the three hooks) so consumers migrate
+incrementally; 19 call-sites retargeted in the same change. Also fixes a
+StrictMode duplicate-message bug — the old `QUERY_COMPLETED` handler nested
+`setMessages` inside the `setStreamingText` updater (a side-effect in an
+updater that double-fires under StrictMode); it now reads the final streamed
+text from a `useRef` and calls `setMessages` directly.
+
 ### i18n — Tasks / Agent modules zh-CN
 
 - **Tasks / Agent module strings** (#96, `s2/tasks-module-zh-i18n`): ~244 keys
   translated to zh-CN (a PM/i18n audit found `zh === en`).
 - **Tasks deep sub-components** (#98, `s2/tasks-i18n-r2`): a second R2 pass
   translated ~237 keys missed by the first pass in deep sub-components.
+
+### i18n — final hardcoded-English sweep (R3)
+
+(#101, `s2/i18n-cleanup-r3`) The last user-visible English strings routed
+through `react-intl`: natural-language cron descriptors, calendar
+localization, and the statusBadge tail. Key parity 2300 → 2331.
 
 ### Voice input — cloud speech-to-text (D4 Phase 1)
 
@@ -185,6 +205,18 @@ point at the out-of-process instance.
   + persist a proposal on `suggest=true`.
 - **Clippy fix** (#85, `s2/clippy-commands-config`): struct-literal init in
   `build_seed_file` tests (dev-gate clean).
+- **Data-source installer test flake** (#105, `fix/data-source-installers-di`):
+  the 7 `data_source_installers` tests no longer mutate the process-global
+  `HOME` env var (which raced with other modules' `dirs::home_dir()` reads
+  under parallel `--lib` runs); each public fn gained a `_in(root, …)` variant
+  the tests drive with a tempdir. No behavior change.
+- **Engine pin 3fb42fde** (`chore/engine-pin-3fb42fde-and-changelog`): engine
+  git-dep pin bumped d49e7f5 → 3fb42fde (api_server P0-b/c/d/e: tool-approval
+  WS roundtrip, cancel-token, session_id, persistence; semver CI cache) and
+  `events.schema.json` regenerated. Schema diff is key-order only (verified
+  semantically identical) — no UI-type change. Aligns the declared pin + UI
+  schema with the sibling checkout desktop builds against, and unblocks the
+  local Rust gate (schema-sync no longer aborts `local-check`).
 
 ## v0.3.8 (2026-06-28) — Models P2 (managed providers)
 
