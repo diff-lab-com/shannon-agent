@@ -4,7 +4,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
@@ -52,7 +52,7 @@ export default function ChatInput({
 }: ChatInputProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { config, models, refreshConfig } = useApp()
+  const { config, models, refreshConfig } = useCatalog()
   const modelList = models ?? []
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isDragging, setIsDragging] = useState(false)

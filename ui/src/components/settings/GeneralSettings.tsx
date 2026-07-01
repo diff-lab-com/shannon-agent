@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { useIntl } from 'react-intl'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { useI18n, SUPPORTED_LOCALES, type Locale } from '@/i18n'
 import { useNotification } from '@/hooks/useNotification'
 import * as api from '@/lib/tauri-api'
@@ -21,7 +21,7 @@ const APPROVAL_MODE_KEYS: { value: ApprovalModeKey; labelKey: string; descriptio
 ]
 
 export default function GeneralSettings() {
-  const { config, refreshConfig } = useApp()
+  const { config, refreshConfig } = useCatalog()
   const intl = useIntl()
   const navigate = useNavigate()
   const t = (id: string) => intl.formatMessage({ id })

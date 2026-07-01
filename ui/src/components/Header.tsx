@@ -3,7 +3,7 @@ import { useIntl, type PrimitiveType } from 'react-intl';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { useApp } from '@/context/AppContext';
+import { useCatalog } from '@/context/CatalogContext';
 import { useModalFocus } from '@/hooks/useModalFocus';
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
@@ -38,7 +38,7 @@ export function Header() {
   const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const location = useLocation();
   const navigate = useNavigate();
-  const { status, models, permissionRequest, respondPermission } = useApp();
+  const { status, models, permissionRequest, respondPermission } = useCatalog();
   const { toggle: toggleSidebar } = useSidebar();
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);

@@ -4,7 +4,8 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Modal } from '@/components/ui/modal'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { useApp } from '@/context/AppContext'
+import { useChat } from '@/context/ChatContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { CardSkeleton } from '@/components/SkeletonLoader'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
@@ -13,7 +14,8 @@ import type { BillingPlan, CostRecord, BillingHistory } from '@/types'
 export default function BillingSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { usage, status } = useApp()
+  const { usage } = useChat()
+  const { status } = useCatalog()
   const [plan, setPlan] = useState<BillingPlan | null>(null)
   const [costHistory, setCostHistory] = useState<CostRecord[]>([])
   const [billingHistory, setBillingHistory] = useState<BillingHistory[]>([])

@@ -1,4 +1,15 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
+// AppContext — composition root for the three slice contexts (Chat, Session,
+// Catalog). The provider owns ALL state and actions in one place (so cross-
+// slice actions like sendMessage calling setError stay simple) but exposes
+// them through three memoized context values, so a consumer using useChat() /
+// useSessions() / useCatalog() only re-renders when its own slice changes.
+// The legacy useApp() facade composes all three for backwards compatibility.
+//
+// Split history: this was a single god-context whose value changed on every
+// streamed token, re-rendering all 19 consumers. The slice split scopes the
+// high-frequency chat streaming to chat consumers only.
+
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import * as api from '@/lib/tauri-api'
 import {
@@ -16,53 +27,20 @@ import {
   type UsagePayload,
   type McpServerInfo,
 } from '@/types'
+import { ChatContext, useChat, type ChatContextValue } from './ChatContext'
+import { SessionContext, useSessions, type SessionContextValue } from './SessionContext'
+import { CatalogContext, useCatalog, type CatalogContextValue } from './CatalogContext'
 
-interface AppState {
-  messages: ChatMessage[]
-  streamingText: string
-  thinkingText: string
-  isQuerying: boolean
-  activeToolCalls: ToolCall[]
-  usage: UsagePayload | null
-  sessions: SessionInfo[]
-  currentSessionId: string | null
-  status: StatusResponse | null
-  config: DesktopConfig | null
-  models: ModelInfo[]
-  permissionRequest: PermissionRequest | null
-  backgroundTasks: BackgroundTaskInfo[]
-  tasks: TaskItem[]
-  agents: AgentInfo[]
-  mcpServers: McpServerInfo[]
-  error: string | null
-  loading: boolean
-}
+export type AppContextValue = ChatContextValue & SessionContextValue & CatalogContextValue
 
-interface AppActions {
-  sendMessage: (message: string, filePaths?: string[]) => Promise<void>
-  cancelQuery: () => Promise<void>
-  createSession: () => Promise<void>
-  createSessionInWorktree: () => Promise<void>
-  switchSession: (id: string) => Promise<void>
-  deleteSession: (id: string) => Promise<void>
-  renameSession: (id: string, title: string) => Promise<void>
-  respondPermission: (requestId: string, allow: boolean, note?: string) => Promise<void>
-  refreshSessions: () => Promise<void>
-  refreshStatus: () => Promise<void>
-  refreshConfig: () => Promise<void>
-  refreshModels: () => Promise<void>
-  refreshTasks: () => Promise<void>
-  refreshAgents: () => Promise<void>
-  refreshMcpServers: () => Promise<void>
-  refreshBackgroundTasks: () => Promise<void>
-}
-
-const AppContext = createContext<(AppState & AppActions) | null>(null)
-
-export function useApp(): AppState & AppActions {
-  const ctx = useContext(AppContext)
-  if (!ctx) throw new Error('useApp must be used within AppProvider')
-  return ctx
+/**
+ * Backwards-compatible facade over the three slice contexts. New code should
+ * call the specific hooks (useChat / useSessions / useCatalog) directly so it
+ * only re-renders when its slice changes; this keeps legacy `useApp()` call
+ * sites working unchanged.
+ */
+export function useApp(): AppContextValue {
+  return { ...useCatalog(), ...useSessions(), ...useChat() }
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -85,6 +63,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [_currentQueryId, setCurrentQueryId] = useState<string | null>(null)
+
+  // Mirror streamingText into a ref so the QUERY_COMPLETED handler can read
+  // the final streamed text synchronously. This replaces the prior pattern of
+  // calling setMessages from inside the setStreamingText updater, which
+  // double-fires under React StrictMode and could append the assistant
+  // message twice.
+  const streamingTextRef = useRef('')
+  streamingTextRef.current = streamingText
 
   const refreshSessions = useCallback(async () => {
     try { setSessions(await api.listSessions()) } catch (e) { console.warn('refreshSessions failed:', e) }
@@ -256,12 +242,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }),
         listen(EVENT_NAMES.QUERY_COMPLETED, () => {
           setIsQuerying(false)
-          setStreamingText(prev => {
-            if (prev) {
-              setMessages(msgs => [...msgs, { role: 'assistant', content: prev, timestamp: Date.now() }])
-            }
-            return ''
-          })
+          // Commit the streamed text as a finished assistant message. Read
+          // via the ref (kept in sync on every render) instead of nesting
+          // setMessages inside the setStreamingText updater.
+          const finalText = streamingTextRef.current
+          if (finalText) {
+            setMessages(msgs => [...msgs, { role: 'assistant', content: finalText, timestamp: Date.now() }])
+          }
+          setStreamingText('')
           setThinkingText('')
           setCurrentQueryId(null)
           refreshStatus()
@@ -314,16 +302,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ]).finally(() => setLoading(false))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const value: AppState & AppActions = {
+  const chatValue = useMemo<ChatContextValue>(() => ({
     messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage,
-    sessions, currentSessionId, status, config, models, permissionRequest,
-    backgroundTasks, tasks, agents, mcpServers, error, loading,
-    sendMessage, cancelQuery, createSession, createSessionInWorktree, switchSession: switchToSession,
-    deleteSession: deleteSessionAction, renameSession: renameSessionAction,
-    respondPermission: respondPermissionAction, refreshSessions, refreshStatus,
-    refreshConfig, refreshModels, refreshTasks, refreshAgents, refreshMcpServers,
-    refreshBackgroundTasks,
-  }
+    sendMessage, cancelQuery,
+  }), [messages, streamingText, thinkingText, isQuerying, activeToolCalls, usage, sendMessage, cancelQuery])
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>
+  const sessionValue = useMemo<SessionContextValue>(() => ({
+    sessions, currentSessionId, createSession, createSessionInWorktree, switchSession: switchToSession,
+    deleteSession: deleteSessionAction, renameSession: renameSessionAction, refreshSessions,
+  }), [sessions, currentSessionId, createSession, createSessionInWorktree, switchToSession,
+    deleteSessionAction, renameSessionAction, refreshSessions])
+
+  const catalogValue = useMemo<CatalogContextValue>(() => ({
+    status, config, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
+    error, loading, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
+    refreshMcpServers, refreshBackgroundTasks, respondPermission: respondPermissionAction,
+  }), [status, config, models, agents, tasks, mcpServers, backgroundTasks, permissionRequest,
+    error, loading, refreshStatus, refreshConfig, refreshModels, refreshTasks, refreshAgents,
+    refreshMcpServers, refreshBackgroundTasks, respondPermissionAction])
+
+  return (
+    <CatalogContext.Provider value={catalogValue}>
+      <SessionContext.Provider value={sessionValue}>
+        <ChatContext.Provider value={chatValue}>
+          {children}
+        </ChatContext.Provider>
+      </SessionContext.Provider>
+    </CatalogContext.Provider>
+  )
 }

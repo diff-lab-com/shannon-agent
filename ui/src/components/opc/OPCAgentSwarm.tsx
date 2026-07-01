@@ -6,7 +6,7 @@ import { useIntl } from 'react-intl'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
-import { useApp } from '@/context/AppContext'
+import { useSessions } from '@/context/SessionContext'
 import { useModalFocus } from '@/hooks/useModalFocus'
 import * as api from '@/lib/tauri-api'
 import type { AgentInfo, TaskItem } from '@/types'
@@ -47,7 +47,7 @@ interface Props {
 export default function OPCAgentSwarm({ agents, tasks }: Props) {
   const intl = useIntl()
   const navigate = useNavigate()
-  const { switchSession } = useApp()
+  const { switchSession } = useSessions()
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const [spawnOpen, setSpawnOpen] = useState(false)
   const [reassignTarget, setReassignTarget] = useState<{ agentId: string; agentName: string; taskId: string; taskTitle: string } | null>(null)

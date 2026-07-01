@@ -4,9 +4,13 @@ import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from '@/components/chat/MessageBubble'
 import type { ChatMessage } from '@/types'
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ({
+vi.mock('@/context/ChatContext', () => ({
+  useChat: () => ({
     sendMessage: vi.fn(),
+  }),
+}))
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => ({
     currentSessionId: null,
     switchSession: vi.fn(),
     refreshSessions: vi.fn(),

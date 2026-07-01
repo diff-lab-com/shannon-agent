@@ -10,7 +10,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import type { TaskItem, BackgroundTaskInfo, UpdateTaskPayload } from '@/types'
 import * as api from '@/lib/tauri-api'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { normalizePriority } from '@/lib/task-status'
 
 type TaskLike = TaskItem | BackgroundTaskInfo
@@ -55,7 +55,7 @@ function fromDateInputValue(s: string): number | null {
 export default function TaskDetailDrawer({ task, onClose, onUpdated }: TaskDetailDrawerProps) {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { agents } = useApp()
+  const { agents } = useCatalog()
   const [editing, setEditing] = useState(false)
   const [status, setStatus] = useState('')
   const [assignee, setAssignee] = useState('')

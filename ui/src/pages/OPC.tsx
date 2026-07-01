@@ -15,14 +15,14 @@
 //   - OPCKanbanBoard: 5-column kanban with bucketFor() status mapping.
 
 import { CardSkeleton } from '@/components/SkeletonLoader'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import OpcAnalyticsDashboard from '@/components/opc/OpcAnalyticsDashboard'
 import OPCMissionFocus from '@/components/opc/OPCMissionFocus'
 import OPCAgentSwarm from '@/components/opc/OPCAgentSwarm'
 import OPCKanbanBoard from '@/components/opc/OPCKanbanBoard'
 
 export default function OPC() {
-  const { agents, tasks, config, loading, refreshTasks } = useApp()
+  const { agents, tasks, config, loading, refreshTasks } = useCatalog()
 
   return (
     <div className="flex-1 w-full bg-background overflow-y-auto h-full px-lg py-xl">

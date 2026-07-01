@@ -15,8 +15,8 @@ const mockCtx = vi.hoisted(() => ({
   respondPermission: vi.fn(),
 }))
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => mockCtx,
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => mockCtx,
 }))
 
 function wrap(ui: React.ReactElement, { route = '/chat' } = {}) {

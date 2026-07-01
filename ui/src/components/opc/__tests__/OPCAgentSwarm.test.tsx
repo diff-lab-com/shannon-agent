@@ -10,8 +10,8 @@ vi.mock('@/lib/tauri-api', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ({ switchSession: vi.fn().mockResolvedValue(undefined) }),
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: () => ({ switchSession: vi.fn().mockResolvedValue(undefined) }),
 }))
 
 vi.mock('sonner', () => ({

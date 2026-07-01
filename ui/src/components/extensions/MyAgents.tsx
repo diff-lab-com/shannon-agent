@@ -4,14 +4,14 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import EmptyState from '@/components/ui/empty-state'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 
 export default function MyAgents() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { agents, backgroundTasks, models } = useApp()
+  const { agents, backgroundTasks, models } = useCatalog()
   const navigate = useNavigate()
   const [configuring, setConfiguring] = useState<string | null>(null)
   const [showAddAgent, setShowAddAgent] = useState(false)

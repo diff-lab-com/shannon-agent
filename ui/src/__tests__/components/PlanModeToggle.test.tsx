@@ -16,8 +16,8 @@ vi.mock('react-router-dom', async () => {
 const mockRefreshConfig = vi.fn()
 const modeStore = { current: 'suggest' }
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ({
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => ({
     config: {
       approval_mode: modeStore.current,
       model: 'claude-sonnet-4-6',

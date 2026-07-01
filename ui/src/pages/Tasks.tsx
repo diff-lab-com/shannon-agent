@@ -15,13 +15,13 @@
 //
 // Backend wiring: the new Tauri scheduled-task commands are loaded via
 // useScheduledTasks() and rendered into the calendar (next_fire_at). The
-// legacy background-task / agent data still comes from useApp().
+// legacy background-task / agent data still comes from useCatalog().
 
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { useIntl } from 'react-intl'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { useScheduledTasks } from '@/hooks/scheduled-tasks'
 import type { CreateTaskPayload } from '@/types'
@@ -50,7 +50,7 @@ import HookTaskPipeline from '@/components/tasks/HookTaskPipeline'
 type Tab = 'active' | 'history' | 'worktrees'
 
 export default function Tasks() {
-  const { tasks, backgroundTasks, agents, refreshTasks, loading } = useApp()
+  const { tasks, backgroundTasks, agents, refreshTasks, loading } = useCatalog()
   const { tasks: scheduledTasks, create: createScheduled, refresh: refreshScheduled } = useScheduledTasks()
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
