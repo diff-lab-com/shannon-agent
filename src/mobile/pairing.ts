@@ -26,7 +26,7 @@
  *    signature over `${request_id}:${choice}`.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import type { Logger } from "../adapters/types.js";
@@ -63,28 +63,48 @@ export interface PairTokenStoreOptions {
   ttlMs?: number;
   /** Clock injection for tests. */
   now?: () => number;
+  /**
+   * Optional JSONL file path. When set, the store is **file-backed**: `issue`
+   * appends a record and `consume` does an atomic read-modify-write against the
+   * file. This is the Design-D control channel — the desktop (Rust) appends
+   * tokens here for the QR, and the gateway (TS) consumes them on `shannon/pair`.
+   * Omit for the in-memory store used by unit tests.
+   */
+  filePath?: string;
 }
 
 export class PairTokenStore {
+  /** Used only in memory mode (no `filePath`). */
   private readonly pending = new Map<string, PairTokenRecord>();
   private readonly ttlMs: number;
   private readonly now: () => number;
+  private readonly filePath?: string;
 
   constructor(opts: PairTokenStoreOptions = {}) {
     this.ttlMs = opts.ttlMs ?? 75_000;
     this.now = opts.now ?? Date.now;
+    this.filePath = opts.filePath;
   }
 
-  /** Mint a fresh one-time token. The desktop QR (P1.3) displays it. */
+  /**
+   * Mint a fresh one-time token. The desktop QR (P1.3) displays it. In file mode
+   * the record is appended to disk so a separate consumer process (the gateway)
+   * can validate it; in memory mode it lives in the `pending` map.
+   */
   issue(): PairTokenRecord {
-    this.pruneExpired();
+    if (!this.filePath) this.pruneExpired();
     const issuedAt = this.now();
     const record: PairTokenRecord = {
       token: generatePairToken(),
       issuedAt,
       expiresAt: issuedAt + this.ttlMs,
     };
-    this.pending.set(record.token, record);
+    if (this.filePath) {
+      mkdirSync(dirname(this.filePath), { recursive: true });
+      appendFileSync(this.filePath, JSON.stringify(record) + "\n", "utf8");
+    } else {
+      this.pending.set(record.token, record);
+    }
     return record;
   }
 
@@ -92,16 +112,73 @@ export class PairTokenStore {
    * Validate and consume a token (single-use). Returns the record on success,
    * null on miss / expiry / replay. Deletion is unconditional on lookup so a
    * replay after expiry is still consumed — a leaked token can't be revived.
+   *
+   * In file mode this reads the JSONL, removes the matching line (plus any
+   * expired siblings, opportunistically), and rewrites atomically via tmp+rename.
+   * Concurrency: the desktop appends with O_APPEND; we only rewrite when we
+   * actually remove a line, so a desktop append that lands between our read and
+   * rename is lost only in the rare window of a concurrent consume — a user can
+   * always mint a fresh token. Acceptable for the low-frequency pairing path.
    */
   consume(token: string): PairTokenRecord | null {
-    const record = this.pending.get(token);
-    this.pending.delete(token);
-    if (!record) return null;
-    if (this.now() >= record.expiresAt) return null;
-    return record;
+    if (!this.filePath) {
+      const record = this.pending.get(token);
+      this.pending.delete(token);
+      if (!record) return null;
+      if (this.now() >= record.expiresAt) return null;
+      return record;
+    }
+    return this.consumeFromFile(token);
   }
 
-  /** Number of outstanding (possibly expired) tokens — diagnostics / tests. */
+  private consumeFromFile(token: string): PairTokenRecord | null {
+    let raw: string;
+    try {
+      raw = readFileSync(this.filePath!, "utf8");
+    } catch {
+      return null; // no file yet → no tokens
+    }
+    const now = this.now();
+    let consumed: PairTokenRecord | null = null;
+    const survivors: PairTokenRecord[] = [];
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) continue;
+      let rec: PairTokenRecord;
+      try {
+        rec = JSON.parse(trimmed) as PairTokenRecord;
+      } catch {
+        continue; // tolerate a malformed line rather than failing the pair
+      }
+      if (typeof rec.token !== "string" || typeof rec.expiresAt !== "number") continue;
+      if (rec.token === token) {
+        // Match: consume unconditionally (single-use). Valid only if not expired.
+        consumed = now < rec.expiresAt ? rec : null;
+        continue; // drop from survivors
+      }
+      // Prune expired siblings opportunistically; keep the rest.
+      if (now < rec.expiresAt) survivors.push(rec);
+    }
+    if (consumed !== null) {
+      // Rewrite without the consumed token (and without expired siblings).
+      this.rewriteFile(this.filePath!, survivors);
+    } else if (raw.trim().length === 0) {
+      // No-op: nothing to persist.
+    }
+    // When the token was absent, we do NOT rewrite (avoid clobbering concurrent
+    // desktop appends for a miss).
+    return consumed;
+  }
+
+  private rewriteFile(path: string, records: PairTokenRecord[]): void {
+    const payload = records.map((r) => JSON.stringify(r)).join("\n") + (records.length ? "\n" : "");
+    const tmp = `${path}.tmp`;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(tmp, payload, "utf8");
+    renameSync(tmp, path);
+  }
+
+  /** Number of outstanding tokens — meaningful in memory mode only. */
   get size(): number {
     return this.pending.size;
   }
