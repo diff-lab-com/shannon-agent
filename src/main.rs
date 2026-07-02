@@ -27,6 +27,7 @@ fn main() {
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
     use shannon_desktop::extensions_commands;
+    use shannon_desktop::loopback_api;
     use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
@@ -261,6 +262,13 @@ fn main() {
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
             tauri::async_runtime::block_on(async move {
+                // P0.1 — spawn the loopback engine API server BEFORE the
+                // gateway so its `engine.wsUrl` (ws://127.0.0.1:33420/api/ws)
+                // is reachable when the supervised gateway boots. The brief
+                // sleep lets the listener bind first; serve() then runs for
+                // the lifetime of the process on a detached task.
+                loopback_api::spawn(state_ref.inner()).await;
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
                 commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle).await;
             });
 

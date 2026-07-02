@@ -109,6 +109,9 @@ pub mod commands_connections;
 pub mod gateway_supervisor;
 
 #[cfg(feature = "tauri")]
+pub mod loopback_api;
+
+#[cfg(feature = "tauri")]
 pub mod commands_memory;
 
 #[cfg(feature = "tauri")]
