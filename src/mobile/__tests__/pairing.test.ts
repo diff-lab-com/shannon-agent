@@ -158,6 +158,55 @@ describe("PairTokenStore", () => {
   });
 });
 
+// ── PairTokenStore (file-backed, Design D cross-process channel) ────────────
+
+describe("PairTokenStore (file-backed)", () => {
+  it("consumes across instances via the shared file (desktop writes, gateway reads)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shannon-tokens-"));
+    tmpDirs.push(dir);
+    const path = join(dir, "tokens.jsonl");
+
+    // Desktop process mints (writes the file).
+    const issuer = new PairTokenStore({ filePath: path });
+    const rec = issuer.issue();
+
+    // Gateway process (separate instance) consumes.
+    const consumer = new PairTokenStore({ filePath: path });
+    expect(consumer.consume(rec.token)).toEqual(rec);
+    // Replay → consumed (the line was removed on the first consume).
+    expect(new PairTokenStore({ filePath: path }).consume(rec.token)).toBeNull();
+  });
+
+  it("rejects an expired token and prunes it from the file", () => {
+    let t = 1000;
+    const dir = mkdtempSync(join(tmpdir(), "shannon-tokens-"));
+    tmpDirs.push(dir);
+    const path = join(dir, "tokens.jsonl");
+
+    const issuer = new PairTokenStore({ filePath: path, ttlMs: 60_000, now: () => t });
+    const rec = issuer.issue();
+    t += 61_000;
+    const consumer = new PairTokenStore({ filePath: path, now: () => t });
+    expect(consumer.consume(rec.token)).toBeNull();
+    // Expired line pruned on the consume attempt → file no longer carries it.
+    expect(new PairTokenStore({ filePath: path, now: () => t }).consume(rec.token)).toBeNull();
+  });
+
+  it("returns null without rewriting when the token is absent (no clobber)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shannon-tokens-"));
+    tmpDirs.push(dir);
+    const path = join(dir, "tokens.jsonl");
+    const a = new PairTokenStore({ filePath: path });
+    const rec = a.issue(); // writes one line
+
+    const miss = new PairTokenStore({ filePath: path }).consume("not-there");
+    expect(miss).toBeNull();
+
+    // The still-valid token must remain consumable (the miss didn't rewrite).
+    expect(new PairTokenStore({ filePath: path }).consume(rec.token)).toEqual(rec);
+  });
+});
+
 // ── DeviceRegistry ──────────────────────────────────────────────────────────
 
 describe("DeviceRegistry", () => {
