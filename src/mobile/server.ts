@@ -44,7 +44,8 @@ export interface MethodContext {
 /** Discriminated handler outcome — unambiguous vs. duck-typing the result. */
 export type HandlerOutcome =
   | { kind: "result"; result: unknown }
-  | { kind: "stream"; stream: AsyncIterable<ShannonEvent>; result: unknown };
+  | { kind: "stream"; stream: AsyncIterable<ShannonEvent>; result: unknown }
+  | { kind: "error"; code: number; message: string; data?: unknown };
 
 export type MethodHandler = (params: unknown, ctx: MethodContext) => Promise<HandlerOutcome> | HandlerOutcome;
 
@@ -174,6 +175,13 @@ export class MobileServer {
     }
     try {
       const outcome = await handler(raw.params, ctx);
+      if (outcome.kind === "error") {
+        this.send(
+          ctx,
+          errorResponse(raw.id, outcome.code, outcome.message, outcome.data),
+        );
+        return;
+      }
       if (outcome.kind === "stream") {
         for await (const ev of outcome.stream) {
           if (ctx.socket.readyState !== WebSocket.OPEN) return;
@@ -222,8 +230,11 @@ function errorResponse(
   id: string | number | null,
   code: number,
   message: string,
+  data?: unknown,
 ): JsonRpcResponse<unknown> {
-  return { jsonrpc: JSONRPC_VERSION, id, error: { code, message } };
+  const error: { code: number; message: string; data?: unknown } = { code, message };
+  if (data !== undefined) error.data = data;
+  return { jsonrpc: JSONRPC_VERSION, id, error };
 }
 
 function notification(event: ShannonEvent): ShannonEventNotification {
