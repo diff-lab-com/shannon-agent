@@ -112,6 +112,15 @@ vi.mock('@/lib/tauri-api', () => ({
   gatewaySupervisorStop: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
   gatewaySupervisorStatus: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
   gatewaySetManaged: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
+  // P1.3 — mobile pairing. Default: no devices, a sample token, revoke ok.
+  mobileGeneratePairToken: vi.fn().mockResolvedValue({
+    token: 'tok-1234',
+    expiresAt: Date.now() + 75_000,
+    lanEndpoint: 'ws://192.168.1.10:33430',
+    qrDataUrl: 'data:image/svg+xml;base64,PHN2Zz4=',
+  }),
+  mobileListPairedDevices: vi.fn().mockResolvedValue([]),
+  mobileRevokeDevice: vi.fn().mockResolvedValue(true),
   switchProvider: vi.fn().mockResolvedValue(undefined),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),

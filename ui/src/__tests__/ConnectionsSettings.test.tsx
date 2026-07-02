@@ -170,4 +170,59 @@ describe('ConnectionsSettings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     await waitFor(() => expect(stopSpy).toHaveBeenCalled())
   })
+
+  // ── P1.3 — mobile device pairing card ──────────────────────────────────────
+
+  it('renders the mobile pairing card with no devices by default', async () => {
+    render(<ConnectionsSettings />)
+    await waitFor(() =>
+      expect(screen.getByText('Mobile device pairing')).toBeInTheDocument(),
+    )
+    expect(screen.getByText('No devices paired yet.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Generate pairing code' })).toBeInTheDocument()
+  })
+
+  it('mints a pair token and shows the QR + LAN endpoint on generate', async () => {
+    render(<ConnectionsSettings />)
+    const btn = await screen.findByRole('button', { name: 'Generate pairing code' })
+    fireEvent.click(btn)
+    await waitFor(() => expect(api.mobileGeneratePairToken).toHaveBeenCalled())
+    // The QR image + endpoint code appear.
+    const qr = await screen.findByTestId('mobile-qr')
+    expect(qr.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/svg+xml;base64,PHN2Zz4=',
+    )
+    expect(screen.getByText('ws://192.168.1.10:33430')).toBeInTheDocument()
+  })
+
+  it('surfaces a LAN-detection error and renders no QR', async () => {
+    vi.spyOn(api, 'mobileGeneratePairToken').mockRejectedValue('no LAN IPv4 route')
+    render(<ConnectionsSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate pairing code' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('mobile-pair-error')).toHaveTextContent('no LAN IPv4 route'),
+    )
+    expect(screen.queryByTestId('mobile-qr')).not.toBeInTheDocument()
+  })
+
+  it('lists a paired device and revokes it through a confirm dialog', async () => {
+    vi.spyOn(api, 'mobileListPairedDevices').mockResolvedValue([
+      { deviceId: 'dev-1', publicKey: 'pk', label: 'Pixel', addedAt: 1, lastSeenAt: 2 },
+    ])
+    const revokeSpy = vi.spyOn(api, 'mobileRevokeDevice').mockResolvedValue(true)
+    render(<ConnectionsSettings />)
+    const row = await screen.findByTestId('mobile-device-dev-1')
+    expect(within(row).getByText('Pixel')).toBeInTheDocument()
+    // Click the row's Revoke button → opens the confirm dialog.
+    fireEvent.click(within(row).getByRole('button', { name: 'Revoke' }))
+    const dialog = await screen.findByRole('alertdialog')
+    // Confirm via the dialog's destructive button (also labelled "Revoke").
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Revoke' }))
+    await waitFor(() => expect(revokeSpy).toHaveBeenCalledWith('dev-1'))
+    // The row is gone.
+    await waitFor(() =>
+      expect(screen.queryByTestId('mobile-device-dev-1')).not.toBeInTheDocument(),
+    )
+  })
 })

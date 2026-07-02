@@ -64,6 +64,27 @@ pub struct GatewayConfig {
     pub adapters: Vec<GatewayAdapterConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_level: Option<String>,
+    /// Inbound mobile `shannon/*` server (P1.3). None → mobile disabled in the
+    /// gateway; the desktop's default config enables it so phones can pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobile: Option<GatewayMobileConfig>,
+}
+
+/// Gateway mobile-server block. Mirrors `MobileGatewayConfig` in
+/// `shannon-gateway/src/config/types.ts`. Paths point the gateway at the same
+/// pairing files the desktop's pairing commands read/write (Design D channel).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayMobileConfig {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devices_file: Option<String>,
 }
 
 /// Split `"<service>/<account>"` into its parts. With no `/`, the whole key
@@ -93,6 +114,8 @@ fn default_gateway_config() -> GatewayConfig {
         },
         adapters: vec![],
         log_level: Some("info".into()),
+        // Enable the inbound mobile shannon/* server so phones can pair (P1.3).
+        mobile: Some(crate::commands_mobile_pairing::default_mobile_config()),
     }
 }
 
@@ -355,6 +378,7 @@ mod tests {
                 )])),
             }],
             log_level: Some("info".into()),
+            mobile: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         // camelCase wire shape — matches shannon-gateway/src/config/types.ts
