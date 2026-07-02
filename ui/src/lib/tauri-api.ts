@@ -12,6 +12,8 @@ import type {
   DesktopConfig,
   GatewayConfig,
   GatewayProcessState,
+  MobileDeviceEntry,
+  MobilePairToken,
   SttConfig,
   TranscriptionResult,
   SendMessageResponse,
@@ -126,6 +128,23 @@ export async function gatewaySupervisorStatus(): Promise<GatewayProcessState> {
  */
 export async function gatewaySetManaged(managed: boolean): Promise<GatewayProcessState> {
   return invoke('gateway_set_managed', { managed })
+}
+
+// --- P1.3 mobile device pairing (Design D shared-file channel) ---
+
+/** Mint a one-time 75s pair token + QR (LAN endpoint + token) for the phone. */
+export async function mobileGeneratePairToken(): Promise<MobilePairToken> {
+  return invoke('mobile_generate_pair_token')
+}
+
+/** List currently paired devices (read-only; the gateway writes the file). */
+export async function mobileListPairedDevices(): Promise<MobileDeviceEntry[]> {
+  return invoke('mobile_list_paired_devices')
+}
+
+/** Remove a paired device by id; returns true if a device was removed. */
+export async function mobileRevokeDevice(deviceId: string): Promise<boolean> {
+  return invoke('mobile_revoke_device', { deviceId })
 }
 
 export interface WebhookConfigDto {
