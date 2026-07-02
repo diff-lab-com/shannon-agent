@@ -13,6 +13,18 @@ ignore = [
     "RUSTSEC-2024-0436", # paste - unmaintained (duplicate)
     "RUSTSEC-2017-0008", # flatten-tool - unmaintained
     "RUSTSEC-2024-0320", # unsound
+    # quick-xml 0.39.4 (via plist 1.9.0 → syntect 5.3.0 → shannon-ui). Two DoS
+    # advisories: 0194 = quadratic duplicate-attribute check (CPU exhaustion),
+    # 0195 = NsReader unbounded namespace-decl allocation (memory exhaustion).
+    # Neither is exploitable here: shannon-ui consumes syntect ONLY through
+    # ThemeSet::load_defaults() / SyntaxSet::load_defaults_newlines() —
+    # compile-time-embedded assets. No user-supplied or remote .tmTheme/.plist
+    # is ever parsed, so no attacker-controlled XML reaches quick-xml.
+    # Upgrade is blocked upstream: plist 1.9.0 is the latest release and pins
+    # quick-xml = "^0.39"; no plist version uses quick-xml >=0.41. Re-evaluate
+    # when plist/syntect ship a quick-xml >=0.41 build.
+    "RUSTSEC-2026-0194", # quick-xml quad attribute check — non-exploitable (bundled assets only)
+    "RUSTSEC-2026-0195", # quick-xml NsReader DoS — non-exploitable (bundled assets only)
 ]
 
 [licenses]
