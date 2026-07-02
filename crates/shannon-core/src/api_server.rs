@@ -11,7 +11,7 @@ use crate::tools::ToolRegistry;
 use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::{Message as WsMsg, WebSocket, WebSocketUpgrade};
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
@@ -275,6 +275,16 @@ pub struct ShannonApiServer {
     tools: Arc<ToolRegistry>,
     host: String,
     port: u16,
+    /// Optional bearer token. When set, every non-`/api/health` request must
+    /// carry `Authorization: Bearer <token>`. `None` disables auth (loopback).
+    auth_token: Option<String>,
+    /// Allowed CORS origins. Empty = no `Access-Control-Allow-Origin` header
+    /// (browser cross-origin denied; non-browser clients like the gateway are
+    /// unaffected by CORS).
+    allowed_origins: Vec<String>,
+    /// Explicit opt-in to bind on a non-loopback interface. Defaults to
+    /// `false`; when `true`, `serve()` additionally requires `auth_token`.
+    allow_nonloopback: bool,
 }
 
 impl ShannonApiServer {
@@ -286,6 +296,9 @@ impl ShannonApiServer {
             tools: Arc::new(ToolRegistry::new()),
             host: "127.0.0.1".to_string(),
             port: 8080,
+            auth_token: None,
+            allowed_origins: Vec::new(),
+            allow_nonloopback: false,
         }
     }
 
@@ -308,12 +321,31 @@ impl ShannonApiServer {
         self
     }
 
+    /// Require `Authorization: Bearer <token>` on every non-`/api/health`
+    /// request. Required for any non-loopback bind (enforced by `serve()`).
+    pub fn auth_token(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
+        self
+    }
+
+    /// Allow the listed origins to make cross-origin requests (sets
+    /// `Access-Control-Allow-Origin`). Empty by default = deny-by-default;
+    /// non-browser clients (the gateway) are unaffected by CORS.
+    pub fn allowed_origins(mut self, origins: Vec<String>) -> Self {
+        self.allowed_origins = origins;
+        self
+    }
+
+    /// Explicitly opt in to binding on a non-loopback interface. When set,
+    /// `serve()` also requires [`Self::auth_token`].
+    pub fn allow_nonloopback(mut self, allow: bool) -> Self {
+        self.allow_nonloopback = allow;
+        self
+    }
+
     /// Build the `axum::Router` with all routes and middleware.
     fn build_router(&self) -> axum::Router<()> {
-        let cors = CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any);
+        let cors = build_cors_layer(&self.allowed_origins);
 
         axum::Router::new()
             .route("/api/health", get(health_handler))
@@ -323,6 +355,10 @@ impl ShannonApiServer {
             .route("/api/tools/list", post(tools_list_handler))
             .route("/api/ws", get(ws_handler))
             .route("/api/approval/respond", post(approval_respond_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                self.auth_token.clone(),
+                auth_middleware,
+            ))
             .layer(cors)
             .with_state(AppState {
                 client_config: self.client_config.clone(),
@@ -334,12 +370,104 @@ impl ShannonApiServer {
 
     /// Start the server and block until shutdown.
     pub async fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
+        self.validate_bind()?;
         let addr = format!("{}:{}", self.host, self.port);
         let listener = tokio::net::TcpListener::bind(&addr).await?;
         tracing::info!("Shannon API server listening on {addr}");
         let router = self.build_router();
         axum::serve(listener, router).await?;
         Ok(())
+    }
+
+    /// Validate the bind configuration before opening the listener.
+    ///
+    /// Refuses any non-loopback host unless [`Self::allow_nonloopback`] is set,
+    /// and additionally requires [`Self::auth_token`] for non-loopback binds.
+    /// Loopback binds are always permitted — existing loopback deployments
+    /// (desktop, local TUI) need no opt-in and no auth.
+    fn validate_bind(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if is_loopback_host(&self.host) {
+            return Ok(());
+        }
+        if !self.allow_nonloopback {
+            return Err(format!(
+                "refusing to bind non-loopback host '{}': set .allow_nonloopback(true) to opt in",
+                self.host
+            )
+            .into());
+        }
+        if self.auth_token.is_none() {
+            return Err(format!(
+                "non-loopback host '{}' requires auth: set .auth_token(...) before binding",
+                self.host
+            )
+            .into());
+        }
+        Ok(())
+    }
+}
+
+/// Return true for loopback bind hosts (`127.0.0.0/8`, `::1`, `localhost`).
+fn is_loopback_host(host: &str) -> bool {
+    host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
+/// Constant-time string comparison to avoid timing oracles on token checks.
+fn ct_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+/// Build a CORS layer that is deny-by-default: with no origins configured it
+/// emits no `Access-Control-Allow-Origin` header (browser cross-origin denied);
+/// with a non-empty list it echoes a matched origin. Methods and headers stay
+/// permissive — only origin is gated, since they don't widen read access.
+fn build_cors_layer(origins: &[String]) -> CorsLayer {
+    let mut cors = CorsLayer::new().allow_methods(Any).allow_headers(Any);
+    if !origins.is_empty() {
+        let parsed: Vec<HeaderValue> = origins
+            .iter()
+            .filter_map(|o| o.parse::<HeaderValue>().ok())
+            .collect();
+        cors = cors.allow_origin(parsed);
+    }
+    cors
+}
+
+/// Axum middleware enforcing the optional bearer-token auth policy.
+///
+/// `/api/health` is always public (liveness probes must work unauthenticated).
+/// When the configured token (the middleware state) is `None`, all routes pass
+/// through (loopback). Otherwise every request must carry
+/// `Authorization: Bearer <token>` with a constant-time-equal match; a missing
+/// or mismatched header yields `401`. The token is passed as an independent
+/// `from_fn_with_state` state so it does not pollute the shared [`AppState`].
+async fn auth_middleware(
+    State(expected): State<Option<String>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    if req.uri().path() == "/api/health" {
+        return Ok(next.run(req).await);
+    }
+    let expected = match &expected {
+        Some(t) => t,
+        None => return Ok(next.run(req).await),
+    };
+    let provided = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(|t| t.trim());
+    match provided {
+        Some(t) if ct_eq(t, expected) => Ok(next.run(req).await),
+        _ => Err(StatusCode::UNAUTHORIZED),
     }
 }
 
@@ -982,6 +1110,169 @@ mod tests {
             .await
             .expect("failed to read body")
             .to_vec()
+    }
+
+    fn test_app_with_auth(token: &str) -> Router<()> {
+        ShannonApiServer::new(test_config())
+            .auth_token(token)
+            .build_router()
+    }
+
+    fn test_app_with_origins(origins: &[&str]) -> Router<()> {
+        ShannonApiServer::new(test_config())
+            .allowed_origins(origins.iter().map(|s| s.to_string()).collect())
+            .build_router()
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Bind policy (P0.2) — non-loopback requires opt-in + auth
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn validate_bind_loopback_ok_without_auth() {
+        // Default host is 127.0.0.1 — loopback never needs opt-in or auth.
+        let server = ShannonApiServer::new(test_config());
+        assert!(server.validate_bind().is_ok());
+    }
+
+    #[test]
+    fn validate_bind_loopback_variants_all_ok() {
+        for host in ["127.0.0.1", "127.1.2.3", "localhost", "::1"] {
+            let server = ShannonApiServer::new(test_config()).host(host);
+            assert!(
+                server.validate_bind().is_ok(),
+                "expected '{host}' to be loopback"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_bind_nonloopback_refused_without_opt_in() {
+        let server = ShannonApiServer::new(test_config()).host("0.0.0.0");
+        let err = server.validate_bind().unwrap_err().to_string();
+        assert!(
+            err.contains("non-loopback") && err.contains("allow_nonloopback"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_bind_nonloopback_refused_without_auth() {
+        let server = ShannonApiServer::new(test_config())
+            .host("0.0.0.0")
+            .allow_nonloopback(true);
+        let err = server.validate_bind().unwrap_err().to_string();
+        assert!(err.contains("requires auth"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn validate_bind_nonloopback_ok_with_opt_in_and_auth() {
+        let server = ShannonApiServer::new(test_config())
+            .host("0.0.0.0")
+            .allow_nonloopback(true)
+            .auth_token("secret");
+        assert!(server.validate_bind().is_ok());
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Auth middleware (P0.2) — bearer-token enforcement
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn auth_disabled_passes_through_without_token() {
+        // No auth_token configured → /api/models reachable without a bearer.
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_health_remains_public_when_auth_enabled() {
+        let app = test_app_with_auth("secret");
+        let req = Request::builder()
+            .uri("/api/health")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn auth_rejects_request_without_bearer() {
+        let app = test_app_with_auth("secret");
+        let req = Request::builder()
+            .uri("/api/models")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_rejects_request_with_wrong_bearer() {
+        let app = test_app_with_auth("secret");
+        let req = Request::builder()
+            .uri("/api/models")
+            .header("authorization", "Bearer wrong")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_accepts_request_with_correct_bearer() {
+        let app = test_app_with_auth("secret");
+        let req = Request::builder()
+            .uri("/api/models")
+            .header("authorization", "Bearer secret")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // CORS (P0.2) — deny-by-default, explicit allow list
+    // ══════════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn cors_no_origins_denies_cross_origin() {
+        // Default (empty origins) → no ACAO header even when an Origin is sent.
+        let app = test_app();
+        let req = Request::builder()
+            .uri("/api/health")
+            .header("origin", "http://evil.example")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        assert!(
+            response
+                .headers()
+                .get("access-control-allow-origin")
+                .is_none(),
+            "no ACAO header expected when no origins are allowed"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_allowed_origin_is_echoed() {
+        let app = test_app_with_origins(&["http://app.local"]);
+        let req = Request::builder()
+            .uri("/api/health")
+            .header("origin", "http://app.local")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(req).await.unwrap();
+        let acao = response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("expected ACAO header for allowed origin");
+        assert_eq!(acao, "http://app.local");
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -2272,7 +2563,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_cors_headers_present_on_health() {
-        let app = test_app();
+        // P0.2: CORS is deny-by-default; the header is present only when the
+        // request origin matches the configured allow list.
+        let app = test_app_with_origins(&["http://example.com"]);
         let req = Request::builder()
             .method("OPTIONS")
             .uri("/api/health")
@@ -2282,29 +2575,29 @@ mod tests {
             .unwrap();
 
         let response = app.oneshot(req).await.unwrap();
-        // CORS middleware should add access-control-allow-origin
         let cors_header = response
             .headers()
             .get("access-control-allow-origin")
-            .expect("CORS header missing");
-        assert_eq!(cors_header, "*");
+            .expect("CORS header missing for allowed origin");
+        assert_eq!(cors_header, "http://example.com");
     }
 
     #[tokio::test]
     async fn test_cors_headers_present_on_models() {
-        let app = test_app();
+        // P0.2: an explicit allowed origin gets an ACAO header on a normal GET.
+        let app = test_app_with_origins(&["http://app.local"]);
         let req = Request::builder()
             .uri("/api/models")
-            .header("origin", "http://evil.com")
+            .header("origin", "http://app.local")
             .body(Body::empty())
             .unwrap();
 
         let response = app.oneshot(req).await.unwrap();
-        assert!(
-            response
-                .headers()
-                .contains_key("access-control-allow-origin")
-        );
+        let cors_header = response
+            .headers()
+            .get("access-control-allow-origin")
+            .expect("CORS header missing for allowed origin");
+        assert_eq!(cors_header, "http://app.local");
     }
 
     // ══════════════════════════════════════════════════════════════════════
