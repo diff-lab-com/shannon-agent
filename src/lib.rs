@@ -106,6 +106,8 @@ pub mod commands_config;
 #[cfg(feature = "tauri")]
 pub mod commands_connections;
 #[cfg(feature = "tauri")]
+pub mod commands_mobile_pairing;
+#[cfg(feature = "tauri")]
 pub mod gateway_supervisor;
 
 #[cfg(feature = "tauri")]

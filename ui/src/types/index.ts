@@ -175,10 +175,37 @@ export interface GatewayAdapterConfig {
   secrets?: Record<string, string>
 }
 
+export interface GatewayMobileConfig {
+  enabled?: boolean
+  host?: string
+  port?: number
+  tokensFile?: string
+  devicesFile?: string
+}
+
 export interface GatewayConfig {
   engine: GatewayEngineConfig
   adapters: GatewayAdapterConfig[]
   logLevel?: string
+  mobile?: GatewayMobileConfig
+}
+
+/// One paired device entry. Mirrors `DeviceEntry` in
+/// `shannon-gateway/src/mobile/pairing.ts` (camelCase, passed through).
+export interface MobileDeviceEntry {
+  deviceId: string
+  publicKey: string
+  label?: string | null
+  addedAt: number
+  lastSeenAt: number
+}
+
+/// `mobile_generate_pair_token` result — token + LAN endpoint + QR data URL.
+export interface MobilePairToken {
+  token: string
+  expiresAt: number
+  lanEndpoint: string
+  qrDataUrl: string
 }
 
 /// E-1 方案 C — supervised gateway process status. Mirrors the Rust

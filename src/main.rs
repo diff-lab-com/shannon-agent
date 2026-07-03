@@ -15,6 +15,7 @@ fn main() {
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_memory;
+    use shannon_desktop::commands_mobile_pairing;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
     use shannon_desktop::commands_permissions;
@@ -91,6 +92,10 @@ fn main() {
             commands_connections::gateway_supervisor_stop,
             commands_connections::gateway_supervisor_status,
             commands_connections::gateway_set_managed,
+            // P1.3 — mobile device pairing (Design D shared-file channel)
+            commands_mobile_pairing::mobile_generate_pair_token,
+            commands_mobile_pairing::mobile_list_paired_devices,
+            commands_mobile_pairing::mobile_revoke_device,
             // D4 — cloud speech-to-text (voice input)
             commands_voice::transcribe_audio,
             commands_voice::get_stt_config,

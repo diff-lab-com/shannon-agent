@@ -49,6 +49,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 sha2 = "0.10"
 rand = "0.8"
+qrcode = "0.14"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 percent-encoding = "2"
 
