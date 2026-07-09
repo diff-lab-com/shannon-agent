@@ -117,7 +117,12 @@ fn main() {
         schemars::schema_for!(EventEnvelope<serde_json::Value>),
     );
 
-    let schema_json = serde_json::to_string_pretty(&schemas).expect("schema serialization failed");
+    // Normalize through serde_json::Value so the emitted JSON is deterministic.
+    // schemars::Map may iterate non-deterministically (HashMap), which churned the
+    // committed schema file on every build. serde_json::Value is BTreeMap-backed
+    // (no `preserve_order` feature), so re-serializing sorts keys at every level.
+    let value: serde_json::Value = serde_json::to_value(&schemas).expect("schema to_value failed");
+    let schema_json = serde_json::to_string_pretty(&value).expect("schema serialization failed");
 
     // Write to OUT_DIR (build-time location)
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");

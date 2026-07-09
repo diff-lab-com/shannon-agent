@@ -1,22 +1,13 @@
 {
   "BackgroundTaskInfo": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "BackgroundTaskInfo",
-    "type": "object",
-    "required": [
-      "output",
-      "prompt",
-      "started_at",
-      "status",
-      "task_id"
-    ],
     "properties": {
       "completed_at": {
+        "format": "int64",
         "type": [
           "integer",
           "null"
-        ],
-        "format": "int64"
+        ]
       },
       "output": {
         "type": "string"
@@ -25,8 +16,8 @@
         "type": "string"
       },
       "started_at": {
-        "type": "integer",
-        "format": "int64"
+        "format": "int64",
+        "type": "integer"
       },
       "status": {
         "type": "string"
@@ -34,26 +25,26 @@
       "task_id": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "output",
+      "prompt",
+      "started_at",
+      "status",
+      "task_id"
+    ],
+    "title": "BackgroundTaskInfo",
+    "type": "object"
   },
   "BackgroundTaskUpdate": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "BackgroundTaskUpdate",
-    "type": "object",
-    "required": [
-      "output",
-      "prompt",
-      "started_at",
-      "status",
-      "task_id"
-    ],
     "properties": {
       "completed_at": {
+        "format": "int64",
         "type": [
           "integer",
           "null"
-        ],
-        "format": "int64"
+        ]
       },
       "output": {
         "type": "string"
@@ -62,8 +53,8 @@
         "type": "string"
       },
       "started_at": {
-        "type": "integer",
-        "format": "int64"
+        "format": "int64",
+        "type": "integer"
       },
       "status": {
         "type": "string"
@@ -71,17 +62,19 @@
       "task_id": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "output",
+      "prompt",
+      "started_at",
+      "status",
+      "task_id"
+    ],
+    "title": "BackgroundTaskUpdate",
+    "type": "object"
   },
   "ChatMessage": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "ChatMessage",
-    "type": "object",
-    "required": [
-      "content",
-      "role",
-      "timestamp"
-    ],
     "properties": {
       "content": {
         "type": "string"
@@ -90,19 +83,20 @@
         "type": "string"
       },
       "timestamp": {
-        "type": "integer",
-        "format": "int64"
+        "format": "int64",
+        "type": "integer"
       }
-    }
+    },
+    "required": [
+      "content",
+      "role",
+      "timestamp"
+    ],
+    "title": "ChatMessage",
+    "type": "object"
   },
   "ConfigUpdatedPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "ConfigUpdatedPayload",
-    "type": "object",
-    "required": [
-      "key",
-      "value"
-    ],
     "properties": {
       "key": {
         "type": "string"
@@ -110,23 +104,59 @@
       "value": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "key",
+      "value"
+    ],
+    "title": "ConfigUpdatedPayload",
+    "type": "object"
   },
   "DiffFileInfo": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "DiffFileInfo",
-    "type": "object",
-    "required": [
-      "hunks",
-      "path",
-      "status"
-    ],
+    "definitions": {
+      "DiffHunk": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "newLines": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "newStart": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "oldLines": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "oldStart": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "content",
+          "newLines",
+          "newStart",
+          "oldLines",
+          "oldStart"
+        ],
+        "type": "object"
+      }
+    },
     "properties": {
       "hunks": {
-        "type": "array",
         "items": {
           "$ref": "#/definitions/DiffHunk"
-        }
+        },
+        "type": "array"
       },
       "path": {
         "type": "string"
@@ -135,48 +165,41 @@
         "type": "string"
       }
     },
-    "definitions": {
-      "DiffHunk": {
-        "type": "object",
-        "required": [
-          "content",
-          "newLines",
-          "newStart",
-          "oldLines",
-          "oldStart"
-        ],
-        "properties": {
-          "content": {
-            "type": "string"
-          },
-          "newLines": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0.0
-          },
-          "newStart": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0.0
-          },
-          "oldLines": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0.0
-          },
-          "oldStart": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0.0
-          }
-        }
-      }
-    }
+    "required": [
+      "hunks",
+      "path",
+      "status"
+    ],
+    "title": "DiffFileInfo",
+    "type": "object"
   },
   "DiffHunk": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "DiffHunk",
-    "type": "object",
+    "properties": {
+      "content": {
+        "type": "string"
+      },
+      "newLines": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "newStart": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "oldLines": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "oldStart": {
+        "format": "uint32",
+        "minimum": 0.0,
+        "type": "integer"
+      }
+    },
     "required": [
       "content",
       "newLines",
@@ -184,88 +207,57 @@
       "oldLines",
       "oldStart"
     ],
-    "properties": {
-      "content": {
-        "type": "string"
-      },
-      "newLines": {
-        "type": "integer",
-        "format": "uint32",
-        "minimum": 0.0
-      },
-      "newStart": {
-        "type": "integer",
-        "format": "uint32",
-        "minimum": 0.0
-      },
-      "oldLines": {
-        "type": "integer",
-        "format": "uint32",
-        "minimum": 0.0
-      },
-      "oldStart": {
-        "type": "integer",
-        "format": "uint32",
-        "minimum": 0.0
-      }
-    }
+    "title": "DiffHunk",
+    "type": "object"
   },
   "EventEnvelope": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "EventEnvelope_for_AnyValue",
-    "type": "object",
-    "required": [
-      "event",
-      "payload",
-      "schema_version"
-    ],
     "properties": {
       "event": {
         "type": "string"
       },
       "payload": true,
       "schema_version": {
-        "type": "integer",
         "format": "uint32",
-        "minimum": 0.0
+        "minimum": 0.0,
+        "type": "integer"
       }
-    }
+    },
+    "required": [
+      "event",
+      "payload",
+      "schema_version"
+    ],
+    "title": "EventEnvelope_for_AnyValue",
+    "type": "object"
   },
   "HunkAction": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "HunkAction",
-    "type": "object",
-    "required": [
-      "action",
-      "line_end",
-      "line_start"
-    ],
     "properties": {
       "action": {
         "type": "string"
       },
       "line_end": {
-        "type": "integer",
         "format": "uint32",
-        "minimum": 0.0
+        "minimum": 0.0,
+        "type": "integer"
       },
       "line_start": {
-        "type": "integer",
         "format": "uint32",
-        "minimum": 0.0
+        "minimum": 0.0,
+        "type": "integer"
       }
-    }
+    },
+    "required": [
+      "action",
+      "line_end",
+      "line_start"
+    ],
+    "title": "HunkAction",
+    "type": "object"
   },
   "PermissionRequest": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "PermissionRequest",
-    "type": "object",
-    "required": [
-      "input",
-      "request_id",
-      "risk",
-      "tool"
-    ],
     "properties": {
       "input": true,
       "request_id": {
@@ -277,42 +269,44 @@
       "tool": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "input",
+      "request_id",
+      "risk",
+      "tool"
+    ],
+    "title": "PermissionRequest",
+    "type": "object"
   },
   "QueryCancelledPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "QueryCancelledPayload",
-    "type": "object",
-    "required": [
-      "query_id"
-    ],
     "properties": {
       "query_id": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "query_id"
+    ],
+    "title": "QueryCancelledPayload",
+    "type": "object"
   },
   "QueryCompletedPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "QueryCompletedPayload",
-    "type": "object",
-    "required": [
-      "query_id"
-    ],
     "properties": {
       "query_id": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "query_id"
+    ],
+    "title": "QueryCompletedPayload",
+    "type": "object"
   },
   "QueryFailedPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "QueryFailedPayload",
-    "type": "object",
-    "required": [
-      "error",
-      "query_id"
-    ],
     "properties": {
       "error": {
         "type": "string"
@@ -320,16 +314,16 @@
       "query_id": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "error",
+      "query_id"
+    ],
+    "title": "QueryFailedPayload",
+    "type": "object"
   },
   "QueryTextPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "QueryTextPayload",
-    "type": "object",
-    "required": [
-      "content",
-      "query_id"
-    ],
     "properties": {
       "content": {
         "type": "string"
@@ -337,38 +331,36 @@
       "query_id": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "content",
+      "query_id"
+    ],
+    "title": "QueryTextPayload",
+    "type": "object"
   },
   "SessionInfo": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "SessionInfo",
-    "type": "object",
-    "required": [
-      "created_at",
-      "id",
-      "message_count",
-      "title"
-    ],
     "properties": {
       "branch_point": {
+        "format": "uint",
+        "minimum": 0.0,
         "type": [
           "integer",
           "null"
-        ],
-        "format": "uint",
-        "minimum": 0.0
+        ]
       },
       "created_at": {
-        "type": "integer",
-        "format": "int64"
+        "format": "int64",
+        "type": "integer"
       },
       "id": {
         "type": "string"
       },
       "message_count": {
-        "type": "integer",
         "format": "uint",
-        "minimum": 0.0
+        "minimum": 0.0,
+        "type": "integer"
       },
       "parent_id": {
         "type": [
@@ -385,31 +377,20 @@
           "null"
         ]
       }
-    }
+    },
+    "required": [
+      "created_at",
+      "id",
+      "message_count",
+      "title"
+    ],
+    "title": "SessionInfo",
+    "type": "object"
   },
   "SessionLoaded": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "SessionLoaded",
-    "type": "object",
-    "required": [
-      "messages"
-    ],
-    "properties": {
-      "messages": {
-        "type": "array",
-        "items": {
-          "$ref": "#/definitions/ChatMessage"
-        }
-      }
-    },
     "definitions": {
       "ChatMessage": {
-        "type": "object",
-        "required": [
-          "content",
-          "role",
-          "timestamp"
-        ],
         "properties": {
           "content": {
             "type": "string"
@@ -418,17 +399,65 @@
             "type": "string"
           },
           "timestamp": {
-            "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "type": "integer"
           }
-        }
+        },
+        "required": [
+          "content",
+          "role",
+          "timestamp"
+        ],
+        "type": "object"
       }
-    }
+    },
+    "properties": {
+      "messages": {
+        "items": {
+          "$ref": "#/definitions/ChatMessage"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "messages"
+    ],
+    "title": "SessionLoaded",
+    "type": "object"
   },
   "TaskRetryPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "TaskRetryPayload",
-    "type": "object",
+    "properties": {
+      "attempt": {
+        "format": "uint",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "delay_ms": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "last_error": {
+        "type": "string"
+      },
+      "max_attempts": {
+        "format": "uint",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "run_id": {
+        "type": "string"
+      },
+      "task_id": {
+        "type": "string"
+      },
+      "timestamp_ms": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      }
+    },
     "required": [
       "attempt",
       "delay_ms",
@@ -438,51 +467,11 @@
       "task_id",
       "timestamp_ms"
     ],
-    "properties": {
-      "attempt": {
-        "type": "integer",
-        "format": "uint",
-        "minimum": 0.0
-      },
-      "delay_ms": {
-        "type": "integer",
-        "format": "uint64",
-        "minimum": 0.0
-      },
-      "last_error": {
-        "type": "string"
-      },
-      "max_attempts": {
-        "type": "integer",
-        "format": "uint",
-        "minimum": 0.0
-      },
-      "run_id": {
-        "type": "string"
-      },
-      "task_id": {
-        "type": "string"
-      },
-      "timestamp_ms": {
-        "type": "integer",
-        "format": "uint64",
-        "minimum": 0.0
-      }
-    }
+    "title": "TaskRetryPayload",
+    "type": "object"
   },
   "TaskStepPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "TaskStepPayload",
-    "type": "object",
-    "required": [
-      "run_id",
-      "status",
-      "step_index",
-      "step_label",
-      "step_total",
-      "task_id",
-      "timestamp_ms"
-    ],
     "properties": {
       "error": {
         "type": [
@@ -497,36 +486,41 @@
         "type": "string"
       },
       "step_index": {
-        "type": "integer",
         "format": "uint",
-        "minimum": 0.0
+        "minimum": 0.0,
+        "type": "integer"
       },
       "step_label": {
         "type": "string"
       },
       "step_total": {
-        "type": "integer",
         "format": "uint",
-        "minimum": 0.0
+        "minimum": 0.0,
+        "type": "integer"
       },
       "task_id": {
         "type": "string"
       },
       "timestamp_ms": {
-        "type": "integer",
         "format": "uint64",
-        "minimum": 0.0
+        "minimum": 0.0,
+        "type": "integer"
       }
-    }
+    },
+    "required": [
+      "run_id",
+      "status",
+      "step_index",
+      "step_label",
+      "step_total",
+      "task_id",
+      "timestamp_ms"
+    ],
+    "title": "TaskStepPayload",
+    "type": "object"
   },
   "ThinkingPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "ThinkingPayload",
-    "type": "object",
-    "required": [
-      "content",
-      "query_id"
-    ],
     "properties": {
       "content": {
         "type": "string"
@@ -534,26 +528,23 @@
       "query_id": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "content",
+      "query_id"
+    ],
+    "title": "ThinkingPayload",
+    "type": "object"
   },
   "ToolProgressPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "ToolProgressPayload",
-    "type": "object",
-    "required": [
-      "message",
-      "progress",
-      "query_id",
-      "tool_name",
-      "tool_use_id"
-    ],
     "properties": {
       "message": {
         "type": "string"
       },
       "progress": {
-        "type": "number",
-        "format": "float"
+        "format": "float",
+        "type": "number"
       },
       "query_id": {
         "type": "string"
@@ -564,19 +555,19 @@
       "tool_use_id": {
         "type": "string"
       }
-    }
-  },
-  "ToolResultPayload": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "ToolResultPayload",
-    "type": "object",
+    },
     "required": [
-      "is_error",
+      "message",
+      "progress",
       "query_id",
-      "result",
       "tool_name",
       "tool_use_id"
     ],
+    "title": "ToolProgressPayload",
+    "type": "object"
+  },
+  "ToolResultPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
       "is_error": {
         "type": "boolean"
@@ -593,18 +584,19 @@
       "tool_use_id": {
         "type": "string"
       }
-    }
-  },
-  "ToolStartPayload": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "ToolStartPayload",
-    "type": "object",
+    },
     "required": [
+      "is_error",
       "query_id",
-      "tool_input",
+      "result",
       "tool_name",
       "tool_use_id"
     ],
+    "title": "ToolResultPayload",
+    "type": "object"
+  },
+  "ToolStartPayload": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
     "properties": {
       "query_id": {
         "type": "string"
@@ -616,15 +608,18 @@
       "tool_use_id": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "query_id",
+      "tool_input",
+      "tool_name",
+      "tool_use_id"
+    ],
+    "title": "ToolStartPayload",
+    "type": "object"
   },
   "UpdateAvailablePayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "UpdateAvailablePayload",
-    "type": "object",
-    "required": [
-      "version"
-    ],
     "properties": {
       "body": {
         "type": [
@@ -641,54 +636,59 @@
       "version": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "version"
+    ],
+    "title": "UpdateAvailablePayload",
+    "type": "object"
   },
   "UpdateProgressPayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "UpdateProgressPayload",
-    "type": "object",
-    "required": [
-      "progress",
-      "status"
-    ],
     "properties": {
       "progress": {
-        "type": "number",
-        "format": "float"
+        "format": "float",
+        "type": "number"
       },
       "status": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "progress",
+      "status"
+    ],
+    "title": "UpdateProgressPayload",
+    "type": "object"
   },
   "UsagePayload": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "UsagePayload",
-    "type": "object",
+    "properties": {
+      "cost_usd": {
+        "format": "double",
+        "type": "number"
+      },
+      "input_tokens": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "output_tokens": {
+        "format": "uint64",
+        "minimum": 0.0,
+        "type": "integer"
+      },
+      "query_id": {
+        "type": "string"
+      }
+    },
     "required": [
       "cost_usd",
       "input_tokens",
       "output_tokens",
       "query_id"
     ],
-    "properties": {
-      "cost_usd": {
-        "type": "number",
-        "format": "double"
-      },
-      "input_tokens": {
-        "type": "integer",
-        "format": "uint64",
-        "minimum": 0.0
-      },
-      "output_tokens": {
-        "type": "integer",
-        "format": "uint64",
-        "minimum": 0.0
-      },
-      "query_id": {
-        "type": "string"
-      }
-    }
+    "title": "UsagePayload",
+    "type": "object"
   }
 }
