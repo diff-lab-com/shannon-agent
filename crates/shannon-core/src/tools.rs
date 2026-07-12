@@ -732,6 +732,13 @@ impl ToolRegistry {
                 strict: Some(false),
             })
             .collect();
+        // Deterministic ordering: `self.tools` is a map, so `.values()`
+        // iterates in non-deterministic order. Sorting by name makes request
+        // bodies reproducible across runs — required for VCR fixture replay
+        // (ADR 0003) and improves Anthropic prompt-cache hit rate, since cache
+        // breakpoints are position-sensitive.
+        let mut defs = defs;
+        defs.sort_by(|a, b| a.name.cmp(&b.name));
         *Self::recover_lock(self.defs_cache.write()) = Some((ver, defs.clone()));
         defs
     }
