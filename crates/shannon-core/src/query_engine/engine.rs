@@ -1623,8 +1623,17 @@ impl QueryEngine {
                 };
                 match stream_result {
                     Ok(mut stream) => {
-                        let mut current_tool_use: Option<(String, String)> = None;
-                        let mut accumulated_tool_input = String::new();
+                        // Per-index tool call state. OpenAI streaming interleaves
+                        // InputJsonDelta chunks across parallel tool calls (multiple
+                        // tools in one assistant message); a single shared buffer would
+                        // concatenate fragments from different tools into invalid JSON
+                        // and the parser would discard every tool call in the batch.
+                        // Map key is the streaming `index`; value is (id, name,
+                        // accumulated JSON input).
+                        let mut tool_call_state: std::collections::HashMap<
+                            usize,
+                            (String, String, String),
+                        > = std::collections::HashMap::new();
                         let mut tool_inputs: Vec<(String, String, serde_json::Value)> = Vec::new();
                         let mut has_content = false;
                         // Accumulate the full assistant response for conversation tracking
@@ -1647,12 +1656,22 @@ impl QueryEngine {
                                                 message.usage.cache_creation_input_tokens as u64;
                                         }
                                         StreamEvent::ContentBlockStart {
-                                            content_block, ..
+                                            index,
+                                            content_block,
                                         } => {
                                             match &content_block {
                                                 ContentBlock::ToolUse { id, name, input } => {
-                                                    current_tool_use =
-                                                        Some((id.clone(), name.clone()));
+                                                    let entry = tool_call_state
+                                                        .entry(index)
+                                                        .or_insert_with(|| {
+                                                            (
+                                                                id.clone(),
+                                                                name.clone(),
+                                                                String::new(),
+                                                            )
+                                                        });
+                                                    entry.0 = id.clone();
+                                                    entry.1 = name.clone();
                                                     send_event!(
                                                         tx,
                                                         QueryEvent::ToolUseRequest {
@@ -1669,36 +1688,41 @@ impl QueryEngine {
                                                 _ => {}
                                             }
                                         }
-                                        StreamEvent::ContentBlockDelta { delta, .. } => match delta
-                                        {
-                                            ContentDelta::TextDelta { text } => {
-                                                has_content = true;
-                                                assistant_text.push_str(&text);
-                                                send_event!(
-                                                    tx,
-                                                    QueryEvent::Text {
-                                                        query_id,
-                                                        content: text,
+                                        StreamEvent::ContentBlockDelta { index, delta } => {
+                                            match delta {
+                                                ContentDelta::TextDelta { text } => {
+                                                    has_content = true;
+                                                    assistant_text.push_str(&text);
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Text {
+                                                            query_id,
+                                                            content: text,
+                                                        }
+                                                    );
+                                                }
+                                                ContentDelta::InputJsonDelta { partial_json } => {
+                                                    if let Some(entry) =
+                                                        tool_call_state.get_mut(&index)
+                                                    {
+                                                        entry.2.push_str(&partial_json);
                                                     }
-                                                );
+                                                }
+                                                ContentDelta::ThinkingDelta { thinking } => {
+                                                    send_event!(
+                                                        tx,
+                                                        QueryEvent::Thinking {
+                                                            query_id,
+                                                            content: thinking,
+                                                        }
+                                                    );
+                                                }
                                             }
-                                            ContentDelta::InputJsonDelta { partial_json } => {
-                                                accumulated_tool_input.push_str(&partial_json);
-                                            }
-                                            ContentDelta::ThinkingDelta { thinking } => {
-                                                send_event!(
-                                                    tx,
-                                                    QueryEvent::Thinking {
-                                                        query_id,
-                                                        content: thinking,
-                                                    }
-                                                );
-                                            }
-                                        },
-                                        StreamEvent::ContentBlockStop { .. } => {
-                                            if let Some((id, name)) = current_tool_use.take() {
-                                                let raw =
-                                                    std::mem::take(&mut accumulated_tool_input);
+                                        }
+                                        StreamEvent::ContentBlockStop { index } => {
+                                            if let Some((id, name, raw)) =
+                                                tool_call_state.remove(&index)
+                                            {
                                                 match serde_json::from_str::<serde_json::Value>(
                                                     &raw,
                                                 ) {
@@ -1832,11 +1856,14 @@ impl QueryEngine {
                                                 }
                                             );
 
-                                            // Flush any pending tool input that wasn't finalized by
-                                            // ContentBlockStop (OpenAI/Ollama don't emit that event).
-                                            if let Some((id, name)) = current_tool_use.take() {
-                                                let raw =
-                                                    std::mem::take(&mut accumulated_tool_input);
+                                            // Flush any pending tool inputs that weren't finalized by
+                                            // ContentBlockStop (e.g. finish_reason arrived without
+                                            // a prior synthesized stop event). Drain every
+                                            // remaining per-index entry — multiple parallel tool
+                                            // calls may have been mid-flight.
+                                            for (id, name, raw) in
+                                                tool_call_state.drain().map(|(_, v)| v)
+                                            {
                                                 match serde_json::from_str::<serde_json::Value>(
                                                     &raw,
                                                 ) {

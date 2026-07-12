@@ -299,11 +299,18 @@ impl SandboxProvider for BwrapSandbox {
         args.push("--tmpfs".to_string());
         args.push("/tmp".to_string());
 
-        // Mount project directory read-write
+        // Mount project directory read-write.
+        // Bind to `/workspace` (matching the Docker backend's default workdir)
+        // rather than to itself. Tools, system prompts, and recorded
+        // conversations assume `/workspace` as the project root — e.g.,
+        // `pwd` reads `/workspace`, `rm /workspace/<file>` is the natural
+        // tool invocation. Binding to the original host path would leave
+        // `/workspace` non-existent inside the sandbox and silently break
+        // every command that references it.
         let project = config.project_dir.to_string_lossy().to_string();
         args.push("--bind".to_string());
         args.push(project.clone());
-        args.push(project.clone());
+        args.push("/workspace".to_string());
 
         // Deny writes to .git/ inside the project (mount read-only)
         let git_dir = config.project_dir.join(".git");
@@ -369,7 +376,11 @@ impl SandboxProvider for BwrapSandbox {
             .collect::<Vec<_>>()
             .join("; ");
 
-        let cd = format!("cd {}", shell_escape(&project));
+        // After binding project → /workspace above, `cd /workspace` puts
+        // the sandbox process at the project root. The previous form
+        // (`cd <project>`) worked when project was bound to itself, but
+        // with the new binding the natural sandbox CWD is `/workspace`.
+        let cd = "cd /workspace".to_string();
         let full = format!("{env_exports}; {cd}; {command}");
 
         Ok(format!(

@@ -198,7 +198,7 @@ impl LlmProvider {
             LlmProvider::ZhipuInternational => "/api/paas/v4/chat/completions",
             LlmProvider::ZhipuCoding => "/v1/messages",
             LlmProvider::Moonshot => "/v1/chat/completions",
-            LlmProvider::Minimax => "/v1/text/chatcompletion_v2",
+            LlmProvider::Minimax => "/v1/chat/completions",
             LlmProvider::DashScope => "/compatible-mode/v1/chat/completions",
         }
     }
@@ -1721,10 +1721,7 @@ mod tests {
             "/api/paas/v4/chat/completions"
         );
         assert_eq!(LlmProvider::Moonshot.endpoint(), "/v1/chat/completions");
-        assert_eq!(
-            LlmProvider::Minimax.endpoint(),
-            "/v1/text/chatcompletion_v2"
-        );
+        assert_eq!(LlmProvider::Minimax.endpoint(), "/v1/chat/completions");
         assert_eq!(
             LlmProvider::DashScope.endpoint(),
             "/compatible-mode/v1/chat/completions"
