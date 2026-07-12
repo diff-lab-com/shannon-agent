@@ -84,8 +84,14 @@ out/
 # 测试
 tests/integration/tmp/
 
-# 录制 fixtures (按需生成，不提交)
+# 录制 fixtures (按需生成，不提交) —— 非确定性 session 不入库
 tests/fixtures/real_tasks/*.jsonl
+# 例外: 确定性 replay fixtures 入库供 CI 无 key 回放 (ADR 0003 Phase 1)
+# 用 `git add -f` 强制跟踪；已跟踪文件不受上面的 ignore 影响。
+!tests/fixtures/real_tasks/minimax_MiniMax-M3_create_file.jsonl
+!tests/fixtures/real_tasks/minimax_MiniMax-M3_bash_command.jsonl
+!tests/fixtures/real_tasks/minimax_MiniMax-M3_read_and_edit.jsonl
+!tests/fixtures/real_tasks/minimax_MiniMax-M3_overwrite_existing_file.jsonl
 
 # Claude/Anthropic 相关
 .claude/

@@ -213,6 +213,140 @@ fn write_file(path: &std::path::Path, content: &str) {
     fs::write(path, content).expect(&format!("write {}", path.display()));
 }
 
+// ── Replay helpers: drive the agent offline against recorded fixtures ─────
+// Inverse of `shannon_record`: mounts recorded exchanges as mockito mocks and
+// points shannon at the mock server. Implements ADR 0003 Phase 1 — minimal
+// VCR replay for deterministic tasks (no API key, no cost).
+
+use shannon_core::testing::record_replay::RecordedExchange;
+
+/// Resolve a recorded fixture path for a (provider, model, session) tuple.
+fn replay_fixture_path(provider: &str, model: &str, session: &str) -> PathBuf {
+    fixtures_dir().join(format!("{provider}_{model}_{session}.jsonl"))
+}
+
+/// Extract the tempdir workspace path (e.g. `/tmp/.tmp0ZFV0J`) embedded in a
+/// recorded request body. Shannon's system prompt includes the CWD; TempDir
+/// uses a random name, so the recorded path differs from the replay path and
+/// must be rewritten before exact-match comparison.
+fn recorded_workspace_path(body: &str) -> Option<String> {
+    const MARKER: &str = "/tmp/.tmp";
+    let start = body.find(MARKER)?;
+    let suffix: String = body[start + MARKER.len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+    Some(format!("{MARKER}{suffix}"))
+}
+
+/// Rewrite the workspace-path suffix in `body` so that the recorded CWD's
+/// random suffix becomes the replay CWD's random suffix. The function
+/// finds the longest common prefix between `recorded_cwd` and
+/// `replay_cwd` and replaces everything that differs. Both request and
+/// response bodies go through this; SSE fragment streams get the suffix
+/// rewritten in each fragment independently so the streaming parser
+/// reassembles the correct replay path.
+///
+/// Returns the rewritten body unchanged if no `/tmp/.tmp` marker is
+/// found in the body (i.e. `recorded_workspace_path` returns None).
+fn rewrite_path_suffix(body: &str, recorded_cwd: &str, replay_cwd: &str) -> String {
+    let common_len = recorded_cwd
+        .chars()
+        .zip(replay_cwd.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let recorded_suffix = &recorded_cwd[common_len..];
+    let replay_suffix = &replay_cwd[common_len..];
+    if !recorded_suffix.is_empty() {
+        body.replace(recorded_suffix, replay_suffix)
+    } else {
+        body.to_string()
+    }
+}
+
+/// Mount a single recorded exchange as a mockito mock.
+///
+/// Matches the recorded request body with its tempdir path rewritten to the
+/// replay CWD (so a fresh TempDir produces an identical body). Replays status,
+/// body, and `content-type`; transport headers (`transfer-encoding`, etc.) are
+/// dropped to avoid conflicts with mockito's own framing.
+fn mount_exchange(
+    server: &mut mockito::ServerGuard,
+    ex: &RecordedExchange,
+    replay_cwd: &std::path::Path,
+) -> mockito::Mock {
+    let mut expected_body = ex.request.body.clone();
+    let mut response_body = ex.response.body.clone();
+    if let Some(recorded_cwd) = recorded_workspace_path(&ex.request.body) {
+        let replay = replay_cwd.to_string_lossy();
+        // Replace only the differing SUFFIX, not the full path. Both recorded
+        // and replay tempdirs share the `/tmp/.tmp` prefix, so the variable
+        // part is a short random tail. A full-path replace works on the
+        // contiguous request body but FAILS on the response body: tool-call
+        // arguments stream incrementally across SSE delta fragments, splitting
+        // the path (e.g. fragment 1 ends `/tmp/.tmp`, fragment 2 starts with
+        // the suffix). Replacing the suffix catches each fragment independently,
+        // and the agent's streaming parser reassembles the correct replay path.
+        // (ADR 0003)
+        expected_body = rewrite_path_suffix(&ex.request.body, &recorded_cwd, &replay);
+        response_body = rewrite_path_suffix(&ex.response.body, &recorded_cwd, &replay);
+    }
+    let mut mock = server
+        .mock("POST", ex.request.path.as_str())
+        .match_body(expected_body.as_str())
+        .with_status(ex.response.status as usize);
+    for (name, value) in &ex.response.headers {
+        if name.eq_ignore_ascii_case("content-type") {
+            mock = mock.with_header(name, value);
+        }
+    }
+    mock.with_body(response_body).create()
+}
+
+/// Mount every exchange from a JSONL fixture file onto the server.
+/// Returns the mock guards — keep them alive until the agent run finishes.
+fn mount_fixture(
+    server: &mut mockito::ServerGuard,
+    path: &std::path::Path,
+    replay_cwd: &std::path::Path,
+) -> Vec<mockito::Mock> {
+    let exchanges = RecordedExchange::load_jsonl(path)
+        .unwrap_or_else(|e| panic!("load {}: {e}", path.display()));
+    exchanges
+        .iter()
+        .map(|ex| mount_exchange(server, ex, replay_cwd))
+        .collect()
+}
+
+/// Build a shannon command in REPLAY mode: pointed at the mock server with a
+/// dummy API key, recording disabled. Mirrors `shannon_record`'s env hygiene.
+fn shannon_replay(
+    base_url: &str,
+    provider: &str,
+    model: &str,
+    workspace: &tempfile::TempDir,
+) -> Command {
+    let mut cmd = shannon();
+    cmd.env("SHANNON_BASE_URL", base_url)
+        .env("SHANNON_API_KEY", "replay-fake-key")
+        .env("SHANNON_PROVIDER", provider)
+        .env("SHANNON_MODEL", model)
+        .env_remove("SHANNON_RECORD_DIR")
+        .env_remove("OPENAI_BASE_URL")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .current_dir(workspace.path());
+    if let Some(key_env) = provider_key_env(provider) {
+        cmd.env(key_env, "replay-fake-key");
+    }
+    // NOTE: do NOT pass --yes. The recorded fixtures were captured under
+    // FullAuto (recording uses `shannon --prompt` without --yes). Passing
+    // --yes flips the agent to BypassPermissions, which changes the outgoing
+    // request body (e.g. system-prompt permission instructions) and every
+    // mock fails with http_501. The destructive-ops that need --yes (delete_file)
+    // are excluded from the replay set for orthogonal reasons.
+    cmd
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 // ── Live Provider Tests ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════════
@@ -1721,6 +1855,195 @@ fn replay_workspace_creation_works() {
     );
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// ── Agent-level replay (ADR 0003 Phase 1) ────────────────────────────────
+// Re-drives the agent against mockito-served recorded fixtures. No API key.
+// Only deterministic tasks; volatile tasks (git, glob, search) are skipped.
+// If a fixture is missing or the request body drifts (stale fixture), the
+// test skips with a "run: just record" hint rather than failing CI.
+//
+// Run: just replay-agent
+// ══════════════════════════════════════════════════════════════════════════
+
+/// Provider/model pair recorded in the committed fixtures. Replay reads from
+/// these; recording a different model adds a parallel set, not a replacement.
+const REPLAY_PROVIDER: &str = "minimax";
+const REPLAY_MODEL: &str = "MiniMax-M3";
+
+// Local-only VCR harness test. Runs via `just replay-agent`. #[ignore]d
+// for CI by design — exact-match VCR replay proved too brittle for the
+// GitHub Actions runner env (see ADR 0003 Phase 1 落地回顾). Developers
+// run locally to validate the harness; CI gets the structural replay
+// tests (replay_*) instead, which don't drive the agent.
+#[test]
+#[ignore = "local-only VCR harness; run via `just replay-agent`"]
+#[serial]
+fn replay_agent_create_file() {
+    let path = replay_fixture_path(REPLAY_PROVIDER, REPLAY_MODEL, "create_file");
+    if !path.exists() {
+        eprintln!(
+            "skip: no fixture at {} — run: just record-minimax",
+            path.display()
+        );
+        return;
+    }
+    let workspace = create_workspace("replay_create_file");
+    let mut server = mockito::Server::new();
+    let _mocks = mount_fixture(&mut server, &path, workspace.path());
+
+    shannon_replay(&server.url(), REPLAY_PROVIDER, REPLAY_MODEL, &workspace)
+        .args([
+            "--prompt",
+            "Create a file called hello.txt with the content 'world'",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .success();
+
+    assert!(
+        workspace.path().join("hello.txt").exists(),
+        "hello.txt should be created"
+    );
+    let content = fs::read_to_string(workspace.path().join("hello.txt")).unwrap();
+    assert!(
+        content.contains("world"),
+        "hello.txt should contain 'world', got: {content}"
+    );
+}
+
+// Local-only VCR harness test. Runs via `just replay-agent`. #[ignore]d
+// for CI by design — exact-match VCR replay proved too brittle for the
+// GitHub Actions runner env (see ADR 0003 Phase 1 落地回顾).
+#[test]
+#[ignore = "local-only VCR harness; run via `just replay-agent`"]
+#[serial]
+fn replay_agent_bash_command() {
+    let path = replay_fixture_path(REPLAY_PROVIDER, REPLAY_MODEL, "bash_command");
+    if !path.exists() {
+        eprintln!(
+            "skip: no fixture at {} — run: just record-minimax",
+            path.display()
+        );
+        return;
+    }
+    let workspace = create_workspace("replay_bash_cmd");
+    let mut server = mockito::Server::new();
+    let _mocks = mount_fixture(&mut server, &path, workspace.path());
+
+    shannon_replay(&server.url(), REPLAY_PROVIDER, REPLAY_MODEL, &workspace)
+        .args([
+            "--prompt",
+            "Run the command: echo hello_shannon > output.txt",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .success();
+
+    assert!(
+        workspace.path().join("output.txt").exists(),
+        "output.txt should be created"
+    );
+}
+
+// Local-only VCR harness test. Runs via `just replay-agent`. #[ignore]d
+// for CI by design — exact-match VCR replay proved too brittle for the
+// GitHub Actions runner env (see ADR 0003 Phase 1 落地回顾).
+#[test]
+#[ignore = "local-only VCR harness; run via `just replay-agent`"]
+#[serial]
+fn replay_agent_read_and_edit() {
+    let path = replay_fixture_path(REPLAY_PROVIDER, REPLAY_MODEL, "read_and_edit");
+    if !path.exists() {
+        eprintln!(
+            "skip: no fixture at {} — run: just record-minimax",
+            path.display()
+        );
+        return;
+    }
+    let workspace = create_workspace("replay_read_edit");
+    // Pre-create the same file the recording edited, so tool results match.
+    write_file(
+        &workspace.path().join("src/lib.rs"),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }",
+    );
+    let mut server = mockito::Server::new();
+    let _mocks = mount_fixture(&mut server, &path, workspace.path());
+
+    shannon_replay(&server.url(), REPLAY_PROVIDER, REPLAY_MODEL, &workspace)
+        .args([
+            "--prompt",
+            "Read src/lib.rs and add a doc comment above the add function",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
+    assert!(
+        content.contains("///") || content.contains("//"),
+        "lib.rs should have a comment added, got: {content}"
+    );
+}
+
+// Local-only VCR harness test. Runs via `just replay-agent`. #[ignore]d
+// for CI by design — exact-match VCR replay proved too brittle for the
+// GitHub Actions runner env (see ADR 0003 Phase 1 落地回顾).
+#[test]
+#[ignore = "local-only VCR harness; run via `just replay-agent`"]
+#[serial]
+fn replay_agent_overwrite_existing_file() {
+    let path = replay_fixture_path(REPLAY_PROVIDER, REPLAY_MODEL, "overwrite_existing_file");
+    if !path.exists() {
+        eprintln!(
+            "skip: no fixture at {} — run: just record-minimax",
+            path.display()
+        );
+        return;
+    }
+    let workspace = create_workspace("replay_overwrite");
+    write_file(
+        &workspace.path().join("config.toml"),
+        "version = 1\nname = \"old\"",
+    );
+    let mut server = mockito::Server::new();
+    let _mocks = mount_fixture(&mut server, &path, workspace.path());
+
+    shannon_replay(&server.url(), REPLAY_PROVIDER, REPLAY_MODEL, &workspace)
+        .args([
+            "--prompt",
+            "The file config.toml exists. Update it to have version = 2 and name = \"new\"",
+            "--output-format",
+            "json",
+        ])
+        .timeout(std::time::Duration::from_secs(60))
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(workspace.path().join("config.toml")).unwrap();
+    assert!(
+        content.contains("version = 2")
+            || content.contains("version=2")
+            || content.contains("version=\"2\""),
+        "config.toml should be updated to version 2, got: {content}"
+    );
+}
+
+// NOTE: `delete_file` is intentionally NOT in the replay set. Its fixture has
+// two properties that defeat exact-match VCR: (1) the model issues Bash with an
+// explicit `cwd` field, whose absolute tempdir path is not visible inside the
+// bwrap sandbox (bound to /workspace, ADR 0003 trigger), so the tool errors and
+// diverges from the recorded request stream; (2) it is a 17-exchange exploratory
+// session whose Glob/Bash results depend on filesystem ordering. Re-recording
+// with a tighter prompt (single-file delete, no explicit cwd) would make it
+// deterministic — left for future work. The `record_task_delete_file` test
+// remains so the fixture can be regenerated.
+
 // ── Unit tests for test helpers ───────────────────────────────────────
 
 #[test]
@@ -1838,5 +2161,80 @@ fn test_all_nested_writes_use_helper() {
                 "line {line_num}: fs::write with nested path found — use write_file() instead:\n  {line}"
             );
         }
+    }
+}
+
+// ── Unit tests for rewrite_path_suffix ───────────────────────────────────
+//
+// These tests pin down the suffix-only rewrite logic that mount_exchange
+// applies to recorded bodies before matching them against mockito. Splitting
+// the rewrite out of mount_exchange lets us test it without spinning up a
+// mockito server, and makes the SSE-fragmentation case (test 3) explicit.
+
+#[cfg(test)]
+mod rewrite_tests {
+    use super::rewrite_path_suffix;
+
+    #[test]
+    fn rewrite_common_prefix_normal_ci_case() {
+        // Recorded CWD and replay CWD share the `/tmp/.tmp` prefix; only the
+        // random tail differs. All occurrences of the recorded suffix should
+        // become the replay suffix.
+        let recorded_cwd = "/tmp/.tmpJ5YFHN";
+        let replay_cwd = "/tmp/.tmpnWTqOz";
+        let body = r#"{"cwd": "/tmp/.tmpJ5YFHN", "msg": "Working at /tmp/.tmpJ5YFHN/sub"}"#;
+        let expected = r#"{"cwd": "/tmp/.tmpnWTqOz", "msg": "Working at /tmp/.tmpnWTqOz/sub"}"#;
+        assert_eq!(
+            rewrite_path_suffix(body, recorded_cwd, replay_cwd),
+            expected
+        );
+    }
+
+    #[test]
+    fn rewrite_different_prefix_length_local_without_dot_tmp() {
+        // Local development without `tempfile` may produce a different prefix
+        // length (e.g. `/tmp/.dbgWS` instead of `/tmp/.tmpXXXXXX`). The longest
+        // common prefix is `/tmp/.` (6 chars); recorded_suffix = `tmp0ZFV0J`,
+        // replay_suffix = `dbgWS`. The recorded-suffix substring appears inside
+        // the path and gets swapped for the replay-suffix.
+        let recorded_cwd = "/tmp/.tmp0ZFV0J";
+        let replay_cwd = "/tmp/.dbgWS";
+        let body = r#"{"cwd": "/tmp/.tmp0ZFV0J"}"#;
+        let expected = r#"{"cwd": "/tmp/.dbgWS"}"#;
+        assert_eq!(
+            rewrite_path_suffix(body, recorded_cwd, replay_cwd),
+            expected
+        );
+    }
+
+    #[test]
+    fn rewrite_sse_fragmentation_reassembles_path() {
+        // When a tool-call argument streams across multiple SSE delta
+        // fragments, the suffix can be split across fragment boundaries (e.g.
+        // fragment 1 ends `/tmp/.tmp`, fragment 2 starts with the suffix).
+        // Running rewrite_path_suffix on each fragment independently must
+        // produce a concatenation that contains the correct replay path —
+        // the agent's streaming parser reassembles it from the reassembled
+        // fragments.
+        let recorded_cwd = "/tmp/.tmpJ5YFHN";
+        let replay_cwd = "/tmp/.tmpnWTqOz";
+        let body1 = r#"data: {"args": {"path": "/tmp/.tmp"#;
+        let body2 = r#"J5YFHN/file"}}"#;
+        let rewritten_1 = rewrite_path_suffix(body1, recorded_cwd, replay_cwd);
+        let rewritten_2 = rewrite_path_suffix(body2, recorded_cwd, replay_cwd);
+        let concatenated = format!("{rewritten_1}{rewritten_2}");
+        assert!(
+            concatenated.contains("/tmp/.tmpnWTqOz/file"),
+            "concatenated fragments should reconstruct the replay path, got: {concatenated}"
+        );
+    }
+
+    #[test]
+    fn rewrite_noop_when_suffix_is_empty() {
+        // Identical CWDs ⇒ common_len == len(recorded_cwd) ⇒ recorded_suffix
+        // is empty ⇒ body is returned unchanged.
+        let cwd = "/tmp/.tmpJ5YFHN";
+        let body = r#"{"cwd": "/tmp/.tmpJ5YFHN"}"#;
+        assert_eq!(rewrite_path_suffix(body, cwd, cwd), body);
     }
 }

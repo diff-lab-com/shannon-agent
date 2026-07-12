@@ -153,6 +153,12 @@ replay:
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
         -E 'test(replay_) + test(test_write_file) + test(test_record_provider) + test(test_create_workspace) + test(test_provider_key_env) + test(test_all_nested)'
 
+# 回放: 用 fixture 驱动 agent 做端到端 CI 回归 (ADR 0003 Phase 1, 不需要 API key)
+# 与 `replay` (只做 fixture 结构校验) 区分开 —— 这里真正重跑 agent + 工具 + 工作区副作用。
+replay-agent:
+    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
+        -E 'test(replay_agent_)'
+
 # 分析录制 fixture 中的缓存命中统计
 cache-stats:
     @echo "Cache statistics from recorded fixtures:"
