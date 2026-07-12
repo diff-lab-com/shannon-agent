@@ -63,6 +63,8 @@ Things deferred to future work.
 | ADR | Title | Status | Date |
 |---|---|---|---|
 | [0001](0001-scheduled-tasks-storage.md) | Scheduled Tasks Storage — SKILL.md + JSONL Partitioned History | Accepted | 2026-06-13 |
+| [0002](0002-sprint-5-deepen-mcp-integration.md) | Sprint 5 — Deepen MCP Integration | Accepted | 2026-06-16 |
+| [0003](0003-vcr-replay-for-agent-ci-regression.md) | VCR Replay for Agent-Level CI Regression | Accepted | 2026-07-12 |
 
 ## Numbering
 

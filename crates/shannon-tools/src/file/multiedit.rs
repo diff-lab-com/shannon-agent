@@ -69,6 +69,13 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
         usize,
         Vec<ReplacementLocation>,
     )> = Vec::with_capacity(input.edits.len());
+    // path -> most recent in-batch content for that path. Edits against
+    // the same file apply cumulatively; otherwise Phase 2's sequential
+    // fs::write would clobber earlier edits with each subsequent edit's
+    // view of the unchanged file (symptom: MultiEdit reports "Applied N
+    // edits" but only the last edit survives).
+    let mut per_file_content: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for op in &input.edits {
         let metadata = fs::metadata(&op.file_path).await.map_err(|e| {
@@ -94,16 +101,27 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
             )));
         }
 
-        let content = fs::read_to_string(&op.file_path).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to read {}: {e}", op.file_path))
-        })?;
+        let content = if let Some(prev) = per_file_content.get(&op.file_path) {
+            prev.clone()
+        } else {
+            fs::read_to_string(&op.file_path).await.map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to read {}: {e}", op.file_path))
+            })?
+        };
 
         let (new_content, replacements, locations) =
             edit::perform_edit(&content, &op.old_string, &op.new_string, op.replace_all).map_err(
                 |e| ToolError::InvalidInput(format!("Edit failed for {}: {e}", op.file_path)),
             )?;
 
-        pending.push((op.clone(), content, new_content, replacements, locations));
+        pending.push((
+            op.clone(),
+            content,
+            new_content.clone(),
+            replacements,
+            locations,
+        ));
+        per_file_content.insert(op.file_path.clone(), new_content);
     }
 
     // Phase 2: All validations passed — write all files.

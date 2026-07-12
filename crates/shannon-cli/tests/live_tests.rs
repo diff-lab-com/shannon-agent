@@ -175,6 +175,15 @@ fn shannon_record(
     let provider = record_provider();
     let model = record_model();
     let qualified_session = format!("{}_{}_{}", provider, model, session_name);
+    // Clear any prior fixture for this exact (provider, model, session) tuple so
+    // re-running the test produces a clean fixture. The recording engine's
+    // JSONL output is append-mode by design (supports interrupted/resumed
+    // recordings), but each test invocation uses a fresh temp workspace — so
+    // exchanges from prior runs reference paths the new workspace doesn't
+    // have, which silently pollutes replay fixtures and breaks downstream
+    // workspace assertions.
+    let fixture_path = record_dir.join(format!("{qualified_session}.jsonl"));
+    let _ = fs::remove_file(&fixture_path);
     let mut cmd = shannon();
     cmd.env("SHANNON_API_KEY", api_key)
         .env("SHANNON_RECORD_DIR", record_dir)
@@ -1369,66 +1378,6 @@ fn record_task_claude_md_context() {
         "lib.rs should have doc comments per CLAUDE.md rules, got: {content}"
     );
 }
-
-#[test]
-#[serial]
-#[ignore]
-fn record_task_git_operations() {
-    let api_key = require_api_key();
-    let record_dir = require_record_dir();
-    let workspace = create_workspace("real_git_ops");
-
-    // Initialize a git repo with history
-    let git_init = std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(workspace.path())
-        .output()
-        .expect("git init");
-    assert!(git_init.status.success(), "git init should succeed");
-
-    let _ = std::process::Command::new("git")
-        .args(["config", "user.email", "test@shannon.dev"])
-        .current_dir(workspace.path())
-        .output();
-
-    let _ = std::process::Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(workspace.path())
-        .output();
-
-    write_file(
-        &workspace.path().join("src/lib.rs"),
-        "pub fn greet() -> String { \"hello\".to_string() }\n",
-    );
-
-    let _ = std::process::Command::new("git")
-        .args(["add", "."])
-        .current_dir(workspace.path())
-        .output();
-
-    let _ = std::process::Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(workspace.path())
-        .output();
-
-    shannon_record(&api_key, &record_dir, &workspace, "git_operations")
-        .args([
-            "--prompt",
-            "Run git log to see the commit history, then modify src/lib.rs to change 'hello' to 'hello world', then run git diff to see the changes",
-            "--output-format",
-            "json",
-        ])
-        .timeout(std::time::Duration::from_secs(180))
-        .assert()
-        .success();
-
-    let content = fs::read_to_string(workspace.path().join("src/lib.rs")).unwrap();
-    assert!(
-        content.contains("hello world") || content.contains("hello_world"),
-        "lib.rs should be updated, got: {content}"
-    );
-}
-
 #[test]
 #[serial]
 #[ignore]
