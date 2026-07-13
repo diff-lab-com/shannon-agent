@@ -125,21 +125,22 @@ impl RecordedExchange {
     ];
 
     /// Extract cache metrics from the response body JSON.
-    /// Looks for Anthropic-style `usage.cache_creation_input_tokens` and
-    /// `usage.cache_read_input_tokens`, or OpenAI-style equivalents in SSE data lines.
+    ///
+    /// Supports three response shapes:
+    ///
+    /// 1. **Anthropic** (and Anthropic-compatible like zhipu-coding): top-level
+    ///    or per-SSE-event `usage.cache_creation_input_tokens` /
+    ///    `usage.cache_read_input_tokens`.
+    /// 2. **OpenAI** (and OpenAI-compatible like MiniMax): top-level or
+    ///    per-SSE-chunk `usage.prompt_tokens_details.cached_tokens`. This is
+    ///    mapped to `cache_read_input_tokens` (cache hit = tokens reused).
+    ///    OpenAI does not report cache creation separately, so creation is 0.
+    /// 3. **Non-streaming JSON or SSE event with no usage block**: returns (0, 0).
     pub fn extract_cache_metrics(response_body: &str) -> (u32, u32) {
         // Try parsing as a single JSON object first (non-streaming response)
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(response_body) {
             if let Some(usage) = v.get("usage") {
-                let created = usage
-                    .get("cache_creation_input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                let read = usage
-                    .get("cache_read_input_tokens")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as u32;
-                return (created, read);
+                return Self::cache_metrics_from_usage(usage);
             }
         }
 
@@ -161,18 +162,43 @@ impl RecordedExchange {
                     .and_then(|m| m.get("usage"))
                     .or_else(|| v.get("usage"))
                 {
-                    created = usage
-                        .get("cache_creation_input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
-                    read = usage
-                        .get("cache_read_input_tokens")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0) as u32;
+                    let (c, r) = Self::cache_metrics_from_usage(usage);
+                    created = c;
+                    read = r;
                 }
             }
         }
         (created, read)
+    }
+
+    /// Read cache metrics from a `usage` JSON object, dispatching on shape.
+    ///
+    /// Anthropic shape: `{ "cache_creation_input_tokens": N, "cache_read_input_tokens": N }`
+    /// OpenAI shape:    `{ "prompt_tokens_details": { "cached_tokens": N } }`
+    fn cache_metrics_from_usage(usage: &serde_json::Value) -> (u32, u32) {
+        // Anthropic-style: prefer explicit cache_read/create fields when present
+        // (they're more informative than the OpenAI aggregated cached_tokens).
+        let created = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32);
+        let read = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32);
+
+        // OpenAI-style fallback: prompt_tokens_details.cached_tokens maps to
+        // cache_read (tokens reused from a prior cache hit). OpenAI does not
+        // report cache_creation separately, so creation stays 0.
+        let openai_read = usage
+            .get("prompt_tokens_details")
+            .and_then(|p| p.get("cached_tokens"))
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32);
+
+        let final_created = created.unwrap_or(0);
+        let final_read = read.or(openai_read).unwrap_or(0);
+        (final_created, final_read)
     }
 
     /// Return a copy with sensitive headers redacted.
@@ -731,6 +757,68 @@ mod tests {
         let (created, read) = RecordedExchange::extract_cache_metrics(body);
         assert_eq!(created, 0);
         assert_eq!(read, 0);
+    }
+
+    #[test]
+    fn test_extract_cache_metrics_openai_non_streaming() {
+        // OpenAI / OpenAI-compatible (e.g. MiniMax) reports cache hits as
+        // `prompt_tokens_details.cached_tokens`. There is no separate
+        // creation token count, so creation stays 0.
+        let body = r#"{
+            "id": "chatcmpl-1",
+            "usage": {
+                "total_tokens": 31188,
+                "prompt_tokens": 31069,
+                "completion_tokens": 119,
+                "prompt_tokens_details": {"cached_tokens": 128}
+            }
+        }"#;
+        let (created, read) = RecordedExchange::extract_cache_metrics(body);
+        assert_eq!(created, 0, "OpenAI does not report creation tokens");
+        assert_eq!(read, 128);
+    }
+
+    #[test]
+    fn test_extract_cache_metrics_openai_streaming() {
+        // OpenAI streaming chunks: each chunk has usage at the top level.
+        // Last chunk wins (matches Anthropic streaming behavior).
+        let body = "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"usage\":null}\n\ndata: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"prompt_tokens_details\":{\"cached_tokens\":42}}}\n\ndata: [DONE]\n\n";
+        let (created, read) = RecordedExchange::extract_cache_metrics(body);
+        assert_eq!(created, 0);
+        assert_eq!(read, 42);
+    }
+
+    #[test]
+    fn test_extract_cache_metrics_anthropic_wins_over_openai() {
+        // If both shapes are present (shouldn't happen in practice, but be
+        // defensive), prefer Anthropic's more-informative explicit fields.
+        let body = r#"{
+            "usage": {
+                "cache_creation_input_tokens": 200,
+                "cache_read_input_tokens": 300,
+                "prompt_tokens_details": {"cached_tokens": 999}
+            }
+        }"#;
+        let (created, read) = RecordedExchange::extract_cache_metrics(body);
+        assert_eq!(created, 200);
+        assert_eq!(read, 300);
+    }
+
+    #[test]
+    fn test_extract_cache_metrics_deterministic() {
+        // extract_cache_metrics must be pure: calling it multiple times on
+        // the same body must always return the same result. Backfill relies
+        // on this (idempotent re-runs are no-ops), and the
+        // cache_field_consistency integration test relies on it for stable
+        // comparison.
+        let body =
+            "data: {\"id\":\"x\",\"usage\":{\"cache_read_input_tokens\":42}}\n\ndata: [DONE]\n\n";
+        let r1 = RecordedExchange::extract_cache_metrics(body);
+        let r2 = RecordedExchange::extract_cache_metrics(body);
+        let r3 = RecordedExchange::extract_cache_metrics(body);
+        assert_eq!(r1, r2, "extract_cache_metrics must be deterministic");
+        assert_eq!(r2, r3);
+        assert_eq!(r1, (0, 42));
     }
 
     #[test]
