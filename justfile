@@ -159,15 +159,55 @@ replay-agent:
     cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
         -E 'test(replay_agent_)'
 
-# 分析录制 fixture 中的缓存命中统计
+# 分析录制 fixture 中的缓存命中统计 (per-fixture + per-provider 表格)
+#
+# 验证 Shannon 高效率低成本特性: prefix cache 命中率按 fixture 和 provider 汇总.
+#
+# cache_rate 公式 (与 crates/shannon-core/src/testing/mock_dsl.rs:698-700 一致):
+#   cache_read / (cache_read + cache_creation + input_tokens) = cache rate
+#
+# total = max(prompt_field, cache_read + cache_creation) 以兼容:
+#   - OpenAI/MiniMax 格式: usage.prompt_tokens 是总 prompt 大小 (含 cache_* + input)
+#   - Anthropic/Zhipu 格式: usage.input_tokens 是非缓存部分, total = input + cache_creation + cache_read
+#
+# 两列 cache_rate:
+#   rate       - 全部 exchanges (含 cold start turn 1)
+#   warm_rate  - 排除 cold start exchanges (cache_read < 100, 启发式阈值)
+#
+# 颜色 (ANSI):  ≥70% green, 40-69% yellow, <40% red
 cache-stats:
-    @echo "Cache statistics from recorded fixtures:"
-    @for f in tests/fixtures/real_tasks/*.jsonl; do \
-        [ -f "$f" ] || continue; \
-        echo ""; \
-        echo "=== $f ==="; \
-        jq -s 'map(select(.cache_read_input_tokens != null)) | {total: length, cache_hits: map(select(.cache_read_input_tokens > 0)) | length, total_created: map(.cache_creation_input_tokens // 0) | add, total_read: map(.cache_read_input_tokens // 0) | add, hit_rate: ((map(select(.cache_read_input_tokens > 0)) | length) / length * 100 | tostring + "%")}' "$f" 2>/dev/null || echo "(no cache data)"; \
-    done
+    @GREEN='\033[32m'; \
+    YELLOW='\033[33m'; \
+    RED='\033[31m'; \
+    NC='\033[0m'; \
+    { \
+        printf "%-58s  %6s  %12s  %12s  %9s  %9s\n" "fixture" "exch" "cache_read" "prompt_tot" "rate" "warm_rate"; \
+        printf -- '-%.0s' {1..126}; echo; \
+        for f in tests/fixtures/real_tasks/*.jsonl; do \
+            [ -f "$f" ] || continue; \
+            base=$(basename "$f"); \
+            jq -rs --arg n "$base" '($n | split("_")[0]) as $provider | ([.[] | ((.cache_read_input_tokens // 0) // 0) as $cr | ((.cache_creation_input_tokens // 0) // 0) as $cc | (try (.response.body | scan("\"(prompt_tokens|input_tokens)\":\\s*([0-9]+)") | last | tonumber) catch 0) as $pf | (if $pf > ($cr + $cc) then $pf else ($pf + $cr + $cc) end) as $total | {cr: $cr, total: $total, is_warm: ($total > 0 and $cr * 20 >= $total)}]) as $stats | ($stats | map(.cr) | add) as $tcr | ($stats | map(.total) | add) as $tp | ($stats | map(select(.is_warm) | .cr) | add // 0) as $wcr | ($stats | map(select(.is_warm) | .total) | add // 0) as $wtp | ($stats | length) as $exch | "\($n)\t\($provider)\t\($exch)\t\($tcr)\t\($tp)\t\($wcr)\t\($wtp)"' "$f" 2>/dev/null; \
+        done; \
+    } | awk -F'\t' -v green="$GREEN" -v yellow="$YELLOW" -v red="$RED" -v nc="$NC" \
+        'NR==1 {print; next} NR==2 {print; next} { \
+            rate = ($5 > 0 ? $4 * 100 / $5 : 0); \
+            warm_rate = ($7 > 0 ? $6 * 100 / $7 : -1); \
+            color = (rate >= 70 ? green : (rate >= 40 ? yellow : red)); \
+            warm_str = (warm_rate < 0 ? "N/A" : sprintf("%5.1f%%", warm_rate)); \
+            warm_color = (warm_rate < 0 ? nc : (warm_rate >= 70 ? green : (warm_rate >= 40 ? yellow : red))); \
+            printf "%-58s  %6s  %12s  %12s  %s%5.1f%%%s  %s%9s%s\n", $1, $3, $4, $5, color, rate, nc, warm_color, warm_str, nc; \
+            files[$2]++; cr[$2]+=$4; tp[$2]+=$5; wcr[$2]+=$6; wtp[$2]+=$7; \
+        } END { \
+            printf "\nBy provider:\n"; \
+            for (p in cr) { \
+                rate = (tp[p] > 0 ? cr[p] * 100 / tp[p] : 0); \
+                warm_rate = (wtp[p] > 0 ? wcr[p] * 100 / wtp[p] : -1); \
+                col = (rate >= 70 ? green : (rate >= 40 ? yellow : red)); \
+                warm_str = (warm_rate < 0 ? "N/A" : sprintf("%5.1f%%", warm_rate)); \
+                warm_color = (warm_rate < 0 ? nc : (warm_rate >= 70 ? green : (warm_rate >= 40 ? yellow : red))); \
+                printf "  %-30s  files=%d  rate=%s%5.1f%%%s  warm_rate=%s%5s%s\n", p, files[p], col, rate, nc, warm_color, warm_str, nc; \
+            } \
+        }'
 
 # ── 内部 helper ──────────────────────────────────────────────────────────────
 
