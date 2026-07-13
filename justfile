@@ -163,10 +163,10 @@ replay-agent:
 cache-stats:
     @echo "Cache statistics from recorded fixtures:"
     @for f in tests/fixtures/real_tasks/*.jsonl; do \
-        [ -f "$$f" ] || continue; \
+        [ -f "$f" ] || continue; \
         echo ""; \
-        echo "=== $$f ==="; \
-        jq -s 'map(select(.cache_read_input_tokens != null)) | {total: length, cache_hits: map(select(.cache_read_input_tokens > 0)) | length, total_created: map(.cache_creation_input_tokens // 0) | add, total_read: map(.cache_read_input_tokens // 0) | add, hit_rate: ((map(select(.cache_read_input_tokens > 0)) | length) / length * 100 | tostring + "%")}' "$$f" 2>/dev/null || echo "(no cache data)"; \
+        echo "=== $f ==="; \
+        jq -s 'map(select(.cache_read_input_tokens != null)) | {total: length, cache_hits: map(select(.cache_read_input_tokens > 0)) | length, total_created: map(.cache_creation_input_tokens // 0) | add, total_read: map(.cache_read_input_tokens // 0) | add, hit_rate: ((map(select(.cache_read_input_tokens > 0)) | length) / length * 100 | tostring + "%")}' "$f" 2>/dev/null || echo "(no cache data)"; \
     done
 
 # ── 内部 helper ──────────────────────────────────────────────────────────────
