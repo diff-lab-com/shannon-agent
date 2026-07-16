@@ -1,0 +1,15 @@
+# Default owners for the whole repo
+*                          @diff-lab-com/maintainers
+
+# Product-specific deep owners
+/crates/shannon-core/                  @diff-lab-com/maintainers
+/crates/shannon-cli/                   @diff-lab-com/maintainers
+/crates/shannon-api-protocol/          @diff-lab-com/maintainers
+/desktop/                              @diff-lab-com/maintainers
+/desktop/ui/                           @diff-lab-com/maintainers
+/gateway/                              @diff-lab-com/maintainers
+/.github/workflows/                    @diff-lab-com/maintainers
+/.github/CODEOWNERS                    @diff-lab-com/maintainers
+/justfile                              @diff-lab-com/maintainers
+/CONTRIBUTING.md                       @diff-lab-com/maintainers
+/MIGRATION.md                          @diff-lab-com/maintainers
