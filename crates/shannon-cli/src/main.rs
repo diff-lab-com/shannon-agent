@@ -3,8 +3,10 @@ use clap::Parser;
 use clap::Subcommand;
 use futures::StreamExt;
 
+mod loop_command;
 mod mcp_install;
 mod notifications;
+mod triggered_command;
 use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
     i18n,

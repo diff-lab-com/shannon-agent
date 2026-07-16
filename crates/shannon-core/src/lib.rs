@@ -98,6 +98,8 @@ pub mod plugin;
 pub mod preference_memory;
 pub mod recording;
 pub mod sandbox;
+pub mod scheduled_budget;
+pub mod scheduled_retry;
 pub mod scheduled_routines;
 pub mod scheduled_runs;
 pub mod scheduled_task_store;
