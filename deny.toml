@@ -1,49 +1,47 @@
-# cargo-deny configuration
-# https://embarkstudios.github.io/cargo-deny/
+# cargo-deny config for the shannon-agent monorepo.
+# ACTIVATED IN PHASE 5 (see ../MIGRATION.md): copy to repo root.
+# `cargo deny check` runs licenses / advisories / bans / sources checks.
+
+[graph]
+all-features = true
 
 [advisories]
-yanked = "warn"
-# Ignore unmaintained/unsound advisories that are widespread in the ecosystem.
-# These are informational; fixing requires major dependency upgrades.
+# Treat unmaintained/yanked crates as failures in CI.
+yanked = "deny"
 ignore = [
-    "RUSTSEC-2021-0145", # atty - unsound, pervasive in Rust CLIs
-    "RUSTSEC-2024-0375", # proc-macro-error - unmaintained
-    "RUSTSEC-2025-0141", # paste - unmaintained
-    "RUSTSEC-2024-0384", # glob - unmaintained
-    "RUSTSEC-2024-0436", # paste - unmaintained (duplicate)
-    "RUSTSEC-2017-0008", # flatten-tool - unmaintained
-    "RUSTSEC-2024-0320", # unsound
-    # quick-xml 0.39.4 (via plist 1.9.0 → syntect 5.3.0 → shannon-ui). Two DoS
-    # advisories: 0194 = quadratic duplicate-attribute check (CPU exhaustion),
-    # 0195 = NsReader unbounded namespace-decl allocation (memory exhaustion).
-    # Neither is exploitable here: shannon-ui consumes syntect ONLY through
-    # ThemeSet::load_defaults() / SyntaxSet::load_defaults_newlines() —
-    # compile-time-embedded assets. No user-supplied or remote .tmTheme/.plist
-    # is ever parsed, so no attacker-controlled XML reaches quick-xml.
-    # Upgrade is blocked upstream: plist 1.9.0 is the latest release and pins
-    # quick-xml = "^0.39"; no plist version uses quick-xml >=0.41. Re-evaluate
-    # when plist/syntect ship a quick-xml >=0.41 build.
-    "RUSTSEC-2026-0194", # quick-xml quad attribute check — non-exploitable (bundled assets only)
-    "RUSTSEC-2026-0195", # quick-xml NsReader DoS — non-exploitable (bundled assets only)
+    # Add advisory IDs to ignore here, with a reason, e.g.:
+    # "RUSTSEC-2026-0000", # reason: no fixed version yet; tracked in #issue
 ]
 
 [licenses]
+# Allow permissive licenses compatible with Apache-2.0.
 allow = [
-    "MIT",
     "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
     "Zlib",
     "CC0-1.0",
-    "MPL-2.0",
-    "Unicode-3.0",        # ICU/Unicode data crates
-    "CDLA-Permissive-2.0", # IBM data licenses
+    "0BSD",
+    "Unlicense",
 ]
+confidence-threshold = 0.93
+# Flag copyleft / restrictive licenses.
+deny = ["GPL-2.0", "GPL-3.0", "AGPL-3.0", "EUPL-1.2", "CC-BY-SA-4.0"]
+
+[licenses.private]
+ignore = true
 
 [bans]
+# Lint duplicated crate versions (intentional duplicates must be whitelisted here).
 multiple-versions = "warn"
-wildcards = "warn"
+wildcards = "deny"
+deny = []
 
 [sources]
 unknown-registry = "deny"

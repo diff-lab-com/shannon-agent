@@ -6,25 +6,22 @@ rust-version = "1.88"
 description = "Shannon — your AI workspace (Tauri desktop app)"
 license = "Apache-2.0"
 authors = ["Shannon Code Contributors"]
-repository = "https://gitea.diff-lab.com/bigdong89/shannon-desktop"
-homepage = "https://gitea.diff-lab.com/bigdong89/shannon-desktop"
+repository = "https://github.com/shannon-agent/shannon-agent"
+homepage = "https://github.com/shannon-agent/shannon-agent"
 
 [features]
 default = ["tauri"]
 tauri = ["dep:tauri", "dep:tauri-build", "dep:tauri-plugin-shell", "dep:tauri-plugin-updater", "dep:tauri-plugin-global-shortcut", "dep:tauri-plugin-window-state", "dep:tauri-plugin-dialog", "dep:tauri-plugin-notification"]
 
 [dependencies]
-# Shannon engine crates — pulled from the shannon-code git repo via subpath.
-# Pinned to v0.5.5@3fb42fde (D1 Phase 3 + api_server P0-b/c/d/e: tool-approval
-# WS roundtrip, cancel-token, session_id, persistence; semver CI cache. Schema
-# key-order drift only vs prior pin d49e7f5 — no type/field change.)
-shannon-core = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-core", rev = "3fb42fde" }
-shannon-engine = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-engine", rev = "3fb42fde" }
-shannon-types = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-types", rev = "3fb42fde" }
-shannon-tools = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-tools", rev = "3fb42fde" }
-shannon-mcp = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-mcp", rev = "3fb42fde" }
-shannon-skills = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-skills", rev = "3fb42fde" }
-shannon-agents = { git = "ssh://git@github.com/shannon-agent/shannon-code.git", subpath = "crates/shannon-agents", rev = "3fb42fde" }
+# Shannon engine crates — provided by the unified workspace (no git, no SSH, no rev, no patch).
+shannon-core   .workspace = true
+shannon-engine .workspace = true
+shannon-types  .workspace = true
+shannon-tools  .workspace = true
+shannon-mcp    .workspace = true
+shannon-skills .workspace = true
+shannon-agents .workspace = true
 
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -87,22 +84,3 @@ dist = false
 productName = "Shannon Code"
 identifier = "com.shannon-code.desktop"
 window = { title = "Shannon Code", width = 1200, height = 800, minWidth = 800, minHeight = 600 }
-
-# ---------------------------------------------------------------------------
-# Dev-only local patches
-# ---------------------------------------------------------------------------
-# While shannon-code has not yet published the APIs desktop depends on
-# (scheduled_worktree, new_cron, parse_cron, install_extension_file), we
-# override the git deps with a side-by-side checkout at ../shannon-code.
-# Anyone cloning desktop standalone (without the sibling checkout) will
-# fall through to the git dep and currently cannot build — that's expected
-# until shannon-code cuts a release containing those APIs.
-[patch."ssh://git@github.com/shannon-agent/shannon-code.git"]
-shannon-core = { path = "../shannon-code/crates/shannon-core" }
-shannon-engine = { path = "../shannon-code/crates/shannon-engine" }
-shannon-types = { path = "../shannon-code/crates/shannon-types" }
-shannon-tools = { path = "../shannon-code/crates/shannon-tools" }
-shannon-mcp = { path = "../shannon-code/crates/shannon-mcp" }
-shannon-skills = { path = "../shannon-code/crates/shannon-skills" }
-shannon-agents = { path = "../shannon-code/crates/shannon-agents" }
-
