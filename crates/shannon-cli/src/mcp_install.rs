@@ -378,6 +378,7 @@ fn build_test_bundle(mcp_json: &serde_json::Value) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use tempfile::TempDir;
 
     fn write_bundle(dir: &Path, json: &serde_json::Value) -> PathBuf {
@@ -388,6 +389,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_to_project_creates_mcp_json() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -412,6 +414,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_preserves_existing_servers() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -439,6 +442,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_overwrites_same_name_server() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -465,6 +469,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_rejects_bundle_without_mcp_json() {
         use std::io::Cursor;
         use zip::ZipWriter;
@@ -486,6 +491,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_rejects_empty_servers() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -498,6 +504,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_multiple_servers_at_once() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -520,6 +527,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_accepts_mcp_json_without_leading_dot() {
         use std::io::Cursor;
         use zip::ZipWriter;
@@ -544,6 +552,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_preserves_non_mcp_keys_in_user_settings() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -575,12 +584,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_scope_variant_names() {
         assert_eq!(format!("{:?}", InstallScope::Project), "Project");
         assert_eq!(format!("{:?}", InstallScope::User), "User");
     }
 
     #[test]
+    #[serial]
     fn install_error_display() {
         let e = InstallError::Zip("boom".into());
         assert_eq!(format!("{e}"), "zip error: boom");
@@ -605,6 +616,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn user_settings_path_uses_shannon_subdir() {
         let tmp = TempDir::new().unwrap();
         // SAFETY: tests run single-threaded; no concurrent env access.
@@ -615,6 +627,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn project_settings_path_is_relative() {
         let path = project_mcp_json_path();
         assert_eq!(path, PathBuf::from(".mcp.json"));
@@ -624,6 +637,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial]
     fn install_rejects_symlink_target() {
         use std::os::unix::fs::symlink;
         let tmp = TempDir::new().unwrap();
@@ -649,6 +663,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_rejects_oversized_manifest() {
         use std::io::Cursor;
         use zip::ZipWriter;
@@ -684,6 +699,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn install_rejects_unparseable_existing_settings() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -707,6 +723,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn preview_returns_servers_and_target_without_writing() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -738,6 +755,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn preview_flags_overwrites() {
         let tmp = TempDir::new().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -768,6 +786,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial]
     fn preview_does_not_reject_symlink_target() {
         use std::os::unix::fs::symlink;
         let tmp = TempDir::new().unwrap();
