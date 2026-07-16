@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { type AddressInfo, WebSocketServer, type WebSocket } from "ws";
 
 import { EngineWsClient } from "../wsClient.js";
-import { type EngineEvent } from "../types.js";
+import { type EngineEvent } from "../runtime.js";
 
 /**
  * The client is exercised against a real `ws` server speaking the engine's

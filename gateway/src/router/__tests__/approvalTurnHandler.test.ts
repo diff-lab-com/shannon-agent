@@ -8,7 +8,7 @@ import {
   type NormalizedInbound,
   type ReplyTarget,
 } from "../../adapters/types.js";
-import { type EngineEvent } from "../../engine/types.js";
+import { type EngineEvent } from "../../engine/runtime.js";
 import { type EngineWsClient } from "../../engine/wsClient.js";
 import { createApprovalTurnHandler } from "../approvalTurnHandler.js";
 import { type TurnContext } from "../types.js";

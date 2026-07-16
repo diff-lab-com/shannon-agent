@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { WebSocket } from "ws";
 
 import { createConsoleLogger } from "../../logger.js";
-import type { EngineEvent } from "../../engine/types.js";
+import type { EngineEvent } from "../../engine/runtime.js";
 import {
   approvalMessage,
   deviceIdFromPublicKey,
