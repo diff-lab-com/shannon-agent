@@ -1,7 +1,11 @@
 node_modules/
 dist/
+build/
+out/
+.turbo/
 coverage/
 *.log
+*.tsbuildinfo
 
 # Local config / secrets — never commit. Credentials live in the OS keyring
 # (see F14 in the architecture doc); the gateway reads them at runtime.
