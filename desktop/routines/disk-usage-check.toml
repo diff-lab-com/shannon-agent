@@ -1,0 +1,11 @@
+id = "disk-usage-check"
+name = "Disk usage check"
+description = "Flag any partition above 80% full twice a day."
+category = "operations"
+trigger_type = "cron"
+cron_expr = "0 8,20 * * *"
+timezone = ""
+prompt = """
+Run df -h across the configured hosts. Flag partitions above 80% utilisation.
+Suggest the largest deletable files for each flagged partition.
+"""

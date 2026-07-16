@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shannon Code</title>
+    <style>
+        :root {
+            --bg-primary: #1a1b26;
+            --bg-secondary: #24283b;
+            --bg-input: #1f2335;
+            --text-primary: #c0caf5;
+            --text-secondary: #a9b1d6;
+            --text-muted: #565f89;
+            --accent: #7aa2f7;
+            --accent-hover: #89b4fa;
+            --border: #3b4261;
+            --user-bg: #2a2f4a;
+            --assistant-bg: #24283b;
+            --tool-bg: #1f2335;
+            --tool-header-bg: #2a2f4a;
+            --success: #9ece6a;
+            --error: #f7768e;
+            --warning: #e0af68;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 16px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .header-title { font-size: 14px; font-weight: 600; color: var(--accent); }
+        .header-status { font-size: 12px; color: var(--text-muted); }
+        .header-actions { display: flex; gap: 8px; }
+        .header-btn {
+            background: none; border: 1px solid var(--border); color: var(--text-secondary);
+            padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+        }
+        .header-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* Provider bar */
+        .provider-bar {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 16px; background: var(--bg-primary);
+            border-bottom: 1px solid var(--border); font-size: 12px;
+        }
+        .provider-bar select {
+            background: var(--bg-input); color: var(--text-primary);
+            border: 1px solid var(--border); border-radius: 4px;
+            padding: 2px 6px; font-size: 12px; cursor: pointer;
+        }
+        .provider-bar .usage { color: var(--text-muted); margin-left: auto; }
+
+        /* Chat area */
+        .chat { flex: 1; overflow-y: auto; padding: 16px; }
+
+        .message {
+            margin-bottom: 12px; padding: 10px 14px; border-radius: 8px;
+            max-width: 85%; line-height: 1.6; font-size: 14px;
+            word-wrap: break-word;
+        }
+        .message.user {
+            background: var(--user-bg); margin-left: auto;
+            border-bottom-right-radius: 2px; white-space: pre-wrap;
+        }
+        .message.assistant {
+            background: var(--assistant-bg); border-bottom-left-radius: 2px;
+        }
+        .message .role-label {
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            color: var(--text-muted); margin-bottom: 4px;
+        }
+
+        /* Markdown content */
+        .md-content h1, .md-content h2, .md-content h3 {
+            margin: 8px 0 4px; color: var(--accent);
+        }
+        .md-content h1 { font-size: 1.3em; }
+        .md-content h2 { font-size: 1.15em; }
+        .md-content h3 { font-size: 1.05em; }
+        .md-content p { margin: 4px 0; }
+        .md-content ul, .md-content ol { margin: 4px 0 4px 20px; }
+        .md-content li { margin: 2px 0; }
+        .md-content code {
+            background: var(--bg-input); padding: 1px 5px; border-radius: 3px;
+            font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9em;
+        }
+        .md-content pre {
+            background: var(--bg-input); border-radius: 6px; padding: 10px;
+            margin: 6px 0; overflow-x: auto; position: relative;
+        }
+        .md-content pre code {
+            background: none; padding: 0; font-size: 0.85em; line-height: 1.5;
+        }
+        .md-content blockquote {
+            border-left: 3px solid var(--accent); margin: 6px 0;
+            padding-left: 10px; color: var(--text-secondary);
+        }
+        .md-content a { color: var(--accent); text-decoration: none; }
+        .md-content a:hover { text-decoration: underline; }
+        .md-content table { border-collapse: collapse; margin: 6px 0; }
+        .md-content th, .md-content td {
+            border: 1px solid var(--border); padding: 4px 8px; font-size: 0.9em;
+        }
+        .md-content th { background: var(--bg-input); }
+        .md-content strong { color: #fff; }
+
+        /* Tool calls */
+        .tool-call {
+            margin: 6px 0; border-radius: 6px; background: var(--tool-bg);
+            border: 1px solid var(--border); overflow: hidden;
+        }
+        .tool-header {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 10px; background: var(--tool-header-bg);
+            cursor: pointer; font-size: 12px; user-select: none;
+        }
+        .tool-header:hover { background: #2f3454; }
+        .tool-icon { color: var(--warning); font-size: 10px; }
+        .tool-name { font-weight: 600; color: var(--accent); }
+        .tool-status { margin-left: auto; font-size: 10px; }
+        .tool-status.running { color: var(--warning); }
+        .tool-status.done { color: var(--success); }
+        .tool-status.error { color: var(--error); }
+        .tool-body {
+            padding: 8px 10px; font-size: 12px; font-family: monospace;
+            white-space: pre-wrap; display: none; max-height: 300px;
+            overflow-y: auto; color: var(--text-secondary);
+        }
+        .tool-call.expanded .tool-body { display: block; }
+        .tool-call.expanded .tool-icon::after { content: '▼'; }
+        .tool-call:not(.expanded) .tool-icon::after { content: '▶'; }
+
+        /* Typing indicator */
+        .typing-indicator {
+            display: none; padding: 10px 14px; color: var(--text-muted); font-size: 13px;
+        }
+        .typing-indicator.active { display: block; }
+        .typing-indicator span { animation: blink 1.4s infinite; }
+        .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+        .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes blink { 0%, 20% { opacity: 0.2; } 50% { opacity: 1; } 80%, 100% { opacity: 0.2; } }
+
+        /* Input area */
+        .input-area {
+            display: flex; align-items: flex-end;
+            padding: 12px 16px; background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+        }
+        .input-area textarea {
+            flex: 1; background: var(--bg-input);
+            border: 1px solid var(--border); border-radius: 8px;
+            padding: 10px 14px; color: var(--text-primary);
+            font-family: inherit; font-size: 14px; resize: none;
+            outline: none; min-height: 42px; max-height: 150px;
+        }
+        .input-area textarea:focus { border-color: var(--accent); }
+        .input-area textarea::placeholder { color: var(--text-muted); }
+        .send-btn {
+            margin-left: 8px; padding: 10px 16px;
+            background: var(--accent); color: var(--bg-primary);
+            border: none; border-radius: 8px; font-weight: 600;
+            font-size: 14px; cursor: pointer; white-space: nowrap;
+        }
+        .send-btn:hover { background: var(--accent-hover); }
+        .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Key hints */
+        .key-hints {
+            font-size: 11px; color: var(--text-muted);
+            padding: 4px 16px 8px; background: var(--bg-secondary);
+        }
+        .key-hints kbd {
+            background: var(--bg-input); border: 1px solid var(--border);
+            border-radius: 3px; padding: 1px 4px; font-family: inherit; font-size: 10px;
+        }
+
+        /* Settings overlay */
+        .settings-overlay {
+            display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5); z-index: 100;
+            align-items: center; justify-content: center;
+        }
+        .settings-overlay.active { display: flex; }
+        .settings-panel {
+            background: var(--bg-secondary); border: 1px solid var(--border);
+            border-radius: 12px; padding: 24px; width: 400px; max-width: 90vw;
+        }
+        .settings-panel h3 { color: var(--accent); margin-bottom: 16px; }
+        .settings-panel label {
+            display: block; font-size: 12px; color: var(--text-muted);
+            margin-bottom: 4px; margin-top: 12px;
+        }
+        .settings-panel input, .settings-panel select {
+            width: 100%; background: var(--bg-input); color: var(--text-primary);
+            border: 1px solid var(--border); border-radius: 6px;
+            padding: 8px 10px; font-size: 13px;
+        }
+        .settings-panel input:focus, .settings-panel select:focus {
+            border-color: var(--accent); outline: none;
+        }
+        .settings-actions {
+            display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;
+        }
+        .settings-actions button {
+            padding: 8px 16px; border-radius: 6px; border: none;
+            font-size: 13px; cursor: pointer;
+        }
+        .btn-save { background: var(--accent); color: var(--bg-primary); font-weight: 600; }
+        .btn-cancel { background: var(--bg-input); color: var(--text-secondary); border: 1px solid var(--border) !important; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-left">
+            <div class="header-title">Shannon Code</div>
+            <div class="header-status" id="status">Ready</div>
+        </div>
+        <div class="header-actions">
+            <button class="header-btn" onclick="clearChat()">Clear</button>
+            <button class="header-btn" onclick="openSettings()">Settings</button>
+        </div>
+    </div>
+
+    <div class="provider-bar">
+        <span>Provider:</span>
+        <select id="provider-select" onchange="onProviderChange()">
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="ollama">Ollama (local)</option>
+            <option value="groq">Groq</option>
+            <option value="mistral">Mistral</option>
+        </select>
+        <span>Model:</span>
+        <select id="model-select"></select>
+        <span class="usage" id="usage-display"></span>
+    </div>
+
+    <div class="chat" id="chat">
+        <div class="message assistant">
+            <div class="role-label">Shannon</div>
+            <div class="md-content">Welcome to Shannon Code. Ask me anything about your codebase.</div>
+        </div>
+    </div>
+    <div class="typing-indicator" id="typing">
+        Thinking<span>.</span><span>.</span><span>.</span>
+    </div>
+
+    <div class="key-hints">
+        <kbd>Enter</kbd> Send &nbsp;
+        <kbd>Shift+Enter</kbd> New line &nbsp;
+        <kbd>Esc</kbd> Cancel
+    </div>
+    <div class="input-area">
+        <textarea id="input" placeholder="Ask Shannon..." rows="1"></textarea>
+        <button class="send-btn" id="send">Send</button>
+    </div>
+
+    <!-- Settings overlay -->
+    <div class="settings-overlay" id="settings-overlay">
+        <div class="settings-panel">
+            <h3>Settings</h3>
+            <label>Provider</label>
+            <select id="settings-provider">
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="ollama">Ollama (local)</option>
+                <option value="groq">Groq</option>
+                <option value="mistral">Mistral</option>
+            </select>
+            <label>API Key</label>
+            <input type="password" id="settings-apikey" placeholder="sk-..." />
+            <label>Base URL (optional)</label>
+            <input type="text" id="settings-baseurl" placeholder="https://api.anthropic.com" />
+            <label>Model</label>
+            <input type="text" id="settings-model" placeholder="claude-sonnet-4-6" />
+            <div class="settings-actions">
+                <button class="btn-cancel" onclick="closeSettings()">Cancel</button>
+                <button class="btn-save" onclick="saveSettings()">Save & Apply</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Markdown + syntax highlighting (bundled locally in Phase 2) -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js" integrity="sha384-OZq0AmH3MhR74wE7veBqyS0StWSY8d4CL9ESqvl7nR7oYFJHF3m5R95K3+SpNXkg" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11/highlight.min.js" integrity="sha384-1Pa26kaV2XOK7THulYkUnE7sHRg6waldawz/JqobreD2JLIj3xIOnplJxGx2sJ7U" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css" />
+
+    <script>
+        const chat = document.getElementById('chat');
+        const input = document.getElementById('input');
+        const sendBtn = document.getElementById('send');
+        const typing = document.getElementById('typing');
+        const statusEl = document.getElementById('status');
+        const usageEl = document.getElementById('usage-display');
+        const providerSelect = document.getElementById('provider-select');
+        const modelSelect = document.getElementById('model-select');
+
+        let isQuerying = false;
+        let activeUnlisteners = [];
+
+        // Configure marked for markdown rendering
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({
+                highlight: function(code, lang) {
+                    if (lang && typeof hljs !== 'undefined' && hljs.getLanguage(lang)) {
+                        try { return hljs.highlight(code, { language: lang }).value; } catch(e) {}
+                    }
+                    return typeof hljs !== 'undefined' ? hljs.highlightAuto(code).value : code;
+                },
+                breaks: true,
+                gfm: true,
+            });
+        }
+
+        function renderMarkdown(text) {
+            if (typeof marked !== 'undefined') {
+                return marked.parse(text);
+            }
+            // Fallback: escape and wrap in <pre>
+            return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+        }
+
+        function addMessage(role, content) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            const label = document.createElement('div');
+            label.className = 'role-label';
+            label.textContent = role === 'user' ? 'You' : 'Shannon';
+            div.appendChild(label);
+            const body = document.createElement('div');
+            body.className = 'md-content';
+            if (role === 'assistant') {
+                body.innerHTML = renderMarkdown(content);
+            } else {
+                body.textContent = content;
+            }
+            div.appendChild(body);
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+            return body;
+        }
+
+        function createStreamingMessage() {
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            const label = document.createElement('div');
+            label.className = 'role-label';
+            label.textContent = 'Shannon';
+            div.appendChild(label);
+            const body = document.createElement('div');
+            body.className = 'md-content';
+            div.appendChild(body);
+            chat.appendChild(div);
+            return body;
+        }
+
+        function updateStreamingMessage(el, text) {
+            el.innerHTML = renderMarkdown(text);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function addToolCall(toolName, toolInput, queryId) {
+            const div = document.createElement('div');
+            div.className = 'tool-call';
+            div.id = `tool-${queryId}-${toolName}`;
+            const header = document.createElement('div');
+            header.className = 'tool-header';
+            header.onclick = () => div.classList.toggle('expanded');
+            header.innerHTML = `<span class="tool-icon"></span><span class="tool-name">${escapeHtml(toolName)}</span><span class="tool-status running">running</span>`;
+            const body = document.createElement('div');
+            body.className = 'tool-body';
+            body.textContent = typeof toolInput === 'string' ? toolInput : JSON.stringify(toolInput, null, 2);
+            div.appendChild(header);
+            div.appendChild(body);
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+            return div;
+        }
+
+        function updateToolResult(div, result, isError) {
+            const status = div.querySelector('.tool-status');
+            if (status) {
+                status.textContent = isError ? 'error' : 'done';
+                status.className = `tool-status ${isError ? 'error' : 'done'}`;
+            }
+            const body = div.querySelector('.tool-body');
+            if (body) {
+                body.textContent += '\n--- Result ---\n' + (typeof result === 'string' ? result : JSON.stringify(result, null, 2));
+            }
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+
+        async function sendMessage() {
+            const text = input.value.trim();
+            if (!text || isQuerying) return;
+
+            input.value = '';
+            input.style.height = 'auto';
+            addMessage('user', text);
+            isQuerying = true;
+            sendBtn.disabled = true;
+            statusEl.textContent = 'Thinking...';
+            typing.classList.add('active');
+
+            try {
+                const { invoke } = window.__TAURI__;
+                const { listen } = window.__TAURI__.event;
+
+                let streamEl = null;
+                let streamText = '';
+                let currentToolDiv = null;
+
+                // Listen for streaming events
+                const unlistenText = await listen('query:text', (e) => {
+                    typing.classList.remove('active');
+                    if (!streamEl) streamEl = createStreamingMessage();
+                    streamText += e.payload.content;
+                    updateStreamingMessage(streamEl, streamText);
+                });
+
+                const unlistenToolStart = await listen('query:tool-start', (e) => {
+                    const p = e.payload;
+                    currentToolDiv = addToolCall(p.tool_name, p.tool_input, p.query_id);
+                });
+
+                const unlistenToolResult = await listen('query:tool-result', (e) => {
+                    const p = e.payload;
+                    if (currentToolDiv) {
+                        updateToolResult(currentToolDiv, p.result, p.is_error);
+                        currentToolDiv = null;
+                    }
+                });
+
+                const unlistenCompleted = await listen('query:completed', () => {
+                    cleanup();
+                    if (!streamEl) {
+                        // No text was received
+                        streamEl = createStreamingMessage();
+                        updateStreamingMessage(streamEl, '(no response)');
+                    }
+                });
+
+                const unlistenFailed = await listen('query:failed', (e) => {
+                    cleanup();
+                    addMessage('assistant', `**Error:** ${e.payload.error}`);
+                });
+
+                const unlistenUsage = await listen('query:usage', (e) => {
+                    const p = e.payload;
+                    usageEl.textContent = `Tokens: ${p.input_tokens}+${p.output_tokens} | Cost: $${p.cost_usd.toFixed(4)}`;
+                });
+
+                activeUnlisteners = [unlistenText, unlistenToolStart, unlistenToolResult, unlistenCompleted, unlistenFailed, unlistenUsage];
+
+                // Send the message (returns immediately with query_id)
+                await invoke('send_message', { message: text });
+
+            } catch (e) {
+                cleanup();
+                addMessage('assistant', `**Error:** ${e}`);
+            }
+        }
+
+        function cleanup() {
+            isQuerying = false;
+            sendBtn.disabled = false;
+            statusEl.textContent = 'Ready';
+            typing.classList.remove('active');
+            activeUnlisteners.forEach(fn => { try { fn(); } catch(e) {} });
+            activeUnlisteners = [];
+        }
+
+        function clearChat() {
+            chat.innerHTML = '';
+            addMessage('assistant', 'Chat cleared. How can I help?');
+        }
+
+        // Settings
+        function openSettings() {
+            document.getElementById('settings-overlay').classList.add('active');
+            // Load current config
+            window.__TAURI__.invoke('get_config').then(cfg => {
+                document.getElementById('settings-provider').value = cfg.provider || 'anthropic';
+                document.getElementById('settings-apikey').value = cfg.api_key === '***' ? '' : (cfg.api_key || '');
+                document.getElementById('settings-baseurl').value = cfg.base_url || '';
+                document.getElementById('settings-model').value = cfg.model || '';
+            }).catch(() => {});
+        }
+
+        function closeSettings() {
+            document.getElementById('settings-overlay').classList.remove('active');
+        }
+
+        async function saveSettings() {
+            const provider = document.getElementById('settings-provider').value;
+            const apiKey = document.getElementById('settings-apikey').value;
+            const baseUrl = document.getElementById('settings-baseurl').value;
+            const model = document.getElementById('settings-model').value;
+
+            try {
+                await window.__TAURI__.invoke('switch_provider', {
+                    request: {
+                        provider,
+                        api_key: apiKey || null,
+                        base_url: baseUrl || null,
+                        model: model || 'default',
+                    }
+                });
+                providerSelect.value = provider;
+                closeSettings();
+                statusEl.textContent = `Switched to ${provider}`;
+            } catch (e) {
+                alert('Error saving settings: ' + e);
+            }
+        }
+
+        // Provider/model selection
+        async function onProviderChange() {
+            const provider = providerSelect.value;
+            try {
+                const models = await window.__TAURI__.invoke('list_models');
+                modelSelect.innerHTML = '';
+                models.forEach(m => {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = m.name;
+                    modelSelect.appendChild(opt);
+                });
+            } catch(e) {
+                modelSelect.innerHTML = '<option>Error loading models</option>';
+            }
+        }
+
+        modelSelect.addEventListener('change', async () => {
+            try {
+                await window.__TAURI__.invoke('configure', {
+                    update: { key: 'model', value: modelSelect.value }
+                });
+            } catch(e) {}
+        });
+
+        // Input handlers
+        sendBtn.addEventListener('click', sendMessage);
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+            if (e.key === 'Escape' && isQuerying) {
+                window.__TAURI__.invoke('cancel_query').catch(() => {});
+                cleanup();
+            }
+        });
+
+        input.addEventListener('input', () => {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 150) + 'px';
+        });
+
+        // Initialize
+        onProviderChange();
+        input.focus();
+    </script>
+</body>
+</html>

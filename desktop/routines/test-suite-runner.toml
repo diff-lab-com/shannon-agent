@@ -1,0 +1,11 @@
+id = "test-suite-runner"
+name = "Test suite runner"
+description = "Run the repo's test suite and post a summary to Slack."
+category = "engineering"
+trigger_type = "cron"
+cron_expr = "0 6 * * *"
+timezone = ""
+prompt = """
+Run the repo's test suite. If any test fails, post a summary of the failures
+to the configured Slack channel via the outbound notification integration.
+"""

@@ -1,0 +1,14 @@
+id = "retro-aggregator"
+name = "Friday retro aggregator"
+description = "Pull the week's PRs, incidents, and ship a retro summary."
+category = "engineering"
+trigger_type = "cron"
+cron_expr = "0 17 * * 5"
+timezone = ""
+prompt = """
+Aggregate this week's work for the team retro:
+- merged PRs
+- incidents opened/closed
+- pending TODOs
+Present as three columns: went well / didn't / next time.
+"""

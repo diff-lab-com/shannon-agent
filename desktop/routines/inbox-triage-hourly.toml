@@ -1,0 +1,10 @@
+id = "inbox-triage-hourly"
+name = "Inbox triage (hourly)"
+description = "Surface the top unread items every hour during the day."
+category = "productivity"
+trigger_type = "interval"
+interval_secs = 3600
+prompt = """
+Pull the most recent unread items from the configured data sources, group them by sender/topic,
+and produce a short triage list with suggested next action.
+"""

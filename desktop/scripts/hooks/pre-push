@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Pre-push gate — runs scripts/local-check.sh (fmt + clippy + test + deny
+# + UI lint + vitest) before any push to main/dev/release branches.
+#
+# Install once per clone:
+#   git config core.hooksPath scripts/hooks
+#   chmod +x scripts/hooks/pre-push
+#
+# Bypass for a single push (e.g. WIP branch):
+#   git push --no-verify
+#
+# Args (from git): <local ref> <local sha> <remote ref> <remote sha>, one
+# line per ref being pushed. We only need to know *any* ref is going to
+# main/dev — run the full gate in that case.
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+protected_branches=(main dev)
+while read -r _ _ remote_ref _; do
+  branch="${remote_ref#refs/heads/}"
+  for protected in "${protected_branches[@]}"; do
+    if [[ "$branch" == "$protected" ]]; then
+      echo "[pre-push] pushing to $branch — running local-check.sh"
+      exec "$repo_root/scripts/local-check.sh"
+    fi
+  done
+done
+
+exit 0

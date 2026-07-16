@@ -1,0 +1,11 @@
+id = "daily-standup-summary"
+name = "Daily standup summary"
+description = "Summarize yesterday's work and open PRs at 09:00 each weekday."
+category = "engineering"
+trigger_type = "cron"
+cron_expr = "0 9 * * 1-5"
+timezone = ""
+prompt = """
+Summarize the work done yesterday. Look at git log for commits merged in the last 24 hours,
+group them by theme, and call out any pull requests still waiting on review.
+"""

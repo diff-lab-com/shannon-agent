@@ -1,0 +1,10 @@
+id = "incident-postmortem-draft"
+name = "Incident postmortem draft"
+description = "On-demand: scaffold a postmortem from recent logs + chat."
+category = "engineering"
+trigger_type = "interval"
+interval_secs = 86400
+prompt = """
+Draft an incident postmortem using the timeline of the last Sev2/Sev1 event.
+Sections: summary, impact, timeline, root cause, action items. Cite log snippets.
+"""

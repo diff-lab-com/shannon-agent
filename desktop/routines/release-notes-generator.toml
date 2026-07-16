@@ -1,0 +1,13 @@
+id = "release-notes-generator"
+name = "Release notes generator"
+description = "Build a changelog from commits since the last tag."
+category = "documentation"
+trigger_type = "cron"
+cron_expr = "0 12 * * 1"
+timezone = ""
+prompt = """
+Generate release notes for the last week:
+- diff commits since the most recent tag
+- group them: features / fixes / chores / docs
+- output Markdown ready for GitHub releases
+"""
