@@ -108,10 +108,7 @@ fn suggest_name_case_sensitivity_tracked() {
         }
     }
     if !mismatched.is_empty() {
-        eprintln!(
-            "TODO: Permission check name mismatch for tools: {:?}",
-            mismatched
-        );
+        eprintln!("TODO: Permission check name mismatch for tools: {mismatched:?}");
         eprintln!("  is_read_only_tool_name uses lowercase, but tools register with PascalCase");
     }
 }
@@ -230,8 +227,7 @@ fn all_approval_modes_have_descriptions() {
         let desc = mode.description();
         assert!(
             !desc.is_empty(),
-            "ApprovalMode {:?} must have a non-empty description",
-            mode
+            "ApprovalMode {mode:?} must have a non-empty description"
         );
     }
 }

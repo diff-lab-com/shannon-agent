@@ -403,7 +403,7 @@ fn ws_server_message_approval_request() {
 #[test]
 fn ws_server_message_session_info_with_protocol_version() {
     let parsed: serde_json::Value =
-        serde_json::to_value(&WsServerMessage::greeting(0, None)).unwrap();
+        serde_json::to_value(WsServerMessage::greeting(0, None)).unwrap();
     assert_eq!(parsed["type"], "session_info");
     assert_eq!(parsed["message_count"], 0);
     assert!(parsed["model"].is_null());

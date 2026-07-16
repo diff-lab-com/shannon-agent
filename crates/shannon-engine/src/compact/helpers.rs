@@ -247,6 +247,7 @@ pub fn tool_result_preview_limit(tool_name: &str) -> usize {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

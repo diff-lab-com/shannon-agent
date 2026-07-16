@@ -6,6 +6,8 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Test infrastructure (public `testing` module uses mockito)
+mockito = "1.6"
 # Workspace dependencies
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -100,7 +102,6 @@ landlock = ["dep:landlock"]
 [dev-dependencies]
 tokio-test = "0.4"
 criterion = "0.5"
-mockito = "1.6"
 tower = "0.5"
 insta = "1.42"
 proptest = { workspace = true }

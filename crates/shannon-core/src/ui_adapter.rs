@@ -306,6 +306,7 @@ impl UiAdapter for NullUiAdapter {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

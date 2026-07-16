@@ -425,6 +425,7 @@ fn dirs_home_dir() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;
@@ -1101,14 +1102,12 @@ mod tests {
         let result = sandbox.validate_for_write(&new_file).await;
         assert!(
             result.is_ok(),
-            "Should allow creating new file in allowed root: {:?}",
-            result
+            "Should allow creating new file in allowed root: {result:?}"
         );
         let canonical = result.unwrap();
         assert!(
             canonical.ends_with("brand_new_file.txt"),
-            "Canonical path should preserve filename: {:?}",
-            canonical
+            "Canonical path should preserve filename: {canonical:?}"
         );
     }
 
@@ -1129,8 +1128,7 @@ mod tests {
         let result = sandbox.validate_for_write(&new_file).await;
         assert!(
             result.is_ok(),
-            "Should allow creating new file in existing subdir: {:?}",
-            result
+            "Should allow creating new file in existing subdir: {result:?}"
         );
     }
 

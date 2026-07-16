@@ -250,6 +250,7 @@ pub fn compact_messages_with_protection(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

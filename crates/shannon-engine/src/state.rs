@@ -585,6 +585,7 @@ fn default_sessions_dir() -> PathBuf {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::api::MessageContent;

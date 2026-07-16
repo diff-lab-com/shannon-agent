@@ -275,6 +275,7 @@ impl ToolResultCache {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -363,8 +364,10 @@ mod tests {
     // 5. TTL expiration
     #[test]
     fn test_cache_ttl_expiration() {
-        let mut config = ToolCacheConfig::default();
-        config.ttl = Duration::from_secs(300);
+        let config = ToolCacheConfig {
+            ttl: Duration::from_secs(300),
+            ..Default::default()
+        };
         let cache = ToolResultCache::new(config);
 
         let input = json!({"file_path": "/tmp/test.rs"});
@@ -456,8 +459,10 @@ mod tests {
     // 9. Max entries eviction (oldest removed when full)
     #[test]
     fn test_cache_max_entries() {
-        let mut config = ToolCacheConfig::default();
-        config.max_entries = 3;
+        let config = ToolCacheConfig {
+            max_entries: 3,
+            ..Default::default()
+        };
         let cache = ToolResultCache::new(config);
 
         // Fill cache to max
@@ -721,9 +726,11 @@ mod tests {
 
     #[test]
     fn test_cache_with_custom_config() {
-        let mut config = ToolCacheConfig::default();
-        config.max_entries = 10;
-        config.ttl = Duration::from_secs(60);
+        let config = ToolCacheConfig {
+            max_entries: 10,
+            ttl: Duration::from_secs(60),
+            ..Default::default()
+        };
         let cache = ToolResultCache::new(config);
 
         let input = json!({"file_path": "/tmp/test.rs"});
@@ -784,8 +791,10 @@ mod tests {
 
     #[test]
     fn test_max_entries_eviction_removes_oldest() {
-        let mut config = ToolCacheConfig::default();
-        config.max_entries = 2;
+        let config = ToolCacheConfig {
+            max_entries: 2,
+            ..Default::default()
+        };
         let cache = ToolResultCache::new(config);
 
         // Insert first (oldest)

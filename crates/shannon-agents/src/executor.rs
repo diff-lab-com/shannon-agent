@@ -205,6 +205,7 @@ pub fn shared_executor(client: LlmClient) -> Arc<dyn AgentExecutor> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -375,6 +375,7 @@ fn default_base_dir() -> PathBuf {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

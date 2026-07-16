@@ -576,6 +576,7 @@ pub async fn get_git_head_version(file_path: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -1048,7 +1049,7 @@ end
             ours in "[a-zA-Z ]{0,20}",
             theirs in "[a-zA-Z ]{0,20}"
         ) {
-            let content = format!("before\n<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> theirs\nafter", ours, theirs);
+            let content = format!("before\n<<<<<<< HEAD\n{ours}\n=======\n{theirs}\n>>>>>>> theirs\nafter");
             let conflicts = parse_conflict_markers(&content);
             assert_eq!(conflicts.len(), 1);
             assert_eq!(conflicts[0].ours_content, ours);

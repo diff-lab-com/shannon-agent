@@ -159,6 +159,7 @@ pub fn execute_in_pty(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -619,6 +619,7 @@ impl RoutineManager {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -1025,7 +1026,7 @@ mod tests {
         // Minute field "0" gets Claude Code jitter (0-90s)
         for _ in 0..50 {
             let j = apply_cron_jitter("0 * * * *");
-            assert!(j >= 0 && j <= 90, "jitter {j} out of [0, 90]");
+            assert!((0..=90).contains(&j), "jitter {j} out of [0, 90]");
         }
     }
 
@@ -1033,7 +1034,7 @@ mod tests {
     fn test_apply_cron_jitter_thirty_minute() {
         for _ in 0..50 {
             let j = apply_cron_jitter("30 * * * *");
-            assert!(j >= 0 && j <= 90);
+            assert!((0..=90).contains(&j));
         }
     }
 

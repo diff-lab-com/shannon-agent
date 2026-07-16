@@ -164,6 +164,7 @@ impl Tool for TeamDeleteTool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::todo::{TodoItem, TodoStatus};

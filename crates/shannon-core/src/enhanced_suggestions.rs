@@ -704,6 +704,7 @@ fn companion_types_file(path: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

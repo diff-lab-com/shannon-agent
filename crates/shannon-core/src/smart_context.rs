@@ -431,6 +431,7 @@ fn read_snippets(paths: &[String], working_dir: &Path) -> Vec<FileSnippet> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;

@@ -1098,6 +1098,7 @@ impl LlmClient {
 pub type ClaudeClient = LlmClient;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -413,6 +413,7 @@ impl RemoteManagedSettings {
 
 /// A mock remote settings provider for testing.
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 pub struct MockRemoteSettingsProvider {
     pub available: bool,
     pub settings: Vec<SettingOverride>,
@@ -421,6 +422,7 @@ pub struct MockRemoteSettingsProvider {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 impl MockRemoteSettingsProvider {
     pub fn new(available: bool, settings: Vec<SettingOverride>) -> Self {
         Self {
@@ -433,6 +435,7 @@ impl MockRemoteSettingsProvider {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 #[async_trait]
 impl RemoteSettingsProvider for MockRemoteSettingsProvider {
     async fn fetch(&self) -> Result<Vec<SettingOverride>, RemoteSettingsError> {
@@ -462,6 +465,7 @@ impl RemoteSettingsProvider for MockRemoteSettingsProvider {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use chrono::Duration;

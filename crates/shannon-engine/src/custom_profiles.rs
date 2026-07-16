@@ -184,6 +184,7 @@ pub enum CustomProfileError {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;

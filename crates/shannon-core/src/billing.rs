@@ -521,6 +521,7 @@ fn days_in_current_month(now: DateTime<Utc>) -> u32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use chrono::Duration;

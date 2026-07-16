@@ -73,6 +73,7 @@ mod manager;
 mod types;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests;
 
 // Re-export all public types to maintain the same public API

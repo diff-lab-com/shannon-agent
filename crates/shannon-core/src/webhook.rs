@@ -591,6 +591,7 @@ fn verify_hmac(payload: &serde_json::Value, secret: &str, signature: &str) -> bo
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

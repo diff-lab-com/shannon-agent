@@ -763,6 +763,7 @@ fn parse_reinforcement_count(s: &str) -> Option<usize> {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

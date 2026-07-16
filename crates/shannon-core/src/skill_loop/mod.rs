@@ -159,6 +159,7 @@ pub use storage::{approve_proposal, delete_proposal, load_proposals, save_propos
 pub use dedup::{find_similar_skill, jaccard_similarity};
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

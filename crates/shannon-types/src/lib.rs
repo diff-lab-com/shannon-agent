@@ -159,7 +159,8 @@ mod tests {
     #[test]
     fn test_shannon_result_ok() {
         let result: ShannonResult<i32> = Ok(42);
-        assert_eq!(result.unwrap(), 42);
+        assert!(result.is_ok());
+        assert_eq!(result.ok(), Some(42));
     }
 
     #[test]

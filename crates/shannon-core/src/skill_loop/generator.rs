@@ -223,6 +223,7 @@ pub(crate) async fn generate_internal(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::skill_loop::types::TaskOutcome;

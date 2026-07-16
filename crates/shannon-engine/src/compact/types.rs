@@ -386,6 +386,7 @@ pub trait Summarizer: Send + Sync {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -452,8 +453,10 @@ mod tests {
 
     #[test]
     fn test_config_validate_zero_output_tokens() {
-        let mut cfg = CompactConfig::default();
-        cfg.max_output_tokens = 0;
+        let cfg = CompactConfig {
+            max_output_tokens: 0,
+            ..Default::default()
+        };
         let err = cfg.validate().unwrap_err();
         assert!(matches!(err, CompactError::InvalidConfig(_)));
         assert!(err.to_string().contains("max_output_tokens"));
@@ -461,37 +464,47 @@ mod tests {
 
     #[test]
     fn test_config_validate_zero_keep_recent() {
-        let mut cfg = CompactConfig::default();
-        cfg.keep_recent_count = 0;
+        let cfg = CompactConfig {
+            keep_recent_count: 0,
+            ..Default::default()
+        };
         let err = cfg.validate().unwrap_err();
         assert!(err.to_string().contains("keep_recent_count"));
     }
 
     #[test]
     fn test_config_validate_threshold_zero() {
-        let mut cfg = CompactConfig::default();
-        cfg.trigger_threshold = 0.0;
+        let cfg = CompactConfig {
+            trigger_threshold: 0.0,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn test_config_validate_threshold_over_one() {
-        let mut cfg = CompactConfig::default();
-        cfg.trigger_threshold = 1.5;
+        let cfg = CompactConfig {
+            trigger_threshold: 1.5,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn test_config_validate_threshold_boundary_one() {
-        let mut cfg = CompactConfig::default();
-        cfg.trigger_threshold = 1.0;
+        let cfg = CompactConfig {
+            trigger_threshold: 1.0,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_ok());
     }
 
     #[test]
     fn test_config_validate_zero_max_context() {
-        let mut cfg = CompactConfig::default();
-        cfg.max_context_tokens = 0;
+        let cfg = CompactConfig {
+            max_context_tokens: 0,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 

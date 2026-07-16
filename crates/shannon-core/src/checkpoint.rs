@@ -521,6 +521,7 @@ impl Default for CheckpointManager {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

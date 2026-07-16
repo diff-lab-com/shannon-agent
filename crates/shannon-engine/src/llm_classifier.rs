@@ -246,6 +246,7 @@ impl LlmPermissionClassifier {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::permission_classifier::PermissionClassifier;

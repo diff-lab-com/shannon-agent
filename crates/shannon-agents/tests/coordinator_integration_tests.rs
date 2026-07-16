@@ -9,8 +9,10 @@ use tempfile::TempDir;
 async fn temp_coordinator() -> (TempDir, AgentCoordinator) {
     let dir = TempDir::new().unwrap();
     let persistence = FilePersistence::with_base_dir(dir.path().to_path_buf());
-    let mut config = CoordinatorConfig::default();
-    config.enable_worktree_isolation = false;
+    let config = CoordinatorConfig {
+        enable_worktree_isolation: false,
+        ..Default::default()
+    };
     let mut coord = AgentCoordinator::new(config).await.unwrap();
     coord.set_persistence(persistence);
     (dir, coord)

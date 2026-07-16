@@ -50,6 +50,7 @@ pub enum PluginError {
 pub type PluginResult<T> = Result<T, PluginError>;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -133,7 +134,8 @@ mod tests {
     #[test]
     fn plugin_result_ok() {
         let result: PluginResult<i32> = Ok(42);
-        assert_eq!(result.unwrap(), 42);
+        assert!(result.is_ok());
+        assert_eq!(result.ok(), Some(42));
     }
 
     #[test]

@@ -170,6 +170,7 @@ impl TeamContext {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use serial_test::serial;

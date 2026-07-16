@@ -302,7 +302,7 @@ fn mount_tool_use(
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_tool_use_sse(tool_id, tool_name, tool_input))
+        .with_body(anthropic_tool_use_sse(tool_id, tool_name, tool_input))
         .expect(1)
         .create()
 }
@@ -315,7 +315,7 @@ fn mount_text_after_tool(server: &mut mockito::ServerGuard, text: &str) -> mocki
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse(text))
+        .with_body(anthropic_text_sse(text))
         .expect(1)
         .create()
 }
@@ -335,7 +335,7 @@ fn mount_text_and_tool_after_tool(
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_and_tool_sse(
+        .with_body(anthropic_text_and_tool_sse(
             text, tool_id, tool_name, tool_input,
         ))
         .expect_at_most(2)
@@ -352,7 +352,7 @@ fn mount_final_text(server: &mut mockito::ServerGuard, text: &str) -> mockito::M
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse(text))
+        .with_body(anthropic_text_sse(text))
         .expect(1)
         .create()
 }
@@ -446,10 +446,9 @@ async fn test_task_bash_command() {
     assert_eq!(json["exit_code"], "success");
 
     // Tool result should contain the echo output somewhere in the response
-    let combined = format!("{stdout}");
     assert!(
-        combined.contains("task-test-output"),
-        "Output should contain tool execution result, got: {combined}"
+        stdout.contains("task-test-output"),
+        "Output should contain tool execution result, got: {stdout}"
     );
 
     cleanup_workspace(&workspace);
@@ -583,7 +582,7 @@ async fn test_task_write_then_verify() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_tool_use_sse("toolu_1", "Write", write_input))
+        .with_body(anthropic_tool_use_sse("toolu_1", "Write", write_input))
         .expect(1)
         .create();
 
@@ -595,7 +594,7 @@ async fn test_task_write_then_verify() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_and_tool_sse(
+        .with_body(anthropic_text_and_tool_sse(
             "File written. Verifying...",
             "toolu_2",
             "Bash",
@@ -609,7 +608,7 @@ async fn test_task_write_then_verify() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse("Verified: file contains status ok."))
+        .with_body(anthropic_text_sse("Verified: file contains status ok."))
         .expect(1)
         .create();
 
@@ -636,7 +635,7 @@ async fn test_task_write_then_verify() {
 
     let tool_calls = json["tool_calls"].as_array().expect("tool_calls array");
     assert!(
-        tool_calls.len() >= 1,
+        !tool_calls.is_empty(),
         "Should have at least 1 tool call, got: {tool_calls:?}"
     );
 
@@ -694,7 +693,7 @@ async fn test_task_text_only_no_tools() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse("The answer is 42."))
+        .with_body(anthropic_text_sse("The answer is 42."))
         .expect(1)
         .create();
 
@@ -751,7 +750,7 @@ async fn test_task_read_then_edit() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_tool_use_sse(
+        .with_body(anthropic_tool_use_sse(
             "toolu_2",
             "Edit",
             serde_json::json!({
@@ -915,7 +914,7 @@ async fn test_task_grep_then_read() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_tool_use_sse(
+        .with_body(anthropic_tool_use_sse(
             "toolu_2",
             "Read",
             serde_json::json!({ "file_path": "mod.rs" }),
@@ -983,7 +982,7 @@ async fn test_task_multi_file_edit() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_tool_use_sse(
+        .with_body(anthropic_tool_use_sse(
             "toolu_2",
             "Edit",
             serde_json::json!({
@@ -1041,7 +1040,7 @@ async fn scenario_anthropic_text_only() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse("Hello from Anthropic!"))
+        .with_body(anthropic_text_sse("Hello from Anthropic!"))
         .expect(1)
         .create();
 
@@ -1074,7 +1073,7 @@ async fn scenario_openai_text_only() {
         .mock("POST", "/v1/chat/completions")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&openai_text_sse("Hello from OpenAI!"))
+        .with_body(openai_text_sse("Hello from OpenAI!"))
         .expect(1)
         .create();
 
@@ -1104,7 +1103,7 @@ async fn scenario_ollama_text_only() {
         .mock("POST", "/api/chat")
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(&ollama_text_ndjson("Hello from Ollama!"))
+        .with_body(ollama_text_ndjson("Hello from Ollama!"))
         .expect(1)
         .create();
 
@@ -1144,7 +1143,7 @@ async fn scenario_anthropic_write_tool() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_tool_use_sse("toolu_1", "Write", write_input))
+        .with_body(anthropic_tool_use_sse("toolu_1", "Write", write_input))
         .expect(1)
         .create();
 
@@ -1154,7 +1153,7 @@ async fn scenario_anthropic_write_tool() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse("File written."))
+        .with_body(anthropic_text_sse("File written."))
         .expect(1)
         .create();
 
@@ -1194,7 +1193,7 @@ async fn scenario_openai_write_tool() {
         .mock("POST", "/v1/chat/completions")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&openai_tool_use_sse("call_1", "Write", write_input))
+        .with_body(openai_tool_use_sse("call_1", "Write", write_input))
         .expect(1)
         .create();
 
@@ -1204,7 +1203,7 @@ async fn scenario_openai_write_tool() {
         .match_body(Matcher::Regex(r#"tool"#.to_string()))
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&openai_text_sse("File written successfully."))
+        .with_body(openai_text_sse("File written successfully."))
         .expect(1)
         .create();
 
@@ -1244,7 +1243,7 @@ async fn scenario_ollama_write_tool() {
         .mock("POST", "/api/chat")
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(&ollama_tool_use_ndjson("Write", write_input))
+        .with_body(ollama_tool_use_ndjson("Write", write_input))
         .expect(1)
         .create();
 
@@ -1254,7 +1253,7 @@ async fn scenario_ollama_write_tool() {
         .match_body(Matcher::Regex(r#"tool"#.to_string()))
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(&ollama_text_ndjson("File written."))
+        .with_body(ollama_text_ndjson("File written."))
         .expect(1)
         .create();
 
@@ -1295,7 +1294,7 @@ async fn scenario_anthropic_bash_tool() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_tool_use_sse("toolu_1", "Bash", bash_input))
+        .with_body(anthropic_tool_use_sse("toolu_1", "Bash", bash_input))
         .expect(1)
         .create();
 
@@ -1305,7 +1304,7 @@ async fn scenario_anthropic_bash_tool() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse("Command executed."))
+        .with_body(anthropic_text_sse("Command executed."))
         .expect(1)
         .create();
 
@@ -1343,7 +1342,7 @@ async fn scenario_openai_bash_tool() {
         .mock("POST", "/v1/chat/completions")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&openai_tool_use_sse("call_1", "Bash", bash_input))
+        .with_body(openai_tool_use_sse("call_1", "Bash", bash_input))
         .expect(1)
         .create();
 
@@ -1352,7 +1351,7 @@ async fn scenario_openai_bash_tool() {
         .match_body(Matcher::Regex(r#"tool"#.to_string()))
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&openai_text_sse("Command completed."))
+        .with_body(openai_text_sse("Command completed."))
         .expect(1)
         .create();
 
@@ -1390,7 +1389,7 @@ async fn scenario_ollama_bash_tool() {
         .mock("POST", "/api/chat")
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(&ollama_tool_use_ndjson("Bash", bash_input))
+        .with_body(ollama_tool_use_ndjson("Bash", bash_input))
         .expect(1)
         .create();
 
@@ -1399,7 +1398,7 @@ async fn scenario_ollama_bash_tool() {
         .match_body(Matcher::Regex(r#"tool"#.to_string()))
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(&ollama_text_ndjson("Command ran."))
+        .with_body(ollama_text_ndjson("Command ran."))
         .expect(1)
         .create();
 
@@ -1445,7 +1444,7 @@ async fn scenario_anthropic_read_file() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_tool_use_sse("toolu_1", "Read", read_input))
+        .with_body(anthropic_tool_use_sse("toolu_1", "Read", read_input))
         .expect(1)
         .create();
 
@@ -1455,7 +1454,7 @@ async fn scenario_anthropic_read_file() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse("The file contains a main function."))
+        .with_body(anthropic_text_sse("The file contains a main function."))
         .expect(1)
         .create();
 
@@ -1498,7 +1497,7 @@ async fn scenario_openai_read_file() {
         .mock("POST", "/v1/chat/completions")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&openai_tool_use_sse("call_0", "Read", read_input))
+        .with_body(openai_tool_use_sse("call_0", "Read", read_input))
         .expect(1)
         .create();
 
@@ -1507,7 +1506,7 @@ async fn scenario_openai_read_file() {
         .match_body(Matcher::Regex(r#"tool"#.to_string()))
         .with_status(200)
         .with_header("content-type", "text/event-stream")
-        .with_body(&openai_text_sse("The file contains a main function."))
+        .with_body(openai_text_sse("The file contains a main function."))
         .expect(1)
         .create();
 
@@ -1549,7 +1548,7 @@ async fn scenario_ollama_read_file() {
         .mock("POST", "/api/chat")
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(&ollama_tool_use_ndjson("Read", read_input))
+        .with_body(ollama_tool_use_ndjson("Read", read_input))
         .expect(1)
         .create();
 
@@ -1558,7 +1557,7 @@ async fn scenario_ollama_read_file() {
         .match_body(Matcher::Regex(r#"tool"#.to_string()))
         .with_status(200)
         .with_header("content-type", "application/x-ndjson")
-        .with_body(&ollama_text_ndjson("The file contains a main function."))
+        .with_body(ollama_text_ndjson("The file contains a main function."))
         .expect(1)
         .create();
 
@@ -1606,7 +1605,7 @@ async fn scenario_anthropic_multi_tool() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_multi_tool_sse(
+        .with_body(anthropic_multi_tool_sse(
             "toolu_1",
             "Write",
             write_input,
@@ -1623,7 +1622,7 @@ async fn scenario_anthropic_multi_tool() {
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_header("anthropic-version", "2023-06-01")
-        .with_body(&anthropic_text_sse("Both operations completed."))
+        .with_body(anthropic_text_sse("Both operations completed."))
         .expect(1)
         .create();
 

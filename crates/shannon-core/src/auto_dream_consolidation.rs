@@ -424,6 +424,7 @@ pub fn should_consolidate(memory_count: usize, config: &ConsolidationConfig) -> 
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::memory::MemoryEntry;

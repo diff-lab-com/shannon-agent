@@ -768,6 +768,7 @@ pub async fn execute(input: EditInput) -> Result<ToolOutput, ToolError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 #[allow(clippy::await_holding_lock)]
 mod tests {
     use super::*;

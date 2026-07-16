@@ -534,6 +534,7 @@ impl Tool for NotebookEditTool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

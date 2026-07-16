@@ -795,6 +795,7 @@ fn audit_shell_command(command: &str) {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use serde_json::json;

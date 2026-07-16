@@ -32,6 +32,7 @@ pub use client::{ClaudeClient, LlmClient};
 
 // Tests from the original flat module
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::collections::HashMap;

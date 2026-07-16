@@ -71,6 +71,7 @@ pub async fn execute(input: WriteInput) -> Result<ToolOutput, ToolError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

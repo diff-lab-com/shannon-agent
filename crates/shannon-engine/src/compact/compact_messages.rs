@@ -237,6 +237,7 @@ pub fn compact_messages(
 /// Returns true if all tool_use blocks have matching tool_result blocks
 /// and all tool_result blocks have matching tool_use blocks.
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 fn validate_tool_pairs(messages: &[crate::api::Message]) -> bool {
     use std::collections::HashSet;
 
@@ -525,6 +526,7 @@ fn compact_prioritize_code(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::api::{ContentBlock, Message, MessageContent, ToolResultContent};

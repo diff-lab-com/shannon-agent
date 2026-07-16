@@ -868,6 +868,7 @@ fn has_uncommitted_changes(path: &Path) -> Result<bool, ToolError> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

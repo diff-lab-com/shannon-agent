@@ -702,6 +702,7 @@ impl Default for AnalyticsStore {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::collections::HashSet;

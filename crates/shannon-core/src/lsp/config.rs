@@ -123,6 +123,7 @@ pub mod known_servers {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

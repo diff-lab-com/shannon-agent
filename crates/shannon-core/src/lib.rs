@@ -357,10 +357,12 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::const_is_empty)]
     fn test_version() {
         assert!(!VERSION.is_empty());
     }

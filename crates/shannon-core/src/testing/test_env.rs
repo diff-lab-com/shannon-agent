@@ -12,7 +12,7 @@ use shannon_engine::permissions::ApprovalMode;
 use shannon_engine::state::StateManager;
 
 use crate::testing::mock_dsl::MockResponse;
-#[cfg(test)]
+#[allow(unused_imports)] // only used inside cfg(test) test bodies
 use crate::tools::ToolOutput;
 
 /// A fully wired test environment for Shannon integration tests.
@@ -233,6 +233,7 @@ impl TestShannon {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use async_trait::async_trait;

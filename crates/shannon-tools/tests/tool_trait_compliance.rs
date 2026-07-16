@@ -40,8 +40,7 @@ fn all_tools_have_nonempty_descriptions() {
         let tool = registry.get(&name).unwrap();
         assert!(
             !tool.description().is_empty(),
-            "Tool '{}' must have a non-empty description",
-            name
+            "Tool '{name}' must have a non-empty description"
         );
     }
 }
@@ -54,14 +53,12 @@ fn all_tools_return_valid_json_schema() {
         let schema = tool.input_schema();
         assert!(
             schema.is_object(),
-            "Tool '{}' input_schema must return a JSON object, got: {schema}",
-            name
+            "Tool '{name}' input_schema must return a JSON object, got: {schema}"
         );
         // Must have "type" field
         assert!(
             schema.get("type").is_some(),
-            "Tool '{}' input_schema must have a 'type' field",
-            name
+            "Tool '{name}' input_schema must have a 'type' field"
         );
     }
 }
@@ -73,13 +70,11 @@ fn all_tool_names_match_known_conventions() {
         // Names must be non-empty alphanumeric (with underscores), no spaces
         assert!(
             name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
-            "Tool name '{}' must only contain alphanumeric chars and underscores",
-            name
+            "Tool name '{name}' must only contain alphanumeric chars and underscores"
         );
         assert!(
             !name.starts_with('_'),
-            "Tool name '{}' should not start with underscore",
-            name
+            "Tool name '{name}' should not start with underscore"
         );
     }
 }
@@ -104,8 +99,7 @@ fn read_only_tools_are_concurrency_safe() {
         if tool.is_read_only() {
             assert!(
                 tool.is_concurrency_safe(),
-                "Read-only tool '{}' must be concurrency-safe",
-                name
+                "Read-only tool '{name}' must be concurrency-safe"
             );
         }
     }
@@ -119,8 +113,7 @@ fn destructive_tools_are_not_read_only() {
         if tool.is_destructive() {
             assert!(
                 !tool.is_read_only(),
-                "Destructive tool '{}' must not be read-only",
-                name
+                "Destructive tool '{name}' must not be read-only"
             );
         }
     }
@@ -134,8 +127,7 @@ fn destructive_tools_are_not_concurrency_safe() {
         if tool.is_destructive() {
             assert!(
                 !tool.is_concurrency_safe(),
-                "Destructive tool '{}' must not be concurrency-safe",
-                name
+                "Destructive tool '{name}' must not be concurrency-safe"
             );
         }
     }
@@ -162,10 +154,7 @@ fn destructive_tools_are_correctly_marked() {
     // Log which tools are missing the destructive flag (not a hard failure yet,
     // but tracks the gap). Once all tools are fixed, change to assert.
     if !not_marked.is_empty() {
-        eprintln!(
-            "WARNING: Tools not marked destructive (should be fixed): {:?}",
-            not_marked
-        );
+        eprintln!("WARNING: Tools not marked destructive (should be fixed): {not_marked:?}");
     }
     // At least Bash should always be registered
     assert!(
@@ -190,10 +179,7 @@ fn destructive_flag_coverage_tracked() {
         }
     }
     if !unmarked.is_empty() {
-        eprintln!(
-            "TODO: These tools should declare is_destructive() = true: {:?}",
-            unmarked
-        );
+        eprintln!("TODO: These tools should declare is_destructive() = true: {unmarked:?}");
     }
     // This test always passes — it's a tracking test, not a hard assertion.
     // Hard assertions should be added once the tools are fixed.
@@ -242,7 +228,7 @@ async fn tools_do_not_panic_on_empty_json_input() {
             Ok(Ok(_)) => { /* tool accepted empty input — fine */ }
             Ok(Err(_)) => { /* tool rejected empty input — fine */ }
             Err(_) => {
-                panic!("Tool '{}' panicked on empty JSON input", name);
+                panic!("Tool '{name}' panicked on empty JSON input");
             }
         }
     }
