@@ -5,6 +5,12 @@ on:
   pull_request:
     branches: [main, dev]
 
+# Cancel in-progress runs for the same ref when a new commit is pushed.
+# Keeps CI queue short on active branches (e.g. dev) without affecting main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
