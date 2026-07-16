@@ -1,0 +1,48 @@
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "rust"
+
+  - package-ecosystem: "npm"
+    directory: "/desktop/ui"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(ui)"
+    labels:
+      - "dependencies"
+      - "typescript"
+
+  - package-ecosystem: "npm"
+    directory: "/gateway"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(gateway)"
+    labels:
+      - "dependencies"
+      - "typescript"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        applies-to: version-updates
+    labels:
+      - "dependencies"
+      - "ci"
