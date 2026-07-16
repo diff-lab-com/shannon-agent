@@ -356,6 +356,7 @@ fn shannon_replay(
 
 // ── Live Ollama queries ──────────────────────────────────────────────────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -384,6 +385,7 @@ fn test_live_ollama_simple_query() {
     assert!(!response.is_empty(), "Response should not be empty");
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -402,6 +404,7 @@ fn test_live_ollama_streaming() {
         .success();
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -419,6 +422,7 @@ fn test_live_ollama_exit_code_success() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -444,6 +448,7 @@ fn test_live_ollama_model_not_found() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -482,6 +487,7 @@ fn test_live_headless_json_structure() {
 
 // ── Live Ollama context and multi-turn ────────────────────────────────────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -510,6 +516,7 @@ fn test_live_ollama_prompt_preserved() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -536,6 +543,7 @@ fn test_live_ollama_json_stream_events() {
     assert!(has_done, "Should have 'done' event");
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -556,6 +564,7 @@ fn test_live_ollama_duration_positive() {
     assert!(duration > 0, "duration_ms should be > 0, got: {duration}");
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -583,6 +592,7 @@ fn test_live_ollama_nonempty_response() {
 
 // ── Live DeepSeek queries (optional — requires SHANNON_DEEPSEEK_API_KEY) ──
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires SHANNON_DEEPSEEK_API_KEY and SHANNON_RUN_LIVE_TESTS=1
@@ -617,6 +627,7 @@ fn test_live_deepseek_simple_query() {
     assert!(!json["response"].as_str().unwrap_or("").is_empty());
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires SHANNON_DEEPSEEK_API_KEY and SHANNON_RUN_LIVE_TESTS=1
@@ -636,6 +647,7 @@ fn test_live_deepseek_streaming() {
         .success();
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires SHANNON_DEEPSEEK_API_KEY and SHANNON_RUN_LIVE_TESTS=1
@@ -675,6 +687,7 @@ fn test_live_deepseek_json_structure() {
 
 // ── Live context integrity ────────────────────────────────────────────────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -704,6 +717,7 @@ fn test_live_ollama_context_relevance() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore] // Requires running Ollama instance with SHANNON_RUN_LIVE_TESTS=1
@@ -737,6 +751,7 @@ fn test_live_ollama_tool_calls_empty_by_default() {
 
 // ── Recording tests (require API key + SHANNON_RECORD_DIR, #[ignore]) ────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -768,6 +783,7 @@ fn record_task_create_file() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -793,6 +809,7 @@ fn record_task_bash_command() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -825,6 +842,7 @@ fn record_task_read_and_edit() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -855,6 +873,7 @@ fn record_task_code_search() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -888,6 +907,7 @@ fn record_task_multi_turn() {
 
 // ── Tier 1: Core tool chain recordings ────────────────────────────────────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -924,6 +944,7 @@ fn record_task_edit_precise_match() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -955,6 +976,7 @@ fn record_task_search_read_edit() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -975,6 +997,7 @@ fn record_task_bash_verify() {
         .success();
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1008,6 +1031,7 @@ fn record_task_error_recovery() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1045,6 +1069,7 @@ fn record_task_glob_pattern() {
 
 // ── Tier 2: Multi-file / complex task recordings ──────────────────────────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1094,6 +1119,7 @@ fn record_task_multi_file_edit() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1123,6 +1149,7 @@ fn record_task_refactor_rename() {
         .success();
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1145,6 +1172,7 @@ fn record_task_create_with_tests() {
 
 // ── Tier 3: Edge case recordings ──────────────────────────────────────────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1180,6 +1208,7 @@ fn record_task_long_file_handling() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1212,6 +1241,7 @@ fn record_task_json_schema_output() {
 
 // ── Additional recording scenarios ─────────────────────────────────────────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1238,6 +1268,7 @@ fn record_task_tool_error_recovery() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1263,6 +1294,7 @@ fn record_task_code_generation() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1306,6 +1338,7 @@ fn record_task_nested_directory_write() {
     }
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1340,6 +1373,7 @@ fn record_task_overwrite_existing_file() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1368,6 +1402,7 @@ fn record_task_context_compaction() {
         .success();
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1402,6 +1437,7 @@ fn record_task_multi_step_reasoning() {
 
 // ── Tier 4: Core feature recordings ────────────────────────────────────────
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1476,6 +1512,7 @@ fn record_task_session_resume() {
     }
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1512,6 +1549,7 @@ fn record_task_claude_md_context() {
         "lib.rs should have doc comments per CLAUDE.md rules, got: {content}"
     );
 }
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1559,6 +1597,7 @@ fn record_task_delete_file() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1598,6 +1637,7 @@ fn record_task_ndjson_streaming() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1633,6 +1673,7 @@ fn record_task_multi_provider() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1660,6 +1701,7 @@ fn record_task_permission_request() {
         .success();
 }
 
+#[serial]
 #[test]
 #[serial]
 #[ignore]
@@ -1746,6 +1788,7 @@ fn record_task_large_workspace() {
 
 // ── Replay tests (no API key needed, use recorded fixtures) ───────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn replay_fixtures_load_successfully() {
@@ -1798,6 +1841,7 @@ fn validate_session(path: &std::path::Path) -> Result<String, String> {
     Ok(name)
 }
 
+#[serial]
 #[test]
 #[serial]
 fn replay_each_recorded_session() {
@@ -1834,6 +1878,7 @@ fn replay_each_recorded_session() {
     );
 }
 
+#[serial]
 #[test]
 #[serial]
 fn replay_workspace_creation_works() {
@@ -1875,6 +1920,7 @@ const REPLAY_MODEL: &str = "MiniMax-M3";
 // GitHub Actions runner env (see ADR 0003 Phase 1 落地回顾). Developers
 // run locally to validate the harness; CI gets the structural replay
 // tests (replay_*) instead, which don't drive the agent.
+#[serial]
 #[test]
 #[ignore = "local-only VCR harness; run via `just replay-agent`"]
 #[serial]
@@ -1916,6 +1962,7 @@ fn replay_agent_create_file() {
 // Local-only VCR harness test. Runs via `just replay-agent`. #[ignore]d
 // for CI by design — exact-match VCR replay proved too brittle for the
 // GitHub Actions runner env (see ADR 0003 Phase 1 落地回顾).
+#[serial]
 #[test]
 #[ignore = "local-only VCR harness; run via `just replay-agent`"]
 #[serial]
@@ -1952,6 +1999,7 @@ fn replay_agent_bash_command() {
 // Local-only VCR harness test. Runs via `just replay-agent`. #[ignore]d
 // for CI by design — exact-match VCR replay proved too brittle for the
 // GitHub Actions runner env (see ADR 0003 Phase 1 落地回顾).
+#[serial]
 #[test]
 #[ignore = "local-only VCR harness; run via `just replay-agent`"]
 #[serial]
@@ -1994,6 +2042,7 @@ fn replay_agent_read_and_edit() {
 // Local-only VCR harness test. Runs via `just replay-agent`. #[ignore]d
 // for CI by design — exact-match VCR replay proved too brittle for the
 // GitHub Actions runner env (see ADR 0003 Phase 1 落地回顾).
+#[serial]
 #[test]
 #[ignore = "local-only VCR harness; run via `just replay-agent`"]
 #[serial]
@@ -2046,6 +2095,7 @@ fn replay_agent_overwrite_existing_file() {
 
 // ── Unit tests for test helpers ───────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_write_file_creates_nested_dirs() {
     let temp = tempfile::tempdir().unwrap();
@@ -2055,6 +2105,7 @@ fn test_write_file_creates_nested_dirs() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "fn main() {}");
 }
 
+#[serial]
 #[test]
 fn test_write_file_flat_path() {
     let temp = tempfile::tempdir().unwrap();
@@ -2064,6 +2115,7 @@ fn test_write_file_flat_path() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "# hello");
 }
 
+#[serial]
 #[test]
 fn test_write_file_content_roundtrip() {
     let temp = tempfile::tempdir().unwrap();
@@ -2073,6 +2125,7 @@ fn test_write_file_content_roundtrip() {
     assert_eq!(fs::read_to_string(&path).unwrap(), content);
 }
 
+#[serial]
 #[test]
 fn test_write_file_empty_content() {
     let temp = tempfile::tempdir().unwrap();
@@ -2082,6 +2135,7 @@ fn test_write_file_empty_content() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "");
 }
 
+#[serial]
 #[test]
 fn test_write_file_overwrites_existing() {
     let temp = tempfile::tempdir().unwrap();
@@ -2091,6 +2145,7 @@ fn test_write_file_overwrites_existing() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "second");
 }
 
+#[serial]
 #[test]
 fn test_provider_key_env_all_providers() {
     assert_eq!(provider_key_env("zhipu"), Some("ZHIPU_API_KEY"));
@@ -2108,6 +2163,7 @@ fn test_provider_key_env_all_providers() {
     assert_eq!(provider_key_env("qwen"), Some("DASHSCOPE_API_KEY"));
 }
 
+#[serial]
 #[test]
 fn test_provider_key_env_unknown_returns_none() {
     assert_eq!(provider_key_env("anthropic"), None);
@@ -2116,6 +2172,7 @@ fn test_provider_key_env_unknown_returns_none() {
     assert_eq!(provider_key_env(""), None);
 }
 
+#[serial]
 #[test]
 fn test_record_provider_default() {
     // Without SHANNON_RECORD_PROVIDER set, defaults to "anthropic"
@@ -2125,6 +2182,7 @@ fn test_record_provider_default() {
     assert!(!provider.is_empty());
 }
 
+#[serial]
 #[test]
 fn test_create_workspace_unique_paths() {
     let ws1 = create_workspace("test_a");
@@ -2134,6 +2192,7 @@ fn test_create_workspace_unique_paths() {
     assert!(ws2.path().exists());
 }
 
+#[serial]
 #[test]
 fn test_create_workspace_subdir_exists() {
     let ws = create_workspace("my_test");
@@ -2142,6 +2201,7 @@ fn test_create_workspace_subdir_exists() {
     assert!(subdir.is_dir());
 }
 
+#[serial]
 #[test]
 fn test_all_nested_writes_use_helper() {
     // Self-check: ensure no fs::write with nested paths (src/foo, bar/baz)
@@ -2174,7 +2234,9 @@ fn test_all_nested_writes_use_helper() {
 #[cfg(test)]
 mod rewrite_tests {
     use super::rewrite_path_suffix;
+    use serial_test::serial;
 
+    #[serial]
     #[test]
     fn rewrite_common_prefix_normal_ci_case() {
         // Recorded CWD and replay CWD share the `/tmp/.tmp` prefix; only the
@@ -2190,6 +2252,7 @@ mod rewrite_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn rewrite_different_prefix_length_local_without_dot_tmp() {
         // Local development without `tempfile` may produce a different prefix
@@ -2207,6 +2270,7 @@ mod rewrite_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn rewrite_sse_fragmentation_reassembles_path() {
         // When a tool-call argument streams across multiple SSE delta
@@ -2229,6 +2293,7 @@ mod rewrite_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn rewrite_noop_when_suffix_is_empty() {
         // Identical CWDs ⇒ common_len == len(recorded_cwd) ⇒ recorded_suffix

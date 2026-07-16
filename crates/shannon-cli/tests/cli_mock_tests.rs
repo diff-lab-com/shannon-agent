@@ -365,7 +365,6 @@ fn mount_final_text(server: &mut mockito::ServerGuard, text: &str) -> mockito::M
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_write_file() {
     let workspace = create_workspace("write");
     let file_path = workspace.join("hello.txt");
@@ -420,7 +419,6 @@ async fn test_task_write_file() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_bash_command() {
     let workspace = create_workspace("bash");
 
@@ -460,7 +458,6 @@ async fn test_task_bash_command() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_edit_file() {
     let workspace = create_workspace("edit");
     let file_path = workspace.join("config.toml");
@@ -511,7 +508,6 @@ async fn test_task_edit_file() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_edit_then_verify_multi_step() {
     let workspace = create_workspace("multi");
     let file_path = workspace.join("config.toml");
@@ -567,7 +563,6 @@ async fn test_task_edit_then_verify_multi_step() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_write_then_verify() {
     let workspace = create_workspace("write_verify");
     let file_path = workspace.join("output.txt");
@@ -651,7 +646,6 @@ async fn test_task_write_then_verify() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_bash_error_recovery() {
     let workspace = create_workspace("bash_error");
 
@@ -689,7 +683,6 @@ async fn test_task_bash_error_recovery() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_text_only_no_tools() {
     let workspace = create_workspace("text_only");
 
@@ -734,7 +727,6 @@ async fn test_task_text_only_no_tools() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_read_then_edit() {
     let workspace = create_workspace("read_edit");
     let file_path = workspace.join("app.rs");
@@ -811,7 +803,6 @@ async fn test_task_read_then_edit() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_glob_files() {
     let workspace = create_workspace("glob");
 
@@ -854,7 +845,6 @@ async fn test_task_glob_files() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_grep_search() {
     let workspace = create_workspace("grep");
 
@@ -899,7 +889,6 @@ async fn test_task_grep_search() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_grep_then_read() {
     let workspace = create_workspace("grep_read");
 
@@ -967,7 +956,6 @@ async fn test_task_grep_then_read() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn test_task_multi_file_edit() {
     let workspace = create_workspace("multi_edit");
 
@@ -1043,7 +1031,6 @@ async fn test_task_multi_file_edit() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_anthropic_text_only() {
     let workspace = create_workspace("prov_a_text");
     let mut server = mockito::Server::new_async().await;
@@ -1078,7 +1065,6 @@ async fn scenario_anthropic_text_only() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_openai_text_only() {
     let workspace = create_workspace("prov_o_text");
     let mut server = mockito::Server::new_async().await;
@@ -1109,7 +1095,6 @@ async fn scenario_openai_text_only() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_ollama_text_only() {
     let workspace = create_workspace("prov_ol_text");
     let mut server = mockito::Server::new_async().await;
@@ -1144,7 +1129,6 @@ async fn scenario_ollama_text_only() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_anthropic_write_tool() {
     let workspace = create_workspace("prov_a_write");
     let file_path = workspace.join("out.txt");
@@ -1195,7 +1179,6 @@ async fn scenario_anthropic_write_tool() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_openai_write_tool() {
     let workspace = create_workspace("prov_o_write");
     let file_path = workspace.join("out.txt");
@@ -1246,7 +1229,6 @@ async fn scenario_openai_write_tool() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_ollama_write_tool() {
     let workspace = create_workspace("prov_ol_write");
     let file_path = workspace.join("out.txt");
@@ -1301,7 +1283,6 @@ async fn scenario_ollama_write_tool() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_anthropic_bash_tool() {
     let workspace = create_workspace("prov_a_bash");
     let mut server = mockito::Server::new_async().await;
@@ -1351,7 +1332,6 @@ async fn scenario_anthropic_bash_tool() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_openai_bash_tool() {
     let workspace = create_workspace("prov_o_bash");
     let mut server = mockito::Server::new_async().await;
@@ -1399,7 +1379,6 @@ async fn scenario_openai_bash_tool() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_ollama_bash_tool() {
     let workspace = create_workspace("prov_ol_bash");
     let mut server = mockito::Server::new_async().await;
@@ -1451,7 +1430,6 @@ async fn scenario_ollama_bash_tool() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_anthropic_read_file() {
     let workspace = create_workspace("prov_a_read");
     let file_path = workspace.join("src.rs");
@@ -1506,7 +1484,6 @@ async fn scenario_anthropic_read_file() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_openai_read_file() {
     let workspace = create_workspace("prov_o_read");
     let file_path = workspace.join("src.rs");
@@ -1558,7 +1535,6 @@ async fn scenario_openai_read_file() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_ollama_read_file() {
     let workspace = create_workspace("prov_ol_read");
     let file_path = workspace.join("src.rs");
@@ -1614,7 +1590,6 @@ async fn scenario_ollama_read_file() {
 
 #[serial]
 #[tokio::test]
-#[serial]
 async fn scenario_anthropic_multi_tool() {
     let workspace = create_workspace("prov_a_multi");
     let file_path = workspace.join("out.txt");

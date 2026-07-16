@@ -11,6 +11,7 @@
 
 use rexpect::session::PtySession;
 use rexpect::spawn;
+use serial_test::serial;
 
 const BIN: &str = "shannon";
 
@@ -41,6 +42,7 @@ fn spawn_repl(args: &[&str], timeout_ms: u64) -> PtySession {
 // Test: REPL startup and display
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_startup_display() {
@@ -54,6 +56,7 @@ fn test_repl_startup_display() {
     let _ = p.exp_eof();
 }
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_help_command() {
@@ -70,6 +73,7 @@ fn test_repl_help_command() {
     p.send_line("/exit").unwrap();
 }
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_model_command() {
@@ -85,6 +89,7 @@ fn test_repl_model_command() {
     p.send_line("/exit").unwrap();
 }
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_exit_command() {
@@ -101,6 +106,7 @@ fn test_repl_exit_command() {
     }
 }
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_query_with_mock() {
@@ -128,6 +134,7 @@ fn test_repl_query_with_mock() {
 // Test: REPL /compact command
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_compact_command() {
@@ -145,6 +152,7 @@ fn test_repl_compact_command() {
     p.send_line("/exit").unwrap();
 }
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_compact_after_query() {
@@ -172,6 +180,7 @@ fn test_repl_compact_after_query() {
 // Test: REPL /context command
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_context_command() {
@@ -193,6 +202,7 @@ fn test_repl_context_command() {
 // Test: REPL /version command
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_version_command() {
@@ -212,6 +222,7 @@ fn test_repl_version_command() {
 // Test: REPL /lang command
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_lang_command() {
@@ -233,6 +244,7 @@ fn test_repl_lang_command() {
 // Test: REPL provider switching
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_config_command() {
@@ -249,6 +261,7 @@ fn test_repl_config_command() {
     p.send_line("/exit").unwrap();
 }
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_clear_command() {
@@ -270,6 +283,7 @@ fn test_repl_clear_command() {
 // Test: REPL unknown command handling
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_unknown_command() {
@@ -291,6 +305,7 @@ fn test_repl_unknown_command() {
 // Test: REPL multi-line input handling
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[test]
 #[ignore] // Requires built `shannon` binary and PTY — run via `cargo test --test cli_interactive_tests -- --ignored`
 fn test_repl_multiple_commands_sequence() {
