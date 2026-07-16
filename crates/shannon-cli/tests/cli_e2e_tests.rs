@@ -149,6 +149,7 @@ fn parse_json_output(stdout: &str) -> serde_json::Value {
 // Section: Normal text responses across providers
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_text_response_headless() {
@@ -170,6 +171,7 @@ async fn test_ollama_text_response_headless() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_openai_text_response_headless() {
@@ -192,6 +194,7 @@ async fn test_openai_text_response_headless() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_anthropic_text_response_headless() {
@@ -218,6 +221,7 @@ async fn test_anthropic_text_response_headless() {
 // Section: DeepSeek / GLM / Groq / Mistral (OpenAI-compatible providers)
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_deepseek_text_response_headless() {
@@ -241,6 +245,7 @@ async fn test_deepseek_text_response_headless() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_deepseek_streaming_text_output() {
@@ -255,6 +260,7 @@ async fn test_deepseek_streaming_text_output() {
         .stdout(predicate::str::contains("DeepSeek streaming works!"));
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_mistral_text_response_headless() {
@@ -278,6 +284,7 @@ async fn test_mistral_text_response_headless() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_groq_text_response_headless() {
@@ -303,6 +310,7 @@ async fn test_groq_text_response_headless() {
 
 /// Verify multiple OpenAI-compatible providers use the same wire format.
 /// DeepSeek, Mistral, and OpenAI all use /v1/chat/completions with SSE streaming.
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_openai_compatible_providers_same_endpoint() {
@@ -328,6 +336,7 @@ async fn test_openai_compatible_providers_same_endpoint() {
 // Section: Ollama malformed output retry
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_malformed_retry() {
@@ -368,6 +377,7 @@ async fn test_ollama_malformed_retry() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_generic_500_retry() {
@@ -406,6 +416,7 @@ async fn test_ollama_generic_500_retry() {
 // Section: Streaming response (text output mode)
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_anthropic_streaming_response() {
@@ -420,6 +431,7 @@ async fn test_anthropic_streaming_response() {
         .stdout(predicate::str::contains("Streamed response text!"));
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_openai_streaming_response() {
@@ -438,6 +450,7 @@ async fn test_openai_streaming_response() {
 // Section: Multi-turn tool use cycle
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_anthropic_usage_tracking() {
@@ -461,6 +474,7 @@ async fn test_anthropic_usage_tracking() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_openai_streaming_json_output() {
@@ -486,6 +500,7 @@ async fn test_openai_streaming_json_output() {
     assert!(json["tool_calls"].is_array());
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_deepseek_streaming_json_output() {
@@ -510,6 +525,7 @@ async fn test_deepseek_streaming_json_output() {
 // Section: Context preservation and conversation integrity
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_context_preservation_prompt_in_output() {
@@ -537,6 +553,7 @@ async fn test_context_preservation_prompt_in_output() {
     assert_eq!(json["exit_code"], "success");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_prompt_preserved_in_response_context() {
@@ -565,6 +582,7 @@ async fn test_prompt_preserved_in_response_context() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_stream_event_sequence() {
@@ -619,6 +637,7 @@ async fn test_json_stream_event_sequence() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_stream_text_delta_events() {
@@ -661,6 +680,7 @@ async fn test_json_stream_text_delta_events() {
     assert!(!content.is_empty(), "text_delta event should have content");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_stream_anthropic_full_event_flow() {
@@ -718,6 +738,7 @@ async fn test_json_stream_anthropic_full_event_flow() {
 // Section: Error handling and exit codes
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_auth_failure_exit_code() {
@@ -744,6 +765,7 @@ async fn test_auth_failure_exit_code() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_openai_auth_failure() {
@@ -771,6 +793,7 @@ async fn test_openai_auth_failure() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_deepseek_auth_failure() {
@@ -796,6 +819,7 @@ async fn test_deepseek_auth_failure() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_rate_limit_exit_code() {
@@ -832,6 +856,7 @@ async fn test_rate_limit_exit_code() {
     }
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_server_error_503() {
@@ -858,6 +883,7 @@ async fn test_server_error_503() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_stream_error_event() {
@@ -900,6 +926,7 @@ async fn test_json_stream_error_event() {
 // Section: Output format validation
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_output_structure() {
@@ -941,6 +968,7 @@ async fn test_json_output_structure() {
     assert!(json["exit_code"].is_string(), "exit_code should be string");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_output_token_tracking() {
@@ -963,6 +991,7 @@ async fn test_json_output_token_tracking() {
     assert!(duration > 0, "duration_ms should be > 0, got: {duration}");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_json_stream_output() {
@@ -1001,6 +1030,7 @@ async fn test_json_stream_output() {
 // Section: Bare prompt (non-headless path)
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_bare_prompt_noninteractive() {
@@ -1014,6 +1044,7 @@ async fn test_bare_prompt_noninteractive() {
         .stdout(predicate::str::contains("Bare prompt response"));
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_bare_prompt_deepseek() {
@@ -1032,6 +1063,7 @@ async fn test_bare_prompt_deepseek() {
 // Section: User-friendly error messages
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_error_message_not_raw_json() {
@@ -1060,6 +1092,7 @@ async fn test_error_message_not_raw_json() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_openai_format_error_displayed() {
@@ -1089,6 +1122,7 @@ async fn test_openai_format_error_displayed() {
 // Section: Cross-provider consistency
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_all_producers_json_output_consistent() {
@@ -1155,6 +1189,7 @@ async fn test_all_producers_json_output_consistent() {
 // Section: GLM / expanded malformed output patterns
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_glm_unmarshal_retry() {
@@ -1190,6 +1225,7 @@ async fn test_ollama_glm_unmarshal_retry() {
     assert!(json["response"].as_str().unwrap_or("").contains("retry"));
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_invalid_json_retry() {
@@ -1223,6 +1259,7 @@ async fn test_ollama_invalid_json_retry() {
     assert_eq!(json["exit_code"], "success");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_unexpected_token_retry() {
@@ -1256,6 +1293,7 @@ async fn test_ollama_unexpected_token_retry() {
     assert_eq!(json["exit_code"], "success");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_retry_includes_error_detail() {
@@ -1298,6 +1336,7 @@ async fn test_ollama_retry_includes_error_detail() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_repeated_malformed_shows_model_incompatible() {
@@ -1341,6 +1380,7 @@ async fn test_ollama_repeated_malformed_shows_model_incompatible() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_non_malformed_500_not_retried_without_tools() {
@@ -1377,6 +1417,7 @@ async fn test_ollama_non_malformed_500_not_retried_without_tools() {
 // Section: Ollama P0 — no tools sent by default, minimal prompt
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_request_has_no_tools_field() {
@@ -1409,6 +1450,7 @@ async fn test_ollama_request_has_no_tools_field() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_single_request_no_retry() {
@@ -1436,6 +1478,7 @@ async fn test_ollama_single_request_no_retry() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_no_retry_without_tools_message() {
@@ -1456,6 +1499,7 @@ async fn test_ollama_no_retry_without_tools_message() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_ollama_request_uses_short_system_prompt() {
@@ -1484,6 +1528,7 @@ async fn test_ollama_request_uses_short_system_prompt() {
     assert_eq!(json["exit_code"], "success");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_openai_still_sends_tools_by_default() {
@@ -1602,6 +1647,7 @@ fn make_turn_messages(n: usize) -> Vec<serde_json::Value> {
     messages
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_multiturn_ollama_three_turns_accumulated_context() {
@@ -1666,6 +1712,7 @@ async fn test_multiturn_ollama_three_turns_accumulated_context() {
     assert_eq!(j3["exit_code"], "success");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_multiturn_openai_resume_preserves_context() {
@@ -1714,6 +1761,7 @@ async fn test_multiturn_openai_resume_preserves_context() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_multiturn_anthropic_resume_context() {
@@ -1757,6 +1805,7 @@ async fn test_multiturn_anthropic_resume_context() {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_multiturn_ollama_story_then_character_count() {
@@ -1799,6 +1848,7 @@ async fn test_multiturn_ollama_story_then_character_count() {
     assert_eq!(j2["exit_code"], "success");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_multiturn_resume_no_session_fails_gracefully() {
@@ -1818,6 +1868,7 @@ async fn test_multiturn_resume_no_session_fails_gracefully() {
     assert_eq!(json["exit_code"], "success");
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_multiturn_deepseek_resume_context() {
@@ -1903,6 +1954,7 @@ async fn run_long_conversation_test(n_turns: usize) {
     );
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_5_turns() {
@@ -1910,36 +1962,42 @@ async fn test_long_conversation_5_turns() {
 }
 
 // Long conversation stress test
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_10_turns() {
     run_long_conversation_test(10).await;
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_20_turns() {
     run_long_conversation_test(20).await;
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_50_turns() {
     run_long_conversation_test(50).await;
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_100_turns() {
     run_long_conversation_test(100).await;
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_200_turns() {
     run_long_conversation_test(200).await;
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_long_conversation_500_turns() {
@@ -1977,6 +2035,7 @@ mod offline_tests {
 
     // ── 1. CLI Flag Parsing ───────────────────────────────────────────────
 
+    #[serial]
     #[test]
     fn offline_model_flag_parsed() {
         // --model should be accepted without error. The binary will try to
@@ -1991,6 +2050,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_provider_flag_parsed() {
         let result = shannon().args(["--provider", "ollama", "--help"]).assert();
@@ -2002,6 +2062,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_prompt_flag_enters_headless() {
         // --prompt is the headless mode flag. It should be parsed; since no
@@ -2016,6 +2077,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_resume_flag_parsed() {
         let result = shannon().args(["--help"]).assert();
@@ -2027,6 +2089,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_schema_flag_parsed() {
         let result = shannon().args(["--help"]).assert();
@@ -2038,6 +2101,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_output_format_flag_parsed() {
         let result = shannon().args(["--help"]).assert();
@@ -2049,6 +2113,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_max_turns_flag_parsed() {
         let result = shannon().args(["--help"]).assert();
@@ -2060,6 +2125,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_allowed_tools_flag_parsed() {
         let result = shannon().args(["--help"]).assert();
@@ -2071,6 +2137,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_diff_only_flag_parsed() {
         let result = shannon().args(["--help"]).assert();
@@ -2082,6 +2149,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_pipe_flag_parsed() {
         let result = shannon().args(["--help"]).assert();
@@ -2095,6 +2163,7 @@ mod offline_tests {
 
     // ── 2. Config File Resolution ─────────────────────────────────────────
 
+    #[serial]
     #[test]
     fn offline_global_config_dir_detected() {
         // Verify that ~/.shannon/config.toml path is used.
@@ -2112,6 +2181,7 @@ mod offline_tests {
         }
     }
 
+    #[serial]
     #[test]
     fn offline_project_config_file_detected() {
         // Verify .shannon.toml in project dir is a valid TOML file name.
@@ -2130,6 +2200,7 @@ mod offline_tests {
         cleanup_temp_dir(&dir);
     }
 
+    #[serial]
     #[test]
     fn offline_config_priority_env_overrides_file() {
         // Config priority: CLI args > env vars > project config > global config.
@@ -2159,6 +2230,7 @@ mod offline_tests {
         cleanup_temp_dir(&dir);
     }
 
+    #[serial]
     #[test]
     fn offline_invalid_config_file_handled() {
         // An invalid TOML config should not crash the binary.
@@ -2184,6 +2256,7 @@ mod offline_tests {
 
     // ── 3. Session Management (offline) ───────────────────────────────────
 
+    #[serial]
     #[test]
     fn offline_session_directory_creation() {
         let home = offline_temp_dir("session_dir");
@@ -2200,6 +2273,7 @@ mod offline_tests {
         cleanup_temp_dir(&home);
     }
 
+    #[serial]
     #[test]
     fn offline_session_file_listing_empty() {
         let home = offline_temp_dir("session_empty");
@@ -2219,6 +2293,7 @@ mod offline_tests {
         cleanup_temp_dir(&home);
     }
 
+    #[serial]
     #[test]
     fn offline_session_file_listing_with_sessions() {
         let home = offline_temp_dir("session_with");
@@ -2258,6 +2333,7 @@ mod offline_tests {
         cleanup_temp_dir(&home);
     }
 
+    #[serial]
     #[test]
     fn offline_session_uuid_format_validation() {
         // UUIDs used for sessions should be parseable by the uuid crate.
@@ -2288,6 +2364,7 @@ mod offline_tests {
 
     // ── 4. Help and Version ───────────────────────────────────────────────
 
+    #[serial]
     #[test]
     fn offline_help_output_contains_expected_text() {
         let result = shannon().args(["--help"]).assert().success();
@@ -2309,6 +2386,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_version_output() {
         let result = shannon().args(["--version"]).assert().success();
@@ -2326,6 +2404,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_help_lists_key_commands() {
         let result = shannon().args(["--help"]).assert().success();
@@ -2351,6 +2430,7 @@ mod offline_tests {
 
     // ── 5. Error Handling ─────────────────────────────────────────────────
 
+    #[serial]
     #[test]
     fn offline_unknown_flag_gives_error() {
         // An unrecognized flag should cause the binary to exit with a non-zero
@@ -2366,6 +2446,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_missing_config_file_no_crash() {
         // Running with a nonexistent HOME directory should not panic/crash.
@@ -2390,6 +2471,7 @@ mod offline_tests {
         cleanup_temp_dir(&dir);
     }
 
+    #[serial]
     #[test]
     fn offline_prompt_without_api_key_gives_helpful_error() {
         // --prompt mode without any API configuration should fail with
@@ -2432,6 +2514,7 @@ mod offline_tests {
         cleanup_temp_dir(&dir);
     }
 
+    #[serial]
     #[test]
     fn offline_invalid_output_format_rejected() {
         // An invalid --output-format value should be rejected by clap.
@@ -2452,6 +2535,7 @@ mod offline_tests {
         );
     }
 
+    #[serial]
     #[test]
     fn offline_resume_with_invalid_uuid_no_crash() {
         // --resume with a non-UUID string should not crash the binary.
