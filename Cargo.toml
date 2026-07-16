@@ -106,6 +106,7 @@ shannon-tools  = { path = "crates/shannon-tools",  version = "0.6.0" }
 shannon-mcp    = { path = "crates/shannon-mcp",    version = "0.6.0" }
 shannon-skills = { path = "crates/shannon-skills", version = "0.6.0" }
 shannon-agents = { path = "crates/shannon-agents", version = "0.6.0" }
+shannon-api-protocol = { path = "crates/shannon-api-protocol", version = "0.6.0" }
 shannon-stability-attr = { path = "crates/shannon-stability-attr" }          # proc-macro: no version
 
 # ---- Desktop-specific (declared at workspace level so both roots agree) ----

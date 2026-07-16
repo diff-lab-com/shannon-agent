@@ -353,7 +353,7 @@ export function mapEngineEvent(ev: EngineEvent): ShannonEvent | null {
         tool_input: ev.tool_input,
         description: ev.description,
         is_destructive: ev.is_destructive,
-        diff_preview: ev.diff_preview,
+        diff_preview: ev.diff_preview ?? null,
       };
     case "session_info":
       // Metadata-only; no mobile-facing event. (Usage/cost for the turn already

@@ -58,7 +58,7 @@ export function createApprovalTurnHandler(
               toolInput: ev.tool_input,
               description: ev.description,
               isDestructive: ev.is_destructive,
-              diffPreview: ev.diff_preview,
+              diffPreview: ev.diff_preview ?? null,
             });
             try {
               await respondToApproval({
