@@ -1,0 +1,171 @@
+# Desktop (Tauri) and Gateway (Bun) releases — matrix builds for the monorepo.
+# The Rust CLI release is handled by .github/workflows/release.yml (cargo-dist).
+# This file covers the two remaining products that cargo-dist does not understand:
+#   - shannon-desktop: Tauri v2 (Rust + React) → .deb / .rpm / .AppImage / .msi / .dmg
+#   - shannon-gateway:  Bun-compiled TS binary  → linux/darwin x64+arm64
+#
+# Triggered on `v*` tags (matches the cargo-dist pattern).
+
+name: release-desktop-gateway
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ────────────────────────── Desktop (Tauri) ──────────────────────────
+  desktop:
+    name: shannon-desktop (${{ matrix.target }})
+    needs: []
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            ext: deb
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            ext: rpm
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            ext: deb
+          - target: x86_64-apple-darwin
+            os: macos-14
+            ext: dmg
+          - target: aarch64-apple-darwin
+            os: macos-14
+            ext: dmg
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            ext: msi
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev patchelf
+
+      - name: Setup Node + pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install UI deps
+        working-directory: desktop/ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Build & bundle Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          args: --target ${{ matrix.target }}
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shannon-desktop-${{ matrix.target }}-${{ matrix.ext }}
+          path: |
+            desktop/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            desktop/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            desktop/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            desktop/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            desktop/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+  # ────────────────────────── Gateway (Bun) ──────────────────────────
+  gateway:
+    name: shannon-gateway (${{ matrix.target }})
+    needs: []
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            os: ubuntu-22.04
+            artifact: shannon-gateway-linux-x64
+          - target: bun-linux-arm64
+            os: ubuntu-22.04
+            artifact: shannon-gateway-linux-arm64
+          - target: bun-darwin-x64
+            os: macos-14
+            artifact: shannon-gateway-darwin-x64
+          - target: bun-darwin-arm64
+            os: macos-14
+            artifact: shannon-gateway-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        working-directory: gateway
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        working-directory: gateway
+        run: bun run typecheck
+
+      - name: Test
+        working-directory: gateway
+        run: bun test
+
+      - name: Build binary
+        working-directory: gateway
+        run: bun run build:binary
+        env:
+          TARGET: ${{ matrix.target }}
+
+      - name: Upload gateway binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: gateway/dist/${{ matrix.artifact }}
+
+  # ────────────────────────── Attach to release ──────────────────────────
+  attach:
+    name: attach artifacts to release
+    needs: [desktop, gateway]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          fail_on_unmatched_files: false
