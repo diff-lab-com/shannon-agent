@@ -1,0 +1,44 @@
+# cargo-deny configuration
+# https://embarkstudios.github.io/cargo-deny/
+# Mirrors shannon-code/deny.toml policy so both repos enforce the same
+# license/security/bans baseline.
+
+[advisories]
+yanked = "warn"
+# Only flag *unmaintained* crates that are workspace members. Tauri pulls in a
+# large transitive tree (gtk-rs GTK3 bindings, proc-macro-error, unic-char-*
+# etc.) whose unmaintained advisories this desktop shell cannot fix directly;
+# scoping to workspace keeps the gate meaningful without an ever-growing ignore
+# list. Real vulnerabilities and unsound advisories are still caught — and
+# fixed directly when they surface (e.g. `cargo update -p anyhow` for
+# RUSTSEC-2026-0190), which is why there is no blanket `ignore` list.
+unmaintained = "workspace"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception", # target-lexicon (LLVM exception)
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+    "Unicode-3.0",         # ICU/Unicode data crates
+    "CDLA-Permissive-2.0", # IBM data licenses
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# shannon-* crates are pulled from the shannon-agent git server via subpath
+# deps; without this allow-git line cargo-deny rejects the build.
+allow-git = [
+    "ssh://git@github.com/shannon-agent/shannon-code.git",
+]

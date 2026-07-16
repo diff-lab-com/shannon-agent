@@ -1,0 +1,11 @@
+id = "nightly-doc-sync"
+name = "Nightly README ↔ code sync check"
+description = "Diff the README against actual API surface and propose updates."
+category = "documentation"
+trigger_type = "cron"
+cron_expr = "0 23 * * *"
+timezone = ""
+prompt = """
+Read the README and the most recent changes to the public API surface.
+Flag any drift between docs and code, and propose a patch to bring them back in sync.
+"""

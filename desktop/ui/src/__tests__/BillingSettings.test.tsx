@@ -1,0 +1,91 @@
+import { describe, it, expect } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { AppProvider } from '@/context/AppContext'
+import { MemoryRouter } from 'react-router-dom'
+import BillingSettings from '@/components/settings/BillingSettings'
+
+function wrap(ui: React.ReactElement) {
+  return (
+    <AppProvider>
+      <MemoryRouter>
+        {ui}
+      </MemoryRouter>
+    </AppProvider>
+  )
+}
+
+async function renderReady() {
+  render(wrap(<BillingSettings />))
+  await waitFor(() => expect(screen.getAllByText(/Usage & Billing/).length).toBeGreaterThanOrEqual(1))
+  await waitFor(() => expect(screen.getByText('Active Plan')).toBeInTheDocument())
+}
+
+describe('BillingSettings', () => {
+  it('renders usage and billing heading', async () => {
+    await renderReady()
+    expect(screen.getByRole('heading', { name: /Usage & Billing/ })).toBeInTheDocument()
+  })
+
+  it('shows demo mode banner warning', async () => {
+    await renderReady()
+    expect(screen.getByText('Demo mode')).toBeInTheDocument()
+    expect(screen.getByText(/illustrative sample data/i)).toBeInTheDocument()
+  })
+
+  it('renders usage quota overview section', async () => {
+    await renderReady()
+    expect(screen.getByText('Usage Quota Overview')).toBeInTheDocument()
+  })
+
+  it('renders token usage display', async () => {
+    await renderReady()
+    expect(screen.getByText('Token Usage')).toBeInTheDocument()
+  })
+
+  it('renders cache hit rate display', async () => {
+    await renderReady()
+    expect(screen.getByText('Cache Hit Rate')).toBeInTheDocument()
+  })
+
+  it('renders cost analysis section', async () => {
+    await renderReady()
+    expect(screen.getByText('Cost Analysis')).toBeInTheDocument()
+  })
+
+  it('renders active plan badge', async () => {
+    await renderReady()
+    expect(screen.getByText('Active Plan')).toBeInTheDocument()
+  })
+
+  it('renders billing history section', async () => {
+    await renderReady()
+    expect(screen.getByText('Billing History')).toBeInTheDocument()
+  })
+
+  it('renders footer help section', async () => {
+    await renderReady()
+    expect(screen.getByText(/Enterprise Team/i)).toBeInTheDocument()
+  })
+
+  // US-SET-06: Change Plan modal is intentionally disabled in demo mode
+  // (no real billing backend). Tests removed — see P0.5 fix.
+
+  // US-SET-08: Legal modal
+  it('opens legal modal on Legal & Terms click', async () => {
+    await renderReady()
+    fireEvent.click(screen.getByText('Legal & Terms'))
+    expect(screen.getByText('Legal & Privacy')).toBeInTheDocument()
+  })
+
+  it('opens legal modal on Privacy Policy click', async () => {
+    await renderReady()
+    fireEvent.click(screen.getByText('Privacy Policy'))
+    expect(screen.getByText('Legal & Privacy')).toBeInTheDocument()
+  })
+
+  // US-SET-07: Cancel subscription
+  it('has cancel button', async () => {
+    await renderReady()
+    expect(screen.getByText('Cancel')).toBeInTheDocument()
+  })
+})

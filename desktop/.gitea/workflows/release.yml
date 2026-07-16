@@ -1,0 +1,368 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    branches: [main, dev]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Full 40-char SHA is required: git fetch by short SHA fails with
+  # "couldn't find remote ref <short>" because the refspec parser treats
+  # abbreviated SHAs as ref names. GitHub's upload-pack resolves full SHAs
+  # via allowReachableSHA1InWant.
+  SHANNON_CODE_REV: "d49e7f56c5f5cc7b12a8cb82171abf571913f5c7"
+  # linuxdeploy + plugins are themselves AppImages. In rootless DinD the
+  # runner has no /dev/fuse, so the AppImage runtime cannot self-mount.
+  # APPIMAGE_EXTRACT_AND_RUN=1 tells them to extract to a temp dir and
+  # run from there — pure userspace, no capabilities or device access
+  # required. Costs ~5s per build.
+  APPIMAGE_EXTRACT_AND_RUN: "1"
+  # Tauri updater signing — secrets come from Gitea repo settings.
+  # When both are present, `cargo tauri build` emits .sig files next to
+  # every installer plus a latest.json manifest. The pubkey lives in
+  # tauri.conf.json; the private key never enters the repo.
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+  # Pinned rustup version for supply-chain hardening. Bump explicitly when
+  # upstream releases a security fix. SHA256 is verified per-platform at
+  # install time using the official .sha256 file from static.rust-lang.org.
+  RUSTUP_VERSION: "1.28.2"
+
+jobs:
+  audit:
+    name: Supply chain audit
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout desktop
+        uses: https://gitea.com/actions/checkout@v4
+
+      - name: Route github.com through gh-proxy
+        shell: bash
+        run: git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "https://github.com/"
+
+      - name: Clone shannon-code sibling at pinned rev
+        shell: bash
+        env:
+          SHANNON_CODE_REV: ${{ env.SHANNON_CODE_REV }}
+        run: |
+          git clone --depth 1 https://github.com/shannon-agent/shannon-code.git ../shannon-code
+          cd ../shannon-code
+          git fetch --depth 1 origin $SHANNON_CODE_REV
+          git checkout $SHANNON_CODE_REV
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev libssl-dev
+
+      - name: Configure China mirrors
+        shell: bash
+        run: |
+          echo "RUSTUP_DIST_SERVER=https://rsproxy.cn" >> $GITHUB_ENV
+          echo "RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup" >> $GITHUB_ENV
+          mkdir -p "$HOME/.cargo"
+          cat > "$HOME/.cargo/config.toml" <<'EOF'
+          [source.crates-io]
+          replace-with = "rsproxy-sparse"
+
+          [source.rsproxy-sparse]
+          registry = "sparse+https://rsproxy.cn/index/"
+
+          [registries.rsproxy]
+          index = "https://rsproxy.cn/crates.io-index"
+
+          [net]
+          git-fetch-with-cli = true
+          EOF
+          npm config set registry https://registry.npmmirror.com
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Setup Node 20
+        uses: https://gitea.com/actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable pnpm 10 via corepack
+        run: corepack prepare pnpm@10 --activate
+
+      - name: Install UI deps
+        run: pnpm install --dir ui --frozen-lockfile
+
+      - name: pnpm audit (high+ only)
+        # Fail only on high/critical advisories. Use package.json
+        # "pnpm.auditConfig" or .npmrc to explicitly allowlist exceptions
+        # rather than silencing failures here.
+        run: pnpm --dir ui audit --audit-level=high
+
+      - name: cargo audit
+        # Scans Cargo.lock against RustSec advisory DB.
+        # --deny warnings treats any advisory as build failure.
+        run: cargo audit --deny warnings
+
+  build:
+    needs: audit
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux
+            bundles: deb,rpm,appimage
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows
+            bundles: msi,nsis
+          # Single macOS job builds both arm64 + x86_64 sequentially,
+          # so one runner produces both DMGs.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macos
+            bundles: dmg
+
+    steps:
+      - name: Guard — only main or release tags
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]] && [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "Release builds only run on main or v* tags. Got: $GITHUB_REF"
+            exit 1
+          fi
+
+      - name: Checkout desktop
+        uses: https://gitea.com/actions/checkout@v4
+
+      - name: Route github.com through gh-proxy (defensive — catches any HTTPS fetch)
+        shell: bash
+        run: git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "https://github.com/"
+
+      - name: Clone shannon-code sibling at pinned rev
+        shell: bash
+        run: |
+          git clone --depth 1 https://github.com/shannon-agent/shannon-code.git ../shannon-code
+          cd ../shannon-code
+          git fetch --depth 1 origin $SHANNON_CODE_REV
+          git checkout $SHANNON_CODE_REV
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev libssl-dev
+
+      - name: Configure China mirrors (Linux + macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          # rsproxy.cn mirrors both rustup artifacts AND crates.io.
+          # tuna/bfsu/USTC prune rust-1.88.0 (rust-toolchain.toml pins to 1.88),
+          # causing 404 on rustup-init. Verified rsproxy has the full archive.
+          # These env vars are read by the rustup-init script in the next step.
+          echo "RUSTUP_DIST_SERVER=https://rsproxy.cn" >> $GITHUB_ENV
+          echo "RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup" >> $GITHUB_ENV
+
+          # crates.io registry mirror (same provider, sparse protocol).
+          # sparse+ is mandatory for the index URL — rsproxy's sparse index is
+          # ~10x faster than the git index for first-time fetches.
+          mkdir -p "$HOME/.cargo"
+          cat > "$HOME/.cargo/config.toml" <<'EOF'
+          [source.crates-io]
+          replace-with = "rsproxy-sparse"
+
+          [source.rsproxy-sparse]
+          registry = "sparse+https://rsproxy.cn/index/"
+
+          [registries.rsproxy]
+          index = "https://rsproxy.cn/crates.io-index"
+
+          [net]
+          git-fetch-with-cli = true
+          EOF
+
+          # pnpm/npm — use npmmirror.com (Alibaba) for UI deps install.
+          npm config set registry https://registry.npmmirror.com
+
+      - name: Install Rust (stable + targets, hardened)
+        # Supply-chain hardening: download rustup-init binary directly from
+        # static.rust-lang.org with pinned version + SHA256 verification,
+        # instead of piping sh.rustup.rs shell script to sh. Windows runner
+        # already has rustup pre-installed via chocolatey, so we only harden
+        # the Linux + macOS path.
+        shell: bash
+        env:
+          RUSTUP_VERSION: ${{ env.RUSTUP_VERSION }}
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            rustup toolchain install stable --profile minimal
+            rustup target add ${{ matrix.target }}
+          else
+            case "${{ runner.os }}" in
+              Linux)  RUSTUP_TARGET=x86_64-unknown-linux-gnu ;;
+              macOS)  RUSTUP_TARGET=aarch64-apple-darwin ;;
+            esac
+            BASE_URL="https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${RUSTUP_TARGET}"
+            curl --proto '=https' --tlsv1.2 -sSf "${BASE_URL}/rustup-init" -o rustup-init
+            curl --proto '=https' --tlsv1.2 -sSf "${BASE_URL}/rustup-init.sha256" -o rustup-init.sha256
+            # Verify checksum (file contains "<sha256>  rustup-init")
+            sha256sum -c rustup-init.sha256
+            chmod +x rustup-init
+            ./rustup-init -y --profile minimal --default-toolchain stable --no-modify-path
+            source "$HOME/.cargo/env"
+            if [ "${{ runner.os }}" = "macOS" ]; then
+              rustup target add aarch64-apple-darwin x86_64-apple-darwin
+            else
+              rustup target add ${{ matrix.target }}
+            fi
+          fi
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Setup Node 20
+        uses: https://gitea.com/actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Enable pnpm 10 via corepack
+        run: corepack prepare pnpm@10 --activate
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Install UI deps
+        run: pnpm install --dir ui --frozen-lockfile
+
+      - name: Build desktop installers
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            for t in aarch64-apple-darwin x86_64-apple-darwin; do
+              echo "=== Building $t ==="
+              cargo tauri build --target $t --bundles ${{ matrix.bundles }}
+            done
+          else
+            cargo tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          fi
+
+      - name: Upload installers (linux)
+        if: matrix.label == 'linux'
+        uses: https://gitea.com/actions/upload-artifact@v3
+        with:
+          name: shannon-desktop-linux
+          path: |
+            target/${{ matrix.target }}/release/bundle/deb/*.deb
+            target/${{ matrix.target }}/release/bundle/deb/*.deb.sig
+            target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            target/${{ matrix.target }}/release/bundle/rpm/*.rpm.sig
+            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.sig
+            target/${{ matrix.target }}/release/bundle/**/latest.json
+
+      - name: Upload installers (windows)
+        if: matrix.label == 'windows'
+        uses: https://gitea.com/actions/upload-artifact@v3
+        with:
+          name: shannon-desktop-windows
+          path: |
+            target/${{ matrix.target }}/release/bundle/msi/*.msi
+            target/${{ matrix.target }}/release/bundle/msi/*.msi.sig
+            target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            target/${{ matrix.target }}/release/bundle/nsis/*.exe.sig
+            target/${{ matrix.target }}/release/bundle/**/latest.json
+
+      - name: Upload installers (macos)
+        if: matrix.label == 'macos'
+        uses: https://gitea.com/actions/upload-artifact@v3
+        with:
+          name: shannon-desktop-macos
+          path: |
+            target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            target/aarch64-apple-darwin/release/bundle/dmg/*.dmg.sig
+            target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+            target/x86_64-apple-darwin/release/bundle/dmg/*.dmg.sig
+            target/*/release/bundle/**/latest.json
+
+  release:
+    needs: build
+    name: Publish Gitea Release
+    runs-on: ubuntu-22.04
+    # build already guards on main/tag, but a downloadable Release only makes
+    # sense for a tag. workflow_dispatch on main/dev must NOT create one.
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all build artifacts
+        # Pulls every platform artifact set (shannon-desktop-{linux,windows,macos})
+        # into artifacts/<name>/... so we can attach them to the Release.
+        uses: https://gitea.com/actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Create release and attach installers
+        shell: bash
+        env:
+          # GITHUB_TOKEN is auto-provided by Gitea Actions and scoped to this
+          # repo. If the repo's Actions token lacks release write permission,
+          # add a RELEASE_TOKEN secret (PAT with write:repository) and point
+          # GITEA_TOKEN at it instead.
+          GITEA_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          API="${SERVER_URL}/api/v1/repos/${REPOSITORY}"
+
+          echo "Creating release for tag ${TAG} …"
+          # The tag already exists (it triggered this run), so we only create
+          # the Release object attached to it.
+          RELEASE_ID=$(curl -fsSL -X POST "${API}/releases" \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "{\"tag_name\":\"${TAG}\",\"name\":\"${TAG}\",\"body\":\"Shannon Desktop ${TAG}\",\"draft\":false,\"prerelease\":false}" \
+            | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "Release id: ${RELEASE_ID}"
+
+          # latest.json is the Tauri updater manifest; the rest are platform
+          # installers (+ their .sig sidecars).
+          mapfile -t ASSETS < <(find artifacts -type f \
+            \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \
+               -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \
+               -o -name '*.sig'  -o -name 'latest.json' \) | sort -u)
+
+          echo "Attaching ${#ASSETS[@]} asset(s)…"
+          fail=0
+          for asset in "${ASSETS[@]}"; do
+            name="$(basename "${asset}")"
+            # URL-encode the asset name (spaces / special chars break the query).
+            qname="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "${name}")"
+            if curl -fsSL -X POST "${API}/releases/${RELEASE_ID}/assets?name=${qname}" \
+                 -H "Authorization: token ${GITEA_TOKEN}" \
+                 -H "Content-Type: application/octet-stream" \
+                 --data-binary "@${asset}" >/dev/null; then
+              echo "  + ${name}"
+            else
+              echo "  ! ${name} upload failed" >&2
+              fail=1
+            fi
+          done
+          if [ "${fail}" -ne 0 ]; then
+            echo "One or more assets failed to upload." >&2
+            exit 1
+          fi
+          echo "Release ${TAG} published with ${#ASSETS[@]} asset(s)."

@@ -1,0 +1,119 @@
+name: CI
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Rust build / clippy / fmt / cargo-deny were removed from CI because the
+  # Gitea runner cannot reliably reach github.com — both cloning
+  # actions/checkout and fetching the shannon-code sibling time out.
+  # Run them locally before merge:
+  #   cargo fmt --all -- --check
+  #   cargo clippy --workspace -- -D warnings
+  #   cargo test --workspace
+  #   cargo deny check --hide-inclusion-graph
+  ui:
+    name: UI · lint + test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4
+      - name: Install Node 20 + pnpm 10 (npmmirror, checksum-pinned)
+        # actions/setup-node@v4 and corepack both pull from nodejs.org /
+        # npmjs.org, which the Gitea runner reaches only intermittently — CI
+        # stalled 12-14 min on the Node-binary download (the i18n job, which
+        # runs nothing but setup-node + a local script, timed out at 12m9s,
+        # isolating the culprit to that fetch). npmmirror's mirror is reachable
+        # from the runner (release.yml already routes npm through it).
+        #
+        # Supply-chain posture: BOTH the Node binary AND the pnpm tarball are
+        # version-pinned and verified against OFFICIAL upstream hashes
+        # (hardcoded here — fetched from nodejs.org / npmjs.org), so a
+        # compromised/relabeled mirror cannot forge matching checksums. This
+        # matters especially for pnpm: it is the package manager that runs
+        # every subsequent install, so a backdoored pnpm could tamper with
+        # everything downstream. corepack is bypassed because (a) it re-pulls
+        # pnpm from npmjs.org and (b) its integrity check fails against the
+        # npmmirror proxy — instead we fetch the tarball, verify it ourselves,
+        # and install the already-verified file. All checks are fail-closed.
+        #
+        # ~/.npmrc routes the UI dep install through npmmirror too, so this job
+        # never touches npmjs.org. (Verified locally: Node+pnpm install from
+        # the mirror with both checksums verified; pnpm 10.34.4 honors ~/.npmrc.)
+        #
+        # Bump a pinned pair together when updating:
+        #   Node -> nodejs.org/dist/<ver>/SHASUMS256.txt (line node-<ver>-linux-x64.tar.gz) -> SHA256 (hex)
+        #   pnpm -> registry.npmjs.org/pnpm/<ver> dist.integrity -> SHA512 base64 (drop the "sha512-" prefix)
+        shell: bash
+        env:
+          NODE_VERSION: "v20.20.2"
+          NODE_SHA256: "19e56f0825510207dd904f087fe52faa0a4eb6b2aab5f0ea7a33830d04888b8b"
+          PNPM_VERSION: "10.34.4"
+          # dist.integrity for pnpm@10.34.4 from the OFFICIAL npmjs.org registry
+          # (sha512 base64 — npm's own integrity format, minus the "sha512-" prefix).
+          PNPM_SHA512: "h2i+VSAK4/Iia2Un/Momh+FLxOXxLXchoPJdo99HkVF3BYZI20F3uvNIEg+guidS2NjZP2vq8f5krhjajelhrw=="
+        run: |
+          set -euo pipefail
+          # --- Node ---
+          # Retry + fast-fail timeouts recover the documented intermittent
+          # npmmirror egress stalls (run #461 hung ~12 min on this fetch and
+          # hit the job limit) instead of stalling to cancellation. The
+          # fail-closed checksum check below still rejects any tampered bytes.
+          TARBALL="node-${NODE_VERSION}-linux-x64.tar.gz"
+          echo "Installing Node ${NODE_VERSION} from npmmirror (checksum-pinned)…"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 90 "https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${TARBALL}" -o "${TARBALL}"
+          # Fail-closed: verify against the pinned official nodejs.org SHA256.
+          printf '%s  %s\n' "${NODE_SHA256}" "${TARBALL}" | sha256sum -c -
+          mkdir -p "$HOME/node"
+          tar xzf "${TARBALL}" -C "$HOME/node" --strip-components=1
+          echo "$HOME/node/bin" >> $GITHUB_PATH
+          # --- pnpm (verified against the official npmjs.org dist.integrity) ---
+          P_TARBALL="pnpm-${PNPM_VERSION}.tgz"
+          echo "Installing pnpm ${PNPM_VERSION} from npmmirror (integrity-pinned)…"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 90 "https://registry.npmmirror.com/pnpm/-/pnpm-${PNPM_VERSION}.tgz" -o "${P_TARBALL}"
+          # Fail-closed: sha512 base64, npm's own dist.integrity format.
+          ACTUAL="$(openssl dgst -sha512 -binary "${P_TARBALL}" | openssl base64 -A)"
+          if [ "${ACTUAL}" != "${PNPM_SHA512}" ]; then
+            echo "pnpm integrity MISMATCH (expected sha512-${PNPM_SHA512:0:16}…, got sha512-${ACTUAL:0:16}…)" >&2
+            exit 1
+          fi
+          # Install the already-verified tarball locally (--prefix keeps it
+          # writable; bypasses corepack's npmjs.org fetch + mirror check).
+          "$HOME/node/bin/npm" install -g "${P_TARBALL}" --prefix="$HOME/node" --registry=https://registry.npmmirror.com
+          # Route the UI dep install through npmmirror so the job never hits npmjs.org.
+          echo "registry=https://registry.npmmirror.com" > "$HOME/.npmrc"
+      - name: Install UI deps
+        run: pnpm install --dir ui --frozen-lockfile
+      - name: Type check
+        run: pnpm --dir ui lint
+      - name: Unit tests
+        run: pnpm --dir ui test --run
+
+  i18n-parity:
+    name: i18n · key parity
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: https://gitea.com/actions/checkout@v4
+      - name: Install Node 20 (npmmirror, checksum-pinned)
+        # See the ui job. This job needs Node only for the local parity
+        # script (no npm install), so it omits the pnpm install + ~/.npmrc.
+        shell: bash
+        env:
+          NODE_VERSION: "v20.20.2"
+          NODE_SHA256: "19e56f0825510207dd904f087fe52faa0a4eb6b2aab5f0ea7a33830d04888b8b"
+        run: |
+          set -euo pipefail
+          TARBALL="node-${NODE_VERSION}-linux-x64.tar.gz"
+          echo "Installing Node ${NODE_VERSION} from npmmirror (checksum-pinned)…"
+          curl -fsSL --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 20 --max-time 90 "https://registry.npmmirror.com/-/binary/node/${NODE_VERSION}/${TARBALL}" -o "${TARBALL}"
+          printf '%s  %s\n' "${NODE_SHA256}" "${TARBALL}" | sha256sum -c -
+          mkdir -p "$HOME/node"
+          tar xzf "${TARBALL}" -C "$HOME/node" --strip-components=1
+          echo "$HOME/node/bin" >> $GITHUB_PATH
+      - name: Check en/zh-CN key parity
+        run: node scripts/check-i18n-parity.mjs

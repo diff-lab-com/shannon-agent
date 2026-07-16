@@ -1,0 +1,34 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node / pnpm
+/ui/node_modules
+/ui/dist
+/ui/coverage
+/ui/test-results
+/ui/.vite
+.vite
+
+# Tauri build artifacts
+/src-tauri/target
+/gen
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Playwright MCP artifacts
+/.playwright-mcp
+
+# OMC working state
+/.omc
+**/.omc/
+
+# Shannon runtime artifacts (scheduled worktrees, sessions, etc.)
+/.shannon
+**/.shannon/
