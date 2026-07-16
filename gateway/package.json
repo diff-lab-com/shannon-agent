@@ -1,0 +1,29 @@
+{
+  "name": "shannon-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node/TypeScript gateway connecting chat platforms (Slack, Telegram, Discord, Matrix, WhatsApp, WeCom/WeChat, Feishu, DingTalk) to the Shannon engine's api_server.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "build:binary": "bun build --compile --outfile=dist/shannon-gateway src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "dev": "tsx src/index.ts"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}
