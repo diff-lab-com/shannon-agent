@@ -5,6 +5,7 @@
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use serial_test::serial;
 
 const BIN: &str = "shannon";
 
@@ -14,6 +15,7 @@ fn shannon() -> Command {
 
 // ── Version Flag ────────────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_version_flag_long() {
     shannon()
@@ -23,6 +25,7 @@ fn test_version_flag_long() {
         .stdout(predicate::str::contains("shannon"));
 }
 
+#[serial]
 #[test]
 fn test_version_flag_short() {
     shannon()
@@ -34,6 +37,7 @@ fn test_version_flag_short() {
 
 // ── Help Flag ───────────────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_help_flag_long() {
     shannon()
@@ -43,6 +47,7 @@ fn test_help_flag_long() {
         .stdout(predicate::str::contains("AI-powered code assistant"));
 }
 
+#[serial]
 #[test]
 fn test_help_flag_short() {
     shannon()
@@ -54,6 +59,7 @@ fn test_help_flag_short() {
 
 // ── Subcommand Help ─────────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_repl_subcommand_help() {
     shannon()
@@ -63,6 +69,7 @@ fn test_repl_subcommand_help() {
         .stdout(predicate::str::contains("repl"));
 }
 
+#[serial]
 #[test]
 fn test_version_subcommand_help() {
     shannon()
@@ -72,6 +79,7 @@ fn test_version_subcommand_help() {
         .stdout(predicate::str::contains("version"));
 }
 
+#[serial]
 #[test]
 fn test_query_subcommand_help() {
     shannon()
@@ -81,6 +89,7 @@ fn test_query_subcommand_help() {
         .stdout(predicate::str::contains("query"));
 }
 
+#[serial]
 #[test]
 fn test_config_subcommand_help() {
     shannon()
@@ -92,6 +101,7 @@ fn test_config_subcommand_help() {
 
 // ── Output Format ───────────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_output_format_text_is_default() {
     shannon()
@@ -101,6 +111,7 @@ fn test_output_format_text_is_default() {
         .stdout(predicate::str::contains("output-format"));
 }
 
+#[serial]
 #[test]
 fn test_output_format_json_flag() {
     // --output-format json should be accepted by clap parsing
@@ -111,6 +122,7 @@ fn test_output_format_json_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_output_format_json_stream_flag() {
     shannon()
@@ -119,6 +131,7 @@ fn test_output_format_json_stream_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_output_format_invalid() {
     shannon()
@@ -130,6 +143,7 @@ fn test_output_format_invalid() {
 
 // ── CLI Argument Parsing ────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_model_flag() {
     shannon()
@@ -138,6 +152,7 @@ fn test_model_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_provider_flag() {
     shannon()
@@ -146,6 +161,7 @@ fn test_provider_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_lang_flag() {
     shannon()
@@ -154,26 +170,31 @@ fn test_lang_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_yes_flag() {
     shannon().args(["--yes", "--help"]).assert().success();
 }
 
+#[serial]
 #[test]
 fn test_quiet_flag() {
     shannon().args(["--quiet", "--help"]).assert().success();
 }
 
+#[serial]
 #[test]
 fn test_diff_only_flag() {
     shannon().args(["--diff-only", "--help"]).assert().success();
 }
 
+#[serial]
 #[test]
 fn test_resume_flag() {
     shannon().args(["--resume", "--help"]).assert().success();
 }
 
+#[serial]
 #[test]
 fn test_continue_flag() {
     shannon().args(["--continue", "--help"]).assert().success();
@@ -181,6 +202,7 @@ fn test_continue_flag() {
 
 // ── Repl Subcommand Args ────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_repl_model_flag() {
     shannon()
@@ -189,6 +211,7 @@ fn test_repl_model_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_provider_flag() {
     shannon()
@@ -197,6 +220,7 @@ fn test_repl_provider_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_max_tokens_flag() {
     shannon()
@@ -205,6 +229,7 @@ fn test_repl_max_tokens_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_temperature_flag() {
     shannon()
@@ -213,6 +238,7 @@ fn test_repl_temperature_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_timeout_flag() {
     shannon()
@@ -221,6 +247,7 @@ fn test_repl_timeout_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_debug_flag() {
     shannon()
@@ -229,6 +256,7 @@ fn test_repl_debug_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_local_flag() {
     shannon()
@@ -237,6 +265,7 @@ fn test_repl_local_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_cwd_flag() {
     shannon()
@@ -245,6 +274,7 @@ fn test_repl_cwd_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_env_flag() {
     shannon()
@@ -253,6 +283,7 @@ fn test_repl_env_flag() {
         .success();
 }
 
+#[serial]
 #[test]
 fn test_repl_file_flag() {
     shannon()
@@ -263,6 +294,7 @@ fn test_repl_file_flag() {
 
 // ── Query Subcommand Args ───────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_query_subcommand() {
     shannon()
@@ -272,6 +304,7 @@ fn test_query_subcommand() {
         .stdout(predicate::str::contains("query"));
 }
 
+#[serial]
 #[test]
 fn test_query_output_flag() {
     shannon()
@@ -281,6 +314,7 @@ fn test_query_output_flag() {
         .stdout(predicate::str::contains("output"));
 }
 
+#[serial]
 #[test]
 fn test_query_no_stream_flag() {
     shannon()
@@ -292,6 +326,7 @@ fn test_query_no_stream_flag() {
 
 // ── Version Subcommand Args ─────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_version_verbose_flag() {
     shannon()
@@ -303,6 +338,7 @@ fn test_version_verbose_flag() {
 
 // ── Pipe Flag ───────────────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_pipe_flag_in_help() {
     shannon()
@@ -314,6 +350,7 @@ fn test_pipe_flag_in_help() {
 
 // ── Headless Mode Args ──────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_headless_prompt_flag() {
     shannon()
@@ -323,6 +360,7 @@ fn test_headless_prompt_flag() {
         .stdout(predicate::str::contains("prompt"));
 }
 
+#[serial]
 #[test]
 fn test_max_turns_flag() {
     shannon()
@@ -332,6 +370,7 @@ fn test_max_turns_flag() {
         .stdout(predicate::str::contains("max-turns"));
 }
 
+#[serial]
 #[test]
 fn test_exit_on_error_flag() {
     shannon()
@@ -341,6 +380,7 @@ fn test_exit_on_error_flag() {
         .stdout(predicate::str::contains("exit-on-error"));
 }
 
+#[serial]
 #[test]
 fn test_allowed_tools_flag() {
     shannon()
@@ -352,6 +392,7 @@ fn test_allowed_tools_flag() {
 
 // ── Session Flag ────────────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_session_flag() {
     shannon()
@@ -363,11 +404,13 @@ fn test_session_flag() {
 
 // ── Invalid Arguments ───────────────────────────────────────────────────
 
+#[serial]
 #[test]
 fn test_unknown_flag_fails() {
     shannon().args(["--nonexistent-flag"]).assert().failure();
 }
 
+#[serial]
 #[test]
 fn test_invalid_repl_args() {
     shannon().args(["repl", "--nonexistent"]).assert().failure();
