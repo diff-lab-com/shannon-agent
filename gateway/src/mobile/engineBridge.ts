@@ -25,7 +25,7 @@
 
 import { respondToApproval, type GatewayApprovalChoice } from "../engine/httpClient.js";
 import { EngineWsClient, type EngineWsClientOptions } from "../engine/wsClient.js";
-import type { EngineEvent } from "../engine/types.js";
+import type { EngineEvent } from "../engine/runtime.js";
 import type { Logger } from "../adapters/types.js";
 import { approvalMessage } from "./crypto.js";
 import {

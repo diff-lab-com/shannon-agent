@@ -1,4 +1,4 @@
-import { type EngineEvent } from "../engine/types.js";
+import { type EngineEvent } from "../engine/runtime.js";
 import { respondToApproval } from "../engine/httpClient.js";
 import { newAccumulator, sendReply } from "./reply.js";
 import { canStream, StreamingReply } from "./streaming.js";

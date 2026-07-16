@@ -8,7 +8,7 @@ import {
   type ReplyTarget,
 } from "../../adapters/types.js";
 import { AdapterRegistry } from "../../adapters/registry.js";
-import { type EngineEvent } from "../../engine/types.js";
+import { type EngineEvent } from "../../engine/runtime.js";
 import { type EngineWsClient } from "../../engine/wsClient.js";
 import { SessionRouter } from "../router.js";
 import { createDefaultTurnHandler } from "../defaultTurnHandler.js";

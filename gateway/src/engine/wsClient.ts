@@ -5,7 +5,7 @@ import {
   type EngineEvent,
   type EngineEventType,
   isTerminalEvent,
-} from "./types.js";
+} from "./runtime.js";
 import type { WsClientMessageQuery } from "./types.gen.js";
 
 /**

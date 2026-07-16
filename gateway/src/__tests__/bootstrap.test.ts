@@ -17,7 +17,7 @@ import {
   type ReplyTarget,
   type SessionConversation,
 } from "../adapters/types.js";
-import { type EngineEvent } from "../engine/types.js";
+import { type EngineEvent } from "../engine/runtime.js";
 import { type EngineWsClient } from "../engine/wsClient.js";
 import { type GatewayConfig } from "../config/types.js";
 import { bootstrap, type AdapterFactory } from "../bootstrap.js";

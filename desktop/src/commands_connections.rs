@@ -105,11 +105,14 @@ fn gateway_config_path() -> Result<PathBuf, String> {
 /// A sane loopback default used when no gateway config exists yet. The user
 /// can edit the engine URLs from the UI; this just gives the panel a starting
 /// point so it never renders empty.
+const CANONICAL_ENGINE_WS_URL: &str = "ws://127.0.0.1:33420/api/ws";
+const CANONICAL_ENGINE_HTTP_BASE_URL: &str = "http://127.0.0.1:33420";
+
 fn default_gateway_config() -> GatewayConfig {
     GatewayConfig {
         engine: GatewayEngineConfig {
-            ws_url: "ws://127.0.0.1:33420/api/ws".into(),
-            http_base_url: "http://127.0.0.1:33420".into(),
+            ws_url: CANONICAL_ENGINE_WS_URL.into(),
+            http_base_url: CANONICAL_ENGINE_HTTP_BASE_URL.into(),
             model: None,
         },
         adapters: vec![],
@@ -183,6 +186,22 @@ pub async fn gateway_read_config() -> Result<GatewayConfig, String> {
 /// Validate + persist the gateway config. Writes atomically (temp file +
 /// rename) so a crash mid-write can't leave a half-written config. Returns
 /// the canonicalized config that was written.
+fn write_gateway_config_atomic(config: &GatewayConfig) -> Result<(), String> {
+    let path = gateway_config_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("gateway config: cannot create {parent:?}: {e}"))?;
+    }
+    let json = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("gateway config: serialize failed: {e}"))?;
+    let tmp = NamedTempFile::new_in(path.parent().expect("config path has a parent"))
+        .map_err(|e| format!("gateway config: cannot create temp file: {e}"))?;
+    fs::write(tmp.path(), &json).map_err(|e| format!("gateway config: write failed: {e}"))?;
+    tmp.persist(&path)
+        .map_err(|e| format!("gateway config: persist failed: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn gateway_write_config(config: GatewayConfig) -> Result<GatewayConfig, String> {
     if config.engine.ws_url.trim().is_empty() {
@@ -198,28 +217,15 @@ pub async fn gateway_write_config(config: GatewayConfig) -> Result<GatewayConfig
             );
         }
     }
-    for (i, a) in config.adapters.iter().enumerate() {
-        if a.platform.trim().is_empty() {
+    for (i, adapter) in config.adapters.iter().enumerate() {
+        if adapter.platform.trim().is_empty() {
             return Err(format!(
                 "gateway config: adapters[{i}].platform must be a non-empty string"
             ));
         }
     }
 
-    let path = gateway_config_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("gateway config: cannot create {parent:?}: {e}"))?;
-    }
-    let json = serde_json::to_string_pretty(&config)
-        .map_err(|e| format!("gateway config: serialize failed: {e}"))?;
-
-    let tmp = NamedTempFile::new_in(path.parent().expect("config path has a parent"))
-        .map_err(|e| format!("gateway config: cannot create temp file: {e}"))?;
-    fs::write(tmp.path(), &json).map_err(|e| format!("gateway config: write failed: {e}"))?;
-    tmp.persist(&path)
-        .map_err(|e| format!("gateway config: persist failed: {e}"))?;
-
+    write_gateway_config_atomic(&config)?;
     Ok(config)
 }
 
@@ -325,19 +331,48 @@ pub async fn bootstrap_gateway_supervisor(
     state: &tauri::State<'_, AppState>,
     app: &tauri::AppHandle,
 ) {
-    let gw_cfg = state.desktop_config.read().await.gateway.clone();
+    let mut gw_cfg = state.desktop_config.read().await.gateway.clone();
     if !gw_cfg.managed {
         return;
     }
+
+    let mut gateway_config = match gateway_read_config().await {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!("managed gateway config read failed: {error}");
+            return;
+        }
+    };
+    gateway_config.engine.ws_url = CANONICAL_ENGINE_WS_URL.into();
+    gateway_config.engine.http_base_url = CANONICAL_ENGINE_HTTP_BASE_URL.into();
+    if let Err(error) = write_gateway_config_atomic(&gateway_config) {
+        tracing::error!("managed gateway config bootstrap failed: {error}");
+        return;
+    }
+
+    let config_path = match gateway_config_path() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::error!("managed gateway config path resolution failed: {error}");
+            return;
+        }
+    };
+    if !gw_cfg.extra_args.iter().any(|arg| arg == "--config") {
+        gw_cfg.extra_args.push("--config".into());
+        gw_cfg
+            .extra_args
+            .push(config_path.to_string_lossy().into_owned());
+    }
+
     let mut guard = state.gateway_supervisor.lock().await;
     let already_running = guard
         .as_ref()
-        .map(|s| matches!(s.status(), GatewaySupervisorStatus::Running { .. }))
+        .map(|supervisor| matches!(supervisor.status(), GatewaySupervisorStatus::Running { .. }))
         .unwrap_or(false);
     if !already_running {
-        let sup = GatewaySupervisor::start(app, &gw_cfg);
-        let status = sup.status();
-        *guard = Some(sup);
+        let supervisor = GatewaySupervisor::start(app, &gw_cfg);
+        let status = supervisor.status();
+        *guard = Some(supervisor);
         tracing::info!("gateway supervisor auto-started: {status:?}");
     }
 }

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 import { createConsoleLogger } from "../../logger.js";
-import type { EngineEvent } from "../../engine/types.js";
+import type { EngineEvent } from "../../engine/runtime.js";
 import { ShannonError, type ShannonEvent } from "../protocol.js";
 import { MobileServer, type MethodHandlers } from "../server.js";
 import { createEngineHandlers, mapEngineEvent, type EngineClient } from "../engineBridge.js";

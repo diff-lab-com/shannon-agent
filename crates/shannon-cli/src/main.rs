@@ -536,12 +536,20 @@ enum Commands {
     /// Start the HTTP API server
     Serve {
         /// Port to listen on
-        #[arg(short, long, default_value_t = 8080)]
+        #[arg(short, long, default_value_t = 33420)]
         port: u16,
 
-        /// Host to bind to
-        #[arg(short, long)]
+        /// Host to bind to (defaults to loopback)
+        #[arg(long)]
         host: Option<String>,
+
+        /// Bearer token required for non-health API requests
+        #[arg(long)]
+        auth_token: Option<String>,
+
+        /// Explicitly allow binding to a non-loopback host (requires --auth-token)
+        #[arg(long)]
+        allow_nonloopback: bool,
     },
 
     /// Render predefined UI scenes as text files for AI analysis
@@ -1683,7 +1691,13 @@ fn read_stdin() -> String {
 }
 
 /// Run the HTTP API server.
-fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Result<()> {
+fn run_serve_command(
+    port: u16,
+    host: Option<String>,
+    auth_token: Option<String>,
+    allow_nonloopback: bool,
+    config: &CliConfig,
+) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         // Build tool registry with default tools (sandboxed to project dir).
@@ -1718,13 +1732,18 @@ fn run_serve_command(port: u16, host: Option<String>, config: &CliConfig) -> Res
 
         let mut server = shannon_core::api_server::ShannonApiServer::new(client_config)
             .with_tools(tools)
-            .port(port);
+            .port(port)
+            .allow_nonloopback(allow_nonloopback);
 
-        if let Some(h) = host {
+        if let Some(h) = host.as_deref() {
             server = server.host(h);
         }
+        if let Some(token) = auth_token {
+            server = server.auth_token(token);
+        }
 
-        println!("Shannon API server starting on port {port}");
+        let bind_host = host.as_deref().unwrap_or("127.0.0.1");
+        println!("Shannon API server starting on {bind_host}:{port}");
         server.serve().await.map_err(|e| anyhow::anyhow!("{e}"))
     })
 }
@@ -2692,8 +2711,19 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             };
             run_noninteractive_query(&query, !no_stream, &config, cli.yes, resume_data)?;
         }
-        Some(Commands::Serve { port, host }) => {
-            run_serve_command(port, host.clone(), &config)?;
+        Some(Commands::Serve {
+            port,
+            host,
+            auth_token,
+            allow_nonloopback,
+        }) => {
+            run_serve_command(
+                port,
+                host.clone(),
+                auth_token.clone(),
+                allow_nonloopback,
+                &config,
+            )?;
         }
         Some(Commands::Screenshot { dir }) => {
             let output_path = std::path::PathBuf::from(&dir);
@@ -3033,6 +3063,74 @@ mod tests {
                 assert_eq!(env[1], "TOKENS=4096");
             }
             _ => panic!("Expected Repl command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_serve_defaults() {
+        let cli = Cli::try_parse_from(["shannon", "serve"]).unwrap();
+        match cli.command {
+            Some(Commands::Serve {
+                port,
+                host,
+                auth_token,
+                allow_nonloopback,
+            }) => {
+                assert_eq!(port, 33420);
+                assert_eq!(host, None);
+                assert_eq!(auth_token, None);
+                assert!(!allow_nonloopback);
+            }
+            _ => panic!("Expected Serve command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_serve_custom_port_and_auth_token() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "serve",
+            "--port",
+            "34567",
+            "--auth-token",
+            "secret-token",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Serve {
+                port, auth_token, ..
+            }) => {
+                assert_eq!(port, 34567);
+                assert_eq!(auth_token.as_deref(), Some("secret-token"));
+            }
+            _ => panic!("Expected Serve command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_serve_nonloopback_requires_explicit_flag() {
+        let cli = Cli::try_parse_from([
+            "shannon",
+            "serve",
+            "--host",
+            "0.0.0.0",
+            "--allow-nonloopback",
+            "--auth-token",
+            "secret-token",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Serve {
+                host,
+                auth_token,
+                allow_nonloopback,
+                ..
+            }) => {
+                assert_eq!(host.as_deref(), Some("0.0.0.0"));
+                assert_eq!(auth_token.as_deref(), Some("secret-token"));
+                assert!(allow_nonloopback);
+            }
+            _ => panic!("Expected Serve command"),
         }
     }
 
