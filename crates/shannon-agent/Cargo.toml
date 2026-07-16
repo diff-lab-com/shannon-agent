@@ -5,8 +5,8 @@ edition.workspace = true
 authors = ["Shannon Team"]
 description = "Standalone agent binary for out-of-process agent execution"
 license = "MIT"
-repository = "https://github.com/shannon-agent/shannon-code"
-homepage = "https://github.com/shannon-agent/shannon-code"
+repository = "https://github.com/shannon-agent/shannon-agent"
+homepage = "https://github.com/shannon-agent/shannon-agent"
 
 [package.metadata.dist]
 dist = false

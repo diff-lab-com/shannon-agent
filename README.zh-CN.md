@@ -138,17 +138,17 @@ VS Code 配套扩展（`editors/vscode/`）：
 
 ```bash
 # Linux / macOS（从 GitHub Releases 下载）
-curl -fsSL https://github.com/shannon-agent/shannon-code/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
+curl -fsSL https://github.com/shannon-agent/shannon-agent/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
 sudo mv shannon /usr/local/bin/
 
 # 或使用 cargo（需要 Rust 1.88+）
-cargo install --git https://github.com/shannon-agent/shannon-code.git
+cargo install --git https://github.com/shannon-agent/shannon-agent.git
 ```
 
 <details>
 <summary>其他平台</summary>
 
-- **Windows**：从 [Releases](https://github.com/shannon-agent/shannon-code/releases) 下载 `.zip`
+- **Windows**：从 [Releases](https://github.com/shannon-agent/shannon-agent/releases) 下载 `.zip`
 - **从源码构建**：见下方[开发者指南](#开发者指南)
 
 </details>
@@ -284,7 +284,7 @@ shannon --prompt "修复lint" --diff-only       # 仅输出 diff
 ## 项目结构
 
 ```
-shannon-code/
+shannon-agent/
 ├── crates/
 │   ├── shannon-core/          # 核心引擎：API 客户端、查询引擎、权限、状态
 │   ├── shannon-tools/         # 工具实现：文件操作、Git、搜索、Notebook
@@ -297,7 +297,11 @@ shannon-code/
 │   ├── shannon-tool-interface/# 工具 trait 定义
 │   ├── shannon-codegen/       # 代码生成工具
 │   ├── shannon-cli/           # CLI 入口（shannon 二进制）
-│   └── shannon-agent/         # 独立 Agent（JSON-RPC over stdin/stdout）
+│   ├── shannon-agent/         # 独立 Agent（JSON-RPC over stdin/stdout）
+│   └── shannon-api-protocol/  # 线协议（serde 类型 + TS 代码生成）
+├── desktop/                   # Shannon Desktop（Tauri + React 19）
+│   └── ui/                    # 前端（React、Vite、Tailwind）
+├── gateway/                   # Shannon Gateway（TypeScript 平台桥接）
 ├── editors/vscode/            # VS Code 扩展
 ├── skills/                    # 内置技能定义
 ├── locales/                   # 国际化翻译文件（10 种语言）

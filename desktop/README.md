@@ -39,9 +39,8 @@ kill the product.
 ## What's in this repo
 
 This is the **desktop app** (Tauri + React 19 + TypeScript). The Rust agent
-engine lives in
-[`shannon-code`](https://github.com/shannon-agent/shannon-code) and is
-pulled in as a git subpath dependency.
+engine lives in `crates/` at the monorepo root and is consumed as a
+Cargo workspace member.
 
 | Area | Where |
 |------|-------|
@@ -58,8 +57,8 @@ pnpm install --dir ui
 cargo run
 ```
 
-For full setup, contribution guide, and engine architecture, see
-[`shannon-code`](https://github.com/shannon-agent/shannon-code).
+For full setup, contribution guide, and engine architecture, see the
+[monorepo root README](../README.md).
 
 ## Product strategy
 

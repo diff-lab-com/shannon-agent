@@ -138,17 +138,17 @@ Download the latest release for your platform:
 
 ```bash
 # Linux / macOS (from GitHub Releases)
-curl -fsSL https://github.com/shannon-agent/shannon-code/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
+curl -fsSL https://github.com/shannon-agent/shannon-agent/releases/latest/download/shannon-$(uname -s)-$(uname -m).tar.gz | tar xz
 sudo mv shannon /usr/local/bin/
 
 # Or with cargo (requires Rust 1.88+)
-cargo install --git https://github.com/shannon-agent/shannon-code.git
+cargo install --git https://github.com/shannon-agent/shannon-agent.git
 ```
 
 <details>
 <summary>Other platforms</summary>
 
-- **Windows**: Download `.zip` from [Releases](https://github.com/shannon-agent/shannon-code/releases)
+- **Windows**: Download `.zip` from [Releases](https://github.com/shannon-agent/shannon-agent/releases)
 - **From source**: See [Developer Guide](#developer-guide) below
 
 </details>
@@ -320,7 +320,7 @@ Fallback: `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are auto-detected.
 ## Project Structure
 
 ```
-shannon-code/
+shannon-agent/
 ├── crates/
 │   ├── shannon-core/          # Core engine: API client, query engine, permissions, state
 │   ├── shannon-tools/         # Tool implementations: file ops, git, search, notebook
@@ -333,7 +333,11 @@ shannon-code/
 │   ├── shannon-tool-interface/# Tool trait definitions
 │   ├── shannon-codegen/       # Code generation utilities
 │   ├── shannon-cli/           # CLI entry point (shannon binary)
-│   └── shannon-agent/         # Out-of-process agent (JSON-RPC over stdin/stdout)
+│   ├── shannon-agent/         # Out-of-process agent (JSON-RPC over stdin/stdout)
+│   └── shannon-api-protocol/  # Wire protocol (serde types + TS codegen)
+├── desktop/                   # Shannon Desktop (Tauri + React 19)
+│   └── ui/                    # Frontend (React, Vite, Tailwind)
+├── gateway/                   # Shannon Gateway (TypeScript platform bridge)
 ├── editors/vscode/            # VS Code extension
 ├── skills/                    # Bundled skill definitions
 ├── locales/                   # i18n translations (10 languages)

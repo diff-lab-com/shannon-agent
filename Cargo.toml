@@ -1,7 +1,7 @@
 # =============================================================================
 # Root workspace manifest for the shannon-agent monorepo.
 # ACTIVATED IN PHASE 2 (see ../MIGRATION.md): copy this file to the repo root,
-# replacing shannon-code's old workspace Cargo.toml.
+# replacing the old shannon-code workspace Cargo.toml.
 #
 # What this does:
 #  - Claims crates/* and desktop/ as one Cargo workspace.

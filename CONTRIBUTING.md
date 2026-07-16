@@ -98,5 +98,5 @@ crates/
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/shannon-agent/shannon-code/issues).
+- Use [GitHub Issues](https://github.com/shannon-agent/shannon-agent/issues).
 - Include: Rust version (`rustc --version`), OS, steps to reproduce, expected vs actual behavior.
