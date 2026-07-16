@@ -1,0 +1,20 @@
+[package]
+name = "shannon-api-protocol"
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Stable wire types for the Shannon api_server contract (REST, WS, SSE). The single source of truth consumed by gateway (via gen-ts), desktop, code, and future clients."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+schemars = { version = "0.8", features = ["uuid1"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[[bin]]
+name = "gen-ts"
+path = "src/bin/gen_ts.rs"

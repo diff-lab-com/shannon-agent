@@ -4,9 +4,9 @@ import { PushQueue, type CloseReason } from "../lib/pushQueue.js";
 import {
   type EngineEvent,
   type EngineEventType,
-  type QueryRequest,
   isTerminalEvent,
 } from "./types.js";
+import type { WsClientMessageQuery } from "./types.gen.js";
 
 /**
  * Typed WebSocket client for the Shannon engine's `/api/ws`.
@@ -128,7 +128,7 @@ export class EngineWsClient {
       throw new Error("a query is already in flight on this client");
     }
 
-    const req: QueryRequest = {
+    const req: WsClientMessageQuery = {
       type: "query",
       prompt,
       model: opts.model ?? this.defaultModel,

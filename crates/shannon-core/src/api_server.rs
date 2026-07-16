@@ -2,6 +2,19 @@
 //!
 //! Exposes REST, SSE, and WebSocket APIs so external tools and remote TUI
 //! instances can interact with Shannon over the network.
+//!
+//! ## Wire contract
+//!
+//! The wire types (`QueryRequest`, `WsClientMessage`, `WsServerMessage`,
+//! `ApprovalDecision`, …) live in [`shannon_api_protocol`] — the single
+//! source of truth for the API contract. This module re-exports them so
+//! existing Rust call sites keep compiling without churn; new code should
+//! import them from `shannon_api_protocol` directly when the dependency
+//! direction is unambiguous.
+//!
+//! The engine-level `PermissionChoice` ↔ wire `ApprovalDecision` conversion
+//! intentionally stays here: the protocol crate must not depend on
+//! `shannon_engine`, so the boundary glue lives next to the server.
 
 use crate::VERSION;
 use crate::query_engine::{
@@ -16,7 +29,11 @@ use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use shannon_api_protocol::{
+    ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
+    QueryRequest, QueryResponse, ToolEntry, ToolsListResponse, UsageInfo, WsClientMessage,
+    WsServerMessage,
+};
 use shannon_engine::api::{LlmClient, LlmClientConfig, Message};
 use shannon_engine::permissions::{PermissionChoice, PermissionManager};
 use shannon_engine::state::StateManager;
@@ -28,84 +45,18 @@ use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
 
-// ── Request / Response types ───────────────────────────────────────────
-
-/// JSON body for `POST /api/query`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryRequest {
-    /// The user prompt to send to the LLM.
-    pub prompt: String,
-    /// Optional model override (e.g. `"claude-sonnet-4"`, `"gpt-4o"`).
-    #[serde(default)]
-    pub model: Option<String>,
-    /// Optional client-supplied session identity (a UUID string). When omitted
-    /// or unparseable the server mints a fresh UUID. Lets a caller attribute
-    /// successive requests to the same conversation session; cross-request
-    /// history persistence is wired up in P0-e (the contract lands here).
-    #[serde(default)]
-    pub session_id: Option<String>,
-}
-
-/// Aggregated JSON response returned by `POST /api/query`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QueryResponse {
-    /// The full text content produced by the LLM.
-    pub text: String,
-    /// The model that was used.
-    pub model: String,
-    /// Token usage breakdown.
-    pub usage: Option<UsageInfo>,
-    /// Any error that occurred (non-fatal accumulation).
-    #[serde(default)]
-    pub errors: Vec<String>,
-    /// The session id attributed to this query — echoes the client-supplied
-    /// `session_id` when one was provided, otherwise the freshly-minted UUID
-    /// the server used. Lets callers record which session a stateless request
-    /// was attributed to (`#[serde(default)]` keeps old payloads parseable).
-    #[serde(default)]
-    pub session_id: Uuid,
-}
-
-/// Token usage information included in the query response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageInfo {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cost_usd: f64,
-}
-
-/// JSON response for `GET /api/health`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HealthResponse {
-    pub status: String,
-    pub version: String,
-}
-
-/// JSON response for `GET /api/models`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelsResponse {
-    pub models: Vec<ModelInfo>,
-}
-
-/// Information about a single available model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
-    pub id: String,
-    pub provider: String,
-}
-
-/// JSON response for `POST /api/tools/list`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolsListResponse {
-    pub tools: Vec<ToolEntry>,
-}
-
-/// Summary of a single registered tool.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolEntry {
-    pub name: String,
-    pub description: String,
-}
+// Re-export the wire types so existing call sites keep compiling without
+// a sweeping rename. New code should import them from `shannon_api_protocol`
+// directly when there is no engine-side adapter to write.
+pub use shannon_api_protocol::{
+    ApprovalDecision as PublicApprovalDecision,
+    ApprovalRespondRequest as PublicApprovalRespondRequest, HealthResponse as PublicHealthResponse,
+    ModelInfo as PublicModelInfo, ModelsResponse as PublicModelsResponse, PROTOCOL_VERSION,
+    QueryRequest as PublicQueryRequest, QueryResponse as PublicQueryResponse,
+    ToolEntry as PublicToolEntry, ToolsListResponse as PublicToolsListResponse,
+    UsageInfo as PublicUsageInfo, WsClientMessage as PublicWsClientMessage,
+    WsServerMessage as PublicWsServerMessage,
+};
 
 /// Generic error returned by all API endpoints.
 #[derive(Debug)]
@@ -124,36 +75,17 @@ impl IntoResponse for ApiError {
     }
 }
 
-// ── Approval wire types (P0-b) ─────────────────────────────────────────
+// ── Approval wire ↔ engine glue ────────────────────────────────────────
 
-/// Wire representation of a human's approval decision for `POST
-/// /api/approval/respond`. Decoupled from the engine's `PermissionChoice` so
-/// the HTTP contract stays stable when the engine enum grows new variants.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum ApprovalDecision {
-    #[serde(rename = "allow_once")]
-    AllowOnce,
-    #[serde(rename = "always_allow")]
-    AlwaysAllow,
-    #[serde(rename = "deny")]
-    Deny,
-}
-
-impl ApprovalDecision {
-    fn to_choice(self) -> PermissionChoice {
-        match self {
-            ApprovalDecision::AllowOnce => PermissionChoice::AllowOnce,
-            ApprovalDecision::AlwaysAllow => PermissionChoice::AlwaysAllow,
-            ApprovalDecision::Deny => PermissionChoice::Deny,
-        }
+/// Bridge the wire-level [`ApprovalDecision`] (the public HTTP contract) to
+/// the engine's [`PermissionChoice`]. Lives here, not in `shannon_api_protocol`,
+/// because the protocol crate must not depend on the engine.
+fn approval_decision_to_choice(d: ApprovalDecision) -> PermissionChoice {
+    match d {
+        ApprovalDecision::AllowOnce => PermissionChoice::AllowOnce,
+        ApprovalDecision::AlwaysAllow => PermissionChoice::AlwaysAllow,
+        ApprovalDecision::Deny => PermissionChoice::Deny,
     }
-}
-
-/// JSON body for `POST /api/approval/respond`.
-#[derive(Debug, Deserialize)]
-pub struct ApprovalRespondRequest {
-    pub request_id: String,
-    pub choice: ApprovalDecision,
 }
 
 // ── Shared application state ───────────────────────────────────────────
@@ -181,90 +113,6 @@ pub struct WsSession {
     pub messages: Vec<Message>,
     /// The model override for this session.
     pub model: Option<String>,
-}
-
-// ── WebSocket protocol messages ─────────────────────────────────────────
-
-/// Incoming message from a WebSocket client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum WsClientMessage {
-    /// Send a query to the LLM.
-    #[serde(rename = "query")]
-    Query {
-        prompt: String,
-        model: Option<String>,
-        /// Optional session id override (UUID string). When omitted the
-        /// connection's own session id is used. Lets a caller multiplex
-        /// several conversations over a single socket.
-        #[serde(default)]
-        session_id: Option<String>,
-    },
-    /// Clear conversation history for this session.
-    #[serde(rename = "clear")]
-    Clear,
-    /// Request current session info.
-    #[serde(rename = "info")]
-    Info,
-    /// Cancel the current in-progress query.
-    #[serde(rename = "cancel")]
-    Cancel,
-}
-
-/// Outgoing message sent to a WebSocket client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum WsServerMessage {
-    /// A text chunk from the LLM response.
-    #[serde(rename = "text")]
-    Text { content: String },
-    /// Tool use event.
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        name: String,
-        input: serde_json::Value,
-    },
-    /// Tool result event.
-    #[serde(rename = "tool_result")]
-    ToolResult { name: String, output: String },
-    /// Token usage update.
-    #[serde(rename = "usage")]
-    Usage {
-        input_tokens: u64,
-        output_tokens: u64,
-        cost_usd: f64,
-    },
-    /// Query completed.
-    #[serde(rename = "completed")]
-    Completed { model: String },
-    /// Query failed.
-    #[serde(rename = "failed")]
-    Failed { error: String },
-    /// Query was cancelled by the client via `WsClientMessage::Cancel`. Emitted
-    /// after the in-progress query's event stream has been dropped (which aborts
-    /// the engine's producer task).
-    #[serde(rename = "cancelled")]
-    Cancelled,
-    /// Engine requests human approval for a tool call. The client responds via
-    /// `POST /api/approval/respond` with the matching `request_id`.
-    #[serde(rename = "approval_request")]
-    ApprovalRequest {
-        request_id: String,
-        tool_name: String,
-        tool_input: serde_json::Value,
-        description: String,
-        is_destructive: bool,
-        diff_preview: Option<String>,
-    },
-    /// Session info response.
-    #[serde(rename = "session_info")]
-    SessionInfo {
-        message_count: usize,
-        model: Option<String>,
-    },
-    /// Error in protocol.
-    #[serde(rename = "error")]
-    Error { message: String },
 }
 
 // ── ShannonApiServer ───────────────────────────────────────────────────
@@ -755,7 +603,7 @@ async fn approval_respond_handler(
     let mut registry = state.approval_registry.lock().await;
     match registry.remove(&body.request_id) {
         Some(tx) => {
-            let _ = tx.send(body.choice.to_choice());
+            let _ = tx.send(approval_decision_to_choice(body.choice));
             (
                 StatusCode::OK,
                 Json(serde_json::json!({"status": "resolved"})),
@@ -795,15 +643,10 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
     // blocked the outer receive).
     let (mut sender, mut receiver) = socket.split();
 
-    // Send session greeting
-    let _ = send_msg(
-        &mut sender,
-        WsServerMessage::SessionInfo {
-            message_count: 0,
-            model: None,
-        },
-    )
-    .await;
+    // Send session greeting. The greeting carries the protocol version so a
+    // client can refuse to interoperate with a server on an unexpected
+    // version of the wire contract (Phase A handshake).
+    let _ = send_msg(&mut sender, WsServerMessage::greeting(0, None)).await;
 
     'outer: loop {
         let client_msg = match receiver.next().await {
@@ -1027,19 +870,15 @@ async fn handle_ws_socket(socket: WebSocket, state: AppState) {
             WsClientMessage::Clear => {
                 let mut s = session.lock().await;
                 s.messages.clear();
-                let info = WsServerMessage::SessionInfo {
-                    message_count: 0,
-                    model: s.model.clone(),
-                };
-                let _ = send_msg(&mut sender, info).await;
+                let _ = send_msg(&mut sender, WsServerMessage::greeting(0, s.model.clone())).await;
             }
             WsClientMessage::Info => {
                 let s = session.lock().await;
-                let info = WsServerMessage::SessionInfo {
-                    message_count: s.messages.len(),
-                    model: s.model.clone(),
-                };
-                let _ = send_msg(&mut sender, info).await;
+                let _ = send_msg(
+                    &mut sender,
+                    WsServerMessage::greeting(s.messages.len(), s.model.clone()),
+                )
+                .await;
             }
             WsClientMessage::Cancel => {
                 // No query in progress — nothing to cancel.
@@ -2144,10 +1983,7 @@ mod tests {
 
     #[test]
     fn test_ws_server_message_session_info() {
-        let msg = WsServerMessage::SessionInfo {
-            message_count: 5,
-            model: Some("gpt-4o".to_string()),
-        };
+        let msg = WsServerMessage::greeting(5, Some("gpt-4o".to_string()));
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["type"], "session_info");
@@ -2157,10 +1993,7 @@ mod tests {
 
     #[test]
     fn test_ws_server_message_session_info_no_model() {
-        let msg = WsServerMessage::SessionInfo {
-            message_count: 0,
-            model: None,
-        };
+        let msg = WsServerMessage::greeting(0, None);
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["type"], "session_info");
@@ -2203,10 +2036,7 @@ mod tests {
             WsServerMessage::Failed {
                 error: "err".to_string(),
             },
-            WsServerMessage::SessionInfo {
-                message_count: 3,
-                model: Some("m".to_string()),
-            },
+            WsServerMessage::greeting(3, Some("m".to_string())),
             WsServerMessage::Error {
                 message: "bad".to_string(),
             },
@@ -2377,14 +2207,17 @@ mod tests {
     #[test]
     fn test_approval_decision_maps_to_permission_choice() {
         assert_eq!(
-            ApprovalDecision::AllowOnce.to_choice(),
+            approval_decision_to_choice(ApprovalDecision::AllowOnce),
             PermissionChoice::AllowOnce
         );
         assert_eq!(
-            ApprovalDecision::AlwaysAllow.to_choice(),
+            approval_decision_to_choice(ApprovalDecision::AlwaysAllow),
             PermissionChoice::AlwaysAllow
         );
-        assert_eq!(ApprovalDecision::Deny.to_choice(), PermissionChoice::Deny);
+        assert_eq!(
+            approval_decision_to_choice(ApprovalDecision::Deny),
+            PermissionChoice::Deny
+        );
     }
 
     #[test]

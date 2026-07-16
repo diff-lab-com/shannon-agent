@@ -26,6 +26,9 @@ shannon-tool-interface = { path = "../shannon-tool-interface" }
 # Shared types
 shannon-types = { path = "../shannon-types" }
 
+# Wire contract — single source of truth for QueryRequest/WsServerMessage/etc.
+shannon-api-protocol = { path = "../shannon-api-protocol" }
+
 # Engine (extracted modules — api/, testing/record_replay)
 shannon-engine = { path = "../shannon-engine" }
 

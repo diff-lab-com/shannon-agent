@@ -5930,6 +5930,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shannon-api-protocol"
+version = "0.6.0"
+dependencies = [
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "shannon-cli"
 version = "0.6.0"
 dependencies = [
@@ -6047,6 +6057,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
+ "shannon-api-protocol",
  "shannon-engine",
  "shannon-tool-interface",
  "shannon-types",
