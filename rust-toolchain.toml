@@ -1,2 +1,10 @@
+# Unified toolchain for the whole monorepo.
+# ACTIVATED IN PHASE 2 (see ../MIGRATION.md): copy to repo root.
+#
+# Unifies shannon-code (was `stable`) and shannon-desktop (was pinned `1.88`)
+# onto a single reproducible channel that satisfies the workspace MSRV (1.88).
+# rustup auto-installs this exact channel for contributors.
 [toolchain]
-channel = "stable"
+channel = "1.88"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

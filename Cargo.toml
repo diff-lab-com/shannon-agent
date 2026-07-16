@@ -1,64 +1,65 @@
+# =============================================================================
+# Root workspace manifest for the shannon-agent monorepo.
+# ACTIVATED IN PHASE 2 (see ../MIGRATION.md): copy this file to the repo root,
+# replacing shannon-code's old workspace Cargo.toml.
+#
+# What this does:
+#  - Claims crates/* and desktop/ as one Cargo workspace.
+#  - Lets desktop depend on engine crates via `shannon-core.workspace = true`
+#    (path + version) — deleting every git/SSH/rev dep and the [patch] block.
+#  - Keeps gateway OUT of Cargo (it is TypeScript — an independent pnpm package, not a workspace member).
+# =============================================================================
+
 [workspace]
 resolver = "2"
 members = [
-    "crates/shannon-core",
-    "crates/shannon-cli",
-    "crates/shannon-ui",
-    "crates/shannon-mcp",
-    "crates/shannon-tools",
-    "crates/shannon-agents",
-    "crates/shannon-agent",
-    "crates/shannon-types",
-    "crates/shannon-commands",
-    "crates/shannon-skills",
-    "crates/shannon-tool-interface",
-    "crates/shannon-codegen",
-    "crates/shannon-stability-attr",
-    "crates/shannon-engine",
+    "crates/*",
+    "desktop",
 ]
+# gateway/ is TS, intentionally not a Cargo member.
 
 [workspace.package]
-version = "0.5.5"
+version = "0.6.0"           # unified release version (one tag = all three products)
 edition = "2024"
 rust-version = "1.88"
-authors = ["Shannon Code Contributors"]
+authors = ["Shannon Contributors"]
 license = "Apache-2.0"
-repository = "https://github.com/shannon-agent/shannon-code"
-homepage = "https://github.com/shannon-agent/shannon-code"
+repository = "https://github.com/shannon-agent/shannon-agent"
+homepage = "https://github.com/shannon-agent/shannon-agent"
 
 [workspace.dependencies]
-# Async runtime
+# ---- Async runtime ----
 tokio = { version = "1.43", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
 async-trait = "0.1"
 
-# Serialization
+# ---- Serialization ----
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
 
-# CLI
+# ---- CLI ----
 clap = { version = "4.5", features = ["derive"] }
 
-# Terminal UI
+# ---- Terminal UI ----
 ratatui = "0.29"
 crossterm = "0.28"
 
-# Error handling
+# ---- Error handling ----
 anyhow = "1.0"
 thiserror = "2.0"
 
-# Logging
+# ---- Logging ----
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# HTTP
+# ---- HTTP / WS server ----
 reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
 
-# Utilities
+# ---- Utilities ----
 uuid = { version = "1.12", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures = "0.3"
@@ -67,35 +68,48 @@ dirs = "5.0"
 dotenvy = "0.15"
 bytes = "1.0"
 
-# Internationalization
+# ---- i18n ----
 rust-i18n = "3"
 sys-locale = "0.3"
 
-# WebSocket support
+# ---- WebSocket client ----
 tokio-tungstenite = { version = "0.26", features = ["connect"] }
 
-# OAuth2 PKCE support
+# ---- OAuth2 PKCE ----
 sha2 = "0.10"
 hmac = "0.12"
 rand = "0.8"
 base64 = "0.22"
 urlencoding = "2.1"
 
-# Image processing
+# ---- Image / archive ----
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
-
-# Archive handling (Desktop Extensions: .dxt / .mcpb are ZIP archives)
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 
-# Property-based testing
+# ---- Testing ----
 proptest = "1"
 
-# Proc-macro infrastructure (for shannon-stability-attr)
+# ---- Proc-macro infra ----
 proc-macro2 = "1"
 quote = "1"
 syn = "2"
-shannon-stability-attr = { path = "crates/shannon-stability-attr" }
-shannon-engine = { path = "crates/shannon-engine" }
+
+# =============================================================================
+# Internal crates — path + version dual declaration.
+# In-tree: compiles from local source. Publishable: version satisfies crates.io.
+# Desktop uses these via `<name>.workspace = true` (no git, no SSH, no rev, no patch).
+# =============================================================================
+shannon-core   = { path = "crates/shannon-core",   version = "0.6.0" }
+shannon-engine = { path = "crates/shannon-engine", version = "0.6.0" }
+shannon-types  = { path = "crates/shannon-types",  version = "0.6.0" }
+shannon-tools  = { path = "crates/shannon-tools",  version = "0.6.0" }
+shannon-mcp    = { path = "crates/shannon-mcp",    version = "0.6.0" }
+shannon-skills = { path = "crates/shannon-skills", version = "0.6.0" }
+shannon-agents = { path = "crates/shannon-agents", version = "0.6.0" }
+shannon-stability-attr = { path = "crates/shannon-stability-attr" }          # proc-macro: no version
+
+# ---- Desktop-specific (declared at workspace level so both roots agree) ----
+tauri = { version = "2", features = ["tray-icon"] }
 
 [profile.release]
 opt-level = 3
@@ -108,7 +122,6 @@ panic = "abort"
 opt-level = 0
 debug = true
 
-# The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
 lto = "thin"
