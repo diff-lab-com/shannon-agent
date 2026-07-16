@@ -92,16 +92,23 @@ jobs:
           projectPath: desktop
           args: --target ${{ matrix.target }}
 
-      - name: Upload desktop artifact
+- name: Upload desktop artifact
         uses: actions/upload-artifact@v4
         with:
           name: shannon-desktop-${{ matrix.target }}-${{ matrix.ext }}
+          # Tauri-action writes the bundle to the workspace-root target dir
+          # (not under desktop/target) when projectPath is the desktop
+          # directory — it inherits cargo's workspace root for target/.
           path: |
-            desktop/target/${{ matrix.target }}/release/bundle/deb/*.deb
-            desktop/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
-            desktop/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            desktop/target/${{ matrix.target }}/release/bundle/msi/*.msi
-            desktop/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/deb/*.deb
+            target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            target/${{ matrix.target }}/release/bundle/msi/*.msi
+            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            target/${{ matrix.target }}/release/bundle/macos/*.app
+            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
+          if-no-files-found: warn
 
   # ────────────────────────── Gateway (Bun) ──────────────────────────
   gateway:
