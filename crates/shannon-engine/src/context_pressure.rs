@@ -362,6 +362,7 @@ fn format_tokens(n: usize) -> String {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -607,6 +607,7 @@ pub fn register_team_tools(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use shannon_core::tools::ToolRegistry;

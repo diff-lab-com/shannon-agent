@@ -961,6 +961,7 @@ fn dir_size(path: &Path) -> Result<u64, std::io::Error> {
 // ===========================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

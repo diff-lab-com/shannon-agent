@@ -92,6 +92,7 @@ You can interact with web browsers through browser automation tools. Use these t
 ";
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

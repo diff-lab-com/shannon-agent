@@ -206,6 +206,7 @@ fn variant_name(event: &QueryEvent) -> &'static str {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use serde_json::json;

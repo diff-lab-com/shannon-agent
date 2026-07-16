@@ -140,6 +140,7 @@ pub fn lines_for_token_budget(content: &str, budget_tokens: usize) -> usize {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -260,7 +261,7 @@ mod tests {
 
         let count = lines_for_token_budget(&content, 10);
         assert!(
-            count >= 3 && count <= 7,
+            (3..=7).contains(&count),
             "expected roughly 5 lines, got {count}"
         );
     }

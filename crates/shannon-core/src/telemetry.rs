@@ -397,6 +397,7 @@ where
 // ===========================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::thread;
@@ -570,7 +571,7 @@ mod tests {
         // Second shutdown should fail.
         match mgr.shutdown() {
             Err(TelemetryError::AlreadyShutdown) => {}
-            other => panic!("expected AlreadyShutdown, got {:?}", other),
+            other => panic!("expected AlreadyShutdown, got {other:?}"),
         }
     }
 

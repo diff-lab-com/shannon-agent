@@ -316,6 +316,7 @@ pub fn create_scenario_workspace(setup: &ScenarioSetup) -> tempfile::TempDir {
 // ── Tests ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::testing::mock_dsl::MockContentBlock;

@@ -87,7 +87,7 @@ fn bench_perform_edit_replace_all(c: &mut Criterion) {
             &n_lines,
             |b, _| {
                 b.iter(|| {
-                    let result = perform_edit(&content, &old, &new, true).unwrap();
+                    let result = perform_edit(&content, old, new, true).unwrap();
                     assert_eq!(result.1, expected_count);
                     result
                 });

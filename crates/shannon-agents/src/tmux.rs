@@ -172,6 +172,7 @@ impl Default for TmuxManager {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

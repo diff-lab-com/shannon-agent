@@ -3614,6 +3614,7 @@ fn save_conversation_to_disk(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::tools::ToolRegistry;
@@ -4171,8 +4172,10 @@ mod tests {
         let tools = ToolRegistry::new();
         let permissions = PermissionManager::new();
         let state = StateManager::new();
-        let mut config = QueryEngineConfig::default();
-        config.max_context_tokens = Some(32000);
+        let config = QueryEngineConfig {
+            max_context_tokens: Some(32000),
+            ..Default::default()
+        };
 
         let engine = QueryEngine::new(client, tools, permissions, state, config);
         assert_eq!(engine.effective_max_context_tokens, 32000);
@@ -4304,8 +4307,10 @@ mod tests {
         let tools = ToolRegistry::new();
         let permissions = PermissionManager::new();
         let state = StateManager::new();
-        let mut config = QueryEngineConfig::default();
-        config.max_context_tokens = Some(8000);
+        let config = QueryEngineConfig {
+            max_context_tokens: Some(8000),
+            ..Default::default()
+        };
 
         let engine = QueryEngine::new(client, tools, permissions, state, config);
         assert_eq!(engine.resolved_context_window(), 8000);

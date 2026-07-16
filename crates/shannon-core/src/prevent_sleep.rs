@@ -143,6 +143,7 @@ impl Default for PreventSleepGuard {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::sync::Mutex;
     use std::sync::OnceLock;

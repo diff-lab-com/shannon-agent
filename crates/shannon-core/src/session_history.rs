@@ -671,6 +671,7 @@ fn extract_files_accessed(messages: &[Message]) -> Vec<String> {
 // ============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use shannon_engine::api::MessageContent;

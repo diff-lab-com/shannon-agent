@@ -665,6 +665,7 @@ fn builtin_agent_definitions() -> Vec<AgentDefinition> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;

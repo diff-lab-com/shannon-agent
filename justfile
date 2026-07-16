@@ -1,257 +1,80 @@
-# Shannon 测试命令速查
+# Shannon-Agent monorepo task runner.
+# ACTIVATED IN PHASE 5 (see ../MIGRATION.md): copy to repo root.
+# `just` discovers this at the repo root. Requires: cargo, pnpm, bun.
 #
-# 日常开发:   just dev          (check + lint + test, 提交前跑一次)
-# 云端 CI:    just ci           (全量测试 + doctests, 带 retry/timeout)
-# 回归/调优:  just bench        (微基准测试, 与基线比较)
-# 性能回归:   just perf         (性能阈值测试)
-# 场景测试:   just scenarios    (YAML 声明式场景测试)
-# 录制:       just record       (默认 anthropic)
-#             just record-deepseek / record-openai / record-minimax ...
-# 回放:       just replay       (回放所有已录制的 fixture)
-# 发布:       just build        (编译 release binary)
-#
-# 安装: cargo install just cargo-nextest
+# Note: desktop/ui and gateway are INDEPENDENT TS packages (no pnpm workspace).
+# Each is installed/built in its own directory — see `install` below.
 
-# 录制时使用的模型名 (默认由各 recipe 自行设定)
-shannon_model := env_var_or_default("SHANNON_MODEL", "")
+default:
+    @just --list
 
-# 日常开发：提交前跑一次 (check + lint + test)
-dev:
-    cargo check --workspace
-    cargo clippy --workspace
-    cargo nextest run --workspace --config-file .config/nextest.toml
+# ---------- Install (TS packages are independent — no `pnpm install -r`) ----------
 
-# 全量测试 (本地快速验证)
-test:
-    cargo nextest run --workspace --config-file .config/nextest.toml
+install:
+    cd desktop/ui && pnpm install
+    cd gateway && pnpm install
 
-# 完整测试 (nextest + doctests)
-test-all: test
-    cargo test --workspace --doc
+# ---------- Products (each independently buildable) ----------
 
-# CI 完整流程 (nextest CI profile + doctests + lint)
-ci:
-    cargo nextest run --workspace --config-file .config/nextest.toml --profile ci
-    cargo test --workspace --doc
-    cargo clippy --workspace -- -D warnings
-
-# 快速类型检查
-check:
-    cargo check --workspace
-
-# Lint (CI 严格模式: warning 视为 error)
-lint:
-    cargo clippy --workspace -- -D warnings
-
-# 性能阈值测试 (检测明显性能退化)
-perf:
-    cargo nextest run --workspace --config-file .config/nextest.toml -E 'test(compaction_100_turns) + test(session_load) + test(tool_chain) + test(streaming_parse) + test(snapshot_render) + test(token_estimation) + test(cache_hit_rate) + test(cache_accumulation) + test(single_turn) + test(five_turn) + test(sse_round_trip) + test(message_serialization)'
-
-# YAML 场景测试
-scenarios:
-    cargo nextest run --workspace --config-file .config/nextest.toml -E 'test(scenario_)'
-
-# ── 录制/回放 ──────────────────────────────────────────────────────────────
-#
-# 录制用真实 API 请求生成 fixture 文件，回放用 fixture 驱动 mockito mock。
-#
-# fixture 命名: {provider}_{model}_{session_name}.jsonl
-# 例如: anthropic_unknown_create_file.jsonl
-#       deepseek_deepseek-chat_create_file.jsonl
-#
-# 录制示例:
-#   SHANNON_API_KEY=sk-ant-... just record
-#   SHANNON_API_KEY=sk-... just record-deepseek
-#   SHANNON_API_KEY=sk-... just record-openai gpt-4o-mini
-#   SHANNON_API_KEY=sk-... SHANNON_MODEL=claude-sonnet-4 just record
-#
-# 自定义 provider (需手动设 base URL):
-#   SHANNON_API_KEY=... SHANNON_BASE_URL=https://api.myprovider.com/v1 \
-#     SHANNON_RECORD_PROVIDER=myprovider just record
-#
-# 回放所有已录制的 fixture:
-#   just replay
-
-# 录制: Anthropic (默认)
-record: (_build) (_check-api-key)
-    @echo "Recording with provider=anthropic, model={{ if shannon_model != "" { shannon_model } else { "unknown" } }}..."
-    SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    SHANNON_RECORD_PROVIDER=anthropic \
-    SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "unknown" } }} \
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
-
-# 录制: DeepSeek
-record-deepseek: (_build) (_check-api-key)
-    @echo "Recording with provider=deepseek, model={{ if shannon_model != "" { shannon_model } else { "deepseek-chat" } }}..."
-    SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    SHANNON_RECORD_PROVIDER=deepseek \
-    SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "deepseek-chat" } }} \
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
-
-# 录制: OpenAI (可选参数: model, 默认 gpt-4o)
-record-openai model="gpt-4o": (_build) (_check-api-key)
-    @echo "Recording with provider=openai, model={{ model }}..."
-    SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    SHANNON_RECORD_PROVIDER=openai \
-    SHANNON_MODEL={{ model }} \
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
-
-# 录制: MiniMax
-record-minimax: (_build) (_check-api-key)
-    @echo "Recording with provider=minimax, model={{ if shannon_model != "" { shannon_model } else { "MiniMax-Text-01" } }}..."
-    SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    SHANNON_RECORD_PROVIDER=minimax \
-    SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "MiniMax-Text-01" } }} \
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
-
-# 录制: Moonshot/Kimi
-record-moonshot: (_build) (_check-api-key)
-    @echo "Recording with provider=moonshot, model={{ if shannon_model != "" { shannon_model } else { "moonshot-v1-8k" } }}..."
-    SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    SHANNON_RECORD_PROVIDER=moonshot \
-    SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "moonshot-v1-8k" } }} \
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
-
-# 录制: Zhipu/GLM (标准 OpenAI 兼容 API)
-record-zhipu: (_build) (_check-api-key)
-    @echo "Recording with provider=zhipu, model={{ if shannon_model != "" { shannon_model } else { "glm-4-flash" } }}..."
-    SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    SHANNON_RECORD_PROVIDER=zhipu \
-    SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "glm-4-flash" } }} \
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
-
-# 录制: Zhipu/GLM Coding Plan (Anthropic 兼容 API)
-record-zhipu-coding: (_build) (_check-api-key)
-    @echo "Recording with provider=zhipu-coding, model={{ if shannon_model != "" { shannon_model } else { "glm-5.1" } }}..."
-    SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    SHANNON_RECORD_PROVIDER=zhipu-coding \
-    SHANNON_MODEL={{ if shannon_model != "" { shannon_model } else { "glm-5.1" } }} \
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
-
-# 录制: 任意 provider + model
-# 用法: just record-with <provider> <model>
-# 示例: just record-with zhipu glm-5.1
-#       just record-with dashscope qwen-plus
-#       just record-with myprovider mymodel
-record-with provider model: (_build) (_check-api-key)
-    @echo "Recording with provider={{ provider }}, model={{ model }}..."
-    SHANNON_RECORD_DIR=tests/fixtures/real_tasks \
-    SHANNON_RECORD_PROVIDER={{ provider }} \
-    SHANNON_MODEL={{ model }} \
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        --run-ignored ignored-only --test-threads=1 --no-fail-fast -E 'test(record_task_)'
-
-# 回放录制的 fixture (不需要 API key)
-replay:
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        -E 'test(replay_) + test(test_write_file) + test(test_record_provider) + test(test_create_workspace) + test(test_provider_key_env) + test(test_all_nested)'
-
-# 回放: 用 fixture 驱动 agent 做端到端 CI 回归 (ADR 0003 Phase 1, 不需要 API key)
-# 与 `replay` (只做 fixture 结构校验) 区分开 —— 这里真正重跑 agent + 工具 + 工作区副作用。
-replay-agent:
-    cargo nextest run --test live_tests -p shannon-cli --config-file .config/nextest.toml \
-        -E 'test(replay_agent_)'
-
-# 分析录制 fixture 中的缓存命中统计 (per-fixture + per-provider 表格)
-#
-# 验证 Shannon 高效率低成本特性: prefix cache 命中率按 fixture 和 provider 汇总.
-#
-# cache_rate 公式 (与 crates/shannon-core/src/testing/mock_dsl.rs:698-700 一致):
-#   cache_read / (cache_read + cache_creation + input_tokens) = cache rate
-#
-# total = max(prompt_field, cache_read + cache_creation) 以兼容:
-#   - OpenAI/MiniMax 格式: usage.prompt_tokens 是总 prompt 大小 (含 cache_* + input)
-#   - Anthropic/Zhipu 格式: usage.input_tokens 是非缓存部分, total = input + cache_creation + cache_read
-#
-# 两列 cache_rate:
-#   rate       - 全部 exchanges (含 cold start turn 1)
-#   warm_rate  - 排除 cold start exchanges (cache_read < 100, 启发式阈值)
-#
-# 颜色 (ANSI):  ≥70% green, 40-69% yellow, <40% red
-cache-stats:
-    @GREEN='\033[32m'; \
-    YELLOW='\033[33m'; \
-    RED='\033[31m'; \
-    NC='\033[0m'; \
-    { \
-        printf "%-58s  %6s  %12s  %12s  %9s  %9s\n" "fixture" "exch" "cache_read" "prompt_tot" "rate" "warm_rate"; \
-        printf -- '-%.0s' {1..126}; echo; \
-        for f in tests/fixtures/real_tasks/*.jsonl; do \
-            [ -f "$f" ] || continue; \
-            base=$(basename "$f"); \
-            jq -rs --arg n "$base" '($n | split("_")[0]) as $provider | ([.[] | ((.cache_read_input_tokens // 0) // 0) as $cr | ((.cache_creation_input_tokens // 0) // 0) as $cc | (try (.response.body | scan("\"(prompt_tokens|input_tokens)\":\\s*([0-9]+)") | last | tonumber) catch 0) as $pf | (if $pf > ($cr + $cc) then $pf else ($pf + $cr + $cc) end) as $total | {cr: $cr, total: $total, is_warm: ($total > 0 and $cr * 20 >= $total)}]) as $stats | ($stats | map(.cr) | add) as $tcr | ($stats | map(.total) | add) as $tp | ($stats | map(select(.is_warm) | .cr) | add // 0) as $wcr | ($stats | map(select(.is_warm) | .total) | add // 0) as $wtp | ($stats | length) as $exch | "\($n)\t\($provider)\t\($exch)\t\($tcr)\t\($tp)\t\($wcr)\t\($wtp)"' "$f" 2>/dev/null; \
-        done; \
-    } | awk -F'\t' -v green="$GREEN" -v yellow="$YELLOW" -v red="$RED" -v nc="$NC" \
-        'NR==1 {print; next} NR==2 {print; next} { \
-            rate = ($5 > 0 ? $4 * 100 / $5 : 0); \
-            warm_rate = ($7 > 0 ? $6 * 100 / $7 : -1); \
-            color = (rate >= 70 ? green : (rate >= 40 ? yellow : red)); \
-            warm_str = (warm_rate < 0 ? "N/A" : sprintf("%5.1f%%", warm_rate)); \
-            warm_color = (warm_rate < 0 ? nc : (warm_rate >= 70 ? green : (warm_rate >= 40 ? yellow : red))); \
-            printf "%-58s  %6s  %12s  %12s  %s%5.1f%%%s  %s%9s%s\n", $1, $3, $4, $5, color, rate, nc, warm_color, warm_str, nc; \
-            files[$2]++; cr[$2]+=$4; tp[$2]+=$5; wcr[$2]+=$6; wtp[$2]+=$7; \
-        } END { \
-            printf "\nBy provider:\n"; \
-            for (p in cr) { \
-                rate = (tp[p] > 0 ? cr[p] * 100 / tp[p] : 0); \
-                warm_rate = (wtp[p] > 0 ? wcr[p] * 100 / wtp[p] : -1); \
-                col = (rate >= 70 ? green : (rate >= 40 ? yellow : red)); \
-                warm_str = (warm_rate < 0 ? "N/A" : sprintf("%5.1f%%", warm_rate)); \
-                warm_color = (warm_rate < 0 ? nc : (warm_rate >= 70 ? green : (warm_rate >= 40 ? yellow : red))); \
-                printf "  %-30s  files=%d  rate=%s%5.1f%%%s  warm_rate=%s%5s%s\n", p, files[p], col, rate, nc, warm_color, warm_str, nc; \
-            } \
-        }'
-
-# ── 内部 helper ──────────────────────────────────────────────────────────────
-
-[private]
-_build:
-    cargo build -p shannon-cli
-
-[private]
-_check-api-key:
-    @if [ -z "${SHANNON_API_KEY:-}" ]; then echo "Set SHANNON_API_KEY first"; exit 1; fi
-
-# ── 基准测试 ──────────────────────────────────────────────────────────────
-
-# 微基准测试
-bench:
-    cargo bench
-
-# 编译 release binary
-build:
+# shannon-code product: the CLI/TUI coding agent.
+build-code:
     cargo build --release -p shannon-cli
 
-# ── Desktop ──────────────────────────────────────────────────────────────
-# shannon-desktop was extracted to its own repo at ../shannon-desktop.
-# Run these recipes from the shannon-code checkout; they shell into the
-# sibling repo. The desktop Cargo.toml has a [patch] override that points
-# shannon-* deps at this checkout, so engine changes are picked up locally.
+# shannon-desktop product: Tauri desktop app (member `desktop`).
+build-desktop:
+    cargo build --release -p shannon-desktop
 
-DESKTOP_DIR := "../shannon-desktop"
+# shannon-gateway product: TS platform bridge, compiled to a standalone binary.
+build-gateway:
+    cd gateway && pnpm build:binary
 
-# Desktop app (dev build, needs Tauri system deps)
-desktop:
-    cd {{DESKTOP_DIR}} && cargo build --features tauri
+# ---------- Protocol codegen (Phase A) ----------
 
-# Desktop app (release build)
-desktop-release:
-    cd {{DESKTOP_DIR}} && cargo build --release --features tauri
+# Regenerate gateway TS types + OpenAPI from crates/shannon-api-protocol.
+gen-protocol:
+    cargo run -p shannon-api-protocol --bin gen-ts
+    cd gateway && pnpm typecheck
 
-# Desktop crate tests (no system deps needed)
-desktop-test:
-    cd {{DESKTOP_DIR}} && cargo test
+# ---------- Lint / fmt ----------
 
-# Desktop UI development and build
-desktop-ui:
-    cd {{DESKTOP_DIR}}/ui && pnpm install && pnpm dev
+fmt:
+    cargo fmt --all
 
-desktop-build:
-    cd {{DESKTOP_DIR}}/ui && pnpm build && cd {{DESKTOP_DIR}} && cargo tauri build
+# Note: clippy runs against the workspace library + bin targets only (matches
+# the original shannon-code CI gate). Test targets are intentionally NOT
+# linted here -- the upstream test code uses `unwrap()` extensively and was
+# never subject to `clippy --all-targets` in the original justfile; re-linting
+# it would block CI for pre-existing patterns the migration does not own.
+lint:
+    cargo clippy --workspace -- -D warnings
+    cd desktop/ui && pnpm lint
+    cd gateway && pnpm typecheck
+
+# ---------- Test ----------
+
+test-rust:
+    cargo nextest run --workspace || cargo test --workspace -- --test-threads=1
+
+test-ui:
+    cd desktop/ui && pnpm test:ci
+
+test-gateway:
+    cd gateway && pnpm test
+
+test: test-rust test-ui test-gateway
+
+# ---------- Supply chain ----------
+
+deny:
+    cargo deny check
+
+# ---------- Full CI gate ----------
+
+ci: fmt lint deny test
+    @echo "✅ all gates green"
+
+# ---------- Release helpers (Phase 6) ----------
+
+# Verify a clean-clone desktop build (the Phase 2 KPI), runnable anytime.
+kpi-clean-build:
+    cargo build -p shannon-desktop

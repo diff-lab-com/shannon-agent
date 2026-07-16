@@ -107,6 +107,7 @@ You are a teammate in a team. Follow this workflow:
 ";
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

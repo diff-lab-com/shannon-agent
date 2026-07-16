@@ -1493,10 +1493,11 @@ fn normalize_gemini_event(
 
 // ── Bedrock Response Parsing ─────────────────────────────────────────────────
 
-/// Normalize a Bedrock non-streaming response.
+// Normalize a Bedrock non-streaming response.
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::api::types::ToolDefinition;
@@ -2825,10 +2826,9 @@ mod tests {
             r#"{"candidates":[],"usageMetadata":{"promptTokenCount":1,"totalTokenCount":1}}"#;
         let result = normalize_response(resp, &LlmProvider::Gemini);
         // Should handle gracefully — either error or empty response
-        match result {
-            Ok(r) => assert!(r.content.is_empty()),
-            Err(_) => {} // error is also acceptable
-        }
+        if let Ok(r) = result {
+            assert!(r.content.is_empty());
+        } // Err is also acceptable
     }
 
     #[test]

@@ -180,6 +180,7 @@ fn generate_skill_toml(proposal: &SkillProposal) -> Result<String, Box<dyn std::
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use chrono::Utc;

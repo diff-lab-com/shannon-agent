@@ -78,12 +78,14 @@ impl MemoryConsolidator {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::memory::types::{MemoryCategory, MemoryEntry};
     use chrono::{DateTime, Duration, Utc};
     use tempfile::TempDir;
 
+    #[allow(clippy::too_many_arguments)]
     fn make_entry_with_timestamps(
         id: &str,
         project: &str,

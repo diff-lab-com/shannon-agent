@@ -20,6 +20,7 @@ pub use types::{
 };
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::streaming::ConversationState;
     use super::*;

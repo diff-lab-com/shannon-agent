@@ -302,6 +302,7 @@ fn content_rich_limit(tool_name: &str) -> usize {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::query_engine::types::CompressionStrategy;

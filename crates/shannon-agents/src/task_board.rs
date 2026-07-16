@@ -569,6 +569,7 @@ impl Default for TaskBoard {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

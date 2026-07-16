@@ -1606,6 +1606,7 @@ impl Tool for AutoCommitTool {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -4165,7 +4166,7 @@ mod tests {
         #[test]
         fn proptest_validate_git_arg_safe_names(name in "[a-zA-Z0-9_/]{1,50}") {
             let result = validate_git_arg(&name);
-            assert!(result.is_ok(), "Expected '{}' to be valid, got {:?}", name, result);
+            assert!(result.is_ok(), "Expected '{name}' to be valid, got {result:?}");
         }
 
         /// Any input containing shell metacharacters is rejected.
@@ -4175,17 +4176,17 @@ mod tests {
             meta in "[;&|`${}()]",
             suffix in "[a-zA-Z]{0,10}"
         ) {
-            let arg = format!("{}{}{}", prefix, meta, suffix);
+            let arg = format!("{prefix}{meta}{suffix}");
             let result = validate_git_arg(&arg);
-            assert!(result.is_err(), "Expected '{}' to be rejected (shell meta)", arg);
+            assert!(result.is_err(), "Expected '{arg}' to be rejected (shell meta)");
         }
 
         /// Any input starting with '-' is rejected.
         #[test]
         fn proptest_validate_git_arg_rejects_dash_prefix(rest in "[a-zA-Z0-9]{1,20}") {
-            let arg = format!("-{}", rest);
+            let arg = format!("-{rest}");
             let result = validate_git_arg(&arg);
-            assert!(result.is_err(), "Expected '-{}' to be rejected (dash prefix)", rest);
+            assert!(result.is_err(), "Expected '-{rest}' to be rejected (dash prefix)");
         }
 
         /// Empty strings are always rejected.

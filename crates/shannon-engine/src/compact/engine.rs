@@ -819,6 +819,7 @@ impl CompactEngine {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::api::{ContentBlock, Message, MessageContent, ToolResultContent};
@@ -1196,8 +1197,10 @@ mod tests {
 
     #[test]
     fn test_micro_compact_disabled() {
-        let mut config = CompactConfig::default();
-        config.enable_micro_compact = false;
+        let config = CompactConfig {
+            enable_micro_compact: false,
+            ..Default::default()
+        };
         let engine = CompactEngine::new(config, Box::new(RuleBasedSummarizer::new())).unwrap();
         let mut msgs = vec![text_msg("user", "hello")];
         let result = engine.micro_compact(&mut msgs).unwrap();

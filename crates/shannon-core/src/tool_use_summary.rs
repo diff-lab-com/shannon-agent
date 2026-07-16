@@ -331,6 +331,11 @@ fn summarize_value(value: &Value, max_len: usize) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
+// Async test lambdas return complex pinned future types; the existing
+// `ApiClientFn` alias targets a different shape. Spell out the type at the
+// call site rather than introducing a parallel alias.
+#[allow(clippy::type_complexity)]
 mod tests {
     use super::*;
     use serde_json::json;

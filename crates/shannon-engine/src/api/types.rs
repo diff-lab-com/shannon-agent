@@ -1100,6 +1100,7 @@ fn default_num_ctx() -> usize {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

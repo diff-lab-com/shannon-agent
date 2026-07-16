@@ -484,6 +484,7 @@ fn parse_cargo_compiler_message(msg: &serde_json::Value) -> Option<Vec<LspDiagno
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

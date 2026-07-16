@@ -164,6 +164,7 @@ impl Drop for LspManager {
 pub type LspResult<T> = Result<T, LspClientError>;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -271,7 +272,8 @@ mod tests {
         use client::LspClientError;
 
         let ok: LspResult<i32> = Ok(42);
-        assert_eq!(ok.unwrap(), 42);
+        assert!(ok.is_ok());
+        assert_eq!(ok.ok(), Some(42));
 
         let err: LspResult<i32> = Err(LspClientError::Timeout);
         assert!(err.is_err());

@@ -201,6 +201,7 @@ fn sanitize_name(name: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::io::{Seek, Write};

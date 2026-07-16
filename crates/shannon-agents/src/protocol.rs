@@ -274,6 +274,7 @@ pub fn parse_message(line: &str) -> Result<JsonRpcMessage, serde_json::Error> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

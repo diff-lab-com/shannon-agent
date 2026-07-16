@@ -543,6 +543,7 @@ fn path_matches_glob(path: &Path, pattern: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;

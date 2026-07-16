@@ -138,6 +138,7 @@ fn bench_file_edit(c: &mut Criterion) {
 // Grep (regex search) benchmarks
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::regex_creation_in_loops)]
 fn bench_grep_search(c: &mut Criterion) {
     let dir = tempfile::tempdir().expect("tempdir");
 
@@ -316,7 +317,7 @@ fn bench_file_traversal(c: &mut Criterion) {
             let walker = ignore::WalkBuilder::new(dir.path()).build();
             for entry in walker {
                 let entry = entry.expect("walk entry");
-                if entry.file_type().map_or(false, |ft| ft.is_file()) {
+                if entry.file_type().is_some_and(|ft| ft.is_file()) {
                     let path = entry.path();
                     if let Some(ext) = path.extension() {
                         if ext == "rs" {

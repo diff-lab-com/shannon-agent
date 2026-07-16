@@ -662,8 +662,7 @@ mod tests {
         // is large.
         let padding = "x".repeat((MAX_MANIFEST_SIZE + 1) as usize);
         let json_str = format!(
-            r#"{{"mcpServers": {{ "pad": {{ "command": "true", "args": ["{}"] }} }}}}"#,
-            padding
+            r#"{{"mcpServers": {{ "pad": {{ "command": "true", "args": ["{padding}"] }} }}}}"#
         );
 
         let mut buf = Cursor::new(Vec::new());

@@ -732,6 +732,7 @@ impl MultiAgentSpawner {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::collections::HashMap as StdHashMap;
@@ -1849,7 +1850,7 @@ mod tests {
 
     #[test]
     fn test_build_waves_single_agent() {
-        let agents = vec![AgentConfig::new("solo", "task")];
+        let agents = [AgentConfig::new("solo", "task")];
         let sorted: Vec<&AgentConfig> = agents.iter().collect();
         let waves = MultiAgentSpawner::build_waves(&sorted);
         assert_eq!(waves.len(), 1);
@@ -2235,8 +2236,8 @@ mod tests {
             .collect();
         let sorted = topological_sort(&agents).unwrap();
         let names: Vec<&str> = sorted.iter().map(|a| a.name.as_str()).collect();
-        for i in 0..10 {
-            assert_eq!(names[i], format!("a{i}"));
+        for (i, name) in names.iter().take(10).enumerate() {
+            assert_eq!(*name, format!("a{i}"));
         }
     }
 

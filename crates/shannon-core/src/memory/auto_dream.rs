@@ -445,6 +445,7 @@ impl AutoDreamService {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use shannon_engine::api::{ContentBlock, Message, MessageContent};

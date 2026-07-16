@@ -239,6 +239,7 @@ pub async fn execute(input: ReadInput) -> Result<ToolOutput, ToolError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

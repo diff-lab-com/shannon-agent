@@ -302,6 +302,7 @@ impl Tool for SkillTool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

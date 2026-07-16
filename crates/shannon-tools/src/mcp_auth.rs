@@ -239,6 +239,7 @@ impl Tool for McpAuthTool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

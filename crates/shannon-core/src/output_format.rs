@@ -241,6 +241,7 @@ fn json_type_name(value: &serde_json::Value) -> &'static str {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

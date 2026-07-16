@@ -509,6 +509,7 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

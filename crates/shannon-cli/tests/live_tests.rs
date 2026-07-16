@@ -174,7 +174,7 @@ fn shannon_record(
 ) -> Command {
     let provider = record_provider();
     let model = record_model();
-    let qualified_session = format!("{}_{}_{}", provider, model, session_name);
+    let qualified_session = format!("{provider}_{model}_{session_name}");
     // Clear any prior fixture for this exact (provider, model, session) tuple so
     // re-running the test produces a clean fixture. The recording engine's
     // JSONL output is append-mode by design (supports interrupted/resumed
@@ -210,7 +210,7 @@ fn write_file(path: &std::path::Path, content: &str) {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).expect("create parent dir");
     }
-    fs::write(path, content).expect(&format!("write {}", path.display()));
+    fs::write(path, content).unwrap_or_else(|e| panic!("write {}: {e}", path.display()));
 }
 
 // ── Replay helpers: drive the agent offline against recorded fixtures ─────
@@ -1156,7 +1156,7 @@ fn record_task_long_file_handling() {
     // Generate a ~100 line file
     let mut content = String::from("// Auto-generated module\n\n");
     for i in 0..50 {
-        content.push_str(&format!("pub fn function_{}() -> i32 {{ {} }}\n\n", i, i));
+        content.push_str(&format!("pub fn function_{i}() -> i32 {{ {i} }}\n\n"));
     }
 
     write_file(&workspace.path().join("src/lib.rs"), &content);
@@ -1293,10 +1293,10 @@ fn record_task_nested_directory_write() {
             if path.is_dir() && has_user_struct(&path) {
                 return true;
             }
-            if path.extension().is_some_and(|ext| ext == "rs") {
-                if fs::read_to_string(&path).is_ok_and(|c| c.contains("User")) {
-                    return true;
-                }
+            if path.extension().is_some_and(|ext| ext == "rs")
+                && fs::read_to_string(&path).is_ok_and(|c| c.contains("User"))
+            {
+                return true;
             }
         }
         false
@@ -2151,7 +2151,7 @@ fn test_all_nested_writes_use_helper() {
     for (i, line) in source.lines().enumerate() {
         let line_num = i + 1;
         // Skip lines inside the write_file() helper (~line 151)
-        if line_num >= 147 && line_num <= 152 {
+        if (147..=152).contains(&line_num) {
             continue;
         }
         // Any fs::write to a nested path (contains "/" in the join arg)

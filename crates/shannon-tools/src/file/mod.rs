@@ -442,6 +442,7 @@ impl Tool for GlobTool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -670,8 +671,7 @@ mod tests {
         let result = tool.execute(input).await;
         assert!(
             result.is_ok(),
-            "Write should succeed for new file: {:?}",
-            result
+            "Write should succeed for new file: {result:?}"
         );
 
         let content = std::fs::read_to_string(&new_path).unwrap();
@@ -701,8 +701,7 @@ mod tests {
         let result = tool.execute(input).await;
         assert!(
             result.is_ok(),
-            "Write should succeed for nested new file: {:?}",
-            result
+            "Write should succeed for nested new file: {result:?}"
         );
 
         let content = std::fs::read_to_string(&new_path).unwrap();

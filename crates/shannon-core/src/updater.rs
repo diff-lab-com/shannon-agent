@@ -394,6 +394,7 @@ fn truncate_string(s: &str, max_len: usize) -> String {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::time::Duration;
@@ -608,8 +609,12 @@ mod tests {
     // -- Current version constant -------------------------------------------
 
     #[test]
+    #[allow(clippy::const_is_empty)]
     fn current_version_is_set() {
-        assert!(!CURRENT_VERSION.is_empty());
+        // CARGO_PKG_VERSION is always non-empty at compile time; this test
+        // exists so the constant is exercised and a future change to an
+        // empty literal would trip CI.
+        assert!(!CURRENT_VERSION.is_empty(), "CURRENT_VERSION must be set");
     }
 
     #[test]

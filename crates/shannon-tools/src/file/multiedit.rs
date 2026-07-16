@@ -179,6 +179,7 @@ pub async fn execute(input: MultiEditInput) -> Result<ToolOutput, ToolError> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::io::Write;

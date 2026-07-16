@@ -315,6 +315,7 @@ impl Tool for ScheduleWakeupTool {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

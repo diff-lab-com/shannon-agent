@@ -1,7 +1,8 @@
 //! Tests for the context compression module.
 
 #[cfg(test)]
-mod tests {
+#[allow(clippy::unwrap_used)]
+mod compact_tests {
 
     use crate::api::{ContentBlock, Message, MessageContent, ToolResultContent};
     use std::time::Duration;

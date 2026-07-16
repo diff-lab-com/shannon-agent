@@ -2268,6 +2268,7 @@ fn find_workspace_root(file_path: &Path) -> PathBuf {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -677,6 +677,7 @@ fn are_contradictory(a: &str, b: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::extract_memories::MessageSummary;
@@ -695,6 +696,7 @@ mod tests {
         MemoryEntry::with_confidence(project, category, content, confidence, vec![]).unwrap()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn make_entry_with_timestamps(
         id: &str,
         project: &str,

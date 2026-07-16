@@ -35,6 +35,7 @@ pub enum StructuredMessage {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod structured_message_tests {
     use super::*;
 
