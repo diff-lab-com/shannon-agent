@@ -1,7 +1,7 @@
 {
   "name": "shannon-desktop-ui",
   "private": true,
-  "version": "0.3.8",
+  "version": "0.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

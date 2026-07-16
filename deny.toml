@@ -7,12 +7,12 @@ all-features = true
 
 [advisories]
 # Treat unmaintained/yanked crates as warnings in CI (matches upstream
-# shannon-code policy). Crates can be pinned to a specific yanked version in
+# shannon-agent policy). Crates can be pinned to a specific yanked version in
 # Cargo.lock to escape the warning, but blocking CI on a single yanked release
 # transitively pulled in by the ecosystem has no upside for monorepo velocity.
 yanked = "warn"
 ignore = [
-    # Informational advisories — same baseline as upstream shannon-code.
+    # Informational advisories — same baseline as upstream.
     # Ecosystem-wide, no fix available without breaking the dependency chain.
     "RUSTSEC-2021-0145", # atty - unsound, pervasive in Rust CLIs
     "RUSTSEC-2024-0375", # proc-macro-error - unmaintained
@@ -93,9 +93,7 @@ ignore = true
 multiple-versions = "warn"
 # Wildcards in workspace path-only deps are intentional and unambiguous (the
 # shannon-* crates never publish to crates.io from this tree), so we keep them
-# as warnings rather than CI blockers. This matches the upstream shannon-code
-# policy; the skeleton default of `deny` was overly strict for a path-only
-# workspace.
+# as warnings rather than CI blockers. This matches the upstream policy;
 wildcards = "warn"
 deny = []
 

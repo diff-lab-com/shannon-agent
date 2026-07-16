@@ -1,4 +1,4 @@
-# Shannon Code
+# Shannon Agent — VS Code Extension
 
 AI-powered code assistant for VS Code with multi-provider LLM support, MCP extensions, and intelligent tool use.
 
@@ -13,7 +13,7 @@ AI-powered code assistant for VS Code with multi-provider LLM support, MCP exten
 
 ## Getting Started
 
-1. Install the [Shannon Code CLI](https://github.com/shannon-agent/shannon-code)
+1. Install the [Shannon Code CLI](https://github.com/shannon-agent/shannon-agent)
 2. Install this extension
 3. Set your API key: `SHANNON_API_KEY` env var or in extension settings
 4. Open the chat with `Ctrl+Shift+S` or the status bar icon

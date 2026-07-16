@@ -7,9 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Shannon Desktop — Tauri v2 + React 19 + TypeScript desktop app. Cross-platform
 "AI workspace" shell: chat with multiple LLM providers, run scheduled tasks,
 manage agent teams, install MCP/Skill/Agent extensions, fire native
-notifications. The actual reasoning engine lives in
-[`shannon-code`](https://github.com/shannon-agent/shannon-code) and is pulled
-into this repo as git subpath dependencies.
+notifications. The reasoning engine lives in `crates/` at the monorepo root
+and is consumed as a Cargo workspace member.
 
 ## Build & dev
 
@@ -51,14 +50,13 @@ git config core.hooksPath scripts/hooks
 
 Bypass for a single push (e.g. WIP branch): `git push --no-verify`.
 
-### Critical: the sibling-checkout patch
+### Workspace layout
 
-`Cargo.toml` has a `[patch."ssh://git@github.com/shannon-agent/shannon-code.git"]`
-block that overrides every `shannon-*` git dep with a path dep at
-`../shannon-code/crates/*`. **A standalone clone of this repo will not build**
-unless a sibling `../shannon-code` checkout exists at the matching rev. This is
-intentional — see the comment in `Cargo.toml`. The pinned rev in the git deps
-(e.g. `00510a7`) is what `../shannon-code` must be checked out at.
+Desktop is a Cargo workspace member alongside `crates/*`. All engine
+dependencies (`shannon-core`, `shannon-engine`, etc.) are resolved via
+`workspace = true` in `desktop/Cargo.toml` — no git deps, no `[patch]`
+block, no sibling checkout. A standalone clone builds with `cargo build -p
+shannon-desktop`.
 
 ### Tauri feature gate
 
@@ -162,11 +160,9 @@ The app follows the standard Tauri v2 split:
 
 ### Shannon engine
 
-All `shannon_*` crates come from the sibling repo: `shannon-core`,
-`shannon-types`, `shannon-tools`, `shannon-mcp`, `shannon-skills`,
-`shannon-agents`. The desktop shell only adds IPC plumbing, persistence, and
-UI — every reasoning/tool/MCP/skill behavior is delegated. When the pinned
-rev bumps, expect wire-compatible schema changes (see `CHANGELOG.md`).
+All `shannon_*` crates are workspace members in `crates/`. The desktop shell
+only adds IPC plumbing, persistence, and UI — every reasoning/tool/MCP/skill
+behavior is delegated to the engine crates.
 
 ### Frontend (`ui/src/`)
 

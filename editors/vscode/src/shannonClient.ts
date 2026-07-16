@@ -83,7 +83,7 @@ function checkPath(binary: string): Promise<string | null> {
 /** Show an error message when the Shannon CLI binary cannot be found. */
 export function showBinaryNotFound(): void {
   vscode.window.showErrorMessage(
-    'Shannon CLI not found. Install with `cargo install shannon-code` or set the path in Settings.',
+    'Shannon CLI not found. Install with `cargo install --git https://github.com/shannon-agent/shannon-agent.git shannon-cli` or set the path in Settings.',
     'Open Settings'
   ).then((action) => {
     if (action === 'Open Settings') {

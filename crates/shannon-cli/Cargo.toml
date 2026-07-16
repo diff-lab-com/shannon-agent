@@ -5,8 +5,8 @@ edition = "2024"
 description = "AI-powered code assistant with multi-provider LLM support"
 authors = ["Shannon Code Contributors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/shannon-agent/shannon-code"
-homepage = "https://github.com/shannon-agent/shannon-code"
+repository = "https://github.com/shannon-agent/shannon-agent"
+homepage = "https://github.com/shannon-agent/shannon-agent"
 
 [[bin]]
 name = "shannon"

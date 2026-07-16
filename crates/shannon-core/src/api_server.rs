@@ -29,11 +29,6 @@ use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use futures::{SinkExt, StreamExt};
-use shannon_api_protocol::{
-    ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
-    QueryRequest, QueryResponse, ToolEntry, ToolsListResponse, UsageInfo, WsClientMessage,
-    WsServerMessage,
-};
 use shannon_engine::api::{LlmClient, LlmClientConfig, Message};
 use shannon_engine::permissions::{PermissionChoice, PermissionManager};
 use shannon_engine::state::StateManager;
@@ -49,13 +44,9 @@ use uuid::Uuid;
 // a sweeping rename. New code should import them from `shannon_api_protocol`
 // directly when there is no engine-side adapter to write.
 pub use shannon_api_protocol::{
-    ApprovalDecision as PublicApprovalDecision,
-    ApprovalRespondRequest as PublicApprovalRespondRequest, HealthResponse as PublicHealthResponse,
-    ModelInfo as PublicModelInfo, ModelsResponse as PublicModelsResponse, PROTOCOL_VERSION,
-    QueryRequest as PublicQueryRequest, QueryResponse as PublicQueryResponse,
-    ToolEntry as PublicToolEntry, ToolsListResponse as PublicToolsListResponse,
-    UsageInfo as PublicUsageInfo, WsClientMessage as PublicWsClientMessage,
-    WsServerMessage as PublicWsServerMessage,
+    ApprovalDecision, ApprovalRespondRequest, HealthResponse, ModelInfo, ModelsResponse,
+    PROTOCOL_VERSION, QueryRequest, QueryResponse, ToolEntry, ToolsListResponse, UsageInfo,
+    WsClientMessage, WsServerMessage,
 };
 
 /// Generic error returned by all API endpoints.

@@ -1,11 +1,11 @@
 [package]
 name = "shannon-desktop"
-version = "0.3.8"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Shannon — your AI workspace (Tauri desktop app)"
 license = "Apache-2.0"
-authors = ["Shannon Code Contributors"]
+authors = ["Shannon Agent Contributors"]
 repository = "https://github.com/shannon-agent/shannon-agent"
 homepage = "https://github.com/shannon-agent/shannon-agent"
 
@@ -81,6 +81,6 @@ dist = false
 
 [package.metadata.tauri]
 # Tauri build configuration — these settings control the native window
-productName = "Shannon Code"
-identifier = "com.shannon-code.desktop"
-window = { title = "Shannon Code", width = 1200, height = 800, minWidth = 800, minHeight = 600 }
+productName = "Shannon Agent"
+identifier = "com.shannon-agent.desktop"
+window = { title = "Shannon Agent", width = 1200, height = 800, minWidth = 800, minHeight = 600 }

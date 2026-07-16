@@ -70,7 +70,7 @@ deny:
 
 # ---------- Full CI gate ----------
 
-ci: fmt lint deny test
+ci: fmt lint deny gen-protocol test
     @echo "✅ all gates green"
 
 # ---------- Release helpers (Phase 6) ----------

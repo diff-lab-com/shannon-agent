@@ -52,7 +52,7 @@ bundled `ws`; no Node install needed on the target host).
 
 Every `v*` tag triggers the [Release workflow](.github/workflows/release.yml),
 which cross-compiles four targets and attaches them to the corresponding
-[GitHub Release](https://github.com/shannon-agent/shannon-gateway/releases):
+[GitHub Release](https://github.com/shannon-agent/shannon-agent/releases):
 
 | Asset | Target |
 |---|---|
@@ -63,7 +63,7 @@ which cross-compiles four targets and attaches them to the corresponding
 
 ```bash
 # Example: latest Apple Silicon macOS build
-curl -L -o shannon-gateway https://github.com/shannon-agent/shannon-gateway/releases/latest/download/shannon-gateway-darwin-arm64
+curl -L -o shannon-gateway https://github.com/shannon-agent/shannon-agent/releases/latest/download/shannon-gateway-darwin-arm64
 chmod +x shannon-gateway
 ./shannon-gateway --config path/to/config.json
 ```

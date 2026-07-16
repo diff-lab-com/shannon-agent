@@ -1,18 +1,18 @@
 {
-  "name": "shannon-code",
-  "displayName": "Shannon Code",
+  "name": "shannon-agent-vscode",
+  "displayName": "Shannon Agent",
   "description": "AI-powered code assistant with multi-provider LLM support, MCP extensions, and intelligent tool use",
   "version": "0.1.0",
   "publisher": "diffLab",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/shannon-agent/shannon-code.git"
+    "url": "https://github.com/shannon-agent/shannon-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/shannon-agent/shannon-code/issues"
+    "url": "https://github.com/shannon-agent/shannon-agent/issues"
   },
-  "homepage": "https://github.com/shannon-agent/shannon-code#readme",
+  "homepage": "https://github.com/shannon-agent/shannon-agent#readme",
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#1a1a2e",
@@ -99,7 +99,7 @@
       }
     ],
     "configuration": {
-      "title": "Shannon Code",
+      "title": "Shannon Agent",
       "properties": {
         "shannon.cliPath": {
           "type": "string",
