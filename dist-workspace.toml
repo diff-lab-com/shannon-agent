@@ -15,9 +15,13 @@ installers = ["shell", "powershell", "homebrew"]
 # native deps are glibc-only. Cross-compiling to musl from a Linux
 # runner requires a musl sysroot + cross pkg-config that are not
 # provided on GitHub-hosted runners.
+#
+# aarch64-unknown-linux-gnu is excluded: it would require an aarch64
+# sysroot + cross pkg-config to link glib-sys against aarch64 libs.
+# Add it back when GitHub-hosted aarch64 Linux runners are GA or
+# when we have a self-hosted aarch64 builder.
 targets = [
     "x86_64-unknown-linux-gnu",
-    "aarch64-unknown-linux-gnu",
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
