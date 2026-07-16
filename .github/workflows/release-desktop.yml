@@ -28,15 +28,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux x86_64 covers both .deb and .rpm from the same runner.
+          # aarch64-unknown-linux-gnu is excluded: cross-compiling Tauri
+          # (which depends on glib-sys / webkit2gtk-4.1) from an x86_64
+          # runner requires an aarch64 sysroot that is not provided.
+          # Add it back when GitHub-hosted aarch64 Linux runners are GA
+          # (or when we add a self-hosted aarch64 builder).
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             ext: deb
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             ext: rpm
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04
-            ext: deb
           - target: x86_64-apple-darwin
             os: macos-14
             ext: dmg
@@ -138,9 +141,13 @@ jobs:
         working-directory: gateway
         run: bun run typecheck
 
+      # Use `bun run test` (vitest run, per package.json) rather than
+      # `bun test` (bun's built-in runner). The latter ignores vitest.config.ts
+      # and falls back to a 5-second per-test timeout that is too tight for
+      # the gateway's socket- and WebSocket-based tests on CI hardware.
       - name: Test
         working-directory: gateway
-        run: bun test
+        run: bun run test
 
       - name: Build binary
         working-directory: gateway
