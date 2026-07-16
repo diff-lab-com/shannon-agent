@@ -363,6 +363,7 @@ fn mount_final_text(server: &mut mockito::ServerGuard, text: &str) -> mockito::M
 
 // ── Test: Write tool — create a file ──────────────────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_write_file() {
@@ -417,6 +418,7 @@ async fn test_task_write_file() {
 
 // ── Test: Bash tool — execute a command ───────────────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_bash_command() {
@@ -456,6 +458,7 @@ async fn test_task_bash_command() {
 
 // ── Test: Edit tool — modify an existing file ─────────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_edit_file() {
@@ -506,6 +509,7 @@ async fn test_task_edit_file() {
 
 // ── Test: Multi-step — Edit then verify with Bash ─────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_edit_then_verify_multi_step() {
@@ -561,6 +565,7 @@ async fn test_task_edit_then_verify_multi_step() {
 
 // ── Test: Write + Bash in one session ─────────────────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_write_then_verify() {
@@ -644,6 +649,7 @@ async fn test_task_write_then_verify() {
 
 // ── Test: Tool error handling — Bash command that fails ───────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_bash_error_recovery() {
@@ -681,6 +687,7 @@ async fn test_task_bash_error_recovery() {
 
 // ── Test: Text-only response — no tool use ────────────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_text_only_no_tools() {
@@ -725,6 +732,7 @@ async fn test_task_text_only_no_tools() {
 
 // ── Test: Multi-step — Read then Edit (3 turns) ──────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_read_then_edit() {
@@ -801,6 +809,7 @@ async fn test_task_read_then_edit() {
 
 // ── Test: Glob tool — find files by pattern ───────────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_glob_files() {
@@ -843,6 +852,7 @@ async fn test_task_glob_files() {
 
 // ── Test: Grep tool — search for pattern in files ─────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_grep_search() {
@@ -887,6 +897,7 @@ async fn test_task_grep_search() {
 
 // ── Test: Multi-step — Grep then Read (3 turns) ──────────────────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_grep_then_read() {
@@ -954,6 +965,7 @@ async fn test_task_grep_then_read() {
 
 // ── Test: Multi-step — Edit two files sequentially (3 turns) ──────────
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn test_task_multi_file_edit() {
@@ -1029,6 +1041,7 @@ async fn test_task_multi_file_edit() {
 // Scenario 1: Text-only response across all providers
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_anthropic_text_only() {
@@ -1063,6 +1076,7 @@ async fn scenario_anthropic_text_only() {
     cleanup_workspace(&workspace);
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_openai_text_only() {
@@ -1093,6 +1107,7 @@ async fn scenario_openai_text_only() {
     cleanup_workspace(&workspace);
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_ollama_text_only() {
@@ -1127,6 +1142,7 @@ async fn scenario_ollama_text_only() {
 // Scenario 2: Write tool_use across all providers
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_anthropic_write_tool() {
@@ -1177,6 +1193,7 @@ async fn scenario_anthropic_write_tool() {
     cleanup_workspace(&workspace);
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_openai_write_tool() {
@@ -1227,6 +1244,7 @@ async fn scenario_openai_write_tool() {
     cleanup_workspace(&workspace);
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_ollama_write_tool() {
@@ -1281,6 +1299,7 @@ async fn scenario_ollama_write_tool() {
 // Scenario 3: Bash tool_use across all providers
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_anthropic_bash_tool() {
@@ -1330,6 +1349,7 @@ async fn scenario_anthropic_bash_tool() {
     cleanup_workspace(&workspace);
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_openai_bash_tool() {
@@ -1377,6 +1397,7 @@ async fn scenario_openai_bash_tool() {
     cleanup_workspace(&workspace);
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_ollama_bash_tool() {
@@ -1428,6 +1449,7 @@ async fn scenario_ollama_bash_tool() {
 // Scenario 4: Read tool + text summary across all providers
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_anthropic_read_file() {
@@ -1482,6 +1504,7 @@ async fn scenario_anthropic_read_file() {
     cleanup_workspace(&workspace);
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_openai_read_file() {
@@ -1533,6 +1556,7 @@ async fn scenario_openai_read_file() {
     cleanup_workspace(&workspace);
 }
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_ollama_read_file() {
@@ -1588,6 +1612,7 @@ async fn scenario_ollama_read_file() {
 // Scenario 5: Multi-tool (Write + Bash) in one response
 // ════════════════════════════════════════════════════════════════════════
 
+#[serial]
 #[tokio::test]
 #[serial]
 async fn scenario_anthropic_multi_tool() {
