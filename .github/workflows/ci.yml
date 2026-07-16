@@ -139,8 +139,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libssl-dev libxdo-dev patchelf
+      # shannon-desktop depends on Tauri/webkit2gtk-4.1 which is not musl-portable.
+      # Cross-compile the remaining workspace against musl as a smoke test.
       - name: Check Linux x86_64 musl
-        run: cargo check --workspace --target x86_64-unknown-linux-musl
+        run: cargo check --workspace --exclude shannon-desktop --target x86_64-unknown-linux-musl
 
   semver-check:
     name: Semver Check
@@ -174,5 +176,5 @@ jobs:
           # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
           # format). The repo-wide 1.88 pin is intentionally not used here.
           feature-group: default-features
-          exclude: shannon-engine,shannon-stability-attr,shannon-api-protocol
+          exclude: shannon-engine,shannon-stability-attr,shannon-api-protocol,shannon-desktop
           verbose: true
