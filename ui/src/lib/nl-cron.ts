@@ -18,10 +18,21 @@
 //   "monthly on day N at HH:MM" → M H N * *
 //   "midnight" / "noon"         → literal time shortcuts
 
+export interface CronDescription {
+  /** react-intl message id under the `schedule.*` namespace. */
+  id: string
+  /** ICU placeholder values for {@link id}. */
+  values?: Record<string, string | number>
+  /** Cron day-of-week (0=Sun..6=Sat) for weekly schedules; the caller
+   *  localizes it into the {@code day} value before formatting. */
+  dayOfWeek?: number
+}
+
 export interface NlCronResult {
   expression: string
-  /** Human-readable restatement of the parsed schedule, for confirmation UI. */
-  description: string
+  /** Translatable restatement of the parsed schedule, for confirmation UI.
+   *  Render via `intl.formatMessage({ id: description.id }, description.values)`. */
+  description: CronDescription
 }
 
 const WEEKDAYS: Record<string, number> = {
@@ -55,23 +66,31 @@ function parseTime(s: string): { h: number; m: number } | null {
   return { h, m: min }
 }
 
-function describe(cron: string): string {
-  // Lightweight description for confirmation UI. Format: "<schedule>."
+function describe(cron: string): CronDescription {
+  // Lightweight description for confirmation UI. Returns a translatable
+  // descriptor (id under `schedule.*` + ICU values); the caller formats it via
+  // intl.formatMessage. Weekly schedules carry `dayOfWeek` (0=Sun..6=Sat) so
+  // the caller can localize the weekday into the {day} value.
   const parts = cron.split(/\s+/)
-  if (parts.length !== 5) return cron
+  if (parts.length !== 5) return { id: 'schedule.cron', values: { cron } }
   const [min, hour, dom, , dow] = parts
-  if (hour === '*' && min.startsWith('*/')) return `Every ${min.slice(2)} minutes`
-  if (min === '*' && hour === '*') return 'Every minute'
-  if (hour.startsWith('*/')) return `Every ${hour.slice(2)} hours`
-  if (hour === '*' && min === '0') return 'Hourly'
-  if (dow === '1-5') return `Weekdays at ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`
-  if (dow !== '*') {
-    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    const dayName = names[parseInt(dow, 10)] ?? dow
-    return `Weekly on ${dayName} at ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`
+  const time = `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`
+  if (hour === '*' && min.startsWith('*/')) {
+    return { id: 'schedule.everyMinutes', values: { count: parseInt(min.slice(2), 10) } }
   }
-  if (dom !== '*') return `Monthly on day ${dom} at ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`
-  return `Daily at ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`
+  if (min === '*' && hour === '*') return { id: 'schedule.everyMinute' }
+  if (hour.startsWith('*/')) {
+    return { id: 'schedule.everyHours', values: { count: parseInt(hour.slice(2), 10) } }
+  }
+  if (hour === '*' && min === '0') return { id: 'schedule.hourly' }
+  if (dow === '1-5') return { id: 'schedule.weekdaysAt', values: { time } }
+  if (dow !== '*') {
+    // Carry the cron dow (0=Sun..6=Sat) as dayOfWeek; the caller localizes
+    // it into the {day} value via weekdayName() before formatting.
+    return { id: 'schedule.weeklyOnAt', values: { time }, dayOfWeek: parseInt(dow, 10) % 7 }
+  }
+  if (dom !== '*') return { id: 'schedule.monthlyOnDayAt', values: { day: parseInt(dom, 10), time } }
+  return { id: 'schedule.dailyAt', values: { time } }
 }
 
 export function parseNlCron(input: string): NlCronResult | null {

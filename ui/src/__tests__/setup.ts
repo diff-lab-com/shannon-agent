@@ -75,6 +75,13 @@ class IntersectionObserverMock {
 }
 global.IntersectionObserver = IntersectionObserverMock as any
 
+// jsdom has no PointerEvent constructor; base-ui's Switch onClick constructs
+// `new ownerWindow(input).PointerEvent(...)` (to tell pointer vs keyboard
+// activation). Stub it as a MouseEvent subclass so switch toggles work.
+class PointerEventMock extends MouseEvent {}
+;(globalThis as any).PointerEvent = PointerEventMock
+;(window as any).PointerEvent = PointerEventMock
+
 // Mock tauri-api module
 vi.mock('@/lib/tauri-api', () => ({
   sendMessage: vi.fn().mockResolvedValue({ message_id: '1', status: 'sent' }),
@@ -88,6 +95,32 @@ vi.mock('@/lib/tauri-api', () => ({
     approval_mode: 'normal',
   }),
   configure: vi.fn().mockResolvedValue(undefined),
+  gatewaySetSecret: vi.fn().mockResolvedValue(undefined),
+  gatewayGetSecret: vi.fn().mockResolvedValue(null),
+  gatewayHasSecret: vi.fn().mockResolvedValue(false),
+  gatewayDeleteSecret: vi.fn().mockResolvedValue(undefined),
+  gatewayReadConfig: vi.fn().mockResolvedValue({
+    engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
+    adapters: [],
+  }),
+  gatewayWriteConfig: vi.fn().mockResolvedValue({
+    engine: { wsUrl: 'ws://127.0.0.1:33420/api/ws', httpBaseUrl: 'http://127.0.0.1:33420' },
+    adapters: [],
+  }),
+  // E-1 方案 C — default: managed on, not installed (no binary in the test env).
+  gatewaySupervisorStart: vi.fn().mockResolvedValue({ managed: true, status: 'notInstalled' }),
+  gatewaySupervisorStop: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
+  gatewaySupervisorStatus: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
+  gatewaySetManaged: vi.fn().mockResolvedValue({ managed: true, status: 'stopped' }),
+  // P1.3 — mobile pairing. Default: no devices, a sample token, revoke ok.
+  mobileGeneratePairToken: vi.fn().mockResolvedValue({
+    token: 'tok-1234',
+    expiresAt: Date.now() + 75_000,
+    lanEndpoint: 'ws://192.168.1.10:33430',
+    qrDataUrl: 'data:image/svg+xml;base64,PHN2Zz4=',
+  }),
+  mobileListPairedDevices: vi.fn().mockResolvedValue([]),
+  mobileRevokeDevice: vi.fn().mockResolvedValue(true),
   switchProvider: vi.fn().mockResolvedValue(undefined),
   testProviderConnection: vi.fn().mockResolvedValue({ kind: 'success' }),
   listProviders: vi.fn().mockResolvedValue({ active_provider_id: null, providers: [] }),
@@ -136,18 +169,12 @@ vi.mock('@/lib/tauri-api', () => ({
   getBillingPlan: vi.fn().mockResolvedValue({ name: 'Free', price: 0, token_limit: 100000, features: ['Basic models', '5 sessions'] }),
   getCostHistory: vi.fn().mockResolvedValue([]),
   getBillingHistory: vi.fn().mockResolvedValue([]),
+  getUsageStats: vi.fn().mockResolvedValue({ days: 30, totals: { label: 'total', input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0, requests: 0 }, by_model: [], by_provider: [], by_day: [] }),
   requestPermission: vi.fn().mockResolvedValue(true),
   featuredVendorToEntry: vi.fn().mockResolvedValue({ id: 'test', kind: 'mcp', name: 'Test', description: '', trust: 'community', homepage_url: null, source: null, metadata: {}, tags: [] }),
   sendNotification: vi.fn().mockResolvedValue(undefined),
-  getInboundConfig: vi.fn().mockResolvedValue({ slack: null, telegram: null }),
-  saveInboundConfig: vi.fn().mockResolvedValue(undefined),
-  clearInboundConfig: vi.fn().mockResolvedValue(undefined),
-  getInboundListenerStatus: vi.fn().mockResolvedValue({ slack_running: false, telegram_running: false }),
-  stopInboundListener: vi.fn().mockResolvedValue(undefined),
-  getOutboundConfig: vi.fn().mockResolvedValue({ slack: null, telegram: null }),
-  saveOutboundConfig: vi.fn().mockResolvedValue(undefined),
-  clearOutboundConfig: vi.fn().mockResolvedValue(undefined),
-  sendOutboundTest: vi.fn().mockResolvedValue({ results: [] }),
+  getNotificationPrefs: vi.fn().mockResolvedValue({ master_enabled: true, dnd_enabled: false, dnd_start: null, dnd_end: null, on_completed: true, on_failed: true }),
+  setNotificationPrefs: vi.fn().mockResolvedValue(undefined),
   listPluginMarketplace: vi.fn().mockResolvedValue([]),
   listCatalogUpstreams: vi.fn().mockResolvedValue([]),
   installSkillFromRepo: vi.fn().mockResolvedValue({ id: 'skill-1', name: 'Test Skill', install_path: '/path/to/skill' }),
@@ -178,4 +205,7 @@ vi.mock('@/lib/tauri-api', () => ({
   }),
   markTriageRead: vi.fn().mockResolvedValue(undefined),
   archiveTriageItem: vi.fn().mockResolvedValue(undefined),
+  transcribeAudio: vi.fn().mockResolvedValue({ text: 'mock transcript' }),
+  getSttConfig: vi.fn().mockResolvedValue(null),
+  saveSttConfig: vi.fn().mockResolvedValue(undefined),
 }))

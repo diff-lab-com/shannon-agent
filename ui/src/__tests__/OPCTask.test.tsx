@@ -12,8 +12,11 @@ const ctx = vi.hoisted(() => ({
   respondPermission: vi.fn(),
 }))
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ctx,
+vi.mock('@/context/ChatContext', () => ({
+  useChat: () => ctx,
+}))
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => ctx,
 }))
 
 function renderOPCTask(path = '/opc/task') {

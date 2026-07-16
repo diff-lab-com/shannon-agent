@@ -1,4 +1,4 @@
-//! Notification commands — native OS notifications, webhook config, inbound listener.
+//! Notification commands — native OS notifications and webhook config.
 //!
 //! Extracted from `commands.rs` as part of S2 P1.1 (commands.rs split).
 //!
@@ -7,7 +7,9 @@
 //! in `commands.rs`) and `AppState::new` call them across the module boundary.
 
 use crate::commands::AppState;
+use crate::events::{self, event_names};
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 // === Payloads / DTOs =====================================================
 
@@ -34,26 +36,6 @@ pub struct WebhookConfigDto {
     pub include_body: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SlackInboundDto {
-    pub bot_token: String,
-    pub trigger_word: String,
-    pub allowed_channels: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TelegramInboundDto {
-    pub bot_token: String,
-    pub trigger_word: String,
-    pub allowed_chats: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct InboundConfigDto {
-    pub slack: Option<SlackInboundDto>,
-    pub telegram: Option<TelegramInboundDto>,
-}
-
 // === Commands ============================================================
 
 /// Fire a native OS notification via `tauri-plugin-notification`.
@@ -78,6 +60,70 @@ pub async fn send_notification(
         .map_err(|e| format!("notification show failed: {e}"))
 }
 
+/// Saved desktop-notification preferences (master enable + DND window).
+/// Mirrors the `notifications_*` fields on `DesktopConfig`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationPrefsDto {
+    pub master_enabled: bool,
+    pub dnd_enabled: bool,
+    #[serde(default)]
+    pub dnd_start: Option<String>,
+    #[serde(default)]
+    pub dnd_end: Option<String>,
+    pub on_completed: bool,
+    pub on_failed: bool,
+}
+
+/// Read the current desktop-notification preferences.
+#[tauri::command]
+pub async fn get_notification_prefs() -> Result<NotificationPrefsDto, String> {
+    let c = crate::config::load_config();
+    Ok(NotificationPrefsDto {
+        master_enabled: c.notifications_master_enabled,
+        dnd_enabled: c.notifications_dnd_enabled,
+        dnd_start: c.notifications_dnd_start,
+        dnd_end: c.notifications_dnd_end,
+        on_completed: c.notifications_on_completed,
+        on_failed: c.notifications_on_failed,
+    })
+}
+
+/// Persist desktop-notification preferences. Validates the `"HH:MM"` window
+/// bounds when present, then writes through `DesktopConfig` and emits
+/// `CONFIG_UPDATED` so any open settings panel refreshes.
+#[tauri::command]
+pub async fn set_notification_prefs(
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+    prefs: NotificationPrefsDto,
+) -> Result<(), String> {
+    if let Some(s) = prefs.dnd_start.as_deref() {
+        parse_hhmm(s).ok_or_else(|| format!("invalid dnd_start (expected HH:MM): {s}"))?;
+    }
+    if let Some(e) = prefs.dnd_end.as_deref() {
+        parse_hhmm(e).ok_or_else(|| format!("invalid dnd_end (expected HH:MM): {e}"))?;
+    }
+    let snapshot = {
+        let mut dc = state.desktop_config.write().await;
+        dc.notifications_master_enabled = prefs.master_enabled;
+        dc.notifications_dnd_enabled = prefs.dnd_enabled;
+        dc.notifications_dnd_start = prefs.dnd_start;
+        dc.notifications_dnd_end = prefs.dnd_end;
+        dc.notifications_on_completed = prefs.on_completed;
+        dc.notifications_on_failed = prefs.on_failed;
+        dc.clone()
+    };
+    crate::config::save_config(&snapshot)?;
+    let _ = app_handle.emit(
+        event_names::CONFIG_UPDATED,
+        events::ConfigUpdatedPayload {
+            key: "notifications".into(),
+            value: "updated".into(),
+        },
+    );
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_webhook_config() -> Result<Option<WebhookConfigDto>, String> {
     let cfg = load_desktop_webhook_config();
@@ -98,194 +144,6 @@ pub async fn save_webhook_config(dto: WebhookConfigDto) -> Result<(), String> {
 #[tauri::command]
 pub async fn clear_webhook_config() -> Result<(), String> {
     clear_webhook_config_on_disk()
-}
-
-#[tauri::command]
-pub async fn get_inbound_config() -> Result<InboundConfigDto, String> {
-    let path = resolve_webhook_config_path()?;
-    if !path.exists() {
-        return Ok(InboundConfigDto::default());
-    }
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let Ok(root) = toml::from_str::<toml::Value>(&existing) else {
-        return Ok(InboundConfigDto::default());
-    };
-    let Some(notif) = root.get("notifications").and_then(|v| v.as_table()) else {
-        return Ok(InboundConfigDto::default());
-    };
-    let Some(inbound) = notif.get("inbound").and_then(|v| v.as_table()) else {
-        return Ok(InboundConfigDto::default());
-    };
-    let slack = inbound
-        .get("slack")
-        .and_then(|v| v.as_table())
-        .map(|t| SlackInboundDto {
-            bot_token: t
-                .get("bot_token")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            trigger_word: t
-                .get("trigger_word")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            allowed_channels: t
-                .get("allowed_channels")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        });
-    let telegram = inbound
-        .get("telegram")
-        .and_then(|v| v.as_table())
-        .map(|t| TelegramInboundDto {
-            bot_token: t
-                .get("bot_token")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            trigger_word: t
-                .get("trigger_word")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string(),
-            allowed_chats: t
-                .get("allowed_chats")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-        });
-    Ok(InboundConfigDto { slack, telegram })
-}
-
-#[tauri::command]
-pub async fn save_inbound_config(
-    state: tauri::State<'_, AppState>,
-    app_handle: tauri::AppHandle,
-    dto: InboundConfigDto,
-) -> Result<(), String> {
-    let path = resolve_webhook_config_path()?;
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut root: toml::Value =
-        toml::from_str(&existing).unwrap_or(toml::Value::Table(toml::value::Table::new()));
-    let table = root
-        .as_table_mut()
-        .ok_or_else(|| "config root is not a table".to_string())?;
-    let notifications = table
-        .entry("notifications")
-        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
-    let notif_table = notifications
-        .as_table_mut()
-        .ok_or_else(|| "notifications is not a table".to_string())?;
-    let mut inbound = toml::value::Table::new();
-    if let Some(s) = &dto.slack {
-        let mut t = toml::value::Table::new();
-        t.insert("bot_token".into(), toml::Value::String(s.bot_token.clone()));
-        t.insert(
-            "trigger_word".into(),
-            toml::Value::String(s.trigger_word.clone()),
-        );
-        t.insert(
-            "allowed_channels".into(),
-            toml::Value::Array(
-                s.allowed_channels
-                    .iter()
-                    .map(|c| toml::Value::String(c.clone()))
-                    .collect(),
-            ),
-        );
-        inbound.insert("slack".into(), toml::Value::Table(t));
-    }
-    if let Some(tg) = &dto.telegram {
-        let mut t = toml::value::Table::new();
-        t.insert(
-            "bot_token".into(),
-            toml::Value::String(tg.bot_token.clone()),
-        );
-        t.insert(
-            "trigger_word".into(),
-            toml::Value::String(tg.trigger_word.clone()),
-        );
-        t.insert(
-            "allowed_chats".into(),
-            toml::Value::Array(
-                tg.allowed_chats
-                    .iter()
-                    .map(|c| toml::Value::String(c.clone()))
-                    .collect(),
-            ),
-        );
-        inbound.insert("telegram".into(), toml::Value::Table(t));
-    }
-    notif_table.insert("inbound".into(), toml::Value::Table(inbound));
-    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
-    crate::file_permissions::restrict_to_owner(&path);
-    tracing::info!(path = %path.display(), "inbound config saved");
-    restart_inbound_listener(&state, &app_handle, &dto).await;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn clear_inbound_config(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let path = resolve_webhook_config_path()?;
-    if !path.exists() {
-        let mut listener = state.inbound_listener.lock().await;
-        if let Some(h) = listener.as_mut() {
-            h.stop().await;
-        }
-        *listener = None;
-        return Ok(());
-    }
-    let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    let Ok(mut root) = toml::from_str::<toml::Value>(&existing) else {
-        return Ok(());
-    };
-    if let Some(table) = root.as_table_mut() {
-        if let Some(notif) = table
-            .get_mut("notifications")
-            .and_then(|v| v.as_table_mut())
-        {
-            notif.remove("inbound");
-        }
-    }
-    let serialized = toml::to_string_pretty(&root).map_err(|e| format!("serialize: {e}"))?;
-    std::fs::write(&path, serialized).map_err(|e| format!("write {}: {e}", path.display()))?;
-    crate::file_permissions::restrict_to_owner(&path);
-    tracing::info!(path = %path.display(), "inbound config cleared");
-    let mut listener = state.inbound_listener.lock().await;
-    if let Some(h) = listener.as_mut() {
-        h.stop().await;
-    }
-    *listener = None;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_inbound_listener_status(
-    state: tauri::State<'_, AppState>,
-) -> Result<crate::inbound::InboundListenerStatus, String> {
-    let listener = state.inbound_listener.lock().await;
-    Ok(listener.as_ref().map(|h| h.status()).unwrap_or_default())
-}
-
-#[tauri::command]
-pub async fn stop_inbound_listener(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let mut listener = state.inbound_listener.lock().await;
-    if let Some(h) = listener.as_mut() {
-        h.stop().await;
-    }
-    *listener = None;
-    Ok(())
 }
 
 // === Helpers ==============================================================
@@ -350,6 +208,24 @@ pub(crate) fn fire_query_notification(
     notifier.notify_dedup(&notification, window_ms)
 }
 
+/// Fire a query-event notification and surface the outcome instead of silently
+/// dropping it. Every call site previously used `let _ = fire_query_notification(…)`,
+/// which hid two real conditions: `Ok(false)` — the notifier suppressed the
+/// notification (cooldown/dedup) — and `Err` — the OS-notification dispatch
+/// itself failed. `context` is a short label (e.g. "query_completed") included
+/// in the log line so the source event is identifiable.
+pub(crate) fn fire_query_notification_logged(
+    notifier: &shannon_core::notifier::Notifier,
+    kind: NotificationKind,
+    context: &'static str,
+) {
+    match fire_query_notification(notifier, kind) {
+        Ok(true) => tracing::trace!("{} notification dispatched", context),
+        Ok(false) => tracing::debug!("{} notification suppressed by cooldown/dedup", context),
+        Err(e) => tracing::warn!(error = %e, "{} notification dispatch failed", context),
+    }
+}
+
 /// Best-effort load of `[notifications.webhook]` from `~/.shannon/config.toml`
 /// and `.shannon.toml` (project-local). Returns `None` on any error — never
 /// panics the app on config issues.
@@ -359,6 +235,93 @@ pub(crate) fn load_desktop_webhook_config() -> Option<shannon_core::notifier::We
         .load_local_toml()
         .build();
     cfg.notifications.and_then(|n| n.webhook)
+}
+
+// === Desktop-notification preferences (master enable + DND) ==============
+
+/// Parsed DND preferences used by the OS-notification handler to decide
+/// whether to suppress a notification. Loaded fresh from `DesktopConfig` on
+/// each call — notifications are infrequent, so the disk read is negligible.
+pub(crate) struct NotificationPrefs {
+    pub master_enabled: bool,
+    pub dnd_enabled: bool,
+    dnd_start_min: Option<u32>,
+    dnd_end_min: Option<u32>,
+    on_completed: bool,
+    on_failed: bool,
+}
+
+impl NotificationPrefs {
+    /// Read + parse from `DesktopConfig`. Malformed `"HH:MM"` values are
+    /// dropped (treated as unset), so a bad edit never panics the handler.
+    pub(crate) fn load() -> Self {
+        let c = crate::config::load_config();
+        NotificationPrefs {
+            master_enabled: c.notifications_master_enabled,
+            dnd_enabled: c.notifications_dnd_enabled,
+            dnd_start_min: c.notifications_dnd_start.as_deref().and_then(parse_hhmm),
+            dnd_end_min: c.notifications_dnd_end.as_deref().and_then(parse_hhmm),
+            on_completed: c.notifications_on_completed,
+            on_failed: c.notifications_on_failed,
+        }
+    }
+
+    /// Whether the current system-local time falls inside the DND window.
+    /// False when DND is off or either bound is unset.
+    pub(crate) fn within_dnd_window(&self) -> bool {
+        if !self.dnd_enabled {
+            return false;
+        }
+        let (Some(start), Some(end)) = (self.dnd_start_min, self.dnd_end_min) else {
+            return false;
+        };
+        is_within_dnd_window(minutes_since_local_midnight(), start, end)
+    }
+
+    /// Whether the event-type toggles permit a notification of the given
+    /// severity. Error notifications honor `on_failed`; everything else
+    /// (info/success/warning — e.g. query completions) honors `on_completed.
+    pub(crate) fn allows_level(&self, is_error: bool) -> bool {
+        if is_error {
+            self.on_failed
+        } else {
+            self.on_completed
+        }
+    }
+}
+
+/// Minutes since midnight in system-local time (0..=1439).
+fn minutes_since_local_midnight() -> u32 {
+    use chrono::Timelike;
+    chrono::Local::now().time().num_seconds_from_midnight() / 60
+}
+
+/// Parse `"HH:MM"` (24h, lenient — `"9:05"` accepted) into minutes-of-day.
+/// `None` when the string is malformed or out of range.
+pub(crate) fn parse_hhmm(s: &str) -> Option<u32> {
+    let (h, m) = s.split_once(':')?;
+    let hours: u32 = h.parse().ok()?;
+    let minutes: u32 = m.parse().ok()?;
+    if hours > 23 || minutes > 59 {
+        return None;
+    }
+    Some(hours * 60 + minutes)
+}
+
+/// Is `now_min` inside the `[start, end)` quiet window? Handles overnight
+/// wrap (e.g. 22:00 → 07:00). `start == end` means "no window" (returns
+/// false) so a freshly-enabled DND with identical bounds doesn't suppress
+/// everything.
+pub(crate) fn is_within_dnd_window(now_min: u32, start_min: u32, end_min: u32) -> bool {
+    if start_min == end_min {
+        return false;
+    }
+    if start_min < end_min {
+        now_min >= start_min && now_min < end_min
+    } else {
+        // overnight wrap
+        now_min >= start_min || now_min < end_min
+    }
 }
 
 fn template_to_str(t: &shannon_core::notifier::WebhookTemplate) -> String {
@@ -488,53 +451,6 @@ fn clear_webhook_config_on_disk() -> Result<(), String> {
     Ok(())
 }
 
-/// (Re)spawn inbound workers to match `dto`. Stops any existing workers
-/// first so callers can mutate config and observe the listener reflect it.
-async fn restart_inbound_listener(
-    state: &AppState,
-    app_handle: &tauri::AppHandle,
-    dto: &InboundConfigDto,
-) {
-    let mut listener = state.inbound_listener.lock().await;
-    if let Some(h) = listener.as_mut() {
-        h.stop().await;
-    }
-    let slack = dto.slack.as_ref().map(|s| crate::inbound::SlackConfig {
-        bot_token: s.bot_token.clone(),
-        trigger_word: s.trigger_word.clone(),
-        allowed_channels: s.allowed_channels.clone(),
-    });
-    let telegram = dto
-        .telegram
-        .as_ref()
-        .map(|t| crate::inbound::TelegramConfig {
-            bot_token: t.bot_token.clone(),
-            trigger_word: t.trigger_word.clone(),
-            allowed_chats: t.allowed_chats.clone(),
-        });
-    *listener = Some(crate::inbound::InboundListener::start(
-        app_handle.clone(),
-        slack,
-        telegram,
-    ));
-}
-
-/// Auto-start the listener from app setup if inbound config already exists.
-/// Called from `main.rs::setup()` after `AppState` is constructed.
-pub async fn bootstrap_inbound_listener(state: &AppState, app_handle: &tauri::AppHandle) {
-    let dto = match get_inbound_config().await {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!(error = %e, "inbound bootstrap: could not read config");
-            return;
-        }
-    };
-    if dto.slack.is_none() && dto.telegram.is_none() {
-        return;
-    }
-    restart_inbound_listener(state, app_handle, &dto).await;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,5 +535,93 @@ mod tests {
         use shannon_core::notifier::WebhookTemplate;
         assert_eq!(template_from_str("unknown"), WebhookTemplate::Raw);
         assert_eq!(template_from_str(""), WebhookTemplate::Raw);
+    }
+
+    // === DND / quiet-hours window parsing + evaluation ===
+
+    #[test]
+    fn parse_hhmm_accepts_zero_padded_and_short_forms() {
+        assert_eq!(parse_hhmm("00:00"), Some(0));
+        assert_eq!(parse_hhmm("23:59"), Some(23 * 60 + 59));
+        assert_eq!(parse_hhmm("9:05"), Some(9 * 60 + 5)); // lenient short form
+        assert_eq!(parse_hhmm("7:30"), Some(7 * 60 + 30));
+    }
+
+    #[test]
+    fn parse_hhmm_rejects_out_of_range_and_malformed() {
+        assert_eq!(parse_hhmm("24:00"), None); // hour > 23
+        assert_eq!(parse_hhmm("12:60"), None); // minute > 59
+        assert_eq!(parse_hhmm("noon"), None);
+        assert_eq!(parse_hhmm("12"), None);
+        assert_eq!(parse_hhmm(""), None);
+        assert_eq!(parse_hhmm("ab:cd"), None);
+    }
+
+    #[test]
+    fn dnd_window_same_day_inclusive_start_exclusive_end() {
+        // 09:00–17:00
+        let (start, end) = (9 * 60, 17 * 60);
+        assert!(is_within_dnd_window(9 * 60, start, end)); // at start
+        assert!(is_within_dnd_window(12 * 60, start, end)); // midday
+        assert!(!is_within_dnd_window(17 * 60, start, end)); // at end (exclusive)
+        assert!(!is_within_dnd_window(8 * 60, start, end)); // before
+        assert!(!is_within_dnd_window(23 * 60, start, end)); // after
+    }
+
+    #[test]
+    fn dnd_window_overnight_wraps_past_midnight() {
+        // 22:00–07:00 (wraps midnight)
+        let (start, end) = (22 * 60, 7 * 60);
+        assert!(is_within_dnd_window(22 * 60, start, end)); // at start
+        assert!(is_within_dnd_window(23 * 60, start, end)); // late night
+        assert!(is_within_dnd_window(0, start, end)); // midnight
+        assert!(is_within_dnd_window(3 * 60, start, end)); // early morning
+        assert!(!is_within_dnd_window(7 * 60, start, end)); // at end (exclusive)
+        assert!(!is_within_dnd_window(12 * 60, start, end)); // midday
+    }
+
+    #[test]
+    fn dnd_window_equal_bounds_is_no_window() {
+        // start == end means "disabled" — never suppress (so a freshly-enabled
+        // DND with identical bounds doesn't suppress everything).
+        assert!(!is_within_dnd_window(0, 600, 600));
+        assert!(!is_within_dnd_window(600, 600, 600));
+        assert!(!is_within_dnd_window(1439, 600, 600));
+    }
+
+    #[test]
+    fn allows_level_routes_by_severity() {
+        let both = NotificationPrefs {
+            master_enabled: true,
+            dnd_enabled: false,
+            dnd_start_min: None,
+            dnd_end_min: None,
+            on_completed: true,
+            on_failed: true,
+        };
+        assert!(both.allows_level(false)); // completion
+        assert!(both.allows_level(true)); // error
+
+        let only_errors = NotificationPrefs {
+            master_enabled: true,
+            dnd_enabled: false,
+            dnd_start_min: None,
+            dnd_end_min: None,
+            on_completed: false,
+            on_failed: true,
+        };
+        assert!(!only_errors.allows_level(false)); // completions muted
+        assert!(only_errors.allows_level(true)); // errors still fire
+
+        let only_completed = NotificationPrefs {
+            master_enabled: true,
+            dnd_enabled: false,
+            dnd_start_min: None,
+            dnd_end_min: None,
+            on_completed: true,
+            on_failed: false,
+        };
+        assert!(only_completed.allows_level(false));
+        assert!(!only_completed.allows_level(true)); // errors muted
     }
 }

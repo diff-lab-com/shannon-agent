@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { open } from '@tauri-apps/plugin-dialog'
 import * as api from '@/lib/tauri-api'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import { SIDEBAR_MODE_KEY } from '@/components/Sidebar'
 import { formatShortcut } from '@/lib/platform'
 
@@ -89,9 +89,14 @@ const SHORTCUT_ROWS = [
 // surface host-side Documents skills the user can install with one click.
 // Each entry maps to a GitHub repo that `install_skill_from_repo` clones into
 // `~/.shannon/skills/`. The catalog is deliberately short — only the most
-// universally useful Documents skills. Repos are placeholders until the
-// matching shannon-skills-* repos are published; the install UI gracefully
-// reports failure so users can retry once a repo goes live.
+// universally useful Documents skills.
+//
+// AVAILABILITY GATE: the shannon-skills-docs repos are not yet published, so
+// one-click install would fail for every new user on first run. The whole
+// section is hidden until DOCUMENTS_SKILLS_AVAILABLE is flipped true (a real
+// repo-existence probe can replace this once a backend check / open CSP path
+// exists). See claudedocs/comprehensive-audit-2026-06-29.md P1-1.
+const DOCUMENTS_SKILLS_AVAILABLE = false
 interface DocumentsSkill {
   id: string
   labelKey: string
@@ -152,7 +157,7 @@ const STEP_LABEL_KEYS = [
 export default function Welcome() {
   const intl = useIntl()
   const navigate = useNavigate()
-  const { refreshConfig, refreshStatus, config } = useApp()
+  const { refreshConfig, refreshStatus, config } = useCatalog()
   const [step, setStep] = useState(0)
   const [task, setTask] = useState<TaskId>('general')
   const [provider, setProvider] = useState<string>('anthropic')
@@ -617,8 +622,10 @@ export default function Welcome() {
                 </div>
               </label>
 
-              {/* P2.4 — Documents skill recommendations. Optional one-click
-                  install; users can skip and install later from Extensions Hub. */}
+              {/* P2.4 — Documents skill recommendations. Gated behind
+                  DOCUMENTS_SKILLS_AVAILABLE (see top of file) — the section is
+                  hidden until the skill repos are published. */}
+              {DOCUMENTS_SKILLS_AVAILABLE && (
               <div className="mt-md p-md rounded-xl border border-outline-variant/50 bg-surface-container-low">
                 <div className="flex items-center gap-xs mb-xs">
                   <span className="material-symbols-outlined text-primary text-[20px]">extension</span>
@@ -687,6 +694,7 @@ export default function Welcome() {
                   )}
                 </p>
               </div>
+              )}
             </Card>
           )}
         </div>

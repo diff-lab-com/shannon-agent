@@ -5,7 +5,7 @@
 //! startup on the shared `Notifier` (with `Cooldown` + `minimum_level`) stored
 //! on `AppState`, so all query-event firing sites share the same dedup state.
 
-use shannon_core::notifier::{Notification, NotificationHandler, NotifierError};
+use shannon_core::notifier::{Notification, NotificationHandler, NotificationLevel, NotifierError};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
@@ -28,6 +28,15 @@ impl TauriNotificationHandler {
 
 impl NotificationHandler for TauriNotificationHandler {
     fn send(&self, n: &Notification) -> Result<(), NotifierError> {
+        // Master switch + quiet-hours (DND) + event-type suppression — all
+        // desktop-local. Returning Ok(()) silently drops the OS popup; webhook
+        // handlers on the same Notifier are unaffected, so away-from-desk
+        // delivery still fires.
+        let prefs = crate::commands_notifications::NotificationPrefs::load();
+        let is_error = matches!(n.level, NotificationLevel::Error);
+        if !prefs.master_enabled || prefs.within_dnd_window() || !prefs.allows_level(is_error) {
+            return Ok(());
+        }
         self.app
             .notification()
             .builder()

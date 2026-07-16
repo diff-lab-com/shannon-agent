@@ -11,12 +11,13 @@ fn main() {
     use shannon_desktop::commands_billing;
     use shannon_desktop::commands_chat;
     use shannon_desktop::commands_config;
+    use shannon_desktop::commands_connections;
     use shannon_desktop::commands_files;
     use shannon_desktop::commands_mcp;
     use shannon_desktop::commands_memory;
+    use shannon_desktop::commands_mobile_pairing;
     use shannon_desktop::commands_notifications;
     use shannon_desktop::commands_onboarding;
-    use shannon_desktop::commands_outbound;
     use shannon_desktop::commands_permissions;
     use shannon_desktop::commands_plugins;
     use shannon_desktop::commands_routine_templates;
@@ -24,7 +25,10 @@ fn main() {
     use shannon_desktop::commands_skill_candidates;
     use shannon_desktop::commands_skill_loop;
     use shannon_desktop::commands_tasks;
+    use shannon_desktop::commands_usage;
+    use shannon_desktop::commands_voice;
     use shannon_desktop::extensions_commands;
+    use shannon_desktop::loopback_api;
     use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
     use tauri::{
@@ -77,6 +81,25 @@ fn main() {
             commands_config::save_provider,
             commands_config::delete_provider,
             commands_config::set_active_provider,
+            // T5 — gateway social connections (OS keyring + gateway config.json)
+            commands_connections::gateway_set_secret,
+            commands_connections::gateway_get_secret,
+            commands_connections::gateway_has_secret,
+            commands_connections::gateway_delete_secret,
+            commands_connections::gateway_read_config,
+            commands_connections::gateway_write_config,
+            commands_connections::gateway_supervisor_start,
+            commands_connections::gateway_supervisor_stop,
+            commands_connections::gateway_supervisor_status,
+            commands_connections::gateway_set_managed,
+            // P1.3 — mobile device pairing (Design D shared-file channel)
+            commands_mobile_pairing::mobile_generate_pair_token,
+            commands_mobile_pairing::mobile_list_paired_devices,
+            commands_mobile_pairing::mobile_revoke_device,
+            // D4 — cloud speech-to-text (voice input)
+            commands_voice::transcribe_audio,
+            commands_voice::get_stt_config,
+            commands_voice::save_stt_config,
             commands_sessions::new_session,
             commands_sessions::list_sessions,
             commands_sessions::search_sessions,
@@ -215,25 +238,17 @@ fn main() {
             commands_onboarding::seed_sample_data,
             // P3 notifications — native OS notification bridge
             commands_notifications::send_notification,
+            commands_notifications::get_notification_prefs,
+            commands_notifications::set_notification_prefs,
             commands_notifications::get_webhook_config,
             commands_notifications::save_webhook_config,
             commands_notifications::clear_webhook_config,
-            // P5 Phase 1 — inbound notifications (Slack + Telegram) config storage
-            commands_notifications::get_inbound_config,
-            commands_notifications::save_inbound_config,
-            commands_notifications::clear_inbound_config,
-            // P5 Phase 2 — inbound listener supervisor
-            commands_notifications::get_inbound_listener_status,
-            commands_notifications::stop_inbound_listener,
-            // P1.3 — outbound messaging (Slack + Telegram)
-            commands_outbound::get_outbound_config,
-            commands_outbound::save_outbound_config,
-            commands_outbound::clear_outbound_config,
-            commands_outbound::send_outbound_test,
             // P0-c — billing demo data (UI shows "Demo mode" banner)
             commands_billing::get_billing_plan,
             commands_billing::get_cost_history,
             commands_billing::get_billing_history,
+            // Usage statistics — local usage ledger aggregation
+            commands_usage::get_usage_stats,
             // P2.1 — persistent memory layer (wraps shannon_core::memory::MemoryStore)
             commands_memory::list_memory_projects,
             commands_memory::list_memories,
@@ -248,11 +263,18 @@ fn main() {
             state.attach_notification_handler(app.handle().clone());
             app.manage(state);
 
-            // P5 Phase 2 — auto-start inbound listener if config already exists.
+            // E-1 方案 C — auto-start the gateway supervisor when `managed` is on.
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
             tauri::async_runtime::block_on(async move {
-                commands_notifications::bootstrap_inbound_listener(&state_ref, &app_handle).await;
+                // P0.1 — spawn the loopback engine API server BEFORE the
+                // gateway so its `engine.wsUrl` (ws://127.0.0.1:33420/api/ws)
+                // is reachable when the supervised gateway boots. The brief
+                // sleep lets the listener bind first; serve() then runs for
+                // the lifetime of the process on a detached task.
+                loopback_api::spawn(state_ref.inner()).await;
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle).await;
             });
 
             // Bundle A — Click-to-foreground: when a Shannon notification is

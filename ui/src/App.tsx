@@ -18,6 +18,7 @@ const OPCTask = lazy(() => import('./pages/OPCTask'));
 const QuickFix = lazy(() => import('./pages/QuickFix'));
 const Editor = lazy(() => import('./pages/Editor'));
 const Memory = lazy(() => import('./pages/Memory'));
+const Usage = lazy(() => import('./pages/Usage'));
 const SkillProposalsManager = lazy(() => import('./components/skills/SkillProposalsManager'));
 const DataSources = lazy(() => import('./components/extensions/DataSources'));
 const Featured = lazy(() => import('./components/extensions/Featured'));
@@ -32,6 +33,7 @@ const ModelsSettings = lazy(() => import('./components/settings/ModelsSettings')
 const AdvancedSettings = lazy(() => import('./components/settings/AdvancedSettings'));
 const BillingSettings = lazy(() => import('./components/settings/BillingSettings'));
 const NotificationsSettings = lazy(() => import('./components/settings/NotificationsSettings'));
+const ConnectionsSettings = lazy(() => import('./components/settings/ConnectionsSettings'));
 
 function PageLoader() {
   return <div className="flex-1 flex items-center justify-center"><span className="material-symbols-outlined icon-xl text-primary animate-spin">progress_activity</span></div>;
@@ -57,6 +59,7 @@ export default function App() {
                 <Route path="/chat" element={<Chat />} />
                 <Route path="/tasks" element={<Tasks />} />
                 <Route path="/triage" element={<Triage />} />
+                <Route path="/usage" element={<Usage />} />
                 {/* P1 navigation cleanup — these pages are no longer in the
                     sidebar. Routes redirect to /tasks so existing bookmarks
                     and deep links keep working. Pages and their tests remain
@@ -91,6 +94,7 @@ export default function App() {
                   <Route path="billing" element={<BillingSettings />} />
                   <Route path="advanced" element={<AdvancedSettings />} />
                   <Route path="notifications" element={<NotificationsSettings />} />
+                  <Route path="connections" element={<ConnectionsSettings />} />
                 </Route>
                 <Route path="*" element={<Navigate to="/chat" replace />} />
               </Route>

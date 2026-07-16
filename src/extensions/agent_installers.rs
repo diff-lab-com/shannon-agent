@@ -24,11 +24,23 @@ fn shannon_agents_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/tmp/shannon-agents"))
 }
 
+/// Resolve the agents root, honoring an installer's test-only `root_override`.
+/// `None` → the real `~/.shannon/agents` (production); `Some(p)` → `p` (tests
+/// pass a tempdir so they never mutate the process-global `HOME` env var).
+fn resolve_agents_root(override_: Option<&Path>) -> PathBuf {
+    override_
+        .map(PathBuf::from)
+        .unwrap_or_else(shannon_agents_root)
+}
+
 /// Repo-based agent installer — clones into `~/.shannon/agents/<plugin>/`.
 pub struct AgentRepoInstaller {
     pub plugin_name: String,
     pub repo: String,
     pub ref_: String,
+    /// Test-only override for the agents root. Production leaves this `None`
+    /// (resolve `~/.shannon/agents` from HOME); tests set it to a tempdir.
+    pub root_override: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -60,7 +72,7 @@ impl AddonInstaller for AgentRepoInstaller {
             })
             .await;
 
-        let target_dir = shannon_agents_root().join(&self.plugin_name);
+        let target_dir = resolve_agents_root(self.root_override.as_deref()).join(&self.plugin_name);
         if target_dir.exists() {
             return Err(InstallError::Io(format!(
                 "{} already exists at {}",
@@ -129,7 +141,7 @@ impl AddonInstaller for AgentRepoInstaller {
     }
 
     async fn uninstall(&self, addon_id: &str) -> Result<(), InstallError> {
-        let dir = shannon_agents_root().join(addon_id);
+        let dir = resolve_agents_root(self.root_override.as_deref()).join(addon_id);
         if dir.exists() {
             std::fs::remove_dir_all(&dir)?;
         }
@@ -137,7 +149,7 @@ impl AddonInstaller for AgentRepoInstaller {
     }
 
     async fn update(&self, addon_id: &str) -> Result<InstalledAddon, InstallError> {
-        let dir = shannon_agents_root().join(addon_id);
+        let dir = resolve_agents_root(self.root_override.as_deref()).join(addon_id);
         if !dir.exists() {
             return Err(InstallError::Io(format!(
                 "{addon_id} is not installed at {}",
@@ -180,6 +192,9 @@ impl AddonInstaller for AgentRepoInstaller {
 pub struct AgentMarkdownInstaller {
     pub plugin_name: String,
     pub body: String,
+    /// Test-only override for the agents root. Production leaves this `None`
+    /// (resolve `~/.shannon/agents` from HOME); tests set it to a tempdir.
+    pub root_override: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -208,7 +223,7 @@ impl AddonInstaller for AgentMarkdownInstaller {
             })
             .await;
 
-        let dir = shannon_agents_root().join(&self.plugin_name);
+        let dir = resolve_agents_root(self.root_override.as_deref()).join(&self.plugin_name);
         std::fs::create_dir_all(&dir)?;
         let agent_md = dir.join("agent.md");
         std::fs::write(&agent_md, &self.body)?;
@@ -227,7 +242,7 @@ impl AddonInstaller for AgentMarkdownInstaller {
     }
 
     async fn uninstall(&self, addon_id: &str) -> Result<(), InstallError> {
-        let dir = shannon_agents_root().join(addon_id);
+        let dir = resolve_agents_root(self.root_override.as_deref()).join(addon_id);
         if dir.exists() {
             std::fs::remove_dir_all(&dir)?;
         }
@@ -247,7 +262,14 @@ impl AddonInstaller for AgentMarkdownInstaller {
 
 /// Used by the Tauri command layer to ask "is this agent plugin already installed?"
 pub fn is_agent_installed(plugin_name: &str) -> bool {
-    shannon_agents_root().join(plugin_name).exists()
+    is_agent_installed_in(&shannon_agents_root(), plugin_name)
+}
+
+/// `is_agent_installed` against an explicit agents `root` (see
+/// [`AgentRepoInstaller`] / [`AgentMarkdownInstaller`] `root_override` for why
+/// tests avoid `$HOME`).
+pub fn is_agent_installed_in(root: &Path, plugin_name: &str) -> bool {
+    root.join(plugin_name).exists()
 }
 
 /// Wire type for listing installed agent plugins.
@@ -260,9 +282,13 @@ pub struct InstalledAgent {
 
 /// Scan `~/.shannon/agents/` for installed agent plugins.
 pub fn list_installed_agents() -> Vec<InstalledAgent> {
-    let root = shannon_agents_root();
+    list_installed_agents_in(&shannon_agents_root())
+}
+
+/// `list_installed_agents` against an explicit agents `root`.
+pub fn list_installed_agents_in(root: &Path) -> Vec<InstalledAgent> {
     let mut out = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&root) {
+    if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
             if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
                 let path = entry.path();
@@ -289,11 +315,16 @@ pub fn list_installed_agents() -> Vec<InstalledAgent> {
 
 /// Remove an installed agent plugin by name.
 pub fn remove_installed_agent(name: &str) -> Result<(), InstallError> {
-    let dir = shannon_agents_root().join(name);
+    remove_installed_agent_in(&shannon_agents_root(), name)
+}
+
+/// `remove_installed_agent` against an explicit agents `root`.
+pub fn remove_installed_agent_in(root: &Path, name: &str) -> Result<(), InstallError> {
+    let dir = root.join(name);
     if !dir.exists() {
         return Err(InstallError::Io(format!("{name} is not installed")));
     }
-    let canonical_root = shannon_agents_root()
+    let canonical_root = root
         .canonicalize()
         .map_err(|e| InstallError::Io(format!("canonicalize root: {e}")))?;
     let canonical_target = dir
@@ -313,12 +344,6 @@ pub fn remove_installed_agent(name: &str) -> Result<(), InstallError> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
-
-    static HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    fn home_lock() -> &'static Mutex<()> {
-        HOME_LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     fn fixture_entry() -> CatalogEntry {
         CatalogEntry {
@@ -339,22 +364,19 @@ mod tests {
         }
     }
 
-    fn lock_home() -> std::sync::MutexGuard<'static, ()> {
-        home_lock().lock().unwrap_or_else(|p| p.into_inner())
-    }
-
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn markdown_installer_writes_agent_file() {
-        let _g = lock_home();
+        // Agents root is an isolated tempdir — no HOME mutation. The old form
+        // set HOME via a lock-guarded env override, which is process-global
+        // and raced with unrelated tests reading dirs::home_dir() under
+        // parallel --lib.
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let root = tmp.path().join(".shannon").join("agents");
 
         let installer = AgentMarkdownInstaller {
             plugin_name: "test-agent".into(),
             body: "---\nname: test\n---\n# Test Agent\n".into(),
+            root_override: Some(root.clone()),
         };
         let entry = fixture_entry();
         let installed = installer
@@ -374,59 +396,47 @@ mod tests {
                 .unwrap()
                 .ends_with("test-agent/agent.md")
         );
-        assert!(is_agent_installed("test-agent"));
+        assert!(is_agent_installed_in(&root, "test-agent"));
 
         installer.uninstall("test-agent").await.expect("uninstall");
-        assert!(!is_agent_installed("test-agent"));
+        assert!(!is_agent_installed_in(&root, "test-agent"));
     }
 
     #[test]
     fn list_installed_agents_handles_missing_dir() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let rows = list_installed_agents();
+        let root = tmp.path().join(".shannon").join("agents");
+        let rows = list_installed_agents_in(&root);
         assert!(rows.is_empty());
     }
 
     #[test]
     fn list_installed_agents_returns_plugin_subdirs() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let agent_dir = tmp.path().join(".shannon").join("agents").join("alpha");
+        let root = tmp.path().join(".shannon").join("agents");
+        let agent_dir = root.join("alpha");
         std::fs::create_dir_all(&agent_dir).unwrap();
         std::fs::write(agent_dir.join("agent.md"), "body").unwrap();
-        let rows = list_installed_agents();
+        let rows = list_installed_agents_in(&root);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "alpha");
     }
 
     #[test]
     fn remove_installed_agent_rejects_missing_name() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let result = remove_installed_agent("nope");
+        let root = tmp.path().join(".shannon").join("agents");
+        let result = remove_installed_agent_in(&root, "nope");
         assert!(result.is_err());
     }
 
     #[test]
     fn remove_installed_agent_succeeds_for_existing() {
-        let _g = lock_home();
         let tmp = tempfile::tempdir().expect("tmp");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
-        let agent_dir = tmp.path().join(".shannon").join("agents").join("beta");
+        let root = tmp.path().join(".shannon").join("agents");
+        let agent_dir = root.join("beta");
         std::fs::create_dir_all(&agent_dir).unwrap();
-        remove_installed_agent("beta").expect("remove");
+        remove_installed_agent_in(&root, "beta").expect("remove");
         assert!(!agent_dir.exists());
     }
 }

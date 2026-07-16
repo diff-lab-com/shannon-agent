@@ -35,6 +35,9 @@ pub struct DesktopConfig {
     pub max_tokens: Option<u32>,
     /// Billing plan name (local-app echo of provider plan).
     pub plan: Option<String>,
+    /// Speech-to-text (voice input) provider config (D4 cloud STT).
+    #[serde(default)]
+    pub stt: Option<SttConfig>,
     /// Skill loop evaluation enabled (default: false).
     #[serde(default)]
     pub skill_loop_enabled: bool,
@@ -49,9 +52,80 @@ pub struct DesktopConfig {
     /// scanning sessions. Default: true.
     #[serde(default = "default_skill_detection_enabled")]
     pub skill_detection_enabled: bool,
+    /// Master switch for desktop (OS) notifications. When false, the
+    /// `TauriNotificationHandler` silently drops every notification.
+    /// Default: enabled (existing users keep notifications on upgrade).
+    #[serde(default = "default_true")]
+    pub notifications_master_enabled: bool,
+    /// Do-Not-Disturb / quiet-hours switch. When true, desktop notifications
+    /// are suppressed while the current local time is inside the window
+    /// [`notifications_dnd_start`, `notifications_dnd_end`). Webhook delivery
+    /// is unaffected.
+    #[serde(default)]
+    pub notifications_dnd_enabled: bool,
+    /// DND window start, `"HH:MM"` (24h, system-local). Parsed leniently.
+    #[serde(default)]
+    pub notifications_dnd_start: Option<String>,
+    /// DND window end, `"HH:MM"` (24h, system-local).
+    #[serde(default)]
+    pub notifications_dnd_end: Option<String>,
+    /// Surface a desktop notification when a query/task completes (non-error
+    /// notifications, e.g. `NotificationLevel::Info`/`Success`/`Warning`).
+    /// Default: enabled.
+    #[serde(default = "default_true")]
+    pub notifications_on_completed: bool,
+    /// Surface a desktop notification when a query/task fails
+    /// (`NotificationLevel::Error`). Default: enabled.
+    #[serde(default = "default_true")]
+    pub notifications_on_failed: bool,
+    /// Gateway process supervision (E-1, 方案 C). When `managed` is true the
+    /// desktop app spawns and supervises a local `shannon-gateway` binary;
+    /// when false, the gateway is treated as external (user/ops runs it and
+    /// the UI's engine endpoints point at it).
+    #[serde(default)]
+    pub gateway: GatewayDesktopConfig,
+}
+
+/// Gateway process supervision config (E-1, 方案 C). Stored under
+/// `~/.shannon/desktop/config.json` (the *desktop's* own config — not the
+/// gateway's `~/.shannon/gateway/config.json`, which the gateway itself reads).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayDesktopConfig {
+    /// 方案 C master switch. `true` (default) → desktop spawns + supervises a
+    /// local gateway binary. `false` → the gateway is external; desktop only
+    /// reads/writes its config + engine endpoints and never starts a process.
+    #[serde(default = "default_gateway_managed")]
+    pub managed: bool,
+    /// Explicit path to the gateway binary. If `None`, the supervisor probes a
+    /// few default locations (Tauri resource dir, then `$PATH`); if none
+    /// resolves, `start()` reports `NotInstalled` rather than erroring.
+    #[serde(default)]
+    pub binary_path: Option<String>,
+    /// Extra CLI args appended to the gateway invocation
+    /// (e.g. `["--log-level", "debug"]`).
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+}
+
+impl Default for GatewayDesktopConfig {
+    fn default() -> Self {
+        Self {
+            managed: default_gateway_managed(),
+            binary_path: None,
+            extra_args: Vec::new(),
+        }
+    }
+}
+
+fn default_gateway_managed() -> bool {
+    true
 }
 
 fn default_skill_detection_enabled() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 
@@ -109,6 +183,25 @@ fn default_skill_loop_min_tool_calls() -> usize {
     2
 }
 
+/// Speech-to-text (voice input) provider configuration (D4 cloud STT).
+/// Backs the `transcribe_audio` command. `None`/missing key ⇒ the UI surfaces
+/// a "not configured" toast instead of attempting a provider call.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SttConfig {
+    /// Provider preset: `groq` | `openai` | `custom`.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// API key (stored locally; masked to `"***"` in read-back responses).
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Base URL override. Required for `custom`; optional for the presets.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Whisper model id. Defaults: groq→`whisper-large-v3`, openai→`whisper-1`.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
 impl Default for DesktopConfig {
     fn default() -> Self {
         Self {
@@ -133,6 +226,14 @@ impl Default for DesktopConfig {
             skill_loop_min_duration_secs: default_skill_loop_min_duration_secs(),
             skill_loop_min_tool_calls: default_skill_loop_min_tool_calls(),
             skill_detection_enabled: default_skill_detection_enabled(),
+            notifications_master_enabled: default_true(),
+            notifications_dnd_enabled: false,
+            notifications_dnd_start: None,
+            notifications_dnd_end: None,
+            notifications_on_completed: default_true(),
+            notifications_on_failed: default_true(),
+            stt: None,
+            gateway: GatewayDesktopConfig::default(),
         }
     }
 }
@@ -266,6 +367,14 @@ mod tests {
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
             skill_detection_enabled: true,
+            notifications_master_enabled: true,
+            notifications_dnd_enabled: false,
+            notifications_dnd_start: None,
+            notifications_dnd_end: None,
+            notifications_on_completed: true,
+            notifications_on_failed: true,
+            stt: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -314,6 +423,14 @@ mod tests {
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
             skill_detection_enabled: true,
+            notifications_master_enabled: true,
+            notifications_dnd_enabled: false,
+            notifications_dnd_start: None,
+            notifications_dnd_end: None,
+            notifications_on_completed: true,
+            notifications_on_failed: true,
+            stt: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: DesktopConfig = serde_json::from_str(&json).unwrap();
@@ -344,6 +461,14 @@ mod tests {
             skill_loop_min_duration_secs: 30,
             skill_loop_min_tool_calls: 2,
             skill_detection_enabled: true,
+            notifications_master_enabled: true,
+            notifications_dnd_enabled: false,
+            notifications_dnd_start: None,
+            notifications_dnd_end: None,
+            notifications_on_completed: true,
+            notifications_on_failed: true,
+            stt: None,
+            ..Default::default()
         };
 
         // Test serialization preserves approval_mode

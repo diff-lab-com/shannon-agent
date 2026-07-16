@@ -41,6 +41,7 @@ export interface UsagePayload {
   output_tokens: number
   cost_usd: number
   cache_hit_rate?: number
+  max_tokens?: number
 }
 
 export interface QueryCompletedPayload {
@@ -155,6 +156,73 @@ export interface ConfigUpdate {
   value: string
 }
 
+/// Gateway (shannon-gateway) config — mirrors the on-disk shape of
+/// `~/.shannon/gateway/config.json` (camelCase, same schema the gateway's own
+/// loader validates). Kept structurally identical so the desktop can pass it
+/// through unchanged.
+export interface GatewayEngineConfig {
+  wsUrl: string
+  httpBaseUrl: string
+  model?: string
+}
+
+export interface GatewayAdapterConfig {
+  platform: string
+  enabled: boolean
+  options?: Record<string, unknown>
+  /// adapter-local secret name → OS-keyring key (e.g. `botToken` → `slack/bot-token`).
+  /// Values are keyring key NAMES, never the secrets themselves.
+  secrets?: Record<string, string>
+}
+
+export interface GatewayMobileConfig {
+  enabled?: boolean
+  host?: string
+  port?: number
+  tokensFile?: string
+  devicesFile?: string
+}
+
+export interface GatewayConfig {
+  engine: GatewayEngineConfig
+  adapters: GatewayAdapterConfig[]
+  logLevel?: string
+  mobile?: GatewayMobileConfig
+}
+
+/// One paired device entry. Mirrors `DeviceEntry` in
+/// `shannon-gateway/src/mobile/pairing.ts` (camelCase, passed through).
+export interface MobileDeviceEntry {
+  deviceId: string
+  publicKey: string
+  label?: string | null
+  addedAt: number
+  lastSeenAt: number
+}
+
+/// `mobile_generate_pair_token` result — token + LAN endpoint + QR data URL.
+export interface MobilePairToken {
+  token: string
+  expiresAt: number
+  lanEndpoint: string
+  qrDataUrl: string
+}
+
+/// E-1 方案 C — supervised gateway process status. Mirrors the Rust
+/// `GatewaySupervisorStatus` enum (externally-tagged serde, camelCase variants).
+export type GatewaySupervisorStatus =
+  | 'stopped'
+  | 'notInstalled'
+  | { running: { pid: number } }
+  | { exited: { code: number | null; reason: string } }
+
+/// `gateway_supervisor_*` command return shape: the 方案 C `managed` flag + the
+/// process status in one round-trip.
+export interface GatewayProcessState {
+  managed: boolean
+  status: GatewaySupervisorStatus
+}
+
 export interface ProviderSwitchRequest {
   provider: string
   api_key?: string
@@ -221,6 +289,18 @@ export interface DesktopConfig {
   skill_loop_min_duration_secs?: number
   skill_loop_min_tool_calls?: number
   skill_detection_enabled?: boolean
+  stt?: SttConfig
+}
+
+export interface SttConfig {
+  provider?: string | null
+  api_key?: string | null
+  base_url?: string | null
+  model?: string | null
+}
+
+export interface TranscriptionResult {
+  text: string
 }
 
 export interface SendMessageResponse {
@@ -494,6 +574,29 @@ export interface BillingHistory {
   description: string
   amount: number
   status: 'paid' | 'pending' | 'failed'
+}
+
+// --- Usage Stats Types ---
+//
+// Field names mirror the Rust DTOs in shannon-desktop/src/commands_usage.rs
+// (UsageStats, BucketTotals) exactly — serde serializes them verbatim.
+
+export interface UsageBucket {
+  label: string
+  input_tokens: number
+  output_tokens: number
+  cache_creation_tokens: number
+  cache_read_tokens: number
+  cost_usd: number
+  requests: number
+}
+
+export interface UsageStats {
+  days: number
+  totals: UsageBucket
+  by_model: UsageBucket[]
+  by_provider: UsageBucket[]
+  by_day: UsageBucket[]
 }
 
 // --- Scheduled Tasks (Sprint 2) ---

@@ -99,6 +99,8 @@ pub struct AppState {
     pub(crate) scheduled_runs_store: Arc<shannon_core::scheduled_runs::ScheduledRunsStore>,
     /// Triage items needing user attention.
     pub(crate) triage_store: Arc<crate::scheduled_commands::TriageStore>,
+    /// Usage ledger (`~/.shannon/usage.jsonl`) — append-only token/cache/cost.
+    pub(crate) usage_store: Arc<crate::commands_usage::UsageStore>,
     /// Triggered-routine enabled/disabled overrides.
     pub(crate) routine_overrides: Arc<crate::scheduled_commands::RoutineOverrideStore>,
     /// Triggered-routine registry (reloaded on demand).
@@ -114,9 +116,8 @@ pub struct AppState {
     /// with a `TauriNotificationHandler` once `AppHandle` is available in
     /// `main.rs` setup via `attach_notification_handler`.
     pub(crate) notifier: Arc<shannon_core::notifier::Notifier>,
-    /// Inbound listener supervisor (Phase 2). Owns the Slack + Telegram
-    /// worker tasks. None until the first config is saved.
-    pub(crate) inbound_listener: Arc<tokio::sync::Mutex<Option<crate::inbound::InboundListener>>>,
+    pub(crate) gateway_supervisor:
+        Arc<tokio::sync::Mutex<Option<crate::gateway_supervisor::GatewaySupervisor>>>,
 }
 
 /// Session metadata for session list.
@@ -279,6 +280,7 @@ impl AppState {
             ),
             scheduled_runs_store: Arc::new(shannon_core::scheduled_runs::ScheduledRunsStore::new()),
             triage_store: Arc::new(crate::scheduled_commands::TriageStore::new()),
+            usage_store: Arc::new(crate::commands_usage::UsageStore::new()),
             routine_overrides: Arc::new(crate::scheduled_commands::RoutineOverrideStore::new()),
             triggered_registry: Arc::new(tokio::sync::RwLock::new(
                 shannon_core::triggered_routines::TriggeredRoutineRegistry::load_from_dirs(),
@@ -290,7 +292,7 @@ impl AppState {
                 shannon_agents::message_history::MessageHistoryStore::new(),
             ),
             notifier: Arc::new(shannon_core::notifier::Notifier::new()),
-            inbound_listener: Arc::new(tokio::sync::Mutex::new(None)),
+            gateway_supervisor: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -481,6 +483,8 @@ pub async fn send_message(
     let current_session_id_arc = state.current_session_id.clone();
     let state_mgr_arc = state.state_manager.clone();
     let model_arc = state.model.clone();
+    let provider_arc = state.provider.clone();
+    let usage_store_arc = state.usage_store.clone();
     let notifier_arc = state.notifier.clone();
 
     let return_qid = qid_str.clone();
@@ -588,8 +592,23 @@ pub async fn send_message(
                         input_tokens,
                         output_tokens,
                         cost_usd,
+                        cache_creation_tokens,
+                        cache_read_tokens,
                         ..
                     } => {
+                        // Persist to the local usage ledger. Best-effort:
+                        // a log write failure must never break the stream.
+                        let model_now = model_arc.lock().await.clone();
+                        let provider_now = provider_arc.lock().await.clone();
+                        let _ = usage_store_arc.append(&crate::commands_usage::record_event(
+                            &model_now,
+                            &provider_now,
+                            input_tokens,
+                            output_tokens,
+                            cache_creation_tokens,
+                            cache_read_tokens,
+                            cost_usd,
+                        ));
                         let _ = app.emit(
                             event_names::QUERY_USAGE,
                             events::UsagePayload {
@@ -652,9 +671,10 @@ pub async fn send_message(
                                 query_id: qid_str.clone(),
                             },
                         );
-                        let _ = crate::commands_notifications::fire_query_notification(
+                        crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Completed,
+                            "query_completed",
                         );
 
                         // Skill loop evaluation hook (spawned, non-blocking)
@@ -696,22 +716,63 @@ pub async fn send_message(
                                             client_config,
                                         );
 
-                                        match shannon_core::skill_loop::evaluate_task(
-                                            &client, evaluation,
+                                        // Reduce the evaluation result to a Send-only bool
+                                        // first: evaluate_task returns Result<_, Box<dyn
+                                        // Error>> and Box<dyn Error> is !Send, so the whole
+                                        // result must be dropped before the generate await
+                                        // below (else the spawned future is !Send).
+                                        let suggest = match shannon_core::skill_loop::evaluate_task(
+                                            &client,
+                                            evaluation.clone(),
                                         )
                                         .await
                                         {
-                                            Ok(result) if result.suggest => {
-                                                let _ = app_clone.emit(
-                                                    crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,
-                                                    crate::commands_skill_loop::SkillProposalCountPayload { pending_count: 1 },
-                                                );
-                                            }
-                                            Ok(_) => {
-                                                // suggest=false, silent skip
-                                            }
+                                            Ok(result) => result.suggest,
                                             Err(e) => {
-                                                tracing::warn!(error = %e, "skill loop evaluate failed (non-blocking)");
+                                                tracing::warn!(
+                                                    error = %e,
+                                                    "skill loop evaluate failed (non-blocking)"
+                                                );
+                                                false
+                                            }
+                                        };
+
+                                        if suggest {
+                                            // Generate a proposal draft so the user can
+                                            // review it. Generation is automatic; only install
+                                            // (approve) is manual. Non-blocking on failure — a
+                                            // failed generation simply won't surface a proposal.
+                                            match shannon_core::skill_loop::generate_skill_proposal(
+                                                &client, evaluation,
+                                            )
+                                            .await
+                                            {
+                                                Ok(proposal) => {
+                                                    match crate::commands_skill_loop::save_proposal_and_count(
+                                                        &proposal,
+                                                    ) {
+                                                        Ok(count) => {
+                                                            let _ = app_clone.emit(
+                                                                crate::events::event_names::SKILL_PROPOSAL_AVAILABLE,
+                                                                crate::commands_skill_loop::SkillProposalCountPayload {
+                                                                    pending_count: count,
+                                                                },
+                                                            );
+                                                        }
+                                                        Err(e) => {
+                                                            tracing::warn!(
+                                                                error = %e,
+                                                                "skill loop save proposal failed (non-blocking)"
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        error = %e,
+                                                        "skill loop generate proposal failed (non-blocking)"
+                                                    );
+                                                }
                                             }
                                         }
                                     }
@@ -727,9 +788,10 @@ pub async fn send_message(
                                 error: error.clone(),
                             },
                         );
-                        let _ = crate::commands_notifications::fire_query_notification(
+                        crate::commands_notifications::fire_query_notification_logged(
                             &notifier_arc,
                             crate::commands_notifications::NotificationKind::Failed(error),
+                            "query_failed",
                         );
                     }
                     // Ignore other events in MVP
@@ -743,9 +805,10 @@ pub async fn send_message(
                             error: e.to_string(),
                         },
                     );
-                    let _ = crate::commands_notifications::fire_query_notification(
+                    crate::commands_notifications::fire_query_notification_logged(
                         &notifier_arc,
                         crate::commands_notifications::NotificationKind::Failed(e.to_string()),
+                        "query_failed",
                     );
                 }
             }
@@ -844,6 +907,8 @@ pub async fn start_background_task(
     let tools = state.tools.clone();
     let _qe_config = state.qe_config.read().await.clone();
     let model = state.model.lock().await.clone();
+    let provider = state.provider.lock().await.clone();
+    let usage_store = state.usage_store.clone();
     let approval_mode_str = state.desktop_config.read().await.approval_mode.clone();
 
     tokio::spawn(async move {
@@ -869,6 +934,10 @@ pub async fn start_background_task(
 
         let query_id = uuid::Uuid::new_v4();
         let _qid_str = query_id.to_string();
+
+        // Clone before `model` is moved into QueryMetadata so usage events in
+        // the stream below can be attributed (mirrors send_message).
+        let model_for_usage = model.clone();
 
         let context = QueryContext {
             query_id,
@@ -896,6 +965,29 @@ pub async fn start_background_task(
                 Ok(event) => match event {
                     QueryEvent::Text { content, .. } => {
                         final_output.push_str(&content);
+                    }
+                    QueryEvent::Usage {
+                        input_tokens,
+                        output_tokens,
+                        cost_usd,
+                        cache_creation_tokens,
+                        cache_read_tokens,
+                        ..
+                    } => {
+                        // Persist to the local usage ledger. Best-effort: a log
+                        // write failure must never break the task. No QUERY_USAGE
+                        // emit here — background tasks aren't tied to a visible
+                        // chat, so a live-usage signal has no consumer and could
+                        // surface as a phantom UI update.
+                        let _ = usage_store.append(&crate::commands_usage::record_event(
+                            &model_for_usage,
+                            &provider,
+                            input_tokens,
+                            output_tokens,
+                            cache_creation_tokens,
+                            cache_read_tokens,
+                            cost_usd,
+                        ));
                     }
                     QueryEvent::Completed { .. } => break,
                     QueryEvent::Failed { error, .. } => {

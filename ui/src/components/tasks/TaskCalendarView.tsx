@@ -11,7 +11,7 @@
 
 import { useIntl } from 'react-intl'
 import type { TaskItem, AgentInfo, ScheduledRoutine } from '@/types'
-import { DAY_NAMES, MONTH_NAMES, statusBadge } from './shared'
+import { monthName, weekdayName, statusBadge } from './shared'
 import EfficiencyCard from './EfficiencyCard'
 import AgentAllocation from './AgentAllocation'
 
@@ -63,7 +63,7 @@ export default function TaskCalendarView({
       {/* Full-Width Calendar Grid */}
       <div className="bg-surface-container-lowest border border-outline-variant/30 rounded-2xl p-lg shadow-sm">
         <div className="grid grid-cols-7 text-center mb-sm">
-          {DAY_NAMES.map(d => <span key={d} className="text-[11px] font-bold text-outline uppercase py-sm">{d}</span>)}
+          {[1, 2, 3, 4, 5, 6, 0].map(jsDay => <span key={jsDay} className="text-[11px] font-bold text-outline uppercase py-sm">{weekdayName(intl.locale, jsDay, 'short')}</span>)}
         </div>
         <div className="grid grid-cols-7 gap-1">
           {Array.from({ length: startDay }, (_, i) => (
@@ -106,7 +106,7 @@ export default function TaskCalendarView({
       {selectedDay !== null && (
         <div>
           <h4 className="font-label-md text-label-md text-outline uppercase tracking-[0.1em] mb-md pl-xs">
-            {MONTH_NAMES[viewMonth]} {selectedDay} — {t('tasks.taskCalendarView.tasks')}
+            {monthName(intl.locale, viewMonth)} {selectedDay} — {t('tasks.taskCalendarView.tasks')}
           </h4>
           <div className="space-y-md">
             {filteredTasks.length === 0 ? (
@@ -130,9 +130,9 @@ export default function TaskCalendarView({
                           {task.assignee ? <span className="font-label-sm text-on-surface-variant">{task.assignee}</span> : null}
                         </div>
                       </div>
-                      <div title={badge.tip} className={`flex items-center gap-xs px-sm py-1 rounded-full border ${badge.bg}`}>
+                      <div title={intl.formatMessage({ id: badge.tipId }, badge.values)} className={`flex items-center gap-xs px-sm py-1 rounded-full border ${badge.bg}`}>
                         <span className={`w-2 h-2 rounded-full ${badge.dot}`} />
-                        <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{badge.label}</span>
+                        <span className="font-label-sm text-[11px] font-bold uppercase tracking-wider">{intl.formatMessage({ id: badge.labelId }, badge.values)}</span>
                       </div>
                     </div>
                   </div>

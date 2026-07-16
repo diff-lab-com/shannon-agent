@@ -25,11 +25,12 @@ function durationLabel(start: number, end?: number): string {
 }
 
 function StatusPill({ status }: { status: string }) {
+  const intl = useIntl()
   const badge = statusBadge(status)
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[11px] font-bold ${badge.bg}`}>
       <span className="material-symbols-outlined icon-xs">{badge.icon}</span>
-      {badge.label}
+      {intl.formatMessage({ id: badge.labelId }, badge.values)}
     </span>
   )
 }

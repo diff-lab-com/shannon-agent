@@ -1,21 +1,79 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import { useVoice } from '@/hooks/useVoice'
 import { MicButton } from '@/components/voice/MicButton'
 import { VoiceOrb } from '@/components/voice/VoiceOrb'
+import * as api from '@/lib/tauri-api'
 
 function renderWithI18n(ui: React.ReactNode) {
   return render(<I18nProvider>{ui}</I18nProvider>)
 }
 
-describe('useVoice hook (stubbed backend)', () => {
+interface FakeRecorder {
+  ondataavailable: ((e: { data: Blob }) => void) | null
+  onstop: (() => void) | null
+  start(): void
+  stop(): void
+}
+
+/** Install a fake MediaRecorder + getUserMedia for the cloud-STT hook tests. */
+function installMediaRecorder() {
+  const originalMR = (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+  const originalGUM = navigator.mediaDevices?.getUserMedia
+  const instances: FakeRecorder[] = []
+  class FakeMediaRecorder {
+    ondataavailable: ((e: { data: Blob }) => void) | null = null
+    onstop: (() => void) | null = null
+    constructor() {
+      instances.push(this as unknown as FakeRecorder)
+    }
+    static isTypeSupported() {
+      return true
+    }
+    start() {}
+    stop() {
+      this.onstop?.()
+    }
+  }
+  ;(globalThis as unknown as { MediaRecorder: typeof MediaRecorder }).MediaRecorder =
+    FakeMediaRecorder as unknown as typeof MediaRecorder
+  Object.defineProperty(navigator, 'mediaDevices', {
+    value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] }) },
+    configurable: true,
+  })
+  const teardown = () => {
+    if (originalMR === undefined) {
+      delete (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+    } else {
+      ;(globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder = originalMR
+    }
+    if (originalGUM === undefined) {
+      delete (navigator as unknown as { mediaDevices?: unknown }).mediaDevices
+    } else {
+      Object.defineProperty(navigator, 'mediaDevices', {
+        value: { getUserMedia: originalGUM },
+        configurable: true,
+      })
+    }
+  }
+  return { teardown, instances }
+}
+
+describe('useVoice hook (stub fallback without MediaRecorder)', () => {
+  beforeEach(() => {
+    // jsdom has no MediaRecorder by default → factory falls back to the stub.
+    delete (globalThis as unknown as { MediaRecorder?: typeof MediaRecorder }).MediaRecorder
+    vi.clearAllMocks()
+  })
+
   function VoiceProbe() {
-    const v = useVoice({ simulateLatencyMs: 50 })
+    const v = useVoice()
     return (
       <div>
         <div data-testid="state">{v.state}</div>
         <div data-testid="partial">{v.partialTranscript || 'empty'}</div>
+        <div data-testid="supported">{v.supported ? 'yes' : 'no'}</div>
         <button onClick={() => void v.startRecording()}>start</button>
         <button onClick={() => void v.stopRecording()}>stop</button>
         <button onClick={() => void v.speak('hi')}>speak</button>
@@ -25,12 +83,11 @@ describe('useVoice hook (stubbed backend)', () => {
     )
   }
 
-  beforeEach(() => vi.clearAllMocks())
-
-  it('starts idle with empty partial', () => {
+  it('starts idle with empty partial and reports supported (stub fallback)', () => {
     renderWithI18n(<VoiceProbe />)
     expect(screen.getByTestId('state')).toHaveTextContent('idle')
     expect(screen.getByTestId('partial')).toHaveTextContent('empty')
+    expect(screen.getByTestId('supported')).toHaveTextContent('yes')
   })
 
   it('startRecording transitions to recording state', async () => {
@@ -40,10 +97,10 @@ describe('useVoice hook (stubbed backend)', () => {
     expect(screen.getByTestId('partial')).toHaveTextContent('Listening')
   })
 
-  it('stopRecording transitions through transcribing to idle and emits final transcript', async () => {
+  it('stopRecording returns to idle and emits the final transcript', async () => {
     const onTranscript = vi.fn()
     function Probe() {
-      const v = useVoice({ simulateLatencyMs: 20, onTranscript })
+      const v = useVoice({ onTranscript })
       return (
         <div>
           <div data-testid="state">{v.state}</div>
@@ -79,107 +136,37 @@ describe('useVoice hook (stubbed backend)', () => {
   })
 })
 
-describe('useVoice hook — Web Speech API integration', () => {
-  function fireFinal(recognition: any, transcript: string) {
-    recognition.onresult({
-      resultIndex: 0,
-      results: [{ 0: { transcript }, isFinal: true }],
-    })
-  }
+describe('useVoice hook — cloud STT (remote provider)', () => {
+  let teardown: () => void
+  let instances: FakeRecorder[]
 
-  it('reports supported=false when SpeechRecognition is unavailable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.transcribeAudio).mockResolvedValue({ text: 'cloud says hi' })
+    ;({ teardown, instances } = installMediaRecorder())
+  })
+  afterEach(() => {
+    teardown()
+  })
+
+  it('transcribes via the backend when MediaRecorder is available', async () => {
+    const onTranscript = vi.fn()
     function Probe() {
-      const v = useVoice()
-      return <div data-testid="supported">{v.supported ? 'yes' : 'no'}</div>
+      const v = useVoice({ onTranscript })
+      return (
+        <div>
+          <div data-testid="state">{v.state}</div>
+          <button onClick={() => void v.startRecording()}>start</button>
+          <button onClick={() => void v.stopRecording()}>stop</button>
+        </div>
+      )
     }
     renderWithI18n(<Probe />)
-    expect(screen.getByTestId('supported')).toHaveTextContent('no')
-  })
-
-  it('uses SpeechRecognition when available and emits final transcripts', async () => {
-    const Ctor = vi.fn()
-    const recognition: any = {
-      lang: '',
-      continuous: false,
-      interimResults: false,
-      maxAlternatives: 0,
-      start: vi.fn(),
-      stop: vi.fn(),
-      abort: vi.fn(),
-      onresult: null,
-      onerror: null,
-      onend: null,
-    }
-    Ctor.mockReturnValue(recognition)
-    ;(window as any).SpeechRecognition = Ctor
-
-    try {
-      const onTranscript = vi.fn()
-      function Probe() {
-        const v = useVoice({ onTranscript })
-        return (
-          <div>
-            <div data-testid="state">{v.state}</div>
-            <div data-testid="supported">{v.supported ? 'yes' : 'no'}</div>
-            <button onClick={() => void v.startRecording()}>start</button>
-            <button onClick={() => void v.stopRecording()}>stop</button>
-          </div>
-        )
-      }
-      renderWithI18n(<Probe />)
-      expect(screen.getByTestId('supported')).toHaveTextContent('yes')
-
-      fireEvent.click(screen.getByText('start'))
-      expect(recognition.start).toHaveBeenCalled()
-      expect(screen.getByTestId('state')).toHaveTextContent('recording')
-
-      fireFinal(recognition, 'hello world')
-      expect(onTranscript).toHaveBeenCalledWith('hello world')
-
-      fireEvent.click(screen.getByText('stop'))
-      expect(recognition.stop).toHaveBeenCalled()
-    } finally {
-      delete (window as any).SpeechRecognition
-    }
-  })
-
-  it('surfaces recognition errors via error state', async () => {
-    const Ctor = vi.fn()
-    const recognition: any = {
-      lang: '',
-      continuous: false,
-      interimResults: false,
-      maxAlternatives: 0,
-      start: vi.fn(),
-      stop: vi.fn(),
-      abort: vi.fn(),
-      onresult: null,
-      onerror: null,
-      onend: null,
-    }
-    Ctor.mockReturnValue(recognition)
-    ;(window as any).SpeechRecognition = Ctor
-
-    try {
-      function Probe() {
-        const v = useVoice()
-        return (
-          <div>
-            <div data-testid="state">{v.state}</div>
-            <div data-testid="error">{v.error || 'none'}</div>
-            <button onClick={() => void v.startRecording()}>start</button>
-          </div>
-        )
-      }
-      renderWithI18n(<Probe />)
-      fireEvent.click(screen.getByText('start'))
-      recognition.onerror({ error: 'audio-capture' })
-      await waitFor(() => {
-        expect(screen.getByTestId('error')).toHaveTextContent('Voice recognition error: audio-capture')
-      })
-    } finally {
-      delete (window as any).SpeechRecognition
-    }
+    fireEvent.click(screen.getByText('start'))
+    await waitFor(() => expect(instances.length).toBeGreaterThan(0))
+    instances[0].ondataavailable!({ data: new Blob(['audio']) })
+    fireEvent.click(screen.getByText('stop'))
+    await waitFor(() => expect(onTranscript).toHaveBeenCalledWith('cloud says hi'))
   })
 })
 

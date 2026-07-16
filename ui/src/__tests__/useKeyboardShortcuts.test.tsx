@@ -9,8 +9,8 @@ vi.mock('react-router-dom', () => ({
   useNavigate: () => mockNavigate,
 }))
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ({ cancelQuery: mockCancelQuery, isQuerying: false }),
+vi.mock('@/context/ChatContext', () => ({
+  useChat: () => ({ cancelQuery: mockCancelQuery, isQuerying: false }),
 }))
 
 function fireKeyDown(key: string, opts: { metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; target?: HTMLElement } = {}) {

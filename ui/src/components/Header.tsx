@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { useIntl } from 'react-intl';
+import { useIntl, type PrimitiveType } from 'react-intl';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { useApp } from '@/context/AppContext';
+import { useCatalog } from '@/context/CatalogContext';
 import { useModalFocus } from '@/hooks/useModalFocus';
 import { usePendingSkillCandidates } from '@/hooks/usePendingSkillCandidates';
 import { SkillApprovalModal } from '@/components/self-improve/SkillApprovalModal';
@@ -22,6 +22,7 @@ const TITLE_MAP: [string, string][] = [
   ['/editor', 'header.title.editor'],
   ['/quickfix', 'header.title.quickfix'],
   ['/welcome', 'header.title.welcome'],
+  ['/usage', 'header.title.usage'],
   ['/chat', 'header.title.chat'],
 ]
 
@@ -34,10 +35,10 @@ function getTitleKey(pathname: string): string {
 
 export function Header() {
   const intl = useIntl()
-  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const location = useLocation();
   const navigate = useNavigate();
-  const { status, models, permissionRequest, respondPermission } = useApp();
+  const { status, models, permissionRequest, respondPermission } = useCatalog();
   const { toggle: toggleSidebar } = useSidebar();
   const [modelOpen, setModelOpen] = useState(false);
   const modelRef = useRef<HTMLDivElement>(null);

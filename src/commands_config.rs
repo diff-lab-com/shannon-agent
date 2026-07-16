@@ -383,6 +383,14 @@ pub async fn switch_provider(
         skill_loop_min_duration_secs: existing.skill_loop_min_duration_secs,
         skill_loop_min_tool_calls: existing.skill_loop_min_tool_calls,
         skill_detection_enabled: existing.skill_detection_enabled,
+        notifications_master_enabled: existing.notifications_master_enabled,
+        notifications_dnd_enabled: existing.notifications_dnd_enabled,
+        notifications_dnd_start: existing.notifications_dnd_start.clone(),
+        notifications_dnd_end: existing.notifications_dnd_end.clone(),
+        notifications_on_completed: existing.notifications_on_completed,
+        notifications_on_failed: existing.notifications_on_failed,
+        stt: existing.stt.clone(),
+        gateway: existing.gateway.clone(),
     };
     drop(existing);
 
@@ -425,6 +433,11 @@ pub async fn get_config(state: tauri::State<'_, AppState>) -> Result<DesktopConf
     let mut display = cfg.clone();
     if display.api_key.is_some() {
         display.api_key = Some("***".into());
+    }
+    if let Some(stt) = display.stt.as_mut() {
+        if stt.api_key.is_some() {
+            stt.api_key = Some("***".into());
+        }
     }
     Ok(display)
 }
@@ -500,7 +513,7 @@ pub enum TestConnectionResult {
 /// local user themselves (the Add Provider modal) — there is no
 /// untrusted/remote input vector reaching this path — so the SSRF scenario of
 /// an attacker steering server-side fetches does not apply here.
-fn validate_base_url(raw: &str) -> Result<String, String> {
+pub(crate) fn validate_base_url(raw: &str) -> Result<String, String> {
     let raw = raw.trim();
     let parsed = url::Url::parse(raw).map_err(|e| format!("invalid base_url `{raw}`: {e}"))?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -763,19 +776,58 @@ fn emit_providers_changed(app_handle: &tauri::AppHandle, file: &ProvidersFile) {
     );
 }
 
-/// Build a single-entry `ProvidersFile` from the legacy singular config and
-/// persist it, so existing users see their current connection on first load.
-/// Returns `None` when there is no configured provider to seed from.
-async fn seed_from_legacy_config(
-    state: &tauri::State<'_, AppState>,
-) -> Result<Option<ProvidersFile>, String> {
-    let cfg = state.desktop_config.read().await;
-    let kind = match cfg.provider.as_deref() {
-        Some(k) if !k.is_empty() => k.to_string(),
-        _ => return Ok(None),
-    };
+/// Apply a provider edit to an existing connection. The API key is preserved
+/// unless the caller supplied a fresh (non-empty, non-mask) value, so editing
+/// the label/model never blanks the stored secret.
+fn apply_provider_update(
+    conn: &mut ProviderConnection,
+    input: &ProviderInput,
+    base_url: Option<String>,
+) {
+    conn.label = input.label.clone();
+    conn.provider_kind = input.provider_kind.clone();
+    match input.api_key.as_deref() {
+        Some(k) if !k.is_empty() && k != "***" => conn.api_key = Some(k.to_string()),
+        _ => {}
+    }
+    conn.base_url = base_url;
+    conn.model = input.model.clone().filter(|s| !s.is_empty());
+}
+
+/// Remove a provider by id, clearing the active pointer when it matched.
+/// Errors when no provider carried the given id.
+fn remove_provider(mut file: ProvidersFile, id: &str) -> Result<ProvidersFile, String> {
+    let before = file.providers.len();
+    file.providers.retain(|p| p.id != id);
+    if file.providers.len() == before {
+        return Err(format!("provider not found: {id}"));
+    }
+    if file.active_provider_id.as_deref() == Some(id) {
+        file.active_provider_id = None;
+    }
+    Ok(file)
+}
+
+/// Mirror a managed provider's fields into the singular `DesktopConfig` that
+/// the engine reads. Kept separate so the active-selection logic is testable
+/// without a Tauri runtime.
+fn mirror_provider_into_config(dc: &mut DesktopConfig, conn: &ProviderConnection) {
+    dc.provider = Some(conn.provider_kind.clone());
+    dc.api_key = conn.api_key.clone();
+    dc.base_url = conn.base_url.clone();
+    dc.model = conn.model.clone();
+}
+
+/// Build the first-run seeded `ProvidersFile` from the legacy singular config.
+/// Returns `None` when no provider was configured to seed from.
+fn build_seed_file(cfg: &DesktopConfig) -> Option<ProvidersFile> {
+    let kind = cfg
+        .provider
+        .as_deref()
+        .filter(|k| !k.is_empty())?
+        .to_string();
     let id = unique_provider_slug(&kind, &[]);
-    let file = ProvidersFile {
+    Some(ProvidersFile {
         active_provider_id: Some(id.clone()),
         providers: vec![ProviderConnection {
             id,
@@ -786,6 +838,18 @@ async fn seed_from_legacy_config(
             model: cfg.model.clone(),
             created_at: chrono::Utc::now().to_rfc3339(),
         }],
+    })
+}
+
+/// Build a single-entry `ProvidersFile` from the legacy singular config and
+/// persist it, so existing users see their current connection on first load.
+/// Returns `None` when there is no configured provider to seed from.
+async fn seed_from_legacy_config(
+    state: &tauri::State<'_, AppState>,
+) -> Result<Option<ProvidersFile>, String> {
+    let cfg = state.desktop_config.read().await;
+    let Some(file) = build_seed_file(&cfg) else {
+        return Ok(None);
     };
     config::save_providers(&file)?;
     Ok(Some(file))
@@ -822,15 +886,7 @@ pub async fn save_provider(
             .iter_mut()
             .find(|p| p.id == id)
             .ok_or_else(|| format!("provider not found: {id}"))?;
-        conn.label = input.label.clone();
-        conn.provider_kind = input.provider_kind.clone();
-        // Preserve the existing key unless the frontend sent a fresh value.
-        match input.api_key.as_deref() {
-            Some(k) if !k.is_empty() && k != "***" => conn.api_key = Some(k.to_string()),
-            _ => {}
-        }
-        conn.base_url = base_url;
-        conn.model = input.model.filter(|s| !s.is_empty());
+        apply_provider_update(conn, &input, base_url);
     } else {
         let id = unique_provider_slug(&input.label, &file.providers);
         let conn = ProviderConnection {
@@ -857,15 +913,7 @@ pub async fn delete_provider(
     app_handle: tauri::AppHandle,
     id: String,
 ) -> Result<ProvidersFile, String> {
-    let mut file = config::load_providers();
-    let before = file.providers.len();
-    file.providers.retain(|p| p.id != id);
-    if file.providers.len() == before {
-        return Err(format!("provider not found: {id}"));
-    }
-    if file.active_provider_id.as_deref() == Some(id.as_str()) {
-        file.active_provider_id = None;
-    }
+    let file = remove_provider(config::load_providers(), &id)?;
     config::save_providers(&file)?;
     emit_providers_changed(&app_handle, &file);
     Ok(mask_providers(file))
@@ -890,17 +938,12 @@ pub async fn set_active_provider(
         .clone();
 
     let provider_kind = conn.provider_kind.clone();
-    let api_key = conn.api_key.clone();
-    let base_url = conn.base_url.clone();
     let model = conn.model.clone();
 
     // Mirror into the singular config the engine consumes.
     let desktop_cfg = {
         let mut dc = state.desktop_config.write().await;
-        dc.provider = Some(provider_kind.clone());
-        dc.api_key = api_key.clone();
-        dc.base_url = base_url.clone();
-        dc.model = model.clone();
+        mirror_provider_into_config(&mut dc, &conn);
         dc.clone()
     };
 
@@ -1147,5 +1190,193 @@ mod tests {
         assert_eq!(kind_label("anthropic"), "Anthropic");
         assert_eq!(kind_label("openai-compatible"), "OpenAI-compatible");
         assert_eq!(kind_label("custom"), "custom");
+    }
+
+    // === Models P2 command-level logic (helpers extracted from the commands) ===
+
+    fn sample_conn(id: &str, kind: &str, key: Option<&str>) -> ProviderConnection {
+        ProviderConnection {
+            id: id.into(),
+            label: id.into(),
+            provider_kind: kind.into(),
+            api_key: key.map(str::to_string),
+            base_url: None,
+            model: None,
+            created_at: "2026-06-28T00:00:00Z".into(),
+        }
+    }
+
+    fn provider_input(
+        id: Option<&str>,
+        label: &str,
+        kind: &str,
+        key: Option<&str>,
+    ) -> ProviderInput {
+        ProviderInput {
+            id: id.map(str::to_string),
+            label: label.into(),
+            provider_kind: kind.into(),
+            api_key: key.map(str::to_string),
+            base_url: None,
+            model: None,
+        }
+    }
+
+    #[test]
+    fn apply_provider_update_preserves_key_when_masked_or_absent() {
+        // start with a stored secret
+        let mut conn = sample_conn("anthropic", "anthropic", Some("sk-real"));
+
+        // masked "***" => keep existing
+        apply_provider_update(
+            &mut conn,
+            &provider_input(Some("anthropic"), "Anthropic", "anthropic", Some("***")),
+            None,
+        );
+        assert_eq!(conn.api_key.as_deref(), Some("sk-real"));
+        assert_eq!(conn.label, "Anthropic");
+
+        // absent => keep existing
+        apply_provider_update(
+            &mut conn,
+            &provider_input(Some("anthropic"), "Anthropic", "anthropic", None),
+            None,
+        );
+        assert_eq!(conn.api_key.as_deref(), Some("sk-real"));
+
+        // empty string => keep existing
+        apply_provider_update(
+            &mut conn,
+            &provider_input(Some("anthropic"), "Anthropic", "anthropic", Some("")),
+            None,
+        );
+        assert_eq!(conn.api_key.as_deref(), Some("sk-real"));
+
+        // fresh value => replaced
+        apply_provider_update(
+            &mut conn,
+            &provider_input(Some("anthropic"), "Anthropic", "anthropic", Some("sk-new")),
+            None,
+        );
+        assert_eq!(conn.api_key.as_deref(), Some("sk-new"));
+    }
+
+    #[test]
+    fn apply_provider_update_sets_base_url_and_blanks_empty_model() {
+        let mut conn = sample_conn("glm", "openai-compatible", Some("k"));
+        let input = ProviderInput {
+            id: Some("glm".into()),
+            label: "My GLM".into(),
+            provider_kind: "openai-compatible".into(),
+            api_key: Some("***".into()),
+            base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
+            model: Some("".into()), // empty => cleared
+        };
+        apply_provider_update(
+            &mut conn,
+            &input,
+            Some("https://open.bigmodel.cn/api/paas/v4".into()),
+        );
+        assert_eq!(
+            conn.base_url.as_deref(),
+            Some("https://open.bigmodel.cn/api/paas/v4")
+        );
+        assert!(conn.model.is_none());
+    }
+
+    #[test]
+    fn remove_provider_clears_active_when_active_is_deleted() {
+        let file = ProvidersFile {
+            active_provider_id: Some("a".into()),
+            providers: vec![
+                sample_conn("a", "anthropic", Some("k1")),
+                sample_conn("b", "openai", Some("k2")),
+            ],
+        };
+        let out = remove_provider(file, "a").unwrap();
+        assert!(out.active_provider_id.is_none());
+        assert_eq!(out.providers.len(), 1);
+        assert_eq!(out.providers[0].id, "b");
+    }
+
+    #[test]
+    fn remove_provider_keeps_active_when_other_is_deleted() {
+        let file = ProvidersFile {
+            active_provider_id: Some("b".into()),
+            providers: vec![
+                sample_conn("a", "anthropic", Some("k1")),
+                sample_conn("b", "openai", Some("k2")),
+            ],
+        };
+        let out = remove_provider(file, "a").unwrap();
+        assert_eq!(out.active_provider_id.as_deref(), Some("b"));
+        assert_eq!(out.providers.len(), 1);
+    }
+
+    #[test]
+    fn remove_provider_errors_on_unknown_id() {
+        let file = ProvidersFile {
+            active_provider_id: Some("a".into()),
+            providers: vec![sample_conn("a", "anthropic", Some("k1"))],
+        };
+        assert!(remove_provider(file, "nope").is_err());
+    }
+
+    #[test]
+    fn mirror_provider_into_config_copies_all_singular_fields() {
+        let mut dc = DesktopConfig::default();
+        let conn = ProviderConnection {
+            id: "glm".into(),
+            label: "My GLM".into(),
+            provider_kind: "openai-compatible".into(),
+            api_key: Some("sk-glm".into()),
+            base_url: Some("https://open.bigmodel.cn/api/paas/v4".into()),
+            model: Some("glm-4.6".into()),
+            created_at: "2026-06-28T00:00:00Z".into(),
+        };
+        mirror_provider_into_config(&mut dc, &conn);
+        assert_eq!(dc.provider.as_deref(), Some("openai-compatible"));
+        assert_eq!(dc.api_key.as_deref(), Some("sk-glm"));
+        assert_eq!(
+            dc.base_url.as_deref(),
+            Some("https://open.bigmodel.cn/api/paas/v4")
+        );
+        assert_eq!(dc.model.as_deref(), Some("glm-4.6"));
+    }
+
+    #[test]
+    fn build_seed_file_returns_none_without_provider() {
+        let cfg = DesktopConfig {
+            provider: None,
+            ..Default::default()
+        };
+        assert!(build_seed_file(&cfg).is_none());
+        let cfg = DesktopConfig {
+            provider: Some(String::new()), // empty => treated as unset
+            ..Default::default()
+        };
+        assert!(build_seed_file(&cfg).is_none());
+    }
+
+    #[test]
+    fn build_seed_file_mirrors_legacy_singular_config() {
+        let cfg = DesktopConfig {
+            provider: Some("anthropic".into()),
+            api_key: Some("sk-legacy".into()),
+            model: Some("claude-sonnet-4-6".into()),
+            ..Default::default()
+        };
+        let file = build_seed_file(&cfg).unwrap();
+        assert_eq!(file.providers.len(), 1);
+        // the active pointer names the sole seeded entry
+        assert_eq!(
+            file.active_provider_id.as_deref(),
+            Some(file.providers[0].id.as_str())
+        );
+        let conn = &file.providers[0];
+        assert_eq!(conn.provider_kind, "anthropic");
+        assert_eq!(conn.label, "Anthropic"); // kind_label
+        assert_eq!(conn.api_key.as_deref(), Some("sk-legacy"));
+        assert_eq!(conn.model.as_deref(), Some("claude-sonnet-4-6"));
     }
 }

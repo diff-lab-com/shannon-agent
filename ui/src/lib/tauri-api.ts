@@ -10,6 +10,12 @@ import type {
   ProvidersFile,
   ProviderInput,
   DesktopConfig,
+  GatewayConfig,
+  GatewayProcessState,
+  MobileDeviceEntry,
+  MobilePairToken,
+  SttConfig,
+  TranscriptionResult,
   SendMessageResponse,
   HunkAction,
   SessionInfo,
@@ -66,6 +72,81 @@ export async function configure(update: ConfigUpdate): Promise<void> {
   await invoke('configure', { update })
 }
 
+// --- Gateway social connections (T5) — OS keyring + gateway config.json ---
+
+/** Store a credential in the OS keyring under `<service>/<account>`. */
+export async function gatewaySetSecret(key: string, value: string): Promise<void> {
+  await invoke('gateway_set_secret', { key, value })
+}
+
+/** Fetch a credential, or null if no keyring entry exists. */
+export async function gatewayGetSecret(key: string): Promise<string | null> {
+  return invoke('gateway_get_secret', { key })
+}
+
+/** Whether a keyring entry exists for `key` (cheaper than fetching the value). */
+export async function gatewayHasSecret(key: string): Promise<boolean> {
+  return invoke('gateway_has_secret', { key })
+}
+
+/** Delete a keyring entry (idempotent — missing entry is success). */
+export async function gatewayDeleteSecret(key: string): Promise<void> {
+  await invoke('gateway_delete_secret', { key })
+}
+
+/** Read the gateway config; returns a loopback default on first run. */
+export async function gatewayReadConfig(): Promise<GatewayConfig> {
+  return invoke('gateway_read_config')
+}
+
+/** Validate + atomically persist the gateway config; returns what was written. */
+export async function gatewayWriteConfig(config: GatewayConfig): Promise<GatewayConfig> {
+  return invoke('gateway_write_config', { config })
+}
+
+// --- E-1 方案 C — supervised gateway process lifecycle ---
+
+/** Spawn (or no-op if already running) the local gateway under supervision. */
+export async function gatewaySupervisorStart(): Promise<GatewayProcessState> {
+  return invoke('gateway_supervisor_start')
+}
+
+/** Gracefully stop the supervised gateway (idempotent). */
+export async function gatewaySupervisorStop(): Promise<GatewayProcessState> {
+  return invoke('gateway_supervisor_stop')
+}
+
+/** Snapshot of `managed` + the process status. */
+export async function gatewaySupervisorStatus(): Promise<GatewayProcessState> {
+  return invoke('gateway_supervisor_status')
+}
+
+/**
+ * Persist the 方案 C `managed` flag. Toggling it off also stops a running
+ * gateway. Toggling it on does NOT auto-start — the user clicks Start, or the
+ * next app launch auto-starts via setup().
+ */
+export async function gatewaySetManaged(managed: boolean): Promise<GatewayProcessState> {
+  return invoke('gateway_set_managed', { managed })
+}
+
+// --- P1.3 mobile device pairing (Design D shared-file channel) ---
+
+/** Mint a one-time 75s pair token + QR (LAN endpoint + token) for the phone. */
+export async function mobileGeneratePairToken(): Promise<MobilePairToken> {
+  return invoke('mobile_generate_pair_token')
+}
+
+/** List currently paired devices (read-only; the gateway writes the file). */
+export async function mobileListPairedDevices(): Promise<MobileDeviceEntry[]> {
+  return invoke('mobile_list_paired_devices')
+}
+
+/** Remove a paired device by id; returns true if a device was removed. */
+export async function mobileRevokeDevice(deviceId: string): Promise<boolean> {
+  return invoke('mobile_revoke_device', { deviceId })
+}
+
 export interface WebhookConfigDto {
   url: string
   template: string
@@ -86,89 +167,6 @@ export async function clearWebhookConfig(): Promise<void> {
   await invoke('clear_webhook_config')
 }
 
-export interface SlackInboundDto {
-  bot_token: string
-  trigger_word: string
-  allowed_channels: string[]
-}
-
-export interface TelegramInboundDto {
-  bot_token: string
-  trigger_word: string
-  allowed_chats: string[]
-}
-
-export interface InboundConfigDto {
-  slack?: SlackInboundDto | null
-  telegram?: TelegramInboundDto | null
-}
-
-export async function getInboundConfig(): Promise<InboundConfigDto> {
-  return invoke('get_inbound_config')
-}
-
-export async function saveInboundConfig(dto: InboundConfigDto): Promise<void> {
-  await invoke('save_inbound_config', { dto })
-}
-
-export async function clearInboundConfig(): Promise<void> {
-  await invoke('clear_inbound_config')
-}
-
-export interface InboundListenerStatus {
-  telegram_running: boolean
-  slack_running: boolean
-}
-
-export async function getInboundListenerStatus(): Promise<InboundListenerStatus> {
-  return invoke('get_inbound_listener_status')
-}
-
-export async function stopInboundListener(): Promise<void> {
-  await invoke('stop_inbound_listener')
-}
-
-export interface SlackOutboundDto {
-  bot_token: string
-  channel: string
-}
-
-export interface TelegramOutboundDto {
-  bot_token: string
-  chat_id: string
-}
-
-export interface OutboundConfigDto {
-  slack?: SlackOutboundDto | null
-  telegram?: TelegramOutboundDto | null
-}
-
-export interface ChannelResult {
-  provider: string
-  ok: boolean
-  error?: string | null
-}
-
-export interface SendResultDto {
-  results: ChannelResult[]
-}
-
-export async function getOutboundConfig(): Promise<OutboundConfigDto> {
-  return invoke('get_outbound_config')
-}
-
-export async function saveOutboundConfig(dto: OutboundConfigDto): Promise<void> {
-  await invoke('save_outbound_config', { dto })
-}
-
-export async function clearOutboundConfig(): Promise<void> {
-  await invoke('clear_outbound_config')
-}
-
-export async function sendOutboundTest(message: string): Promise<SendResultDto> {
-  return invoke('send_outbound_test', { message })
-}
-
 export type NotificationLevel = 'info' | 'warning' | 'error' | 'success'
 
 export interface NotificationPayload {
@@ -181,14 +179,26 @@ export async function sendNotification(payload: NotificationPayload): Promise<vo
   await invoke('send_notification', { payload })
 }
 
-export interface InboundMessage {
-  provider: 'slack' | 'telegram'
-  source_id: string
-  source_name: string
-  sender_id: string
-  sender_name: string
-  text: string
-  timestamp: number
+/** Desktop-notification preferences — master enable, quiet-hours (DND) window,
+ *  and per-event-type toggles (completions vs failures). */
+export interface NotificationPrefs {
+  master_enabled: boolean
+  dnd_enabled: boolean
+  /** `"HH:MM"` (24h, system-local) or null. */
+  dnd_start: string | null
+  dnd_end: string | null
+  /** Surface OS notifications for non-error events (query/task completion). */
+  on_completed: boolean
+  /** Surface OS notifications for error events (query/task failure). */
+  on_failed: boolean
+}
+
+export async function getNotificationPrefs(): Promise<NotificationPrefs> {
+  return invoke('get_notification_prefs')
+}
+
+export async function setNotificationPrefs(prefs: NotificationPrefs): Promise<void> {
+  await invoke('set_notification_prefs', { prefs })
 }
 
 export async function switchProvider(req: ProviderSwitchRequest): Promise<void> {
@@ -958,6 +968,10 @@ export async function getBillingHistory(): Promise<import('@/types').BillingHist
   return invoke('get_billing_history')
 }
 
+export async function getUsageStats(days: number): Promise<import('@/types').UsageStats> {
+  return invoke('get_usage_stats', { days })
+}
+
 // --- Scheduled Tasks (Sprint 2) ---
 //
 // Thin invoke() wrappers over the 19 Tauri commands in
@@ -1326,5 +1340,27 @@ export const skillLoop = {
 
   reject: (proposalId: string) =>
     invoke<void>('skill_loop_reject', { proposalId }),
+}
+
+// --- Speech-to-text (D4 voice input) ---
+
+export async function transcribeAudio(
+  audioBase64: string,
+  mimeType: string,
+  language?: string | null,
+): Promise<TranscriptionResult> {
+  return invoke('transcribe_audio', {
+    audioBase64,
+    mimeType,
+    language: language ?? null,
+  })
+}
+
+export async function getSttConfig(): Promise<SttConfig | null> {
+  return invoke('get_stt_config')
+}
+
+export async function saveSttConfig(sttConfig: SttConfig): Promise<void> {
+  await invoke('save_stt_config', { sttConfig })
 }
 

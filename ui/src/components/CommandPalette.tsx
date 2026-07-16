@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
-import { useApp } from '@/context/AppContext'
+import { useSessions } from '@/context/SessionContext'
+import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 
 interface PaletteItem {
@@ -43,7 +44,8 @@ export default function CommandPalette({ open, onClose }: { open: boolean; onClo
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const navigate = useNavigate()
-  const { sessions, models, tasks, agents, refreshConfig, switchSession } = useApp()
+  const { sessions, switchSession } = useSessions()
+  const { models, tasks, agents, refreshConfig } = useCatalog()
   const intl = useIntl()
 
   const t = (id: string) => intl.formatMessage({ id })

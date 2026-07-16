@@ -2,6 +2,256 @@
 
 All notable changes to Shannon Desktop are documented here. Entries are grouped by sprint and category.
 
+## Unreleased
+
+Everything below landed on `dev` after the v0.3.8 (Models P2) release and
+ships together in the next tagged release.
+
+### Notifications — Phase 2 + Phase 3
+
+- **P2 do-not-disturb / quiet hours** (#78, `s2/notifications-p2-dnd`): a
+  global DnD window during which non-critical notifications are suppressed.
+- **P2 per-event-type toggles** (#81, `s2/notifications-p2-events-rescue`,
+  T7): notify on completion / failure per event type (rescued from a
+  stranded branch).
+- **P3 outbound per-channel test + surface discarded results** (#84,
+  `s2/notifications-p3`): a "send test notification" action per outbound
+  channel (T8.1) so users verify webhook/chat config without waiting for a
+  real event; discarded notifier results are surfaced instead of swallowed
+  (T8.3).
+
+### Usage — local token / cache / cost statistics
+
+- **Local usage statistics page** (#91, `s2/usage-stats-page`): a new Usage
+  view aggregating token / cache / cost from the local ledger (no network).
+- **Background-task spend captured** (#92, `s2/usage-bg-path`): token / cache
+  / cost from background tasks is written to the usage ledger, not just
+  foreground chat.
+- **Scheduled-routine spend merged + size-bounded ledger** (#93,
+  `s2/usage-hardening`): scheduled-routine spend is folded into the stats, and
+  the JSONL ledger is size-bounded with rotation so it can't grow unbounded.
+
+### UI/UX audit batch — error causes, dead code, information architecture
+
+- **Surface the real cause in failure toasts** (#87, `s2/unify-error-toasts`,
+  audit P0-1): Artifact copy/export errors now show the underlying cause via
+  `toastError` instead of a generic message.
+- **Surface ChatInput silent failures** (#90, `s2/chatinput-silent-fails`,
+  P1-3): plan-mode toggle and other silent failures now toast.
+- **Extract `<SubNavLink>`** (#88, `s2/sidebar-subnav-extract`, P1-4): the
+  sidebar's 10 render-prop nav links are unified behind one component.
+- **Gate demo Billing + dev Advanced behind dev mode** (#89,
+  `s2/simple-settings-gate`, P3-2): demo-only surfaces are hidden outside dev
+  mode.
+- **Remove dead redirected pages** (#86, `s2/remove-dead-pages`): legacy
+  routes that only redirect are deleted.
+- **Remove orphan Conversations components** (#95,
+  `s2/remove-orphan-conversations`): Conversations components with no route
+  and test-only references are deleted.
+- **Unify Extensions label + purge dead nav keys + fix Usage header** (#94,
+  `s2/ui-ia-cleanup`): information-architecture cleanup from the P0 UI review.
+
+### PM-audit P1/P2/P3 — nav gating, confirm dialog, i18n polish
+
+(#97, `s2/pm-audit-p1-p2-p3`) Welcome documentation gate, simplified Sidebar
+Extensions entry, and Worktree dev-mode gate (P1 IA); `ConfirmDialog` replaces
+native `confirm()` (P2); visibility-gated triage polling; i18n context strings
+and dead keys removed (P3).
+
+### Settings refactor — shared Modal/ConfirmDialog + typed i18n `t()` helper
+
+(#99, `s2/d1-d2-modal-types-voice`, audit D1+D2) Seven hand-rolled settings
+modals migrate to the shared `Modal` / `ConfirmDialog` primitives
+(`ConfirmDialog` gains a `busyLabel`); the `t()` i18n helper is typed
+(`PrimitiveType`) replacing `any`, with `UsagePayload` + `max_tokens` arg
+typing. Net −57 lines.
+
+### Architecture — AppContext split (Chat / Session / Catalog)
+
+(#102, `s2/appcontext-split`) The single `AppContext` god-context is split
+into three memoized slice contexts — `ChatContext`, `SessionContext`,
+`CatalogContext` — so a consumer re-renders only when its own slice changes.
+The high-frequency chat-streaming slice (per-token `streamingText`) no longer
+forces re-renders of the Sidebar, Settings, and catalog pages. `useApp()` is
+retained as a facade (composing the three hooks) so consumers migrate
+incrementally; 19 call-sites retargeted in the same change. Also fixes a
+StrictMode duplicate-message bug — the old `QUERY_COMPLETED` handler nested
+`setMessages` inside the `setStreamingText` updater (a side-effect in an
+updater that double-fires under StrictMode); it now reads the final streamed
+text from a `useRef` and calls `setMessages` directly.
+
+### i18n — Tasks / Agent modules zh-CN
+
+- **Tasks / Agent module strings** (#96, `s2/tasks-module-zh-i18n`): ~244 keys
+  translated to zh-CN (a PM/i18n audit found `zh === en`).
+- **Tasks deep sub-components** (#98, `s2/tasks-i18n-r2`): a second R2 pass
+  translated ~237 keys missed by the first pass in deep sub-components.
+
+### i18n — final hardcoded-English sweep (R3)
+
+(#101, `s2/i18n-cleanup-r3`) The last user-visible English strings routed
+through `react-intl`: natural-language cron descriptors, calendar
+localization, and the statusBadge tail. Key parity 2300 → 2331.
+
+### Voice input — cloud speech-to-text (D4 Phase 1)
+
+Branch `s2/voice-cloud-stt` (PR #100). Replaces the browser Web Speech API
+stub — unavailable in most desktop webviews (Chromium on Linux/macOS; on
+Chromium it also ships audio to a third party for recognition) — with cloud
+speech-to-text via an OpenAI-compatible Whisper endpoint (Groq / OpenAI /
+custom). Audio is captured in the webview and transcribed by a new Rust
+command, so **API keys stay server-side** (no browser CORS, no secret in the
+webview). Phase 2 (local `whisper.cpp` sidecar, offline) remains a later
+opt-in and is not touched here.
+
+#### Backend (Rust)
+- **New `commands_voice.rs`** — `transcribe_audio` (multipart upload + bearer
+  auth + `STT_*` error categorization), `get_stt_config` (key masked to
+  `***`), `save_stt_config` (provider / base_url validation via the shared
+  `validate_base_url`; preserves the stored key when the field is left blank).
+  Emits `CONFIG_UPDATED` so open panels refresh.
+- **`SttConfig` on `DesktopConfig`** (`config.rs`): `provider` / `api_key` /
+  `base_url` / `model`.
+- **`commands_config.rs`** reuses `validate_base_url` for the STT `base_url`
+  and masks `stt.api_key` in `get_config`.
+- **`Cargo.toml`**: reqwest `multipart` feature (pure-Rust, no system deps).
+- Registered the three commands + the module in `main.rs` / `lib.rs`.
+
+#### Backend (security hardening)
+- **External provider error bodies are sanitized** before they reach the UI:
+  control characters are flattened to spaces, surrounding/inner runs are
+  trimmed, and the result is capped at 200 characters — so an untrusted
+  upstream response can't dump a large or noisy blob into a user-facing toast.
+
+#### Frontend
+- **`remoteProvider`** captures audio via `MediaRecorder` and routes the
+  base64 recording through `transcribe_audio`.
+- **`factory`** `defaultVoiceConfig` → cloud STT; the stub stays as the
+  jsdom / headless fallback. The Web Speech provider and `'webspeech'` kind
+  are removed.
+- **`useVoice`** rewritten on the provider abstraction; surfaces non-silent
+  failures via an `onError` callback (wired to a toast in `ChatInput`).
+- **AdvancedSettings**: new Speech-to-text card (provider / key / model /
+  base URL) backed by `get_stt_config` / `save_stt_config`.
+- **i18n**: dropped the "(stub)" mic label and the dead preview banner; added
+  `settings.voice.*` + `voice.error.*` (en + zh-CN, parity-checked).
+- **`tauri-api` / `types`**: `transcribeAudio` / `getSttConfig` /
+  `saveSttConfig` + types.
+
+#### Tests
+- Rust: +7 unit tests (`stt_endpoint`, `parse_transcription`, `extension_for`,
+  `mask_stt_key`, `sanitize_error_body`, …); `cargo clippy` clean.
+- UI: `tsc --noEmit` clean; vitest green; i18n parity OK.
+
+### Social connections — desktop ↔ gateway keyring bridge
+
+Branch `feat/connections-keyring` (T5). A new **Settings → Connections** page
+lets users store each chat platform's bot token in the OS keyring and enable
+adapters for the `shannon-gateway`, and edit the engine WebSocket / HTTP
+endpoints. Adds `src/commands_connections.rs` (six Tauri commands:
+`gateway_set_secret` / `get_secret` / `has_secret` / `delete_secret` /
+`read_config` / `write_config`) and the `keyring` crate. Credentials are
+written straight to the OS keyring — same backend the gateway reads at
+`start()` — and **never enter the webview, the repo, or `config.json`**; only
+the keyring *key names* an adapter needs are recorded (`secrets` map). This is
+the F14 contract the gateway already relies on. `gateway_write_config`
+validates and persists atomically (temp file + rename).
+
+- Rust: +5 unit tests (`split_secret_key`, camelCase serde round-trip,
+  gateway-native JSON parse, loopback default); `cargo clippy` clean;
+  `cargo deny` clean.
+- UI: new `ConnectionsSettings.tsx` (engine card + 8-platform roster with
+  presence badge, keyring-key readout, enable Switch, token Input); i18n
+  keys added to both `en` and `zh-CN`; `setup.ts` gains a `PointerEvent`
+  stub so base-ui Switch clicks work under jsdom; 4 vitest cases; `tsc`
+  clean; full suite green.
+
+### Social connections — gateway process lifecycle (E-1, 方案 C)
+
+Branch `feat/gateway-supervisor` (stacked on T5). A hybrid lifecycle for the
+`shannon-gateway`: when `gateway.managed` is `true` (default) the desktop app
+spawns and supervises a local gateway binary; flipping it to `false` treats
+the gateway as external (user / ops runs it) and the UI's engine endpoints
+point at the out-of-process instance.
+
+- **Rust** — new `src/gateway_supervisor.rs`: `GatewaySupervisor` owns the
+  child via a `tokio::select!` between an explicit `CancellationToken` and
+  `child.wait()`, emits `shannon:gateway-exited` on any exit (mirrors
+  `src/inbound/mod.rs`). `resolve_binary()` probes `binary_path` → Tauri
+  resource dir → `$PATH`, reporting `NotInstalled` (not an error) when nothing
+  resolves. `GatewayDesktopConfig` (`managed` / `binary_path` / `extra_args`)
+  is persisted under the desktop's own `config.json`. Four new commands
+  (`gateway_supervisor_start` / `stop` / `status` / `gateway_set_managed`) +
+  a `bootstrap_gateway_supervisor` lib helper (lib-side, so `main.rs::setup()`
+  never touches `AppState`'s private fields — same pattern as
+  `bootstrap_inbound_listener`). `managed` auto-starts at launch; the flag is
+  preserved across provider switches. +5 unit tests; `clippy` / `deny` clean.
+- **UI** — a **Gateway process** card in `ConnectionsSettings.tsx`: a managed
+  Switch (方案 C master toggle), a live status Badge (Stopped / Not installed /
+  Running w/ PID / Exited + reason), and Start / Stop buttons. Re-polls status
+  on the `shannon:gateway-exited` event. 15 i18n keys added to both `en` and
+  `zh-CN`; 4 new vitest cases (1179 total green); `tsc` clean.
+
+### Social connections — per-platform credential model; dead inbound/outbound loop removed
+
+Branch `feat/connections-domestic-thin` (P2 + P3). Closes the loop opened by
+the gateway keyring bridge (T5) and supervisor (E-1): the desktop no longer
+ships its own platform-message plumbing, and the Connections page models each
+platform's real credentials instead of assuming one bot token.
+
+- **P2 — per-platform credential model.** `ConnectionsSettings` now carries a
+  `SECRET_MODEL` map (verified against each adapter's `start()` in
+  `shannon-gateway`) so every platform stores the keys its adapter actually
+  reads: slack needs `slack/bot-token` **and** `slack/signing-secret`; matrix
+  reads `matrix/access-token`; wecom needs `wecom/corp-secret` **and**
+  `wecom/encoding-aes-key`; feishu reads `feishu/app-secret` (+ optional
+  `feishu/encrypt-key`); dingtalk reads `dingtalk/robot-secret`; whatsapp
+  reads `whatsapp/access-token` (+ optional `whatsapp/app-secret`). A platform
+  badge flips to "Credential stored" only once every **required** slot is in
+  the keyring; enabling a platform writes all of its slots into the gateway
+  config's `secrets` map. Fixes the prior bug where all eight platforms were
+  keyed `<platform>/bot-token`. 9 i18n keys added to both `en` and `zh-CN`
+  (`settings.connections.secret.*`); the now-dead generic `tokenLabel` /
+  `tokenPlaceholder` keys were removed, along with the pre-existing dead
+  `keyringKey` key.
+- **P3 — inbound/outbound hard-delete.** The desktop's own Slack/Telegram
+  inbound listener and outbound sender are deleted (`src/inbound/`,
+  `src/outbound/`, `commands_outbound.rs`, the `inbound_listener` field on
+  `AppState`, and the inbound/outbound Tauri commands + setup bootstrap).
+  These were a closed loop — `inbound-message` had zero consumers and
+  `send_outbound_test` was the only non-test caller of the outbound path —
+  and `shannon-gateway` now owns all platform connectivity. The Notifications
+  page keeps its webhook + DnD surfaces; the per-channel "send test" outbound
+  action (#84 T8.1) and its wizard UI go with it. `ResultRoutingEditor` drops
+  the `slack` channel preset (email / notification / log only). ~250 dead
+  i18n keys (inbound / outbound / wizard) were purged from both locales.
+
+### Tooling / CI
+
+- **Release job** (#83, `s2/release-job-gitea-release`): publish a Gitea
+  Release (installers + `latest.json`) on `v*` tag push.
+- **CI mirror fix** (#82, `s2/ci-npmmirror-mirror`): route Node + npm through
+  npmmirror (both checksum-verified against upstream) to stop intermittent CI
+  timeouts caused by runner egress.
+- **Models P2 command test coverage** (#76, `s2/models-p2-cmd-tests`): logic
+  coverage for the managed-provider commands.
+- **Skill-loop generate wire** (#77, `s2/skillloop-generate-wire`): generate
+  + persist a proposal on `suggest=true`.
+- **Clippy fix** (#85, `s2/clippy-commands-config`): struct-literal init in
+  `build_seed_file` tests (dev-gate clean).
+- **Data-source installer test flake** (#105, `fix/data-source-installers-di`):
+  the 7 `data_source_installers` tests no longer mutate the process-global
+  `HOME` env var (which raced with other modules' `dirs::home_dir()` reads
+  under parallel `--lib` runs); each public fn gained a `_in(root, …)` variant
+  the tests drive with a tempdir. No behavior change.
+- **Engine pin 3fb42fde** (`chore/engine-pin-3fb42fde-and-changelog`): engine
+  git-dep pin bumped d49e7f5 → 3fb42fde (api_server P0-b/c/d/e: tool-approval
+  WS roundtrip, cancel-token, session_id, persistence; semver CI cache) and
+  `events.schema.json` regenerated. Schema diff is key-order only (verified
+  semantically identical) — no UI-type change. Aligns the declared pin + UI
+  schema with the sibling checkout desktop builds against, and unblocks the
+  local Rust gate (schema-sync no longer aborts `local-check`).
+
 ## v0.3.8 (2026-06-28) — Models P2 (managed providers)
 
 ### Models P2 — managed providers store + generic OpenAI-compatible test

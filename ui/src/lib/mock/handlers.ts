@@ -37,6 +37,16 @@ function findTask(id: string) {
   return state.tasks.find(t => t.id === id)
 }
 
+// Mutable notification prefs so DND/quiet-hours toggling feels live in demo mode.
+let notificationPrefs = {
+  master_enabled: true,
+  dnd_enabled: false,
+  dnd_start: null as string | null,
+  dnd_end: null as string | null,
+  on_completed: true,
+  on_failed: true,
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockHandler = (args: any) => unknown | Promise<unknown>
 export const handlers: Record<string, MockHandler> = {
@@ -431,6 +441,16 @@ export const handlers: Record<string, MockHandler> = {
   async delete_memory() { await delay() },
   async search_memories(args: { query: string; project?: string | null }) {
     return handlers.list_memories({ query: args.query, project: args.project })
+  },
+
+  // --- Notification preferences (Notifications P2 DND / quiet hours) ---
+  async get_notification_prefs() {
+    await delay()
+    return clone(notificationPrefs)
+  },
+  async set_notification_prefs(args: { prefs: { master_enabled: boolean; dnd_enabled: boolean; dnd_start: string | null; dnd_end: string | null; on_completed: boolean; on_failed: boolean } }) {
+    await delay()
+    notificationPrefs = { ...args.prefs }
   },
 
   // --- Extensions Hub: Featured ---

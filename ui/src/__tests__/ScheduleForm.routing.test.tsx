@@ -16,7 +16,7 @@ beforeEach(() => {
 })
 
 describe('ScheduleForm result_routing (P2.3)', () => {
-  it('adds a slack channel and includes it in the submit payload', async () => {
+  it('adds an email channel and includes it in the submit payload', async () => {
     const onSubmit = vi.fn()
     render(<ScheduleForm onSubmit={onSubmit} onCancel={() => {}} />)
 
@@ -27,10 +27,10 @@ describe('ScheduleForm result_routing (P2.3)', () => {
     // Open policy section (button toggles)
     fireEvent.click(screen.getByText('Policy options'))
 
-    // Switch to slack channel and add target
+    // Switch to email channel and add target
     await waitFor(() => expect(screen.getByLabelText('Channel type')).toBeInTheDocument())
-    fireEvent.change(screen.getByLabelText('Channel type'), { target: { value: 'slack' } })
-    fireEvent.change(screen.getByLabelText('slack target'), { target: { value: '#release' } })
+    fireEvent.change(screen.getByLabelText('Channel type'), { target: { value: 'email' } })
+    fireEvent.change(screen.getByLabelText('email target'), { target: { value: 'a@release.com' } })
     fireEvent.click(screen.getByText('Add'))
 
     // Submit
@@ -38,7 +38,7 @@ describe('ScheduleForm result_routing (P2.3)', () => {
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     const payload: CreateTaskPayload = onSubmit.mock.calls[0][0]
-    expect(payload.policy?.result_routing).toEqual(['slack:#release'])
+    expect(payload.policy?.result_routing).toEqual(['email:a@release.com'])
   })
 
   it('defaults result_routing to empty when no channels added', async () => {

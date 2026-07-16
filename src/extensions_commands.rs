@@ -63,6 +63,7 @@ pub async fn install_mcp_stdio(spec: StdioMcpSpecPayload) -> Result<InstallResul
             args: spec.args,
             env: spec.env.into_iter().collect(),
         },
+        settings_path_override: None,
     };
     // Build a synthetic CatalogEntry so the installer's bookkeeping works.
     let entry = extensions::CatalogEntry {
@@ -105,6 +106,7 @@ pub async fn install_mcp_mcpb(
     let installer = McpbInstaller {
         archive_bytes,
         extract_root: None,
+        settings_path_override: None,
     };
     let entry = extensions::CatalogEntry {
         id: format!("mcpb:{server_name}"),
@@ -480,6 +482,7 @@ pub async fn install_agent_from_repo(
         plugin_name: plugin_name.clone(),
         repo,
         ref_,
+        root_override: None,
     };
     let entry = extensions::CatalogEntry {
         id: format!("agent-repo:{plugin_name}"),
@@ -527,6 +530,7 @@ pub async fn install_native_agent(
     let installer = AgentMarkdownInstaller {
         plugin_name: plugin_name.clone(),
         body,
+        root_override: None,
     };
     let entry = extensions::CatalogEntry {
         id: format!("native:agent-{plugin_name}"),

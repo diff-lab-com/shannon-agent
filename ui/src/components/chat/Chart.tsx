@@ -1,4 +1,5 @@
 import { memo, useMemo } from 'react'
+import { useIntl } from 'react-intl'
 
 export interface ChartSpec {
   type: 'bar' | 'line' | 'pie'
@@ -26,8 +27,9 @@ interface CartesianChartProps {
 }
 
 function CartesianChart({ spec }: CartesianChartProps) {
+  const intl = useIntl()
   const geometry = useMemo(() => buildCartesianGeometry(spec), [spec])
-  if (!geometry) return <ChartError message={`Invalid chart spec — type "${spec.type}" needs at least one data point.`} />
+  if (!geometry) return <ChartError message={intl.formatMessage({ id: 'chat.chart.error.invalidSpec' }, { type: spec.type })} />
 
   const { points, bars, max, min, plotW, plotH, x0, y0 } = geometry
   const yRange = max - min || 1
@@ -45,7 +47,7 @@ function CartesianChart({ spec }: CartesianChartProps) {
         className="w-full h-auto"
         preserveAspectRatio="xMidYMid meet"
         role="img"
-        aria-label={spec.title || 'chart'}
+        aria-label={spec.title || intl.formatMessage({ id: 'chat.chart.aria.chart' })}
       >
         {ticks.map((tv) => {
           const y = y0 - ((tv - min) / yRange) * plotH
@@ -146,7 +148,7 @@ function CartesianChart({ spec }: CartesianChartProps) {
         )}
       </svg>
       <span className="sr-only">
-        {spec.data.length} data points. Range: {formatTick(min)} to {formatTick(max)}.
+        {intl.formatMessage({ id: 'chat.chart.sr.dataSummary' }, { count: spec.data.length, min: formatTick(min), max: formatTick(max) })}
       </span>
     </figure>
   )
@@ -168,9 +170,10 @@ const PIE_COLORS = [
 ]
 
 function PieChart({ spec }: PieChartProps) {
+  const intl = useIntl()
   const total = spec.data.reduce((s, d) => s + d.value, 0)
   if (spec.data.length === 0 || total === 0) {
-    return <ChartError message="Pie chart needs at least one non-zero value." />
+    return <ChartError message={intl.formatMessage({ id: 'chat.chart.error.pieNeedsValue' })} />
   }
 
   const cx = WIDTH / 2
@@ -198,7 +201,7 @@ function PieChart({ spec }: PieChartProps) {
           {spec.title}
         </figcaption>
       )}
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full h-auto" role="img" aria-label={spec.title || 'pie chart'}>
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="w-full h-auto" role="img" aria-label={spec.title || intl.formatMessage({ id: 'chat.chart.aria.pieChart' })}>
         {slices.map((s, i) => (
           <path
             key={i}

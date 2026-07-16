@@ -26,7 +26,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -48,9 +48,20 @@ use super::types::CatalogSource;
 /// Creates the file if missing, preserves other keys, and marks the entry
 /// with Shannon metadata so the aggregator can identify hub-installed servers.
 pub fn write_mcp_server_config(name: &str, config: Value) -> Result<PathBuf, InstallError> {
-    let path = user_settings_path()?;
+    write_mcp_server_config_to(&user_settings_path()?, name, config)
+}
+
+/// `write_mcp_server_config` against an explicit `settings.json` `path`. Tests
+/// pass a tempdir path so they never mutate the process-global `HOME` env var
+/// — that mutation (the old `HOME_LOCK`) raced with unrelated tests reading
+/// `dirs::home_dir()` on another thread, a recurring parallel-`--lib` flake.
+pub fn write_mcp_server_config_to(
+    path: &Path,
+    name: &str,
+    config: Value,
+) -> Result<PathBuf, InstallError> {
     let mut root: Value = if path.exists() {
-        let text = std::fs::read_to_string(&path).map_err(|e| InstallError::Io(e.to_string()))?;
+        let text = std::fs::read_to_string(path).map_err(|e| InstallError::Io(e.to_string()))?;
         serde_json::from_str(&text).unwrap_or_else(|_| json!({}))
     } else {
         json!({})
@@ -68,17 +79,22 @@ pub fn write_mcp_server_config(name: &str, config: Value) -> Result<PathBuf, Ins
         std::fs::create_dir_all(parent).map_err(|e| InstallError::Io(e.to_string()))?;
     }
     let bytes = serde_json::to_vec_pretty(&root)?;
-    std::fs::write(&path, bytes).map_err(|e| InstallError::Io(e.to_string()))?;
-    Ok(path)
+    std::fs::write(path, bytes).map_err(|e| InstallError::Io(e.to_string()))?;
+    Ok(path.to_path_buf())
 }
 
 /// Remove an MCP server entry. Returns Ok(()) if the entry didn't exist.
 pub fn remove_mcp_server_config(name: &str) -> Result<(), InstallError> {
-    let path = user_settings_path()?;
+    remove_mcp_server_config_from(&user_settings_path()?, name)
+}
+
+/// `remove_mcp_server_config` against an explicit `settings.json` `path` (see
+/// [`write_mcp_server_config_to`] for why tests inject a tempdir path).
+pub fn remove_mcp_server_config_from(path: &Path, name: &str) -> Result<(), InstallError> {
     if !path.exists() {
         return Ok(());
     }
-    let text = std::fs::read_to_string(&path).map_err(|e| InstallError::Io(e.to_string()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| InstallError::Io(e.to_string()))?;
     let mut root: Value = serde_json::from_str(&text)
         .map_err(|e| InstallError::Format(format!("settings.json parse: {e}")))?;
     let removed = root
@@ -88,7 +104,7 @@ pub fn remove_mcp_server_config(name: &str) -> Result<(), InstallError> {
         .is_some();
     if removed {
         let bytes = serde_json::to_vec_pretty(&root)?;
-        std::fs::write(&path, bytes).map_err(|e| InstallError::Io(e.to_string()))?;
+        std::fs::write(path, bytes).map_err(|e| InstallError::Io(e.to_string()))?;
     }
     Ok(())
 }
@@ -96,6 +112,17 @@ pub fn remove_mcp_server_config(name: &str) -> Result<(), InstallError> {
 fn user_settings_path() -> Result<PathBuf, InstallError> {
     let home = dirs::home_dir().ok_or_else(|| InstallError::Io("cannot resolve $HOME".into()))?;
     Ok(home.join(".shannon/settings.json"))
+}
+
+/// Resolve the settings.json path, honoring an installer's test-only
+/// `settings_path_override`. `None` → the real `~/.shannon/settings.json`
+/// (production); `Some(p)` → `p` (tests pass a tempdir path so they never
+/// mutate the process-global `HOME` env var).
+fn resolve_settings_path(override_: Option<&Path>) -> Result<PathBuf, InstallError> {
+    match override_ {
+        Some(p) => Ok(p.to_path_buf()),
+        None => user_settings_path(),
+    }
 }
 
 /// Decorate a server config with Shannon metadata so the aggregator can
@@ -120,6 +147,10 @@ fn annotate_config(mut config: Value, transport: &str) -> Value {
 pub struct StdioMcpInstaller {
     /// Caller-supplied spec (typically built from a form, not from catalog).
     pub spec: StdioMcpSpec,
+    /// Test-only override for `settings.json`. Production leaves this `None`
+    /// (resolve `~/.shannon/settings.json` from HOME); tests set it to a
+    /// tempdir path so they never mutate the process-global `HOME` env var.
+    pub settings_path_override: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -165,7 +196,11 @@ impl AddonInstaller for StdioMcpInstaller {
             }),
             "stdio",
         );
-        let path = write_mcp_server_config(&self.spec.server_name, config)?;
+        let path = write_mcp_server_config_to(
+            &resolve_settings_path(self.settings_path_override.as_deref())?,
+            &self.spec.server_name,
+            config,
+        )?;
 
         progress.emit(ProgressEvent::Finished).await;
         Ok(InstalledAddon {
@@ -183,7 +218,10 @@ impl AddonInstaller for StdioMcpInstaller {
         })
     }
     async fn uninstall(&self, addon_id: &str) -> Result<(), InstallError> {
-        remove_mcp_server_config(addon_id)
+        remove_mcp_server_config_from(
+            &resolve_settings_path(self.settings_path_override.as_deref())?,
+            addon_id,
+        )
     }
     async fn update(&self, _addon_id: &str) -> Result<InstalledAddon, InstallError> {
         Err(InstallError::Unsupported(
@@ -333,6 +371,9 @@ pub struct McpbInstaller {
     pub archive_bytes: Vec<u8>,
     /// Where to extract. Defaults to `~/.shannon/mcp-servers/` if None.
     pub extract_root: Option<PathBuf>,
+    /// Test-only override for `settings.json` (see
+    /// [`StdioMcpInstaller::settings_path_override`]).
+    pub settings_path_override: Option<PathBuf>,
 }
 
 #[async_trait]
@@ -411,7 +452,11 @@ impl AddonInstaller for McpbInstaller {
                 manifest.server.server_type
             )));
         };
-        let path = write_mcp_server_config(&manifest.name, config)?;
+        let path = write_mcp_server_config_to(
+            &resolve_settings_path(self.settings_path_override.as_deref())?,
+            &manifest.name,
+            config,
+        )?;
         progress.emit(ProgressEvent::Finished).await;
 
         Ok(InstalledAddon {
@@ -430,7 +475,10 @@ impl AddonInstaller for McpbInstaller {
         })
     }
     async fn uninstall(&self, addon_id: &str) -> Result<(), InstallError> {
-        remove_mcp_server_config(addon_id)
+        remove_mcp_server_config_from(
+            &resolve_settings_path(self.settings_path_override.as_deref())?,
+            addon_id,
+        )
     }
     async fn update(&self, _addon_id: &str) -> Result<InstalledAddon, InstallError> {
         Err(InstallError::Unsupported(
@@ -505,6 +553,7 @@ pub fn resolve_registry_installer(
                     args,
                     env,
                 },
+                settings_path_override: None,
             }))
         }
         "oauth_remote" => {
@@ -528,6 +577,7 @@ pub fn resolve_registry_installer(
             Some(ResolvedMcpInstaller::Mcpb(McpbInstaller {
                 archive_bytes: Vec::new(),
                 extract_root: None,
+                settings_path_override: None,
             }))
         }
         _ => None,
@@ -541,16 +591,7 @@ pub fn resolve_registry_installer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
     use tempfile::tempdir;
-
-    /// All tests that mutate `$HOME` must hold this lock so they don't race
-    /// when nextest/cargo runs them in parallel.
-    static HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-    fn home_lock() -> &'static Mutex<()> {
-        HOME_LOCK.get_or_init(|| Mutex::new(()))
-    }
 
     /// Override `dirs::home_dir` indirectly: we can't, but we can write
     /// directly via the public API once we know the path. For unit tests we
@@ -566,17 +607,16 @@ mod tests {
 
     #[test]
     fn write_mcp_server_creates_file_if_missing() {
-        // Redirect $HOME via env var so dirs::home_dir uses it.
+        // Settings land in an isolated tempdir path — no HOME mutation. The
+        // old form set HOME under a module lock, which is process-global and
+        // raced with unrelated tests reading dirs::home_dir() under parallel
+        // --lib.
         let dir = tempdir().unwrap();
-        let _home_guard = home_lock().lock().unwrap();
-        unsafe {
-            std::env::set_var("HOME", dir.path());
-        }
-        // dirs::home_dir on Linux reads $HOME.
-        let path = user_settings_path().unwrap();
+        let path = dir.path().join("settings.json");
         assert!(!path.exists());
 
-        let result = write_mcp_server_config(
+        let result = write_mcp_server_config_to(
+            &path,
             "notion",
             json!({"command": "npx", "args": ["-y", "@notionhq/notion-mcp-server"]}),
         );
@@ -591,11 +631,7 @@ mod tests {
     #[test]
     fn write_mcp_server_preserves_other_keys() {
         let dir = tempdir().unwrap();
-        let _home_guard = home_lock().lock().unwrap();
-        unsafe {
-            std::env::set_var("HOME", dir.path());
-        }
-        let path = user_settings_path().unwrap();
+        let path = dir.path().join("settings.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
@@ -603,7 +639,7 @@ mod tests {
         )
         .unwrap();
 
-        write_mcp_server_config("new", json!({"command": "y"})).unwrap();
+        write_mcp_server_config_to(&path, "new", json!({"command": "y"})).unwrap();
 
         let text = std::fs::read_to_string(&path).unwrap();
         let parsed: Value = serde_json::from_str(&text).unwrap();
@@ -615,11 +651,7 @@ mod tests {
     #[test]
     fn remove_mcp_server_drops_only_target() {
         let dir = tempdir().unwrap();
-        let _home_guard = home_lock().lock().unwrap();
-        unsafe {
-            std::env::set_var("HOME", dir.path());
-        }
-        let path = user_settings_path().unwrap();
+        let path = dir.path().join("settings.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(
             &path,
@@ -627,7 +659,7 @@ mod tests {
         )
         .unwrap();
 
-        remove_mcp_server_config("a").unwrap();
+        remove_mcp_server_config_from(&path, "a").unwrap();
 
         let text = std::fs::read_to_string(&path).unwrap();
         let parsed: Value = serde_json::from_str(&text).unwrap();
@@ -638,12 +670,9 @@ mod tests {
     #[test]
     fn remove_mcp_server_handles_missing_file() {
         let dir = tempdir().unwrap();
-        let _home_guard = home_lock().lock().unwrap();
-        unsafe {
-            std::env::set_var("HOME", dir.path());
-        }
+        let path = dir.path().join("settings.json");
         // No file exists.
-        assert!(remove_mcp_server_config("anything").is_ok());
+        assert!(remove_mcp_server_config_from(&path, "anything").is_ok());
     }
 
     fn stdio_entry() -> CatalogEntry {
@@ -672,13 +701,13 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn stdio_installer_writes_settings() {
+        // Settings land in an isolated tempdir path — no HOME mutation. The
+        // old form set HOME under a module lock, which is process-global and
+        // raced with unrelated tests reading dirs::home_dir() under parallel
+        // --lib.
         let dir = tempdir().unwrap();
-        let _home_guard = home_lock().lock().unwrap();
-        unsafe {
-            std::env::set_var("HOME", dir.path());
-        }
+        let settings_path = dir.path().join("settings.json");
 
         let installer = StdioMcpInstaller {
             spec: StdioMcpSpec {
@@ -687,6 +716,7 @@ mod tests {
                 args: vec!["index.js".into()],
                 env: HashMap::new(),
             },
+            settings_path_override: Some(settings_path.clone()),
         };
         let entry = stdio_entry();
         let installed = installer
@@ -701,8 +731,7 @@ mod tests {
         assert!(installed.enabled);
 
         // Verify the config actually landed.
-        let path = user_settings_path().unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
+        let text = std::fs::read_to_string(&settings_path).unwrap();
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["mcpServers"]["my-stdio"]["command"], json!("node"));
         assert_eq!(
@@ -715,6 +744,7 @@ mod tests {
     fn stdio_installer_always_type_to_confirm() {
         let installer = StdioMcpInstaller {
             spec: StdioMcpSpec::default(),
+            settings_path_override: None,
         };
         let entry = stdio_entry();
         assert_eq!(
@@ -812,18 +842,16 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(clippy::await_holding_lock)]
     async fn mcpb_installer_extracts_and_registers() {
+        // Settings + extraction land in isolated tempdirs — no HOME mutation.
         let dir = tempdir().unwrap();
-        let _home_guard = home_lock().lock().unwrap();
-        unsafe {
-            std::env::set_var("HOME", dir.path());
-        }
+        let settings_path = dir.path().join("settings.json");
 
         let bytes = make_minimal_mcpb("bundled-server");
         let installer = McpbInstaller {
             archive_bytes: bytes,
             extract_root: Some(dir.path().join("mcp-servers")),
+            settings_path_override: Some(settings_path.clone()),
         };
         let entry = CatalogEntry {
             id: "test:mcpb".into(),
@@ -863,8 +891,8 @@ mod tests {
         );
 
         // settings.json has the entry.
-        let path = user_settings_path().unwrap();
-        let parsed: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let parsed: Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
         assert_eq!(
             parsed["mcpServers"]["bundled-server"]["command"],
             json!("node")

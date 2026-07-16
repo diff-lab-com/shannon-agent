@@ -3,6 +3,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { I18nProvider } from '@/i18n'
 import ChatInput from '@/components/chat/ChatInput'
 import * as api from '@/lib/tauri-api'
+import { toast } from 'sonner'
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
+}))
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
@@ -15,8 +20,8 @@ vi.mock('react-router-dom', async () => {
 
 // Mock useApp hook
 const mockRefreshConfig = vi.fn()
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => ({
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => ({
     config: {
       approval_mode: 'suggest',
       model: 'claude-sonnet-4-6',
@@ -100,7 +105,7 @@ describe('ChatInput', () => {
 
   it('renders the Voice mic button in idle state', () => {
     renderChatInput()
-    expect(screen.getByLabelText('Start voice recording (stub)')).toBeInTheDocument()
+    expect(screen.getByLabelText('Start voice recording')).toBeInTheDocument()
   })
 
   it('does not render the Voice orb when idle', () => {
@@ -111,7 +116,7 @@ describe('ChatInput', () => {
   it('appends stub transcript to value after recording cycle', async () => {
     const onChange = vi.fn()
     renderChatInput({ value: '', onChange })
-    const mic = screen.getByLabelText('Start voice recording (stub)')
+    const mic = screen.getByLabelText('Start voice recording')
     fireEvent.click(mic)
     expect(screen.getByLabelText('Stop recording')).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Stop recording'))
@@ -284,5 +289,19 @@ describe('ChatInput', () => {
     // Look for auto_awesome icon text
     const autoAwesomeIcons = screen.getAllByText('auto_awesome')
     expect(autoAwesomeIcons.length).toBeGreaterThan(0)
+  })
+
+  it('surfaces a toast when plan mode toggle fails (was silently swallowed)', async () => {
+    vi.mocked(api.configure).mockRejectedValueOnce(new Error('engine down'))
+    renderChatInput()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle plan mode' }))
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        'Failed to toggle plan mode',
+        expect.objectContaining({ description: 'engine down' }),
+      )
+    })
   })
 })

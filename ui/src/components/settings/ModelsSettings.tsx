@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react'
 import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
-import { useApp } from '@/context/AppContext'
+import { useCatalog } from '@/context/CatalogContext'
 import * as api from '@/lib/tauri-api'
 import { toastError } from '@/lib/errorToast'
 import type {
@@ -16,7 +17,7 @@ import type {
 export default function ModelsSettings() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-  const { models, status, config, refreshModels, refreshStatus } = useApp()
+  const { models, status, config, refreshModels, refreshStatus } = useCatalog()
   const [switching, setSwitching] = useState<string | null>(null)
   const [strategy, setStrategyState] = useState<'speed' | 'balanced' | 'high-quality'>(
     (config?.performance_strategy as 'speed' | 'balanced' | 'high-quality') ?? 'high-quality'
@@ -177,7 +178,7 @@ export default function ModelsSettings() {
                           <span className={`font-headline-md text-lg ${m.id === currentModel ? 'text-primary' : 'text-on-surface'}`}>{m.name}</span>
                           {m.id === currentModel ? <span className="px-xs py-[2px] bg-primary text-on-primary rounded text-[10px] font-bold">{t('settings.models.defaultBadge')}</span> : null}
                         </div>
-                        <p className="text-label-sm text-on-surface-variant opacity-70">{m.provider} {m.context_window > 0 ? `· ${(m.context_window / 1000).toFixed(0)}k context` : ''}</p>
+                        <p className="text-label-sm text-on-surface-variant opacity-70">{m.provider} {m.context_window > 0 ? intl.formatMessage({ id: 'settings.models.contextWindow' }, { count: (m.context_window / 1000).toFixed(0) }) : ''}</p>
                       </div>
                     </div>
                     {switching === m.id ? (
@@ -293,6 +294,7 @@ function ProvidersSection({
   const [editing, setEditing] = useState<ProviderConnection | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [activatingId, setActivatingId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ProviderConnection | null>(null)
 
   const handleTest = async (conn: ProviderConnection) => {
     // Only the active provider's key is mirrored into config; for a connection
@@ -337,8 +339,12 @@ function ProvidersSection({
     }
   }
 
-  const handleDelete = async (conn: ProviderConnection) => {
-    if (!window.confirm(intl.formatMessage({ id: 'settings.models.providers.confirmDelete' }, { label: conn.label }))) return
+  // Delete confirmation flows through the ConfirmDialog (state-driven) instead
+  // of a native window.confirm, so it matches the app's design system and locale.
+  const confirmDeleteProvider = async () => {
+    const conn = deleteTarget
+    setDeleteTarget(null)
+    if (!conn) return
     try {
       const fresh = await api.deleteProvider(conn.id)
       onChange(fresh)
@@ -440,7 +446,7 @@ function ProvidersSection({
                   <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-primary cursor-pointer" onClick={() => { setEditing(conn); setModalOpen(true) }} aria-label={t('settings.models.providers.edit')}>
                     <span className="material-symbols-outlined text-[18px]">edit</span>
                   </Button>
-                  <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer" onClick={() => handleDelete(conn)} aria-label={t('settings.models.providers.delete')}>
+                  <Button variant="ghost" className="px-sm py-xs text-on-surface-variant hover:text-error cursor-pointer" onClick={() => setDeleteTarget(conn)} aria-label={t('settings.models.providers.delete')}>
                     <span className="material-symbols-outlined text-[18px]">delete</span>
                   </Button>
                 </div>
@@ -455,6 +461,19 @@ function ProvidersSection({
           editing={editing}
           onClose={() => { setModalOpen(false); setEditing(null) }}
           onSaved={handleSaved}
+        />
+      ) : null}
+
+      {deleteTarget ? (
+        <ConfirmDialog
+          open
+          destructive
+          title={t('settings.models.providers.deleteConfirmTitle')}
+          message={intl.formatMessage({ id: 'settings.models.providers.confirmDelete' }, { label: deleteTarget.label })}
+          confirmLabel={t('settings.models.providers.delete')}
+          cancelLabel={t('settings.models.providers.cancel')}
+          onConfirm={confirmDeleteProvider}
+          onCancel={() => setDeleteTarget(null)}
         />
       ) : null}
     </section>

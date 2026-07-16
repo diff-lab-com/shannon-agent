@@ -103,6 +103,15 @@ pub mod commands_agents;
 pub mod commands_billing;
 #[cfg(feature = "tauri")]
 pub mod commands_config;
+#[cfg(feature = "tauri")]
+pub mod commands_connections;
+#[cfg(feature = "tauri")]
+pub mod commands_mobile_pairing;
+#[cfg(feature = "tauri")]
+pub mod gateway_supervisor;
+
+#[cfg(feature = "tauri")]
+pub mod loopback_api;
 
 #[cfg(feature = "tauri")]
 pub mod commands_memory;
@@ -115,9 +124,6 @@ pub mod commands_mcp;
 
 #[cfg(feature = "tauri")]
 pub mod commands_notifications;
-
-#[cfg(feature = "tauri")]
-pub mod commands_outbound;
 
 #[cfg(feature = "tauri")]
 pub mod commands_files;
@@ -136,6 +142,12 @@ pub mod commands_sessions;
 
 #[cfg(feature = "tauri")]
 pub mod commands_tasks;
+
+#[cfg(feature = "tauri")]
+pub mod commands_usage;
+
+#[cfg(feature = "tauri")]
+pub mod commands_voice;
 
 #[cfg(feature = "tauri")]
 pub mod scheduled_commands;
@@ -163,9 +175,3 @@ pub mod skill_pattern_detection;
 
 #[cfg(feature = "tauri")]
 pub mod notifications;
-
-#[cfg(feature = "tauri")]
-pub mod inbound;
-
-#[cfg(feature = "tauri")]
-pub mod outbound;

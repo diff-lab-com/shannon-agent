@@ -6,7 +6,9 @@ import { Header } from './Header';
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import CommandPalette from './CommandPalette';
 import KeyboardShortcutsHelp from './KeyboardShortcutsHelp';
-import { useApp } from '@/context/AppContext';
+import { useChat } from '@/context/ChatContext';
+import { useSessions } from '@/context/SessionContext';
+import { useCatalog } from '@/context/CatalogContext';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { shouldShowWelcome } from '@/pages/Welcome';
 
@@ -20,7 +22,9 @@ const SidebarContext = createContext<SidebarContextValue>({ open: false, toggle:
 export const useSidebar = () => useContext(SidebarContext)
 
 export function Layout() {
-  const { usage, agents, status, sessions, backgroundTasks, config, loading, createSession } = useApp();
+  const { usage } = useChat();
+  const { sessions, createSession } = useSessions();
+  const { agents, status, backgroundTasks, config, loading } = useCatalog();
   const navigate = useNavigate();
   const intl = useIntl();
   const [paletteOpen, setPaletteOpen] = useState(false);

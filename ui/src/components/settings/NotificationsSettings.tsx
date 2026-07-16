@@ -3,6 +3,7 @@ import { useIntl } from 'react-intl'
 import { toast } from 'sonner'
 import { toastError } from '@/lib/errorToast'
 import { Button } from '@/components/ui/button'
+import { Switch } from '@/components/ui/switch'
 import {
   Select,
   SelectContent,
@@ -12,12 +13,6 @@ import {
 } from '@/components/ui/select'
 import { validateWebhookUrl } from '@/lib/packageValidation'
 import * as api from '@/lib/tauri-api'
-import SlackWizard from './notifications/SlackWizard'
-import TelegramWizard from './notifications/TelegramWizard'
-import OutboundSection from './notifications/OutboundSection'
-
-type ChannelType = 'slack' | 'telegram' | 'email' | null
-
 /** Channel preset id — stored as the webhook `template` discriminator. */
 type WebhookPreset = 'feishu' | 'dingtalk' | 'wechat' | 'slack' | 'custom'
 
@@ -273,106 +268,186 @@ function WebhookSection() {
   )
 }
 
-export default function NotificationsSettings() {
+/** Desktop-notification master switch + Do-Not-Disturb quiet-hours window.
+ * Desktop-local: webhooks still deliver while DND suppresses OS popups. */
+function DndSection() {
   const intl = useIntl()
   const t = (id: string) => intl.formatMessage({ id })
-
   const [loading, setLoading] = useState(true)
-  const [selectedChannel, setSelectedChannel] = useState<ChannelType>(null)
-  const [inboundConfig, setInboundConfig] = useState<api.InboundConfigDto | null>(null)
-  const [status, setStatus] = useState<api.InboundListenerStatus | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [master, setMaster] = useState(true)
+  const [dnd, setDnd] = useState(false)
+  const [start, setStart] = useState('22:00')
+  const [end, setEnd] = useState('07:00')
+  const [onCompleted, setOnCompleted] = useState(true)
+  const [onFailed, setOnFailed] = useState(true)
 
   useEffect(() => {
     let cancelled = false
-    api
-      .getInboundConfig()
-      .then((cfg) => {
+    api.getNotificationPrefs()
+      .then((p) => {
         if (cancelled) return
-        setInboundConfig(cfg)
+        setMaster(p.master_enabled)
+        setDnd(p.dnd_enabled)
+        if (p.dnd_start) setStart(p.dnd_start)
+        if (p.dnd_end) setEnd(p.dnd_end)
+        setOnCompleted(p.on_completed)
+        setOnFailed(p.on_failed)
       })
-      .catch((e) => console.warn('getInboundConfig error:', e))
+      .catch((e) => toastError(t('settings.notifications.dnd.loadFailed'), e))
       .finally(() => {
         if (!cancelled) setLoading(false)
       })
-    api
-      .getInboundListenerStatus()
-      .then((s) => {
-        if (!cancelled) setStatus(s)
-      })
-      .catch((e) => console.warn('getInboundListenerStatus error:', e))
-    const pollId = window.setInterval(() => {
-      api
-        .getInboundListenerStatus()
-        .then((s) => {
-          if (!cancelled) setStatus(s)
-        })
-        .catch((e) => console.warn('getInboundListenerStatus poll error:', e))
-    }, 30000)
     return () => {
       cancelled = true
-      window.clearInterval(pollId)
     }
-  }, [])
+  }, [t])
 
-  const handleSaveInbound = async (dto: api.SlackInboundDto | api.TelegramInboundDto) => {
-    const config: api.InboundConfigDto = {
-      slack: 'bot_token' in dto ? dto as api.SlackInboundDto : inboundConfig?.slack || null,
-      telegram: 'allowed_chats' in dto ? dto as api.TelegramInboundDto : inboundConfig?.telegram || null,
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await api.setNotificationPrefs({
+        master_enabled: master,
+        dnd_enabled: dnd,
+        dnd_start: dnd ? start : null,
+        dnd_end: dnd ? end : null,
+        on_completed: onCompleted,
+        on_failed: onFailed,
+      })
+      toast.success(t('settings.notifications.dnd.saved'))
+    } catch (e) {
+      toastError(t('settings.notifications.dnd.saveFailed'), e)
+    } finally {
+      setSaving(false)
     }
-    await api.saveInboundConfig(config)
-    setInboundConfig(config)
-    const updated = await api.getInboundListenerStatus()
-    setStatus(updated)
-    setSelectedChannel(null)
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12" role="status" aria-live="polite">
-        <span className="material-symbols-outlined icon-xl text-primary animate-spin" aria-hidden="true">progress_activity</span>
-        <span className="sr-only">{t('settings.notifications.loading')}</span>
+  const windowDisabled = loading || !master
+
+  return (
+    <section className="rounded-xl border border-outline-variant/30 bg-surface-container-lowest p-lg space-y-md">
+      <div className="flex items-center justify-between gap-md">
+        <div>
+          <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            {t('settings.notifications.dnd.master')}
+          </div>
+          <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            {t('settings.notifications.dnd.masterDesc')}
+          </div>
+        </div>
+        <Switch
+          checked={master}
+          onCheckedChange={setMaster}
+          disabled={loading}
+          aria-label={t('settings.notifications.dnd.master')}
+          className="shrink-0"
+        />
       </div>
-    )
-  }
 
-  type Channel = {
-    id: 'slack' | 'telegram' | 'email'
-    name: string
-    icon: string
-    configured: boolean
-    active: boolean
-    comingSoon?: boolean
-  }
-  const channels: Channel[] = [
-    {
-      id: 'slack' as const,
-      name: 'Slack',
-      icon: 'tag',
-      configured: !!inboundConfig?.slack,
-      active: status?.slack_running || false,
-    },
-    {
-      id: 'telegram' as const,
-      name: 'Telegram',
-      icon: 'send',
-      configured: !!inboundConfig?.telegram,
-      active: status?.telegram_running || false,
-    },
-    {
-      id: 'email' as const,
-      name: 'Email',
-      icon: 'email',
-      configured: false,
-      active: false,
-      comingSoon: true,
-    },
-  ]
+      <div className="pt-xs">
+        <div className="font-label-sm text-[12px] uppercase tracking-wide text-on-surface-variant mb-sm">
+          {t('settings.notifications.dnd.eventsTitle')}
+        </div>
+        <div className="space-y-md">
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+                {t('settings.notifications.dnd.completed')}
+              </div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+                {t('settings.notifications.dnd.completedDesc')}
+              </div>
+            </div>
+            <Switch
+              checked={onCompleted}
+              onCheckedChange={setOnCompleted}
+              disabled={windowDisabled}
+              aria-label={t('settings.notifications.dnd.completed')}
+              className="shrink-0"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-md">
+            <div>
+              <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+                {t('settings.notifications.dnd.failed')}
+              </div>
+              <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+                {t('settings.notifications.dnd.failedDesc')}
+              </div>
+            </div>
+            <Switch
+              checked={onFailed}
+              onCheckedChange={setOnFailed}
+              disabled={windowDisabled}
+              aria-label={t('settings.notifications.dnd.failed')}
+              className="shrink-0"
+            />
+          </div>
+        </div>
+      </div>
 
-  type HealthState = 'connected' | 'inactive' | 'setup'
-  const healthFor = (c: (typeof channels)[number]): HealthState => {
-    if (!c.configured) return 'setup'
-    return c.active ? 'connected' : 'inactive'
-  }
+      <div className="flex items-center justify-between gap-md">
+        <div>
+          <div className="font-label-md text-[14px] text-on-surface font-semibold mb-1">
+            {t('settings.notifications.dnd.quietHours')}
+          </div>
+          <div className="font-label-sm text-[12px] text-on-surface-variant leading-tight">
+            {t('settings.notifications.dnd.quietHoursDesc')}
+          </div>
+        </div>
+        <Switch
+          checked={dnd}
+          onCheckedChange={setDnd}
+          disabled={windowDisabled}
+          aria-label={t('settings.notifications.dnd.quietHours')}
+          className="shrink-0"
+        />
+      </div>
+
+      {dnd && master && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-md">
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-sm text-[12px] text-on-surface-variant">
+              {t('settings.notifications.dnd.start')}
+            </span>
+            <input
+              type="time"
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              disabled={loading}
+              className="rounded-lg border border-outline-variant bg-surface-container-lowest px-md py-sm font-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </label>
+          <label className="flex flex-col gap-xs">
+            <span className="font-label-sm text-[12px] text-on-surface-variant">
+              {t('settings.notifications.dnd.end')}
+            </span>
+            <input
+              type="time"
+              value={end}
+              onChange={(e) => setEnd(e.target.value)}
+              disabled={loading}
+              className="rounded-lg border border-outline-variant bg-surface-container-lowest px-md py-sm font-body-md text-on-surface focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </label>
+          <p className="sm:col-span-2 font-label-sm text-[12px] text-on-surface-variant">
+            {t('settings.notifications.dnd.windowHint')}
+          </p>
+        </div>
+      )}
+
+      <div>
+        <Button onClick={handleSave} disabled={loading || saving}>
+          {saving ? t('settings.notifications.dnd.saving') : t('settings.notifications.dnd.save')}
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+export default function NotificationsSettings() {
+  const intl = useIntl()
+  const t = (id: string) => intl.formatMessage({ id })
 
   return (
     <div className="pb-xl">
@@ -387,102 +462,19 @@ export default function NotificationsSettings() {
 
       <section className="mt-xl">
         <div className="mb-lg">
-          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.outbound.sectionTitle')}</h3>
-          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.outbound.sectionDesc')}</p>
+          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.dnd.sectionTitle')}</h3>
+          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.dnd.sectionDesc')}</p>
         </div>
-        <div className="space-y-lg">
-          <WebhookSection />
-          <OutboundSection />
-        </div>
+        <DndSection />
       </section>
 
-      <div className="mt-xl">
+      <section className="mt-xl">
         <div className="mb-lg">
-          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.inbound.title')}</h3>
-          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.inbound.subtitle')}</p>
+          <h3 className="font-headline-md text-on-surface mb-xs">{t('settings.notifications.webhook.title')}</h3>
+          <p className="text-on-surface-variant font-body-sm">{t('settings.notifications.webhook.subtitle')}</p>
         </div>
-
-        {!selectedChannel ? (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-md">
-            {channels.map((channel) => (
-              <button
-                key={channel.id}
-                onClick={() => { if (!channel.comingSoon) setSelectedChannel(channel.id) }}
-                disabled={!!channel.comingSoon}
-                className={`p-md rounded-xl border bg-surface-container-lowest transition-colors text-left ${
-                  channel.comingSoon
-                    ? 'border-outline-variant/20 opacity-60 cursor-not-allowed'
-                    : 'border-outline-variant/30 hover:border-primary/50'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-sm">
-                  <div className="flex items-center gap-sm">
-                    <span className="material-symbols-outlined text-primary">{channel.icon}</span>
-                    <span className="font-label-md font-bold text-on-surface">{channel.name}</span>
-                  </div>
-                  {(() => {
-                    if (channel.comingSoon) {
-                      return (
-                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-surface-container-high text-on-surface-variant font-label-sm" role="status">
-                          {t('settings.notifications.channel.comingSoon')}
-                        </span>
-                      )
-                    }
-                    const health = healthFor(channel)
-                    if (health === 'connected') {
-                      return (
-                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-tertiary/20 text-tertiary font-label-sm" role="status">
-                          <span className="w-1 h-1 rounded-full bg-tertiary animate-pulse" aria-hidden="true" />
-                          {t('settings.notifications.wizard.channel.status.connected')}
-                        </span>
-                      )
-                    }
-                    if (health === 'inactive') {
-                      return (
-                        <span className="inline-flex items-center gap-xs px-xs py-xxs rounded-full bg-error/15 text-error font-label-sm" role="status" title={t('settings.notifications.wizard.channel.status.inactive')}>
-                          <span className="material-symbols-outlined icon-xs" aria-hidden="true">warning</span>
-                          {t('settings.notifications.wizard.channel.status.inactive')}
-                        </span>
-                      )
-                    }
-                    return null
-                  })()}
-                </div>
-                {channel.comingSoon ? (
-                  <p className="text-on-surface-variant text-sm">
-                    {t('settings.notifications.wizard.email.comingSoon')}
-                  </p>
-                ) : channel.configured ? (
-                  <p className="text-on-surface-variant text-sm">
-                    {t('settings.notifications.wizard.channel.status.configured')}
-                  </p>
-                ) : (
-                  <p className="text-primary text-sm font-body-md">
-                    + {t('settings.notifications.wizard.channel.status.setup')}
-                  </p>
-                )}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <>
-            {selectedChannel === 'slack' && (
-              <SlackWizard
-                config={inboundConfig?.slack || null}
-                onSave={handleSaveInbound}
-                onCancel={() => setSelectedChannel(null)}
-              />
-            )}
-            {selectedChannel === 'telegram' && (
-              <TelegramWizard
-                config={inboundConfig?.telegram || null}
-                onSave={handleSaveInbound}
-                onCancel={() => setSelectedChannel(null)}
-              />
-            )}
-          </>
-        )}
-      </div>
+        <WebhookSection />
+      </section>
     </div>
   )
 }

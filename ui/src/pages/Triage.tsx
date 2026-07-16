@@ -9,7 +9,7 @@
 // TriageItem cards with checkbox + Mark Read / Archive actions, empty state.
 
 import { useState, useMemo, useCallback, useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useIntl } from 'react-intl'
+import { useIntl, type PrimitiveType } from 'react-intl'
 import { toast } from 'sonner'
 import EmptyState from '@/components/ui/empty-state'
 import { CardSkeleton } from '@/components/SkeletonLoader'
@@ -46,7 +46,7 @@ function TriageCard({ item, selected, focused, onToggleSelected, onMarkRead, onA
   onArchive: (id: string) => void
 }) {
   const intl = useIntl()
-  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const meta = kindMeta(item.kind)
   return (
     <div role="listitem" data-focused={focused ? 'true' : undefined} className={`glass-panel border rounded-xl p-md shadow-sm hover:shadow-md transition-all group bg-surface-container-lowest/80 ${item.read ? 'border-outline-variant/10 opacity-70' : 'border-primary/20'} ${focused ? 'ring-2 ring-primary' : selected ? 'ring-2 ring-primary/40' : ''}`}>
@@ -115,7 +115,7 @@ function TriageCard({ item, selected, focused, onToggleSelected, onMarkRead, onA
 
 export default function Triage() {
   const intl = useIntl()
-  const t = (id: string, values?: any) => intl.formatMessage({ id }, values)
+  const t = (id: string, values?: Record<string, PrimitiveType>) => intl.formatMessage({ id }, values)
   const [kindFilter, setKindFilter] = useState<string | undefined>(undefined)
   const [showArchived, setShowArchived] = useState(false)
   const [readFilter, setReadFilter] = useState<ReadFilter>('all')

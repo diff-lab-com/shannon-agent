@@ -22,9 +22,12 @@ vi.mock('react-router-dom', async () => {
   return { ...actual, useNavigate: () => navigate }
 })
 
-const useAppSpy = vi.hoisted(() => vi.fn())
-vi.mock('@/context/AppContext', () => ({
-  useApp: (...args: unknown[]) => useAppSpy(...args),
+const useCatalogSpy = vi.hoisted(() => vi.fn())
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: (...args: unknown[]) => useCatalogSpy(...args),
+}))
+vi.mock('@/context/SessionContext', () => ({
+  useSessions: (...args: unknown[]) => useCatalogSpy(...args),
 }))
 
 const agentAlpha: AgentInfo = { id: 'a1', name: 'alpha', model: 'm', status: 'running', task: 'shipping' }
@@ -38,7 +41,7 @@ const taskInProgress: TaskItem = {
 }
 
 function renderOPC(overrides: { agents?: AgentInfo[]; tasks?: TaskItem[] } = {}) {
-  useAppSpy.mockReturnValue({
+  useCatalogSpy.mockReturnValue({
     agents: overrides.agents ?? [agentAlpha, agentBeta],
     tasks: overrides.tasks ?? [taskInProgress],
     config: { provider: 'anthropic' },

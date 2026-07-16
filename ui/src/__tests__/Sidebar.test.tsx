@@ -71,8 +71,10 @@ describe('Sidebar', () => {
     expect(screen.getByText('General')).toBeInTheDocument()
     expect(screen.getByText('Theme')).toBeInTheDocument()
     expect(screen.getByText('Models')).toBeInTheDocument()
-    expect(screen.getByText('Usage & Billing')).toBeInTheDocument()
-    expect(screen.getByText('Advanced')).toBeInTheDocument()
+    expect(screen.getByText('Notifications')).toBeInTheDocument()
+    // Billing + Advanced are dev-only (P3-2): hidden in the default Simple mode.
+    expect(screen.queryByText('Usage & Billing')).not.toBeInTheDocument()
+    expect(screen.queryByText('Advanced')).not.toBeInTheDocument()
   })
 })
 
@@ -87,9 +89,14 @@ describe('Sidebar — Simple mode (default)', () => {
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
 
-  it('hides Extensions section in Simple mode', () => {
+  it('shows flat Extensions entry in Simple mode (no dev sub-links)', () => {
     render(wrap(<Sidebar />))
-    expect(screen.queryByText('Integrations')).not.toBeInTheDocument()
+    // P1-2: Simple mode surfaces a flat Extensions link to the Hub index so
+    // general users can reach it without dev mode. The dev-mode collapsible
+    // group (with Skills / My Agents / Connections sub-links) stays hidden.
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
+    expect(screen.queryByText('My Agents')).not.toBeInTheDocument()
   })
 
   it('hides OPC section in Simple mode', () => {
@@ -113,8 +120,8 @@ describe('Sidebar — Simple mode (default)', () => {
   it('toggles to Advanced mode on mode button click', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Advanced mode/ }))
-    // Now in Advanced mode — Integrations visible
-    expect(screen.getByText('Integrations')).toBeInTheDocument()
+    // Now in Advanced mode — Extensions visible
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -127,7 +134,7 @@ describe('Sidebar — Simple mode (default)', () => {
   it('remembers Advanced mode from localStorage on subsequent mount', () => {
     window.localStorage.setItem(SIDEBAR_MODE_KEY, 'dev')
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Integrations')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
     expect(screen.getByText('Advanced mode')).toBeInTheDocument()
   })
 
@@ -148,7 +155,7 @@ describe('Sidebar — Advanced mode', () => {
 
   it('renders Extensions section', () => {
     render(wrap(<Sidebar />))
-    expect(screen.getByText('Integrations')).toBeInTheDocument()
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
   })
 
   it('renders OPC section', () => {
@@ -168,20 +175,27 @@ describe('Sidebar — Advanced mode', () => {
     expect(screen.getByText('One Person Company')).toBeInTheDocument()
   })
 
+  it('shows dev-only Settings sub-links (Billing, Advanced) when expanded', () => {
+    render(wrap(<Sidebar />))
+    fireEvent.click(screen.getByText('Settings'))
+    expect(screen.getByText('Usage & Billing')).toBeInTheDocument()
+    expect(screen.getByText('Advanced')).toBeInTheDocument()
+  })
+
   it('collapses and expands Extensions section', () => {
     render(wrap(<Sidebar />))
-    // Integrations is open by default
+    // Extensions is open by default
     expect(screen.getByText('Skills')).toBeInTheDocument()
 
-    // Click Integrations button to collapse
-    const integrationsButtons = screen.getAllByText('Integrations')
+    // Click Extensions button to collapse
+    const integrationsButtons = screen.getAllByText('Extensions')
     fireEvent.click(integrationsButtons[0])
 
     // Sub-links should be gone
     expect(screen.queryByText('Skills')).not.toBeInTheDocument()
 
     // Click again to expand
-    fireEvent.click(screen.getByText('Integrations'))
+    fireEvent.click(screen.getByText('Extensions'))
     expect(screen.getByText('Skills')).toBeInTheDocument()
   })
 
@@ -193,7 +207,10 @@ describe('Sidebar — Advanced mode', () => {
   it('toggles back to Simple mode on click', () => {
     render(wrap(<Sidebar />))
     fireEvent.click(screen.getByRole('button', { name: /Switch to Simple mode/ }))
-    expect(screen.queryByText('Extensions')).not.toBeInTheDocument()
+    // P1-2: Simple mode still shows the flat Extensions link; what disappears
+    // is the dev-mode Extensions group and its sub-links (Skills).
+    expect(screen.getByText('Extensions')).toBeInTheDocument()
+    expect(screen.queryByText('Skills')).not.toBeInTheDocument()
     expect(screen.getByText('Simple mode')).toBeInTheDocument()
   })
 })

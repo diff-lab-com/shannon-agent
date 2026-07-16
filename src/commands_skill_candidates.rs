@@ -12,7 +12,7 @@
 //! Rejecting just removes the candidate.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
@@ -63,11 +63,21 @@ pub struct AgentAuthoredSkillEdits {
     pub procedure: Option<Vec<String>>,
 }
 
-fn candidates_file() -> Result<PathBuf, String> {
+/// Resolve the real `~/.shannon/desktop` directory (creating it). Production
+/// path only — tests drive the `_in` variants below with a tempdir so they
+/// never mutate the process-global `HOME` env var.
+pub(crate) fn desktop_dir() -> Result<PathBuf, String> {
     let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
     let dir = home.join(".shannon").join("desktop");
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
+    Ok(dir)
+}
+
+/// Candidates file path inside an explicit `desktop` dir (created if missing).
+/// Tests pass a tempdir here instead of mutating `HOME`.
+fn candidates_file_in(dir: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create {}: {e}", dir.display()))?;
     Ok(dir.join("skill-candidates.jsonl"))
 }
 
@@ -79,8 +89,8 @@ fn agent_authored_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn load_candidates() -> Result<Vec<SkillCandidate>, String> {
-    let path = candidates_file()?;
+fn load_candidates_in(dir: &Path) -> Result<Vec<SkillCandidate>, String> {
+    let path = candidates_file_in(dir)?;
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -100,8 +110,12 @@ fn load_candidates() -> Result<Vec<SkillCandidate>, String> {
     Ok(out)
 }
 
-fn save_candidates(candidates: &[SkillCandidate]) -> Result<(), String> {
-    let path = candidates_file()?;
+fn load_candidates() -> Result<Vec<SkillCandidate>, String> {
+    load_candidates_in(&desktop_dir()?)
+}
+
+fn save_candidates_in(dir: &Path, candidates: &[SkillCandidate]) -> Result<(), String> {
+    let path = candidates_file_in(dir)?;
     let mut out = String::new();
     for c in candidates {
         let line = serde_json::to_string(c).map_err(|e| format!("serialize: {e}"))?;
@@ -109,6 +123,10 @@ fn save_candidates(candidates: &[SkillCandidate]) -> Result<(), String> {
         out.push('\n');
     }
     std::fs::write(&path, out).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+fn save_candidates(candidates: &[SkillCandidate]) -> Result<(), String> {
+    save_candidates_in(&desktop_dir()?, candidates)
 }
 
 fn slugify(input: &str) -> String {
@@ -325,9 +343,18 @@ pub async fn list_agent_authored_skills() -> Result<Vec<AgentAuthoredSkill>, Str
 /// Append a new candidate (used by the C2 cron when it detects a pattern).
 /// Public so the automation module can call it without going through Tauri.
 pub fn append_candidate(candidate: SkillCandidate) -> Result<(), String> {
-    let mut current = load_candidates()?;
+    append_candidate_in(&desktop_dir()?, candidate)
+}
+
+/// `append_candidate` against an explicit `desktop` dir. Tests drive this with
+/// a tempdir so they never mutate the process-global `HOME` env var — that
+/// mutation raced with unrelated tests reading `dirs::home_dir()` on another
+/// thread (every append resolved `HOME`), which was the source of a recurring
+/// parallel-`--lib` flake in `skill_pattern_detection`.
+pub(crate) fn append_candidate_in(dir: &Path, candidate: SkillCandidate) -> Result<(), String> {
+    let mut current = load_candidates_in(dir)?;
     current.push(candidate);
-    save_candidates(&current)
+    save_candidates_in(dir, &current)
 }
 
 #[cfg(test)]
@@ -416,14 +443,16 @@ mod tests {
         }
     }
 
-    /// Verify candidates_file path resolves under $HOME/.shannon/desktop.
-    /// Skip if HOME isn't set (CI edge cases).
+    /// Verify the production candidates path resolves under
+    /// `$HOME/.shannon/desktop/skill-candidates.jsonl`. Skip if HOME isn't
+    /// set (CI edge cases).
     #[test]
     fn candidates_file_path_under_shannon() {
         if env::var_os("HOME").is_none() && env::var_os("USERPROFILE").is_none() {
             return;
         }
-        let path = candidates_file().expect("path");
+        let dir = desktop_dir().expect("desktop_dir");
+        let path = candidates_file_in(&dir).expect("candidates_file_in");
         let components: Vec<_> = path
             .components()
             .map(|c| c.as_os_str().to_string_lossy().to_string())
@@ -436,6 +465,36 @@ mod tests {
             path.ends_with("skill-candidates.jsonl"),
             "expected skill-candidates.jsonl suffix: {}",
             path.display()
+        );
+    }
+
+    /// `append_candidate_in` writes + round-trips through an explicit dir with
+    /// no `HOME` mutation. Regression cover for the parallel-test flake fixed
+    /// by the `_in` DI seam.
+    #[test]
+    fn append_candidate_in_writes_to_explicit_dir() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let candidate = SkillCandidate {
+            id: "di-1".into(),
+            detected_at: "2026-07-01T00:00:00Z".into(),
+            occurrence_count: 2,
+            example_session_ids: vec!["s1".into()],
+            proposed_name: "bash".into(),
+            proposed_trigger: "recurring".into(),
+            procedure: vec!["invoke bash".into()],
+            source_tool_calls: vec![],
+            refined: false,
+        };
+        append_candidate_in(dir.path(), candidate.clone()).expect("append");
+        let loaded = load_candidates_in(dir.path()).expect("load");
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "di-1");
+        // File lives inside the injected dir, nowhere near real ~/.shannon.
+        let file = dir.path().join("skill-candidates.jsonl");
+        assert!(
+            file.is_file(),
+            "expected candidates file at {}",
+            file.display()
         );
     }
 }

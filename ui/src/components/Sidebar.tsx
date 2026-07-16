@@ -4,7 +4,8 @@ import { useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '../lib/utils';
-import { useApp } from '@/context/AppContext';
+import { useSessions } from '@/context/SessionContext';
+import { useCatalog } from '@/context/CatalogContext';
 import type { SessionInfo } from '@/types';
 import { useSidebar } from './Layout';
 import { useTriageStats } from '@/hooks/scheduled-tasks';
@@ -30,6 +31,30 @@ export function useSidebarMode(): [SidebarMode, () => void] {
     })
   }, [])
   return [mode, toggle]
+}
+
+const getSubNavClass = ({ isActive }: { isActive: boolean }) =>
+  cn(
+    "flex items-center px-4 py-2 rounded-lg font-label-md text-[13px] transition-all duration-200",
+    isActive
+      ? "text-primary font-bold"
+      : "text-on-surface-variant hover:text-primary"
+  );
+
+// Collapsible sub-navigation link: a leading active/inactive dot + a label.
+// Replaces 9 identical render-prop NavLinks (extensions / opc / settings).
+function SubNavLink({ to, labelId }: { to: string; labelId: string }) {
+  const intl = useIntl()
+  return (
+    <NavLink to={to} className={getSubNavClass}>
+      {({ isActive }) => (
+        <>
+          <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")} />
+          {intl.formatMessage({ id: labelId })}
+        </>
+      )}
+    </NavLink>
+  )
 }
 
 interface SessionsSectionProps {
@@ -166,16 +191,24 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
   });
   const dragging = useRef(false);
   const location = useLocation();
-  const { status, createSession, sessions, currentSessionId, switchSession, createSessionInWorktree } = useApp();
+  const { createSession, sessions, currentSessionId, switchSession, createSessionInWorktree } = useSessions();
+  const { status } = useCatalog();
   const intl = useIntl();
   const { stats: triageStats, refresh: refreshTriageStats } = useTriageStats();
 
-  // Poll triage stats every 30 seconds
+  // Refresh triage stats every 30s, but only while the window is visible —
+  // no point polling a desktop app that's backgrounded. Resumes + immediately
+  // refreshes on focus. (Full event-driven refresh would need a backend
+  // triage-updated emission; see claudedocs/comprehensive-audit-2026-06-29.md P2-6.)
   useEffect(() => {
-    const interval = setInterval(() => {
-      refreshTriageStats();
-    }, 30000);
-    return () => clearInterval(interval);
+    if (typeof document === 'undefined') return;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const stop = () => { if (interval) { clearInterval(interval); interval = undefined; } };
+    const start = () => { stop(); refreshTriageStats(); interval = setInterval(refreshTriageStats, 30000); };
+    const onVisibility = () => { document.hidden ? stop() : start(); };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { stop(); document.removeEventListener('visibilitychange', onVisibility); };
   }, [refreshTriageStats]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -223,14 +256,6 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         : "text-on-surface-variant hover:bg-surface-container-low hover:text-primary hover:-translate-y-0.5"
     );
 
-  const getSubNavClass = ({ isActive }: { isActive: boolean }) =>
-    cn(
-      "flex items-center px-4 py-2 rounded-lg font-label-md text-[13px] transition-all duration-200",
-      isActive
-        ? "text-primary font-bold"
-        : "text-on-surface-variant hover:text-primary"
-    );
-
   const handleNavClick = () => { if (mobile) closeMobile() }
 
   return (
@@ -265,6 +290,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <span className="material-symbols-outlined icon-md">add</span>
         <span>{intl.formatMessage({ id: 'nav.newChat' })}</span>
       </Button>
+      {mode === 'dev' && (
       <Button
         variant="ghost"
         aria-label={intl.formatMessage({ id: 'sidebar.worktree.new.aria' })}
@@ -275,6 +301,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
         <span className="material-symbols-outlined icon-sm">account_tree</span>
         <span>{intl.formatMessage({ id: 'sidebar.worktree.new' })}</span>
       </Button>
+      )}
 
       {sessions.length > 0 && (
         <SessionsSection
@@ -302,6 +329,11 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
            <span className="flex-1">{intl.formatMessage({ id: 'nav.memory' })}</span>
         </NavLink>
 
+        <NavLink to="/usage" className={getNavClass} onClick={handleNavClick}>
+           <span className="material-symbols-outlined">monitoring</span>
+           <span className="flex-1">{intl.formatMessage({ id: 'nav.usage' })}</span>
+        </NavLink>
+
         {/* Triage full-page navigation */}
         <NavLink
           to="/triage"
@@ -317,6 +349,16 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
             </span>
           )}
         </NavLink>
+
+        {/* Simple mode: flat Extensions entry so普通用户 can reach the
+            Extensions Hub without switching to dev mode (dev mode keeps the
+            collapsible group below). Links to Featured — the hub's index tab. */}
+        {mode === 'simple' && (
+          <NavLink to="/extensions/featured" className={getNavClass} onClick={handleNavClick}>
+            <span className="material-symbols-outlined">extension</span>
+            <span className="flex-1">{intl.formatMessage({ id: 'nav.extensions' })}</span>
+          </NavLink>
+        )}
 
         {mode === 'dev' && (
         <>
@@ -335,30 +377,9 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
           {extensionsOpen && (
             <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.extensions.section.aria' })}>
-               <NavLink to="/extensions/skills" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.skills' })}
-                    </>
-                  )}
-               </NavLink>
-               <NavLink to="/extensions/agents" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.myAgents' })}
-                    </>
-                  )}
-               </NavLink>
-               <NavLink to="/extensions/datasources" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.dataSources' })}
-                    </>
-                  )}
-               </NavLink>
+               <SubNavLink to="/extensions/skills" labelId="nav.skills" />
+               <SubNavLink to="/extensions/agents" labelId="nav.myAgents" />
+               <SubNavLink to="/extensions/datasources" labelId="nav.dataSources" />
             </div>
           )}
         </div>
@@ -380,14 +401,7 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
           {opcOpen && (
             <div className="pl-4 pr-2 space-y-1 mt-1 transition-all">
-               <NavLink to="/opc" className={getSubNavClass}>
-                  {({ isActive }) => (
-                    <>
-                      <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                      {intl.formatMessage({ id: 'nav.onePersonCompany' })}
-                    </>
-                  )}
-               </NavLink>
+               <SubNavLink to="/opc" labelId="nav.onePersonCompany" />
             </div>
           )}
         </div>
@@ -429,54 +443,17 @@ export const Sidebar = memo(function Sidebar({ mobile }: { mobile?: boolean }) {
 
         {settingsOpen && (
           <div className="pl-4 pr-2 space-y-1 mt-1 transition-all" aria-label={intl.formatMessage({ id: 'nav.settings.section.aria' })}>
-             <NavLink to="/settings/general" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.general' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/theme" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.theme' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/models" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.models' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/billing" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.usageBilling' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/advanced" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.advanced' })}
-                  </>
-                )}
-             </NavLink>
-             <NavLink to="/settings/notifications" className={getSubNavClass}>
-                {({ isActive }) => (
-                  <>
-                    <span className={cn("w-1.5 h-1.5 rounded-full mr-3 shrink-0", isActive ? "bg-primary" : "bg-outline-variant")}></span>
-                    {intl.formatMessage({ id: 'nav.notifications' })}
-                  </>
-                )}
-             </NavLink>
+             <SubNavLink to="/settings/general" labelId="nav.general" />
+             <SubNavLink to="/settings/theme" labelId="nav.theme" />
+             <SubNavLink to="/settings/models" labelId="nav.models" />
+             {mode === 'dev' && (
+               <>
+                 <SubNavLink to="/settings/billing" labelId="nav.usageBilling" />
+                 <SubNavLink to="/settings/advanced" labelId="nav.advanced" />
+               </>
+             )}
+             <SubNavLink to="/settings/notifications" labelId="nav.notifications" />
+             <SubNavLink to="/settings/connections" labelId="nav.connections" />
           </div>
         )}
 

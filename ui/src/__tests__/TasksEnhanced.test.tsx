@@ -11,8 +11,8 @@ let mockContext: any = {
   refreshTasks: vi.fn(),
 }
 
-vi.mock('@/context/AppContext', () => ({
-  useApp: () => mockContext,
+vi.mock('@/context/CatalogContext', () => ({
+  useCatalog: () => mockContext,
 }))
 
 vi.mock('@/lib/tauri-api', async () => {
@@ -88,7 +88,8 @@ describe('Tasks Enhanced', () => {
   it('renders calendar with day names', () => {
     setContext({ tasks: [], backgroundTasks: [], agents: [] })
     renderTasks()
-    expect(screen.getByText('Mo')).toBeInTheDocument()
+    // Day headers come from Intl weekday 'short' (locale-aware); en → "Mon".
+    expect(screen.getByText('Mon')).toBeInTheDocument()
   })
 
   it('renders Task Completion card', () => {

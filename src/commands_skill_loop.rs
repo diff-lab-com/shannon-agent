@@ -264,6 +264,27 @@ fn count_pending_proposals(proposals_dir: &Path) -> Result<usize, String> {
         .count())
 }
 
+/// Save a generated proposal to disk and return the resulting pending count.
+/// Used by the auto-evaluation hook (`commands.rs::send_message`) so it emits
+/// the *real* proposal count instead of a hardcoded placeholder — after an
+/// actual proposal has been generated and persisted.
+pub(crate) fn save_proposal_and_count(proposal: &SkillProposal) -> Result<usize, String> {
+    save_proposal_and_count_in(&proposals_directory()?, proposal)
+}
+
+/// `save_proposal_and_count` against an explicit `proposals_dir`. Tests drive
+/// this with a tempdir so they never mutate the process-global `HOME` env var
+/// (the old `HomeGuard` form raced with unrelated tests reading
+/// `dirs::home_dir()` under parallel `--lib`).
+pub(crate) fn save_proposal_and_count_in(
+    proposals_dir: &Path,
+    proposal: &SkillProposal,
+) -> Result<usize, String> {
+    skill_loop::save_proposal(proposals_dir, proposal)
+        .map_err(|e| format!("Failed to save proposal: {e}"))?;
+    count_pending_proposals(proposals_dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +321,42 @@ mod tests {
                 _ => unreachable!(),
             },
             TaskOutcome::Success
+        );
+    }
+
+    fn pending_proposal() -> SkillProposal {
+        SkillProposal {
+            id: uuid::Uuid::new_v4(),
+            name: "Test Skill".into(),
+            slug: "test-skill".into(),
+            description: "desc".into(),
+            trigger_patterns: vec!["when X".into()],
+            example_workflow: "1. do Y".into(),
+            source_task_id: None,
+            created_at: chrono::Utc::now(),
+            status: ProposalStatus::Pending,
+            suggested_metadata: None,
+        }
+    }
+
+    #[test]
+    fn save_proposal_and_count_persists_and_counts() {
+        // Proposals land in an isolated tempdir — no HOME mutation. The old
+        // form used a HomeGuard that set HOME, which is process-global and
+        // raced with unrelated tests reading dirs::home_dir() under parallel
+        // --lib runs.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proposals_dir = tmp.path();
+
+        // first saved proposal => 1 pending
+        assert_eq!(
+            save_proposal_and_count_in(proposals_dir, &pending_proposal()).unwrap(),
+            1
+        );
+        // a second pending proposal => 2
+        assert_eq!(
+            save_proposal_and_count_in(proposals_dir, &pending_proposal()).unwrap(),
+            2
         );
     }
 }
