@@ -146,6 +146,9 @@ jobs:
     #    merges never wait on it.
     #  - baseline-rev (a git tag) replaces the default crates.io lookup because
     #    the `shannon-cli` crate name is squatted on crates.io.
+    #  - `shannon-api-protocol` is excluded because it was introduced after
+    #    the v0.5.5 baseline tag and so cannot be checked against that
+    #    baseline; bumping the baseline tag will re-include it.
     continue-on-error: true
     env:
       # Bump this when cutting a new baseline release. It feeds both
@@ -165,5 +168,5 @@ jobs:
           # cargo-semver-checks (>=0.48) requires (rustc >=1.91 for its rustdoc
           # format). The repo-wide 1.88 pin is intentionally not used here.
           feature-group: default-features
-          exclude: shannon-engine,shannon-stability-attr
+          exclude: shannon-engine,shannon-stability-attr,shannon-api-protocol
           verbose: true
