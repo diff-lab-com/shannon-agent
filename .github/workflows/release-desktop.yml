@@ -1,7 +1,7 @@
 # Desktop (Tauri) and Gateway (Bun) releases — matrix builds for the monorepo.
 # The Rust CLI release is handled by .github/workflows/release.yml (cargo-dist).
 # This file covers the two remaining products that cargo-dist does not understand:
-#   - shannon-desktop: Tauri v2 (Rust + React) → .deb / .rpm / .msi / .dmg
+#   - shannon-desktop: Tauri v2 (Rust + React) → .deb / .rpm / .exe / .dmg
 #   - shannon-gateway:  Bun-compiled TS binary  → linux/darwin x64+arm64
 #
 # Architecture (revised after v0.6.0):
@@ -65,7 +65,7 @@ jobs:
             ext: dmg
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            ext: msi
+            ext: nsis
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
