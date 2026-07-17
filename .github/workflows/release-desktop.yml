@@ -112,13 +112,28 @@ jobs:
         # that reliably picks up the space-containing filenames the
         # Tauri productName "Shannon Agent" produces
         # (e.g. "Shannon Agent_0.6.0_amd64.deb").
+        #
+        # Retry up to 30s for the bundle dir to appear — the Tauri
+        # build step prints 'Built application' and lists all bundle
+        # paths before every file has actually been flushed to disk,
+        # and the next step (this one) runs immediately. Without the
+        # retry, the verify step would sometimes see the dir missing
+        # even though Tauri is about to write into it.
         id: collect
         shell: bash
         run: |
           set -euo pipefail
           bundle_dir="target/${{ matrix.target }}/release/bundle/${{ matrix.ext_subdir }}"
+          for attempt in $(seq 1 30); do
+            if [ -d "$bundle_dir" ] && [ -n "$(ls -A "$bundle_dir" 2>/dev/null || true)" ]; then
+              break
+            fi
+            echo "waiting for $bundle_dir (attempt $attempt)..."
+            sleep 1
+          done
           if [ ! -d "$bundle_dir" ]; then
-            echo "::error::bundle dir missing: $bundle_dir"
+            echo "::error::bundle dir missing after 30s: $bundle_dir"
+            ls -la "target/${{ matrix.target }}/release/bundle/" 2>/dev/null || true
             exit 1
           fi
           # Use null-delimited find so filenames with newlines or spaces
@@ -126,7 +141,7 @@ jobs:
           # the upload-artifact `path` input.
           mapfile -d '' -t files < <(find "$bundle_dir" -mindepth 1 -maxdepth 1 -type f -print0)
           if [ "${#files[@]}" -eq 0 ]; then
-            echo "::error::no files in $bundle_dir"
+            echo "::error::no files in $bundle_dir after 30s"
             exit 1
           fi
           echo "uploading ${#files[@]} file(s) from $bundle_dir:"
