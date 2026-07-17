@@ -41,18 +41,23 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             ext: deb
+            bundle_glob: 'target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb'
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             ext: rpm
+            bundle_glob: 'target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm'
           - target: x86_64-apple-darwin
             os: macos-14
             ext: dmg
+            bundle_glob: 'target/x86_64-apple-darwin/release/bundle/dmg/*.dmg'
           - target: aarch64-apple-darwin
             os: macos-14
             ext: dmg
+            bundle_glob: 'target/aarch64-apple-darwin/release/bundle/dmg/*.dmg'
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             ext: msi
+            bundle_glob: 'target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -103,16 +108,17 @@ jobs:
           # Tauri-action writes the bundle to the workspace-root target dir
           # (not under desktop/target) when projectPath is the desktop
           # directory — it inherits cargo's workspace root for target/.
-          path: |
-            target/${{ matrix.target }}/release/bundle/deb/*.deb
-            target/${{ matrix.target }}/release/bundle/rpm/*.rpm
-            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            target/${{ matrix.target }}/release/bundle/msi/*.msi
-            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            target/${{ matrix.target }}/release/bundle/macos/*.app
-            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
-            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
-          if-no-files-found: warn
+          #
+          # `path` is restricted to the bundle subdir matching `matrix.ext`
+          # because actions/upload-artifact@v4 is all-or-nothing: if any
+          # glob in `path` matches zero files, the whole upload is skipped
+          # (even when other globs match). The previous path list combined
+          # deb/rpm/appimage/msi/dmg/macos globs, so jobs whose platform
+          # only produced one of those (e.g. macOS-only *.dmg) silently
+          # uploaded nothing. Each matrix entry now uses just the ext it
+          # produced.
+          path: ${{ matrix.bundle_glob }}
+          if-no-files-found: error
 
   # ────────────────────────── Gateway (Bun) ──────────────────────────
   gateway:
