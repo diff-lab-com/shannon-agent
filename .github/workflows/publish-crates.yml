@@ -1,0 +1,64 @@
+# Publish public crates to crates.io.
+# Currently only publishes `shannon-api-protocol` (the wire contract that
+# external clients may want to consume). The rest of the workspace is private
+# to the monorepo and must not be published.
+#
+# Required secret: CARGO_REGISTRY_TOKEN (https://crates.io/settings/tokens,
+# scope = "publish" for a single account or "publish-update" for a group).
+#
+# Triggered on `v*` tags (matches release.yml). The crate version is taken
+# from the workspace Cargo.toml and must equal the tag without the leading
+# `v` (e.g. tag `v0.6.0` → workspace version `0.6.0`).
+#
+# To do a dry run before tagging, run locally:
+#   cargo publish -p shannon-api-protocol --dry-run
+
+name: publish-crates
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: cargo publish shannon-api-protocol
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88
+
+      - name: Verify tag version matches crate version
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Strip leading 'v' (v0.6.0 → 0.6.0).
+          expected="${TAG#v}"
+          actual=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c "import json,sys; \
+              print(next(p['version'] for p in json.load(sys.stdin)['packages'] \
+                          if p['name']=='shannon-api-protocol'))")
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::tag ${TAG} (${expected}) does not match shannon-api-protocol version ${actual}"
+            echo "Bump crates/shannon-api-protocol version (or workspace version) and re-tag."
+            exit 1
+          fi
+          echo "tag ${TAG} matches shannon-api-protocol version ${actual}"
+
+      - name: Package dry run
+        run: cargo publish -p shannon-api-protocol --dry-run --no-verify --allow-dirty
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p shannon-api-protocol --no-verify
