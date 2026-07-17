@@ -137,10 +137,12 @@ jobs:
           # The productName "Shannon Agent" (with a space) ends up in the
           # bundle filename (e.g. "Shannon Agent_0.6.0_aarch64.dmg"), so a
           # plain `*.dmg` glob in upload-artifact's path sometimes misses
-          # it. Use the full bundle subdir as the path and let upload-artifact
-          # pick up the files inside. `if-no-files-found: error` then honestly
-          # fails the job when the bundle step produced nothing.
-          path: target/${{ matrix.target }}/release/bundle/${{ matrix.ext_subdir }}
+          # it. The bare subdir is also rejected by upload-artifact@v4 as
+          # 'no files found' even when files exist under it, so use
+          # `<subdir>/**` to enumerate every file inside the subdir.
+          # `if-no-files-found: error` then honestly fails the job when
+          # the bundle step produced nothing.
+          path: target/${{ matrix.target }}/release/bundle/${{ matrix.ext_subdir }}/**
           if-no-files-found: error
 
   # ────────────────────────── Gateway (Bun) ──────────────────────────
