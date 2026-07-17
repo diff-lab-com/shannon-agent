@@ -2791,9 +2791,24 @@ fn test_repl_route_routing_state() {
 
 // ---- /mcp command tests ----
 
-/// Helper: clean `.shannon/mcp.json` to ensure test isolation.
+/// Helper: redirect `.shannon/mcp.json` reads/writes to a per-test tempdir
+/// so parallel test binaries don't race on the cwd-relative shared file.
 fn clean_mcp_config() {
-    let _ = std::fs::remove_file(".shannon/mcp.json");
+    let dir = tempfile::tempdir().expect("create mcp tempdir");
+    let config_path = dir.path().join("mcp.json");
+    let approval_path = dir.path().join("mcp_approvals.json");
+    // `tempdir()` removes the directory on drop, but we leak it via `into_path`
+    // so the mcp code can keep reading after the helper returns.
+    let leaked: &'static std::path::Path = Box::leak(dir.into_path().into_boxed_path());
+    // SAFETY: each `#[test]` in this module runs the helper once before any
+    // mcp command touches the env vars. `serial_test` already serializes
+    // shannon-ui repl::tests, and other crates do not read these vars.
+    unsafe {
+        std::env::set_var("SHANNON_MCP_CONFIG", leaked.join("mcp.json"));
+        std::env::set_var("SHANNON_MCP_APPROVALS", leaked.join("mcp_approvals.json"));
+    }
+    let _ = std::fs::remove_file(&config_path);
+    let _ = std::fs::remove_file(&approval_path);
 }
 
 #[test]
