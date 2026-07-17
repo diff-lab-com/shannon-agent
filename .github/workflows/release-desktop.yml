@@ -1,8 +1,19 @@
 # Desktop (Tauri) and Gateway (Bun) releases — matrix builds for the monorepo.
 # The Rust CLI release is handled by .github/workflows/release.yml (cargo-dist).
 # This file covers the two remaining products that cargo-dist does not understand:
-#   - shannon-desktop: Tauri v2 (Rust + React) → .deb / .rpm / .AppImage / .msi / .dmg
+#   - shannon-desktop: Tauri v2 (Rust + React) → .deb / .rpm / .msi / .dmg
 #   - shannon-gateway:  Bun-compiled TS binary  → linux/darwin x64+arm64
+#
+# Architecture (revised after v0.6.0):
+#   v0.6.0 used L1's pattern of "build desktop → upload-artifact → attach job
+#   re-download + softprops upload". That triple-coupling produced 5 desktop
+#   matrix failures for v0.6.0 (the L2-fix chain tried to fix the surface
+#   symptom; the actual root cause was the verify step checking bundle
+#   subdirs the matrix entry never produced). v0.6.1 abandons this pattern:
+#   `tauri-action` is invoked with `tagName`+`releaseName`+`releaseDraft: true`
+#   so it directly uploads bundles as release assets, and `softprops/action-gh-release`
+#   does the same for the gateway bun binary. A final `publish-release` job
+#   flips the release from draft to published once all 9 matrix entries land.
 #
 # Triggered on `v*` tags (matches the cargo-dist pattern).
 
@@ -12,9 +23,7 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
-  # Allow manual re-runs of the release build (e.g. for aarch64 desktop
-  # after a self-hosted runner is added). The release-desktop.yml workflow
-  # does not tag on a non-tag push, so this trigger is local-only.
+  # Allow manual re-runs of the release build without re-tagging.
   workflow_dispatch:
 
 permissions:
@@ -26,13 +35,17 @@ env:
 jobs:
   # ────────────────────────── Desktop (Tauri) ──────────────────────────
   desktop:
-    name: shannon-desktop (${{ matrix.target }})
+    name: shannon-desktop (${{ matrix.target }}-${{ matrix.ext }})
     needs: []
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 covers both .deb and .rpm from the same runner.
+          # Linux x86_64 produces .deb and .rpm in separate matrix entries so
+          # each entry asks Tauri to produce exactly one bundle format — this
+          # avoids the v0.6.0 design where one matrix entry's multi-format
+          # build raced the verify step's "is this subdir ready" probe.
+          #
           # aarch64-unknown-linux-gnu is excluded: cross-compiling Tauri
           # (which depends on glib-sys / webkit2gtk-4.1) from an x86_64
           # runner requires an aarch64 sysroot that is not provided.
@@ -88,31 +101,35 @@ jobs:
         working-directory: desktop/ui
         run: pnpm install --frozen-lockfile
 
-      - name: Build & bundle Tauri app
+      # tauri-action@0 with tagName + releaseName + releaseDraft: true
+      # is the recommended mode for monorepo matrix releases:
+      #   - It uses `productName` from desktop/tauri.conf.json (which is
+      #     "Shannon Agent" with a space) and produces
+      #     "Shannon Agent_<version>_<arch>.<ext>" bundles. Spaces in
+      #     filenames are preserved on the action side.
+      #   - It uploads each bundle as a release asset named exactly as
+      #     Tauri wrote it, so callers don't have to hand-roll a glob.
+      #   - `releaseDraft: true` keeps the release in draft state until
+      #     the `publish-release` job below flips it. This avoids
+      #     publishing a half-baked release if any matrix entry fails.
+      #   - `prerelease: false` matches stable releases (matches cargo-dist).
+      #   - `releaseName: 'Shannon Agent <tag>'` is the user-facing title
+      #     shown on the GitHub release page.
+      # All 5 matrix entries run in parallel and share the same
+      # (tagName, releaseName); tauri-action's getOrCreateRelease is
+      # idempotent, so parallel upload is safe — GitHub serializes
+      # per-release asset additions server-side.
+      - name: Build & release Tauri bundle
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: desktop
-          args: --target ${{ matrix.target }}
-
-      - name: Upload desktop artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: shannon-desktop-${{ matrix.target }}-${{ matrix.ext }}
-          # Tauri-action writes the bundle to the workspace-root target dir
-          # (not under desktop/target) when projectPath is the desktop
-          # directory — it inherits cargo's workspace root for target/.
-          path: |
-            target/${{ matrix.target }}/release/bundle/deb/*.deb
-            target/${{ matrix.target }}/release/bundle/rpm/*.rpm
-            target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-            target/${{ matrix.target }}/release/bundle/msi/*.msi
-            target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-            target/${{ matrix.target }}/release/bundle/macos/*.app
-            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
-            target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
-          if-no-files-found: warn
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Shannon Agent ${{ github.ref_name }}'
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.ext }}
 
   # ────────────────────────── Gateway (Bun) ──────────────────────────
   gateway:
@@ -162,28 +179,51 @@ jobs:
 
       - name: Build binary
         working-directory: gateway
-        run: bun run build:binary
+        # Use `bun build --compile` directly (not `bun run build:binary`,
+        # which hard-codes --outfile=dist/shannon-gateway and so writes
+        # the same path for every matrix entry — a latent bug that
+        # surfaced only once a multi-target matrix actually ran).
+        # The artifact name comes from the matrix entry directly so
+        # it matches the upload step's `files:` path.
+        run: |
+          set -euo pipefail
+          bun build --compile \
+            --target="$TARGET" \
+            --outfile="dist/$ARTIFACT" \
+            src/index.ts
+          ls -la dist/
         env:
           TARGET: ${{ matrix.target }}
+          ARTIFACT: ${{ matrix.artifact }}
 
-      - name: Upload gateway binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: gateway/dist/${{ matrix.artifact }}
-
-  # ────────────────────────── Attach to release ──────────────────────────
-  attach:
-    name: attach artifacts to release
-    needs: [desktop, gateway]
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Publish to release
+      # Upload the gateway binary directly to the release via softprops,
+      # matching the tauri-action convention in the `desktop` job:
+      # `tag_name` ties us to the v* tag just pushed; `draft: true`
+      # defers "Latest release" pinning until publish-release runs.
+      # `fail_on_unmatched_files: false` keeps a single matrix failure
+      # from blocking the other 3 entries (which the deprecated
+      # v0.6.0 design relied on the explicit `attach` job to do).
+      - name: Upload gateway binary to release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          tag_name: ${{ github.ref_name }}
+          draft: true
+          files: gateway/dist/${{ matrix.artifact }}
           fail_on_unmatched_files: false
+
+  # ────────────────────────── Publish release ──────────────────────────
+  # Flips the release from draft to published once all 9 matrix entries
+  # (5 desktop + 4 gateway) have uploaded their assets. This is what
+  # unblocks `gh release view` from showing the release as Latest.
+  publish-release:
+    name: publish release ${{ github.ref_name }}
+    needs: [desktop, gateway]
+    if: success()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Flip release to published
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
