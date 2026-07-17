@@ -105,38 +105,48 @@ jobs:
       - name: Verify desktop bundle exists
         # Sanity check: print whatever ended up in the bundle dir so a
         # missing-platform failure surfaces clearly in the job log instead
-        # of only inside the upload-artifact step.
+        # of only inside the upload-artifact step. Also exports each
+        # file's path on its own line to $GITHUB_OUTPUT, which the next
+        # step feeds to upload-artifact's `path` input. Listing concrete
+        # paths (rather than a glob like `*` or `**`) is the only thing
+        # that reliably picks up the space-containing filenames the
+        # Tauri productName "Shannon Agent" produces
+        # (e.g. "Shannon Agent_0.6.0_amd64.deb").
+        id: collect
         shell: bash
         run: |
           set -euo pipefail
-          bundle_dir="target/${{ matrix.target }}/release/bundle"
-          echo "bundle dir contents for ${{ matrix.target }} (${{ matrix.ext }}):"
-          if [ -d "$bundle_dir" ]; then
-            find "$bundle_dir" -type f -print
-          else
-            echo "  (no bundle dir)"
+          bundle_dir="target/${{ matrix.target }}/release/bundle/${{ matrix.ext_subdir }}"
+          if [ ! -d "$bundle_dir" ]; then
+            echo "::error::bundle dir missing: $bundle_dir"
+            exit 1
           fi
+          # Use null-delimited find so filenames with newlines or spaces
+          # survive intact, then transform to a multiline string for
+          # the upload-artifact `path` input.
+          mapfile -d '' -t files < <(find "$bundle_dir" -mindepth 1 -maxdepth 1 -type f -print0)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no files in $bundle_dir"
+            exit 1
+          fi
+          echo "uploading ${#files[@]} file(s) from $bundle_dir:"
+          printf '  %s\n' "${files[@]}"
+          # Multiline output for `path` input.
+          {
+            echo "files<<EOF"
+            printf '%s\n' "${files[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload desktop artifact
         uses: actions/upload-artifact@v4
         with:
           name: shannon-desktop-${{ matrix.target }}-${{ matrix.ext }}
-          # Tauri-action writes the bundle to the workspace-root target dir
-          # (not under desktop/target) when projectPath is the desktop
-          # directory — it inherits cargo's workspace root for target/.
-          #
-          # Use `*` to enumerate files in the bundle subdir. The
-          # productName "Shannon Agent" produces filenames with spaces
-          # (e.g. "Shannon Agent_0.6.0_aarch64.dmg"); `*` matches those
-          # because shell globbing handles embedded spaces, and
-          # upload-artifact@4's path parser also handles them.
-          #
-          # If the bare-subdir `**` approach is ever needed in the
-          # future, prefer passing a list of concrete paths from a
-          # previous `find` step, since upload-artifact@4 rejects `**`
-          # in the path glob over directories with space-containing
-          # files.
-          path: target/${{ matrix.target }}/release/bundle/${{ matrix.ext_subdir }}/*
+          # Path is the multiline list of concrete file paths collected
+          # by the previous step. Glob patterns (`*`, `**`, bare dir)
+          # all fail for the space-containing filenames that Tauri's
+          # productName produces, so we feed exact paths instead.
+          path: ${{ steps.collect.outputs.files }}
           if-no-files-found: error
 
   # ────────────────────────── Gateway (Bun) ──────────────────────────
