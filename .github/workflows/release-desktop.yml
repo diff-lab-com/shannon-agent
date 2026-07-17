@@ -125,24 +125,18 @@ jobs:
           # (not under desktop/target) when projectPath is the desktop
           # directory — it inherits cargo's workspace root for target/.
           #
-          # `path` is restricted to the bundle subdir matching `matrix.ext`
-          # because actions/upload-artifact@v4 is all-or-nothing: if any
-          # glob in `path` matches zero files, the whole upload is skipped
-          # (even when other globs match). The previous path list combined
-          # deb/rpm/appimage/msi/dmg/macos globs, so jobs whose platform
-          # only produced one of those (e.g. macOS-only *.dmg) silently
-          # uploaded nothing. Each matrix entry now uses just the ext it
-          # produced.
+          # Use `*` to enumerate files in the bundle subdir. The
+          # productName "Shannon Agent" produces filenames with spaces
+          # (e.g. "Shannon Agent_0.6.0_aarch64.dmg"); `*` matches those
+          # because shell globbing handles embedded spaces, and
+          # upload-artifact@4's path parser also handles them.
           #
-          # The productName "Shannon Agent" (with a space) ends up in the
-          # bundle filename (e.g. "Shannon Agent_0.6.0_aarch64.dmg"), so a
-          # plain `*.dmg` glob in upload-artifact's path sometimes misses
-          # it. The bare subdir is also rejected by upload-artifact@v4 as
-          # 'no files found' even when files exist under it, so use
-          # `<subdir>/**` to enumerate every file inside the subdir.
-          # `if-no-files-found: error` then honestly fails the job when
-          # the bundle step produced nothing.
-          path: target/${{ matrix.target }}/release/bundle/${{ matrix.ext_subdir }}/**
+          # If the bare-subdir `**` approach is ever needed in the
+          # future, prefer passing a list of concrete paths from a
+          # previous `find` step, since upload-artifact@4 rejects `**`
+          # in the path glob over directories with space-containing
+          # files.
+          path: target/${{ matrix.target }}/release/bundle/${{ matrix.ext_subdir }}/*
           if-no-files-found: error
 
   # ────────────────────────── Gateway (Bun) ──────────────────────────
