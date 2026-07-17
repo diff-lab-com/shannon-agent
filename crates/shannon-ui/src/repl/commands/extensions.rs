@@ -23,7 +23,17 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
     }
 
     fn config_path() -> PathBuf {
+        if let Ok(p) = std::env::var("SHANNON_MCP_CONFIG") {
+            return PathBuf::from(p);
+        }
         PathBuf::from(".shannon/mcp.json")
+    }
+
+    fn approval_path() -> PathBuf {
+        if let Ok(p) = std::env::var("SHANNON_MCP_APPROVALS") {
+            return PathBuf::from(p);
+        }
+        PathBuf::from(".shannon/mcp_approvals.json")
     }
 
     fn load_config() -> McpConfig {
@@ -255,7 +265,7 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                     .add_message(ChatRole::System, "Usage: /mcp approve <name>".to_string());
                 return Ok(());
             }
-            let approval_path = PathBuf::from(".shannon/mcp_approvals.json");
+            let approval_path = approval_path();
             let mut mgr = shannon_core::McpApprovalManager::with_defaults();
             let _ = mgr.load_from_file(&approval_path);
             mgr.approve_server(name);
@@ -278,7 +288,7 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
                     .add_message(ChatRole::System, "Usage: /mcp deny <name>".to_string());
                 return Ok(());
             }
-            let approval_path = PathBuf::from(".shannon/mcp_approvals.json");
+            let approval_path = approval_path();
             let mut mgr = shannon_core::McpApprovalManager::with_defaults();
             let _ = mgr.load_from_file(&approval_path);
             mgr.deny_server(name);
@@ -295,7 +305,7 @@ pub(crate) fn handle_mcp(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
         "reset-approvals" => {
-            let approval_path = PathBuf::from(".shannon/mcp_approvals.json");
+            let approval_path = approval_path();
             match shannon_core::McpApprovalManager::reset_persisted(&approval_path) {
                 Ok(()) => {
                     repl.chat.add_message(ChatRole::System, "All approval decisions cleared. Servers will be re-evaluated on next startup.".to_string());

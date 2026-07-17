@@ -12,6 +12,10 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+*'
+  # Allow manual re-runs of the release build (e.g. for aarch64 desktop
+  # after a self-hosted runner is added). The release-desktop.yml workflow
+  # does not tag on a non-tag push, so this trigger is local-only.
+  workflow_dispatch:
 
 permissions:
   contents: write
