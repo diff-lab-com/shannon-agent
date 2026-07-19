@@ -113,4 +113,4 @@ release-prep version:
     git add Cargo.toml desktop/Cargo.toml desktop/tauri.conf.json gateway/package.json
     git commit -m "chore(release): v{{version}}"
     git tag v{{version}}
-    @echo "✅ tagged v{{version}} — run: git push && git push origin v{{version}}"
+    echo "✅ tagged v{{version}} — run: git push origin dev && git push origin v{{version}}"
