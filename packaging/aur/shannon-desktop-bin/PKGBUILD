@@ -1,0 +1,35 @@
+# Maintainer: Shannon Agent <packaging@shannon.ai>
+# NOTE: -bin PKGBUILD — downloads the prebuilt GitHub release asset, does NOT build.
+# Not yet wired into CI (post-release automation, see RELEASE-INSTALL-PLAN.md §7).
+# Replace the pkgver placeholder and sha256 at release time.
+
+pkgname=shannon-desktop-bin
+_pkgver=0.7.0  # REPLACE AT RELEASE TIME — CI fills the real version.
+pkgver=${_pkgver}
+pkgrel=1
+pkgdesc="Desktop app for the Shannon Agent (prebuilt binary)"
+arch=('x86_64')
+url="https://github.com/shannon-agent/shannon-agent"
+license=('Apache-2.0')
+depends=('gtk3' 'webkit2gtk' 'libsoup')
+provides=('shannon-desktop')
+conflicts=('shannon-desktop')
+options=('!strip')
+source=("$pkgname-$pkgver::https://github.com/shannon-agent/shannon-agent/releases/download/v$pkgver/shannon-desktop_${pkgver}_amd64.deb")
+sha256sums=('SKIP')  # REPLACE AT RELEASE TIME with the real sha256 of the .deb asset.
+
+pkgver() {
+  echo "$_pkgver"
+}
+
+package() {
+  # Extract the data tarball from the .deb and install into $pkgdir.
+  bsdtar -xf "$srcdir/$pkgname-$pkgver.data.tar.zst" -C "$pkgdir" 2>/dev/null || \
+  bsdtar -xf "$srcdir/$pkgname-$pkgver.data.tar.xz" -C "$pkgdir"
+
+  # Ensure the desktop binary is executable and on the PATH.
+  install -d "$pkgdir/usr/bin"
+  if [ -f "$pkgdir/opt/shannon-desktop/shannon-desktop" ]; then
+    ln -s /opt/shannon-desktop/shannon-desktop "$pkgdir/usr/bin/shannon-desktop"
+  fi
+}
