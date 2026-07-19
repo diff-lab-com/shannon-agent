@@ -19,7 +19,7 @@ members = [
 # gateway/ is TS, intentionally not a Cargo member.
 
 [workspace.package]
-version = "0.7.0-rc2"           # unified release version (one tag = all three products)
+version = "0.7.0-rc3"           # unified release version (one tag = all three products)
 edition = "2024"
 rust-version = "1.88"
 authors = ["Shannon Contributors"]
@@ -99,14 +99,14 @@ syn = "2"
 # In-tree: compiles from local source. Publishable: version satisfies crates.io.
 # Desktop uses these via `<name>.workspace = true` (no git, no SSH, no rev, no patch).
 # =============================================================================
-shannon-core   = { path = "crates/shannon-core",   version = "0.7.0-rc2" }
-shannon-engine = { path = "crates/shannon-engine", version = "0.7.0-rc2" }
-shannon-types  = { path = "crates/shannon-types",  version = "0.7.0-rc2" }
-shannon-tools  = { path = "crates/shannon-tools",  version = "0.7.0-rc2" }
-shannon-mcp    = { path = "crates/shannon-mcp",    version = "0.7.0-rc2" }
-shannon-skills = { path = "crates/shannon-skills", version = "0.7.0-rc2" }
-shannon-agents = { path = "crates/shannon-agents", version = "0.7.0-rc2" }
-shannon-api-protocol = { path = "crates/shannon-api-protocol", version = "0.7.0-rc2" }
+shannon-core   = { path = "crates/shannon-core",   version = "0.7.0-rc3" }
+shannon-engine = { path = "crates/shannon-engine", version = "0.7.0-rc3" }
+shannon-types  = { path = "crates/shannon-types",  version = "0.7.0-rc3" }
+shannon-tools  = { path = "crates/shannon-tools",  version = "0.7.0-rc3" }
+shannon-mcp    = { path = "crates/shannon-mcp",    version = "0.7.0-rc3" }
+shannon-skills = { path = "crates/shannon-skills", version = "0.7.0-rc3" }
+shannon-agents = { path = "crates/shannon-agents", version = "0.7.0-rc3" }
+shannon-api-protocol = { path = "crates/shannon-api-protocol", version = "0.7.0-rc3" }
 shannon-stability-attr = { path = "crates/shannon-stability-attr" }          # proc-macro: no version
 
 # ---- Desktop-specific (declared at workspace level so both roots agree) ----
