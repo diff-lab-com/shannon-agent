@@ -2423,14 +2423,11 @@ fn find_desktop_binary() -> Option<std::path::PathBuf> {
         dirs::home_dir()
             .map(|h| h.join(".local").join("bin").join("shannon-desktop"))
             .unwrap_or_default(),
-        std::path::PathBuf::from("/Applications/Shannon Desktop.app/Contents/MacOS/shannon-desktop"),
+        std::path::PathBuf::from(
+            "/Applications/Shannon Desktop.app/Contents/MacOS/shannon-desktop",
+        ),
     ];
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    candidates.into_iter().find(|candidate| candidate.is_file())
 }
 
 /// Probe only the system PATH for `shannon-desktop` and return its path if found.
@@ -2539,9 +2536,9 @@ fn find_gateway_binary() -> Option<std::path::PathBuf> {
 fn run_gateway_command(command: GatewaySubcommand) -> Result<()> {
     let binary = match find_gateway_binary() {
         Some(b) => b,
-        None => anyhow::bail!(
-            "shannon-gateway not found on PATH. Install the gateway service first."
-        ),
+        None => {
+            anyhow::bail!("shannon-gateway not found on PATH. Install the gateway service first.")
+        }
     };
 
     let sub: &str = match command {
@@ -2583,7 +2580,14 @@ fn current_version() -> String {
 fn version_is_newer(current: &str, latest: &str) -> bool {
     fn parse(v: &str) -> Vec<u64> {
         v.split('.')
-            .map(|p| p.trim_start_matches('v').split(|c: char| !c.is_ascii_digit()).next().unwrap_or("").parse::<u64>().unwrap_or(0))
+            .map(|p| {
+                p.trim_start_matches('v')
+                    .split(|c: char| !c.is_ascii_digit())
+                    .next()
+                    .unwrap_or("")
+                    .parse::<u64>()
+                    .unwrap_or(0)
+            })
             .collect()
     }
     let a = parse(current);
@@ -2606,7 +2610,9 @@ fn version_is_newer(current: &str, latest: &str) -> bool {
 fn run_update_command() -> Result<()> {
     let current = current_version();
     println!("Current version: {current}");
-    println!("Checking for updates at https://api.github.com/repos/shannon-agent/shannon-agent/releases/latest ...");
+    println!(
+        "Checking for updates at https://api.github.com/repos/shannon-agent/shannon-agent/releases/latest ..."
+    );
 
     // Best-effort: shell out to `curl` (already referenced by the install flow).
     let out = std::process::Command::new("curl")
@@ -2627,7 +2633,9 @@ fn run_update_command() -> Result<()> {
                 "WARN: GitHub request failed (exit {}).",
                 o.status.code().unwrap_or(-1)
             );
-            println!("Visit https://github.com/shannon-agent/shannon-agent/releases to update manually.");
+            println!(
+                "Visit https://github.com/shannon-agent/shannon-agent/releases to update manually."
+            );
             return Ok(());
         }
         Err(e) => {
@@ -2663,7 +2671,9 @@ fn run_update_command() -> Result<()> {
         println!("To upgrade, run:");
         println!("    curl -fsSL https://get.shannon.ai/install.sh | sh");
         println!();
-        println!("Or download from: https://github.com/shannon-agent/shannon-agent/releases/{latest}");
+        println!(
+            "Or download from: https://github.com/shannon-agent/shannon-agent/releases/{latest}"
+        );
     } else {
         println!("You are already on the latest version.");
     }
@@ -3207,7 +3217,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         }
         Some(Commands::Doctor) => {
             run_doctor_command()?;
-        },
+        }
     }
 
     Ok(())
