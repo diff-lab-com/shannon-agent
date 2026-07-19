@@ -90,15 +90,27 @@ kpi-clean-build:
 #   4) `shannon --version` display value is tied to the workspace version
 #      automatically via clap::crate_version!() in shannon-cli (see task C).
 release-prep version:
-    # 1) cargo workspace version
-    sed -i 's/^version = ".*"/version = "{{version}}"/' Cargo.toml
-    # 2) Tauri (separate hardcoded version)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Derive the CURRENT workspace version — every release-version source that
+    # tracks it is bumped from this value, so they stay in lockstep.
+    OLD="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+    echo "release-prep: ${OLD} -> {{version}}"
+    # 1) root Cargo.toml — BOTH workspace.package.version AND every
+    #    [workspace.dependencies] internal path-dep pin. These pins MUST track
+    #    the workspace version: a stale `version = "<OLD>"` makes the requirement
+    #    `^<OLD>` fail to resolve against the newly-versioned crate (this broke
+    #    v0.7.0-rc1: pins stayed 0.6.0 while the crate bumped to rc1).
+    sed -i "s/version = \"${OLD}\"/version = \"{{version}}\"/g" Cargo.toml
+    # 2) desktop has its OWN [package] version (NOT workspace-inherited)
+    sed -i "s/^version = \"${OLD}\"/version = \"{{version}}\"/" desktop/Cargo.toml
+    # 3) Tauri (separate hardcoded version; Tauri does not read the cargo workspace)
     sed -i 's/^    "version": ".*"/    "version": "{{version}}"/' desktop/tauri.conf.json
-    # 3) gateway
+    # 4) gateway (independent TS package)
     sed -i 's/^  "version": ".*"/  "version": "{{version}}"/' gateway/package.json
-    # 4) clap version attr is replaced by clap::crate_version!() in shannon-cli
-    #    (done in task C) — no sed needed here.
-    git add Cargo.toml desktop/tauri.conf.json gateway/package.json
+    # `shannon --version` is tied to the workspace version automatically via
+    # env!("CARGO_PKG_VERSION") in shannon-cli (version.workspace=true) — no sed.
+    git add Cargo.toml desktop/Cargo.toml desktop/tauri.conf.json gateway/package.json
     git commit -m "chore(release): v{{version}}"
     git tag v{{version}}
     @echo "✅ tagged v{{version}} — run: git push && git push origin v{{version}}"
