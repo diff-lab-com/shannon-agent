@@ -373,16 +373,25 @@ jobs:
             | sed 's| \./| |' > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}  # rc/beta/alpha (dash) -> prerelease
-          files: |
-            scripts/install.sh
-            scripts/install.ps1
-            release-assets/SHA256SUMS
+      - name: Attach installers + checksum, then publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          REPO="$GITHUB_REPOSITORY"
+          # Attach the unified installer scripts + checksum manifest to the
+          # existing draft (created by create-release).
+          gh release upload "$TAG" \
+            scripts/install.sh scripts/install.ps1 release-assets/SHA256SUMS \
+            --clobber --repo "$REPO"
+          # Flip the existing draft -> published, IN PLACE. softprops
+          # action-gh-release@v2 with draft:false instead CREATES a second
+          # published release and then collides with already_exists (this
+          # aborted both rc2 and rc4). `gh release edit` targets the tagged
+          # release directly — no find-or-create, no duplicate. The prerelease
+          # flag is already set by create-release and preserved by edit.
+          gh release edit "$TAG" --draft=false --repo "$REPO"
+          echo "published $TAG"
 
       - name: Upload to Cloudflare R2
         if: vars.R2_BUCKET != ''
