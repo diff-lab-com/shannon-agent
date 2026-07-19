@@ -1,6 +1,6 @@
 [package]
 name = "shannon-desktop"
-version = "0.7.0-rc3"
+version = "0.7.0-rc4"
 edition = "2024"
 rust-version = "1.88"
 description = "Shannon — your AI workspace (Tauri desktop app)"
