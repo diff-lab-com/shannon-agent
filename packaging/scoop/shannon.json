@@ -1,0 +1,31 @@
+{
+  "version": "0.7.0",
+  "description": "Shannon Agent CLI — unified command for the Shannon agent (REPL, query, serve, desktop, gateway).",
+  "homepage": "https://github.com/shannon-agent/shannon-agent",
+  "license": "Apache-2.0",
+  "notes": "Installs the shannon CLI. Desktop and gateway components are available as separate packages in the same release.",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/shannon-agent/shannon-agent/releases/download/v0.7.0/shannon-x86_64-pc-windows-msvc.zip",
+      "hash": "REPLACE_AT_RELEASE_TIME_WITH_REAL_SHA256",
+      "extract_dir": ""
+    }
+  },
+  "bin": [
+    "shannon.exe"
+  ],
+  "depends": [],
+  "checkver": {
+    "github": "https://github.com/shannon-agent/shannon-agent"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/shannon-agent/shannon-agent/releases/download/v$version/shannon-x86_64-pc-windows-msvc.zip",
+        "hash": {
+          "url": "$baseurl/SHA256SUMS"
+        }
+      }
+    }
+  }
+}

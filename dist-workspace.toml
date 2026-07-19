@@ -7,6 +7,12 @@ members = ["cargo:."]
 cargo-dist-version = "0.32.0"
 # CI backends to support
 ci = "github"
+# Do NOT create our own GitHub release: release.yml is the single orchestrator
+# that builds shannon (CLI) + desktop + gateway and creates ONE release.
+# With release=false, cargo-dist only builds + uploads artifacts into the
+# existing tag's release (via `dist host --steps=upload`), avoiding the
+# old dual-release collision (Release vs release-desktop-gateway).
+release = false
 # The installers to generate for each app
 installers = ["shell", "powershell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax).
