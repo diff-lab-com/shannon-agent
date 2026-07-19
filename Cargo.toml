@@ -19,7 +19,7 @@ members = [
 # gateway/ is TS, intentionally not a Cargo member.
 
 [workspace.package]
-version = "0.6.0"           # unified release version (one tag = all three products)
+version = "0.7.0-rc1"           # unified release version (one tag = all three products)
 edition = "2024"
 rust-version = "1.88"
 authors = ["Shannon Contributors"]
