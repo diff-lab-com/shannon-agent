@@ -1,0 +1,26 @@
+# Maintainer: Shannon Agent <packaging@shannon.ai>
+# NOTE: -bin PKGBUILD — downloads the prebuilt GitHub release asset, does NOT build.
+# Not yet wired into CI (post-release automation, see RELEASE-INSTALL-PLAN.md §7).
+# Replace the pkgver placeholder and sha256 at release time.
+
+pkgname=shannon-gateway-bin
+_pkgver=0.7.0  # REPLACE AT RELEASE TIME — CI fills the real version.
+pkgver=${_pkgver}
+pkgrel=1
+pkgdesc="Gateway service for the Shannon Agent (prebuilt binary)"
+arch=('x86_64')
+url="https://github.com/shannon-agent/shannon-agent"
+license=('Apache-2.0')
+provides=('shannon-gateway')
+conflicts=('shannon-gateway')
+options=('!strip')
+source=("$pkgname-$pkgver::https://github.com/shannon-agent/shannon-agent/releases/download/v$pkgver/shannon-gateway-linux-x64")
+sha256sums=('SKIP')  # REPLACE AT RELEASE TIME with the real sha256 of the gateway binary.
+
+pkgver() {
+  echo "$_pkgver"
+}
+
+package() {
+  install -Dm755 "$srcdir/$pkgname-$pkgver" "$pkgdir/usr/bin/shannon-gateway"
+}

@@ -1,6 +1,6 @@
 {
     "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
-    "productName": "Shannon Agent",
+    "productName": "shannon-desktop",
     "version": "0.6.0",
     "identifier": "com.shannon-agent.desktop",
     "build": {
