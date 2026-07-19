@@ -78,3 +78,27 @@ ci: fmt lint deny gen-protocol test
 # Verify a clean-clone desktop build (the Phase 2 KPI), runnable anytime.
 kpi-clean-build:
     cargo build -p shannon-desktop
+
+# ---------- Release prep: bump every version source, commit, tag ----------
+# Usage: just release-prep 0.7.0
+#   then: git push && git push origin v0.7.0   (triggers release.yml)
+# Bumps the 4 independent version sources so cargo-dist + tauri + gateway
+# + `shannon --version` all agree with the tag:
+#   1) Cargo.toml workspace.package.version  (crates with version.workspace=true inherit)
+#   2) desktop/tauri.conf.json  "version"  (Tauri does NOT read the cargo workspace)
+#   3) gateway/package.json        "version"
+#   4) `shannon --version` display value is tied to the workspace version
+#      automatically via clap::crate_version!() in shannon-cli (see task C).
+release-prep version:
+    # 1) cargo workspace version
+    sed -i 's/^version = ".*"/version = "{{version}}"/' Cargo.toml
+    # 2) Tauri (separate hardcoded version)
+    sed -i 's/^    "version": ".*"/    "version": "{{version}}"/' desktop/tauri.conf.json
+    # 3) gateway
+    sed -i 's/^  "version": ".*"/  "version": "{{version}}"/' gateway/package.json
+    # 4) clap version attr is replaced by clap::crate_version!() in shannon-cli
+    #    (done in task C) — no sed needed here.
+    git add Cargo.toml desktop/tauri.conf.json gateway/package.json
+    git commit -m "chore(release): v{{version}}"
+    git tag v{{version}}
+    @echo "✅ tagged v{{version}} — run: git push && git push origin v{{version}}"

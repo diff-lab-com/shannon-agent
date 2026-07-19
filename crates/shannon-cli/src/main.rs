@@ -321,7 +321,7 @@ fn load_toml_config() -> ShannonTomlConfig {
 #[derive(Parser, Debug)]
 #[command(name = "shannon")]
 #[command(author = "Shannon Code Contributors")]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "AI-powered code assistant in Rust", long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
@@ -563,6 +563,58 @@ enum Commands {
         #[command(subcommand)]
         command: McpSubcommand,
     },
+
+    /// Launch the Shannon desktop application (Tauri GUI)
+    Desktop {
+        /// Do not attempt to build the desktop app if the binary isn't found.
+        #[arg(long)]
+        no_build: bool,
+
+        /// Run in the foreground and wait for the desktop app to exit.
+        #[arg(long)]
+        foreground: bool,
+    },
+
+    /// Delegate to the external `shannon-gateway` service manager
+    Gateway {
+        #[command(subcommand)]
+        command: GatewaySubcommand,
+    },
+
+    /// Self-update: check GitHub for a newer release and print upgrade steps.
+    Update,
+
+    /// Run diagnostics: check toolchain, ports, and services.
+    Doctor,
+}
+
+/// Subcommands for `shannon gateway` (delegated to the external binary).
+///
+/// Variants are spawned verbatim (kebab-case) on `shannon-gateway`'s PATH.
+#[derive(Subcommand, Debug)]
+enum GatewaySubcommand {
+    /// Run the gateway in the foreground.
+    Run,
+    /// Start the gateway as a background service.
+    Start,
+    /// Stop the background gateway service.
+    Stop,
+    /// Restart the background gateway service.
+    Restart,
+    /// Show the gateway service status.
+    Status,
+    /// List registered gateway routes/endpoints.
+    List,
+    /// Install the gateway as a system service.
+    Install,
+    /// Uninstall the gateway system service.
+    Uninstall,
+    /// Set up gateway configuration and data directory.
+    Setup,
+    /// Migrate a legacy gateway configuration.
+    MigrateLegacy,
+    /// Enroll this device with the gateway control plane.
+    Enroll,
 }
 
 /// Subcommands for `shannon mcp`.
@@ -2359,6 +2411,319 @@ fn handle_url_scheme_registration(register: bool, unregister: bool) -> Result<()
     Ok(())
 }
 
+/// Resolve the path to the `shannon-desktop` binary.
+///
+/// Order: (a) PATH `shannon-desktop`, (b) known install dirs, (c) None.
+fn find_desktop_binary() -> Option<std::path::PathBuf> {
+    if let Ok(path) = which_desktop_on_path() {
+        return Some(path);
+    }
+    let candidates = [
+        std::path::PathBuf::from("/usr/local/bin/shannon-desktop"),
+        dirs::home_dir()
+            .map(|h| h.join(".local").join("bin").join("shannon-desktop"))
+            .unwrap_or_default(),
+        std::path::PathBuf::from("/Applications/Shannon Desktop.app/Contents/MacOS/shannon-desktop"),
+    ];
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Probe only the system PATH for `shannon-desktop` and return its path if found.
+fn which_desktop_on_path() -> Result<std::path::PathBuf, ()> {
+    let out = std::process::Command::new("command")
+        .args(["-v", "shannon-desktop"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() {
+                Err(())
+            } else {
+                Ok(std::path::PathBuf::from(s))
+            }
+        }
+        _ => Err(()),
+    }
+}
+
+/// Launch the Shannon desktop application.
+///
+/// Best-effort: resolves the binary, optionally builds it via `cargo tauri
+/// build`, then spawns it. If `foreground` is false the process is detached
+/// (spawn only); otherwise we wait for it to exit.
+fn run_desktop_command(no_build: bool, foreground: bool) -> Result<()> {
+    let binary = match find_desktop_binary() {
+        Some(b) => b,
+        None => {
+            if no_build {
+                anyhow::bail!(
+                    "shannon-desktop not found on PATH or in known install dirs. \
+                     Install it or run without --no-build to build it from desktop/."
+                );
+            }
+            // Try to build the desktop app from the workspace `desktop/` dir.
+            let desktop_dir = std::path::PathBuf::from("desktop");
+            eprintln!("shannon-desktop not found; building via `cargo tauri build`...");
+            let status = std::process::Command::new("cargo")
+                .arg("tauri")
+                .arg("build")
+                .current_dir(&desktop_dir)
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    // Search known dirs again after a successful build.
+                    match find_desktop_binary() {
+                        Some(b) => b,
+                        None => anyhow::bail!(
+                            "Built the desktop app but could not locate the shannon-desktop binary."
+                        ),
+                    }
+                }
+                Ok(s) => anyhow::bail!("`cargo tauri build` failed (exit status: {s})."),
+                Err(e) => anyhow::bail!("Failed to run `cargo tauri build`: {e}"),
+            }
+        }
+    };
+
+    eprintln!("Launching Shannon Desktop: {}", binary.display());
+    let mut cmd = std::process::Command::new(&binary);
+    if !foreground {
+        // Detach: spawn without waiting and report success immediately.
+        match cmd.spawn() {
+            Ok(_child) => {
+                println!("Shannon Desktop launched (detached).");
+                return Ok(());
+            }
+            Err(e) => anyhow::bail!("Failed to launch Shannon Desktop: {e}"),
+        }
+    }
+
+    // Foreground: wait for the desktop app to exit and mirror its exit code.
+    match cmd.status() {
+        Ok(status) => {
+            if let Some(code) = status.code() {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(e) => anyhow::bail!("Failed to launch Shannon Desktop: {e}"),
+    }
+}
+
+/// Find the external `shannon-gateway` binary on the system PATH.
+fn find_gateway_binary() -> Option<std::path::PathBuf> {
+    let out = std::process::Command::new("command")
+        .args(["-v", "shannon-gateway"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(s))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Delegate a gateway subcommand to the external `shannon-gateway` binary.
+///
+/// Spawns `shannon-gateway <subcommand>` and mirrors its exit code.
+fn run_gateway_command(command: GatewaySubcommand) -> Result<()> {
+    let binary = match find_gateway_binary() {
+        Some(b) => b,
+        None => anyhow::bail!(
+            "shannon-gateway not found on PATH. Install the gateway service first."
+        ),
+    };
+
+    let sub: &str = match command {
+        GatewaySubcommand::Run => "run",
+        GatewaySubcommand::Start => "start",
+        GatewaySubcommand::Stop => "stop",
+        GatewaySubcommand::Restart => "restart",
+        GatewaySubcommand::Status => "status",
+        GatewaySubcommand::List => "list",
+        GatewaySubcommand::Install => "install",
+        GatewaySubcommand::Uninstall => "uninstall",
+        GatewaySubcommand::Setup => "setup",
+        GatewaySubcommand::MigrateLegacy => "migrate-legacy",
+        GatewaySubcommand::Enroll => "enroll",
+    };
+
+    eprintln!("Delegating to shannon-gateway: {sub}");
+    let status = std::process::Command::new(&binary).arg(sub).status();
+    match status {
+        Ok(s) => {
+            if let Some(code) = s.code() {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
+        Err(e) => anyhow::bail!("Failed to run shannon-gateway {sub}: {e}"),
+    }
+}
+
+/// Current version of the `shannon` CLI crate.
+fn current_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// Simple semver-ish comparison: returns true if `latest` is newer than `current`.
+///
+/// Compares dot-separated numeric components left to right. Non-numeric parts
+/// are ignored. Good enough for release tag comparison.
+fn version_is_newer(current: &str, latest: &str) -> bool {
+    fn parse(v: &str) -> Vec<u64> {
+        v.split('.')
+            .map(|p| p.trim_start_matches('v').split(|c: char| !c.is_ascii_digit()).next().unwrap_or("").parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let a = parse(current);
+    let b = parse(latest);
+    let len = a.len().max(b.len());
+    for i in 0..len {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        if y > x {
+            return true;
+        }
+        if y < x {
+            return false;
+        }
+    }
+    false
+}
+
+/// Self-update: check GitHub for a newer release and print upgrade steps.
+fn run_update_command() -> Result<()> {
+    let current = current_version();
+    println!("Current version: {current}");
+    println!("Checking for updates at https://api.github.com/repos/shannon-agent/shannon-agent/releases/latest ...");
+
+    // Best-effort: shell out to `curl` (already referenced by the install flow).
+    let out = std::process::Command::new("curl")
+        .args([
+            "-fsSL",
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "User-Agent: shannon-cli",
+            "https://api.github.com/repos/shannon-agent/shannon-agent/releases/latest",
+        ])
+        .output();
+
+    let body = match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        Ok(o) => {
+            println!(
+                "WARN: GitHub request failed (exit {}).",
+                o.status.code().unwrap_or(-1)
+            );
+            println!("Visit https://github.com/shannon-agent/shannon-agent/releases to update manually.");
+            return Ok(());
+        }
+        Err(e) => {
+            println!("WARN: could not run curl ({e}). Install curl or update manually at");
+            println!("https://github.com/shannon-agent/shannon-agent/releases");
+            return Ok(());
+        }
+    };
+
+    let value: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            println!("WARN: failed to parse release metadata: {e}");
+            return Ok(());
+        }
+    };
+
+    let latest = value
+        .get("tag_name")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if latest.is_empty() {
+        println!("WARN: no tag_name found in release metadata.");
+        return Ok(());
+    }
+
+    println!("Latest version: {latest}");
+    if version_is_newer(&current, &latest) {
+        println!();
+        println!("A newer version is available: {latest}");
+        println!("To upgrade, run:");
+        println!("    curl -fsSL https://get.shannon.ai/install.sh | sh");
+        println!();
+        println!("Or download from: https://github.com/shannon-agent/shannon-agent/releases/{latest}");
+    } else {
+        println!("You are already on the latest version.");
+    }
+    Ok(())
+}
+
+/// Probe whether a TCP port is free by attempting to bind it.
+fn is_port_free(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// Run diagnostics: toolchain, ports, services, and config.
+///
+/// Never blocks — every check reports OK/WARN/INFO and continues.
+fn run_doctor_command() -> Result<()> {
+    println!("Shannon Doctor — diagnostics");
+
+    // Toolchain probes (PATH via `command -v`).
+    let tools = ["cargo", "rustc", "node", "bun"];
+    for tool in tools {
+        let present = std::process::Command::new("command")
+            .args(["-v", tool])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if present {
+            println!("[OK]    found '{tool}' on PATH");
+        } else {
+            // `bun` is optional; only WARN. `cargo`/`rustc`/`node` are WARN too
+            // (some install paths use prebuilt binaries). Never block.
+            println!("[WARN]  '{tool}' not found on PATH");
+        }
+    }
+
+    // Gateway service on PATH.
+    match find_gateway_binary() {
+        Some(p) => println!("[OK]    shannon-gateway found: {}", p.display()),
+        None => println!("[INFO]  shannon-gateway not found on PATH (run `shannon gateway setup`)"),
+    }
+
+    // Port 33420 free (the default api_server port).
+    if is_port_free(33420) {
+        println!("[OK]    port 33420 is free");
+    } else {
+        println!("[WARN]  port 33420 is already in use (api_server may be running)");
+    }
+
+    // Configured engine URL.
+    let engine_url = std::env::var("SHANNON_BASE_URL")
+        .ok()
+        .or_else(|| std::env::var("ANTHROPIC_BASE_URL").ok());
+    match engine_url {
+        Some(url) => println!("[OK]    engine URL configured: {url}"),
+        None => println!("[INFO]  no engine URL configured (using provider default)"),
+    }
+
+    println!("Doctor finished.");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     // Check for URL scheme registration flags first (hidden, not in Cli struct)
     let args: Vec<String> = std::env::args().collect();
@@ -2585,7 +2950,11 @@ fn run_with_cli(cli: Cli) -> Result<()> {
         | Some(Commands::Config { .. })
         | Some(Commands::Serve { .. })
         | Some(Commands::Screenshot { .. })
-        | Some(Commands::Mcp { .. }) => CliConfig::default(),
+        | Some(Commands::Mcp { .. })
+        | Some(Commands::Desktop { .. })
+        | Some(Commands::Gateway { .. })
+        | Some(Commands::Update)
+        | Some(Commands::Doctor) => CliConfig::default(),
     };
 
     // Initialize tracing if debug mode enabled
@@ -2635,7 +3004,7 @@ fn run_with_cli(cli: Cli) -> Result<()> {
             repl.run().map_err(|e| anyhow::anyhow!("{e:?}"))?;
         }
         Some(Commands::Version { verbose }) => {
-            println!("Shannon Code v0.1.0");
+            println!("Shannon Code v{}", env!("CARGO_PKG_VERSION"));
             if verbose {
                 println!("Rust {}", env!("CARGO_PKG_RUST_VERSION"));
                 println!("Features: mcp, multi-agent, tools");
@@ -2823,6 +3192,21 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     }
                 }
             }
+        },
+        Some(Commands::Desktop {
+            no_build,
+            foreground,
+        }) => {
+            run_desktop_command(no_build, foreground)?;
+        }
+        Some(Commands::Gateway { command }) => {
+            run_gateway_command(command)?;
+        }
+        Some(Commands::Update) => {
+            run_update_command()?;
+        }
+        Some(Commands::Doctor) => {
+            run_doctor_command()?;
         },
     }
 
