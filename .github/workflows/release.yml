@@ -193,7 +193,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'shannon-desktop ${{ github.ref_name }}'
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}  # rc/beta/alpha (dash) -> prerelease
           args: --target ${{ matrix.target }} --bundles ${{ matrix.ext }}
 
   # ───────────────────────────── Gateway (Bun) ────────────────────────────
@@ -295,7 +295,7 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}  # rc/beta/alpha (dash) -> prerelease
           files: |
             scripts/install.sh
             scripts/install.ps1
