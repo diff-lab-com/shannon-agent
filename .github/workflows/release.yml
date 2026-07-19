@@ -178,7 +178,9 @@ jobs:
           TARGET="${{ matrix.target }}"
           ART="shannon-${TARGET}.tar.gz"
           tar -C "target/${TARGET}/release" -czf "$ART" shannon
-          sha256sum "$ART" > "${ART}.sha256"
+          # shasum is the portable choice: present on macOS (built-in) and
+          # on Linux runners (ships with Perl). macOS has no sha256sum.
+          shasum -a 256 "$ART" > "${ART}.sha256"
           gh release upload "$TAG" "$ART" "${ART}.sha256" --clobber --repo "$GITHUB_REPOSITORY"
 
       - name: Package + upload CLI (windows)
