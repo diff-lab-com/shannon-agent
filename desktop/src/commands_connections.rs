@@ -384,7 +384,8 @@ pub async fn bootstrap_gateway_supervisor(
         tracing::info!(
             "gateway already running as OS service — desktop will not spawn a competing child"
         );
-        let supervisor = GatewaySupervisor::managed_externally("shannon-gateway.service");
+        let supervisor =
+            GatewaySupervisor::managed_externally(crate::gateway_service_probe::SERVICE_NAME);
         *guard = Some(supervisor);
         return;
     }

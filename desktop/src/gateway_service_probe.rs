@@ -17,9 +17,26 @@
 //!                  spawns as before (preserves first-run UX).
 
 use serde::Serialize;
+use std::process::Stdio;
 use std::sync::Mutex;
+use std::time::Duration;
 
 type ProbeFn = fn() -> ServiceState;
+
+/// Human-readable name of the gateway's OS-level service, per platform.
+/// Used by the supervisor when surfacing `ManagedExternally` to the UI.
+///
+/// Linux:   systemd user unit (e.g. `~/.config/systemd/user/shannon-gateway.service`)
+/// macOS:   launchd label (reverse-DNS form, what `shannon gateway install` writes)
+/// Windows: scheduled task display name (what `schtasks /Query` matches against)
+#[cfg(target_os = "linux")]
+pub const SERVICE_NAME: &str = "shannon-gateway.service";
+
+#[cfg(target_os = "macos")]
+pub const SERVICE_NAME: &str = "shannon.gateway";
+
+#[cfg(target_os = "windows")]
+pub const SERVICE_NAME: &str = "Shannon Gateway";
 
 /// Result of querying the OS service manager for `shannon-gateway`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -63,41 +80,43 @@ pub async fn query_gateway_service_state() -> ServiceState {
             return f();
         }
     }
-    default_probe()
+    default_probe().await
 }
 
-/// Platform-default probe implementation. Each branch shells out to the
-/// platform service manager with a 2 s timeout.
+/// Platform-default probe implementation.
+///
+/// Each branch shells out to the platform service manager with stdout/stderr
+/// routed to `Stdio::null()` so the child can't wedge on a full pipe buffer.
+/// The Linux branch additionally wraps the subprocess in a 2 s
+/// `tokio::time::timeout` — `systemctl --user` can hang on dbus stalls or
+/// permission query waits, and the probe runs on the Tauri setup path so an
+/// unbounded wait blocks the desktop from reaching its runloop. On timeout,
+/// returns `ServiceState::Unknown`, which the supervisor treats as
+/// "spawn a child" (preserving first-run / unregistered-service UX).
 #[cfg(target_os = "linux")]
-fn default_probe() -> ServiceState {
-    let output = std::process::Command::new("systemctl")
-        .args(["--user", "is-active", "shannon-gateway.service"])
-        .output();
-    match output {
-        Ok(o) if o.status.success() => parse_systemd_active(&o.stdout),
-        Ok(_) => ServiceState::Inactive,
-        Err(_) => ServiceState::Unknown,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn parse_systemd_active(stdout: &[u8]) -> ServiceState {
-    // `systemctl is-active` prints "active" on stdout when active,
-    // "inactive" / "failed" / etc. otherwise. The exit code also
-    // reflects this (0 = active, non-zero = other). Trust the exit
-    // code, but double-check stdout for "active" in case of edge cases.
-    let s = std::str::from_utf8(stdout).unwrap_or("");
-    if s.trim() == "active" {
-        ServiceState::Active
-    } else {
-        ServiceState::Inactive
+async fn default_probe() -> ServiceState {
+    let probe = async {
+        tokio::process::Command::new("systemctl")
+            .args(["--user", "is-active", SERVICE_NAME])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .await
+    };
+    match tokio::time::timeout(Duration::from_secs(2), probe).await {
+        Ok(Ok(o)) if o.status.success() => ServiceState::Active,
+        Ok(Ok(_)) => ServiceState::Inactive,
+        Ok(Err(_)) => ServiceState::Unknown,
+        Err(_elapsed) => ServiceState::Unknown,
     }
 }
 
 #[cfg(target_os = "macos")]
-fn default_probe() -> ServiceState {
+async fn default_probe() -> ServiceState {
     let output = std::process::Command::new("launchctl")
         .args(["print", &format!("user/{}", unsafe { libc::getuid() })])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .output();
     let stdout = match output {
         Ok(o) => String::from_utf8_lossy(&o.stdout).to_string(),
@@ -116,14 +135,16 @@ fn default_probe() -> ServiceState {
 }
 
 #[cfg(target_os = "windows")]
-fn default_probe() -> ServiceState {
+async fn default_probe() -> ServiceState {
     // Windows service registration via `shannon gateway install` is not
     // yet implemented (out-of-scope per the design spec). Probe for the
     // scheduled task defensively in case the user registered one
     // manually with nssm or similar. Missing task → Unknown → supervisor
     // spawns a child (the v0.7.0 behavior).
     let output = std::process::Command::new("schtasks")
-        .args(["/Query", "/TN", "Shannon Gateway"])
+        .args(["/Query", "/TN", SERVICE_NAME])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .output();
     match output {
         Ok(o) if o.status.success() => ServiceState::Active,
@@ -133,7 +154,7 @@ fn default_probe() -> ServiceState {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-fn default_probe() -> ServiceState {
+async fn default_probe() -> ServiceState {
     ServiceState::Unknown
 }
 
@@ -142,7 +163,12 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    // Serialize probe-override tests so the OnceLock swap is deterministic.
+    // Serialize probe-override tests so the PROBE_OVERRIDE swap is
+    // deterministic across parallel test runners. PROBE_OVERRIDE is a
+    // process-wide Mutex<Option<ProbeFn>> (not a OnceLock — that design
+    // didn't allow swapping between Active/Inactive/Unknown within a
+    // single test binary), so concurrent test threads would race on it
+    // without this extra lock.
     static TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -194,12 +220,16 @@ mod tests {
     #[cfg(target_os = "linux")]
     fn linux_default_probe_returns_unknown_for_unregistered_service() {
         // `shannon-gateway.service` is almost certainly not registered
-        // in CI. systemctl returns non-zero, parser sees non-"active"
-        // stdout → Inactive. Acceptable: also a "don't spawn externally"
-        // signal for the supervisor (matches Unknown's spawn behavior).
-        // The strict assertion here is "anything other than Active".
+        // in CI. systemctl returns non-zero, the probe returns Inactive.
+        // Acceptable: also a "don't spawn externally" signal for the
+        // supervisor (matches Unknown's spawn behavior). The strict
+        // assertion here is "anything other than Active".
         let _g = TEST_LOCK.lock().unwrap();
-        let state = default_probe();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let state = rt.block_on(default_probe());
         assert_ne!(state, ServiceState::Active, "test env must not have a real shannon-gateway.service running");
     }
 }
