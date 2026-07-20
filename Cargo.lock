@@ -5887,7 +5887,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-agent"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -5906,7 +5906,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-agents"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5931,7 +5931,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-api-protocol"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "schemars 0.8.22",
  "serde",
@@ -5941,7 +5941,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-cli"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -5979,7 +5979,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-codegen"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "criterion",
@@ -6002,7 +6002,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-commands"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6026,7 +6026,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-core"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6079,7 +6079,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-desktop"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6130,7 +6130,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-engine"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -6161,7 +6161,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-mcp"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6192,7 +6192,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-skills"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6217,7 +6217,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-stability-attr"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6226,7 +6226,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-tool-interface"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "async-trait",
  "serde",
@@ -6237,7 +6237,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-tools"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6277,7 +6277,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-types"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "chrono",
  "schemars 0.8.22",
@@ -6290,7 +6290,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-ui"
-version = "0.7.0-rc2"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
