@@ -20,11 +20,7 @@ try {
 Write-Host "[info] Latest version: $Version" -ForegroundColor Cyan
 
 $CLI_ARCHIVE = 'shannon-x86_64-pc-windows-msvc.zip'
-$GATEWAY    = 'shannon-gateway-linux-x64'  # placeholder; real windows asset below
-$GATEWAY    = 'shannon-gateway-windows-x64'  # bun windows target artifact (if built)
-# NOTE: the gateway matrix builds linux/darwin only. On Windows we still fetch
-# the CLI; gateway service is set up on Linux/macOS runners. If a windows
-# gateway artifact is added later, it will be picked up here automatically.
+$GATEWAY    = 'shannon-gateway-windows-x64.exe'  # built by release.yml gateway matrix
 
 # Determine install directory
 $InstallDir = if ($env:USERPROFILE) {
@@ -89,6 +85,17 @@ if ($CliPath) {
     Write-Host "[ok] Installed shannon to $(Join-Path $InstallDir 'shannon.exe')" -ForegroundColor Green
 }
 
+# ── Gateway ───────────────────────────────────────────────────────────────
+$GatewayTmp = Join-Path $env:TEMP 'shannon-gateway.exe'
+$GatewayPath = Download-Verify -Asset $GATEWAY -Dest $GatewayTmp
+if ($GatewayPath) {
+    Copy-Item $GatewayPath (Join-Path $InstallDir 'shannon-gateway.exe') -Force
+    Remove-Item $GatewayPath -Force
+    Write-Host "[ok] Installed shannon-gateway to $(Join-Path $InstallDir 'shannon-gateway.exe')" -ForegroundColor Green
+} else {
+    Write-Host "[info] shannon-gateway not available; skipping (gateway service registration must run on linux/macOS)" -ForegroundColor Yellow
+}
+
 # ── Desktop (NSIS setup) ───────────────────────────────────────────────────
 $DesktopAsset = "shannon-desktop_${Version}_x64-setup.exe"
 $DesktopPath = Join-Path $env:TEMP 'shannon-desktop-setup.exe'
@@ -115,7 +122,10 @@ if ($UserPath -notlike "*$InstallDir*") {
 }
 
 Write-Host ""
-Write-Host "[ok] Shannon Agent installed." -ForegroundColor Green
-Write-Host "[info] Next: set your API key and run:" -ForegroundColor Cyan
-Write-Host "  `$env:SHANNON_API_KEY = 'sk-ant-...'"
-Write-Host "  shannon"
+Write-Host "[ok] Shannon Agent installed. Next steps:" -ForegroundColor Green
+Write-Host "[info]   1. `$env:SHANNON_API_KEY = 'sk-ant-...'" -ForegroundColor Cyan
+Write-Host "[info]   2. shannon                                          # launch the REPL" -ForegroundColor Cyan
+Write-Host "[info]   3. shannon gateway setup                            # initialize ~/.shannon/gateway/config.json" -ForegroundColor Cyan
+Write-Host "[info]   4. shannon gateway install                          # register gateway as background service (linux/macOS)" -ForegroundColor Cyan
+Write-Host "[info]   5. shannon gateway enroll <platform>                # enroll a chat-platform bot token" -ForegroundColor Cyan
+Write-Host "[info]   Docs: https://shannon.ai/docs/gateway                # Slack/Telegram/Discord/Matrix/WhatsApp/WeCom/Feishu/DingTalk" -ForegroundColor Cyan

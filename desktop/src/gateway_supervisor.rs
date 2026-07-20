@@ -38,6 +38,12 @@ pub enum GatewaySupervisorStatus {
     Running { pid: u32 },
     /// The child exited on its own; carried detail lets the UI explain why.
     Exited { code: Option<i32>, reason: String },
+    /// A user-level OS service (systemd --user / launchd / schtasks) is
+    /// already running the gateway. The supervisor does not own a child
+    /// process; the UI should disable Start/Stop and surface a "managed
+    /// externally" indicator. The supervisor cannot stop this service
+    /// — `stop()` is a no-op when the status is `ManagedExternally`.
+    ManagedExternally { service_name: String },
 }
 
 /// What a `gateway_supervisor_*` command returns — the managed flag + the
@@ -157,8 +163,36 @@ impl GatewaySupervisor {
         }
     }
 
+    /// Construct a supervisor that represents a gateway process owned by
+    /// an external OS service. The supervisor holds no child pid and
+    /// `stop()` is a no-op (the external service manager owns the
+    /// lifecycle — stopping it requires `shannon gateway stop` or the
+    /// platform equivalent).
+    pub fn managed_externally(service_name: impl Into<String>) -> Self {
+        let status = Arc::new(std::sync::RwLock::new(
+            GatewaySupervisorStatus::ManagedExternally {
+                service_name: service_name.into(),
+            },
+        ));
+        Self {
+            status,
+            cancel: CancellationToken::new(),
+            join: None,
+        }
+    }
+
     /// Signal the supervisor to kill + reap the child. Idempotent.
     pub async fn stop(&mut self) {
+        // External OS service owns the gateway; the supervisor cannot
+        // stop it. Treat stop() as a no-op (the UI button is also
+        // disabled in ManagedExternally state, so this is a defensive
+        // guard).
+        if matches!(
+            self.status(),
+            GatewaySupervisorStatus::ManagedExternally { .. }
+        ) {
+            return;
+        }
         self.cancel.cancel();
         if let Some(h) = self.join.take() {
             // Bound the wait so a misbehaving kill can't hang the UI action.
@@ -269,6 +303,17 @@ mod tests {
         let j2 = serde_json::to_string(&s2).expect("serialize");
         assert!(j2.contains("\"code\":1"));
         assert!(j2.contains("\"reason\":\"boom\""));
+        let s3 = GatewaySupervisorStatus::ManagedExternally {
+            service_name: "shannon-gateway.service".into(),
+        };
+        let j3 = serde_json::to_string(&s3).expect("serialize");
+        // Variant tag camelCases ("managedExternally"); inner field name
+        // remains snake_case under serde's default enum-level rename_all
+        // (matches the existing Running { pid } / Exited { code, reason }
+        // patterns in this enum).
+        assert!(j3.contains("\"managedExternally\""));
+        assert!(j3.contains("\"service_name\":\"shannon-gateway.service\""));
+        assert!(!j3.contains("\"managed_externally\""));
     }
 }
 

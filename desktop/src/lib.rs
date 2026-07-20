@@ -111,7 +111,16 @@ pub mod commands_mobile_pairing;
 pub mod gateway_supervisor;
 
 #[cfg(feature = "tauri")]
+pub mod gateway_service_probe;
+
+#[cfg(feature = "tauri")]
 pub mod loopback_api;
+
+#[cfg(feature = "tauri")]
+pub mod engine_discovery;
+
+#[cfg(feature = "tauri")]
+pub mod engine_discovery_commands;
 
 #[cfg(feature = "tauri")]
 pub mod commands_memory;

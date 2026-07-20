@@ -1,5 +1,7 @@
 # Shannon Code
 
+> **Note:** The unified `shannon` CLI replaces the former `shannon-code` product from earlier releases. Install paths, subcommands, and configuration are unchanged — only the binary name changed.
+
 <div align="center">
 
 **A high-performance, open-source AI-assisted coding tool, written in Rust**
