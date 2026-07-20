@@ -27,6 +27,8 @@ fn main() {
     use shannon_desktop::commands_tasks;
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
+    use shannon_desktop::engine_discovery;
+    use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
     use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
     use shannon_desktop::skill_pattern_detection;
@@ -92,6 +94,8 @@ fn main() {
             commands_connections::gateway_supervisor_stop,
             commands_connections::gateway_supervisor_status,
             commands_connections::gateway_set_managed,
+            // Q4-A — engine discovery probe result (Hosted vs External)
+            commands_engine_discovery::engine_discovery_get_mode,
             // P1.3 — mobile device pairing (Design D shared-file channel)
             commands_mobile_pairing::mobile_generate_pair_token,
             commands_mobile_pairing::mobile_list_paired_devices,
@@ -267,13 +271,35 @@ fn main() {
             let app_handle = app.handle().clone();
             let state_ref: tauri::State<'_, commands::AppState> = app.state();
             tauri::async_runtime::block_on(async move {
-                // P0.1 — spawn the loopback engine API server BEFORE the
-                // gateway so its `engine.wsUrl` (ws://127.0.0.1:33420/api/ws)
-                // is reachable when the supervised gateway boots. The brief
-                // sleep lets the listener bind first; serve() then runs for
-                // the lifetime of the process on a detached task.
-                loopback_api::spawn(state_ref.inner()).await;
-                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                // Q4-A — before hosting our own loopback engine API server,
+                // probe 127.0.0.1:33420. If another engine (typically the
+                // shannon CLI REPL or another desktop instance) is already
+                // serving the engine protocol, connect as a client and skip
+                // hosting — avoids the port-bind collision that previously
+                // forced users to pick exactly one of CLI/desktop.
+                let engine_mode = engine_discovery::probe_existing_engine().await;
+                {
+                    let mut slot = state_ref
+                        .engine_mode
+                        .write()
+                        .expect("engine_mode lock poisoned");
+                    *slot = Some(engine_mode);
+                }
+                tracing::info!(?engine_mode, "engine discovery complete");
+                if engine_mode == engine_discovery::EngineMode::Hosted {
+                    // P0.1 — spawn the loopback engine API server BEFORE the
+                    // gateway so its `engine.wsUrl` (ws://127.0.0.1:33420/api/ws)
+                    // is reachable when the supervised gateway boots. The
+                    // brief sleep lets the listener bind first; serve() then
+                    // runs for the lifetime of the process on a detached task.
+                    loopback_api::spawn(state_ref.inner()).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                } else {
+                    tracing::info!(
+                        "engine already serving on 127.0.0.1:33420 — connecting as client, \
+                         skipping loopback host"
+                    );
+                }
                 commands_connections::bootstrap_gateway_supervisor(&state_ref, &app_handle).await;
             });
 

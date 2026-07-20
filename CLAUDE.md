@@ -1,5 +1,7 @@
 # Shannon Code
 
+> **Note:** The unified `shannon` CLI replaces the former `shannon-code` product. Internal `shannon-code` references in CHANGELOG / release notes / migration docs are historical and intentionally retained.
+
 Rust-based AI code assistant (like Claude Code) with multi-provider LLM support, MCP-based extensions, and terminal UI.
 
 ## Build & Test
