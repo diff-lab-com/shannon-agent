@@ -176,7 +176,10 @@ fi
 
 printf '\n'
 ok "Shannon Agent installed. Next steps:"
-info "  export SHANNON_API_KEY=\"sk-ant-...\""
-info "  shannon                       # launch the REPL"
-info "  shannon gateway install       # register the gateway as a background service"
+info "  1. export SHANNON_API_KEY=\"sk-ant-...\""
+info "  2. shannon                                          # launch the REPL"
+info "  3. shannon gateway setup                            # initialize ~/.shannon/gateway/config.json"
+info "  4. shannon gateway install                          # register gateway as background service (linux/macOS)"
+info "  5. shannon gateway enroll <platform>                # enroll a chat-platform bot token"
+info "  Docs: https://shannon.ai/docs/gateway                # Slack/Telegram/Discord/Matrix/WhatsApp/WeCom/Feishu/DingTalk"
 printf '\n'
