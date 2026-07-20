@@ -10,11 +10,11 @@
 //! This module queries the OS service manager for the
 //! `shannon-gateway` service state. The supervisor consults the
 //! result before deciding to spawn:
-//!   - `Active`   → supervisor enters `ManagedExternally`, no child.
+//!   - `Active` → supervisor enters `ManagedExternally`, no child.
 //!   - `Inactive` → service is registered but stopped; supervisor
-//!                  spawns as before.
-//!   - `Unknown`  → service is not registered (fresh install); supervisor
-//!                  spawns as before (preserves first-run UX).
+//!     spawns as before.
+//!   - `Unknown` → service is not registered (fresh install); supervisor
+//!     spawns as before (preserves first-run UX).
 
 use serde::Serialize;
 use std::process::Stdio;
