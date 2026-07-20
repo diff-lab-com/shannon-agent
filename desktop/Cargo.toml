@@ -1,6 +1,6 @@
 [package]
 name = "shannon-desktop"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Shannon — your AI workspace (Tauri desktop app)"
@@ -38,6 +38,7 @@ tempfile = "3"
 base64 = "0.22"
 dirs = "5"
 keyring = { version = "3", default-features = false, features = ["apple-native", "windows-native", "sync-secret-service"] }
+libc = "0.2"  # macOS launchctl probe (gateway_service_probe::default_probe) + dev e2e
 toml = "0.8"
 lsp-types = "0.95"
 url = "2"
@@ -63,7 +64,6 @@ tokio-test = "0.4"
 tempfile = "3"
 criterion = { version = "0.5", features = ["async_tokio"] }
 mockito = "1"
-libc = "0.2"
 # Enables `tauri::test::mock_app()` for the supervisor E2E test (cfg(test) alone
 # doesn't reach the tauri dependency crate). `test` is an empty gate feature.
 tauri = { version = "2", features = ["test"] }
