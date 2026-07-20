@@ -64,6 +64,36 @@ lint:
     cd desktop/ui && pnpm lint
     cd gateway && pnpm typecheck
 
+# ── Dev experience (从 shannon-code justfile 恢复) ──
+#
+# dev        - 提交前快路径(check + clippy + test)
+# test-all   - 完整测试(nextest + doctests)
+# bench      - 微基准(cargo bench)
+# perf       - 性能阈值回归(测试名 verify 见 Step 1)
+# scenarios  - YAML 声明式场景测试
+
+# 提交前快路径(跳过 doctest,跳过 release lint)
+dev:
+    cargo check --workspace
+    cargo clippy --workspace
+    cargo nextest run --workspace || cargo test --workspace -- --test-threads=1
+
+# 完整测试(nextest + doctests)
+test-all: test-rust
+    cargo test --workspace --doc
+
+# 微基准
+bench:
+    cargo bench --workspace
+
+# 性能阈值回归(12 个测试名 verify against cargo nextest list 全部命中)
+perf:
+    cargo nextest run --workspace -E 'test(cache_accumulation) + test(cache_hit_rate) + test(compaction_100_turns) + test(five_turn) + test(message_serialization) + test(session_load) + test(single_turn) + test(snapshot_render) + test(sse_round_trip) + test(streaming_parse) + test(token_estimation) + test(tool_chain)'
+
+# YAML 场景测试
+scenarios:
+    cargo nextest run --workspace -E 'test(scenario_)'
+
 # ---------- Test ----------
 
 test-rust:
