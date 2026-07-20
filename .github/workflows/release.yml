@@ -297,6 +297,9 @@ jobs:
           - target: bun-darwin-arm64
             os: macos-14
             artifact: shannon-gateway-darwin-arm64
+          - target: bun-windows-x64
+            os: windows-latest
+            artifact: shannon-gateway-windows-x64.exe
     steps:
       - uses: actions/checkout@v4
 
