@@ -158,6 +158,46 @@ cache-stats:
             printf "%-58s  %6s  %12s  %12s  %s%8.1f%%%s  %s%9s%s\n", $1, $3, $4, $5, color, rate, nc, warm_color, warm_str, nc; \
         }'
 
+# ── Local fixture migration (dev convenience, no commit) ──
+#
+# 从同级 stale pre-migration 副本(.../../shannon-agent/shannon-code/...)
+# 把 55 个老 fixture 拷到 monorepo 同名目录,本地用,不 commit。
+#
+# 55 个 fixture schema 与新 repo 兼容(同 JSONL keys,同加载器),
+# 见 docs/superpowers/plans/2026-07-21-justfile-record-replay-restore.md Q1 取舍。
+#
+# 注意:依赖 stale 副本(非 git)存在。如果清理掉了,本 recipe 报错。
+
+migrate-fixtures:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    SRC="../../shannon-agent/shannon-code/tests/fixtures/real_tasks"
+    DST="tests/fixtures/real_tasks"
+    if [ ! -d "$SRC" ]; then
+        echo "ERROR: source dir not found: $SRC"
+        echo "Expected location of pre-migration shannon-code fixture cache."
+        echo "If this stale copy has been cleaned up, fixtures must be re-recorded via 'just record'."
+        exit 1
+    fi
+    mkdir -p "$DST"
+    copied=0
+    skipped=0
+    for f in "$SRC"/*.jsonl; do
+        [ -f "$f" ] || continue
+        name=$(basename "$f")
+        if [ -f "$DST/$name" ]; then
+            skipped=$((skipped + 1))
+        else
+            cp "$f" "$DST/$name"
+            copied=$((copied + 1))
+        fi
+    done
+    total=$(ls "$DST"/*.jsonl | wc -l)
+    echo "✅ migrate-fixtures: copied=$copied skipped=$skipped total=$total"
+    echo "   source: $SRC"
+    echo "   dest:   $DST"
+    echo "   (none committed — see justfile header for curated-commit rule)"
+
 # ── private helpers ──
 
 [private]
