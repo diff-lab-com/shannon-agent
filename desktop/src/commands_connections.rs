@@ -250,11 +250,15 @@ pub async fn gateway_supervisor_start(
     let gw_cfg = state.desktop_config.read().await.gateway.clone();
     let mut guard = state.gateway_supervisor.lock().await;
     if let Some(sup) = guard.as_ref() {
-        if let GatewaySupervisorStatus::Running { .. } = sup.status() {
-            return Ok(GatewayProcessState {
-                managed: gw_cfg.managed,
-                status: sup.status(),
-            });
+        match sup.status() {
+            GatewaySupervisorStatus::Running { .. }
+            | GatewaySupervisorStatus::ManagedExternally { .. } => {
+                return Ok(GatewayProcessState {
+                    managed: gw_cfg.managed,
+                    status: sup.status(),
+                });
+            }
+            _ => {}
         }
     }
     let sup = GatewaySupervisor::start(&app, &gw_cfg);
@@ -369,12 +373,26 @@ pub async fn bootstrap_gateway_supervisor(
         .as_ref()
         .map(|supervisor| matches!(supervisor.status(), GatewaySupervisorStatus::Running { .. }))
         .unwrap_or(false);
-    if !already_running {
-        let supervisor = GatewaySupervisor::start(app, &gw_cfg);
-        let status = supervisor.status();
-        *guard = Some(supervisor);
-        tracing::info!("gateway supervisor auto-started: {status:?}");
+    if already_running {
+        return;
     }
+
+    // Q4-B: if a user-level OS service is already running the gateway,
+    // treat it as authoritative — do not spawn a competing child.
+    let service_state = crate::gateway_service_probe::query_gateway_service_state().await;
+    if service_state == crate::gateway_service_probe::ServiceState::Active {
+        tracing::info!(
+            "gateway already running as OS service — desktop will not spawn a competing child"
+        );
+        let supervisor = GatewaySupervisor::managed_externally("shannon-gateway.service");
+        *guard = Some(supervisor);
+        return;
+    }
+
+    let supervisor = GatewaySupervisor::start(app, &gw_cfg);
+    let status = supervisor.status();
+    *guard = Some(supervisor);
+    tracing::info!("gateway supervisor auto-started: {status:?}");
 }
 
 #[cfg(test)]
