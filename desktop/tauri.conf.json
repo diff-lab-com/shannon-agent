@@ -22,7 +22,7 @@
         "withGlobalTauri": false,
         "windows": [
             {
-                "title": "Shannon Code",
+                "title": "Shannon Agent",
                 "width": 1200,
                 "height": 800,
                 "minWidth": 800,
