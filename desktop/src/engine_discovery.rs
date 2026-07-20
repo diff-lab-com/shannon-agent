@@ -100,7 +100,10 @@ mod tests {
             }
         });
 
-        assert_eq!(probe_at("127.0.0.1", addr.port()).await, EngineMode::External);
+        assert_eq!(
+            probe_at("127.0.0.1", addr.port()).await,
+            EngineMode::External
+        );
     }
 
     #[tokio::test]
