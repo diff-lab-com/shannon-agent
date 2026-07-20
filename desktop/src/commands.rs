@@ -118,6 +118,11 @@ pub struct AppState {
     pub(crate) notifier: Arc<shannon_core::notifier::Notifier>,
     pub(crate) gateway_supervisor:
         Arc<tokio::sync::Mutex<Option<crate::gateway_supervisor::GatewaySupervisor>>>,
+    /// Result of the startup engine discovery probe (`engine_discovery`).
+    /// `None` until `setup()` runs the probe; `Some(Hosted)` once the
+    /// loopback server is spawned; `Some(External)` when another engine
+    /// was already serving on 33420.
+    pub engine_mode: Arc<std::sync::RwLock<Option<crate::engine_discovery::EngineMode>>>,
 }
 
 /// Session metadata for session list.
@@ -293,6 +298,7 @@ impl AppState {
             ),
             notifier: Arc::new(shannon_core::notifier::Notifier::new()),
             gateway_supervisor: Arc::new(tokio::sync::Mutex::new(None)),
+            engine_mode: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 

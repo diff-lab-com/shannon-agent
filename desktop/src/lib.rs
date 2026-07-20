@@ -114,6 +114,12 @@ pub mod gateway_supervisor;
 pub mod loopback_api;
 
 #[cfg(feature = "tauri")]
+pub mod engine_discovery;
+
+#[cfg(feature = "tauri")]
+pub mod engine_discovery_commands;
+
+#[cfg(feature = "tauri")]
 pub mod commands_memory;
 
 #[cfg(feature = "tauri")]
