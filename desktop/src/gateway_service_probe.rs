@@ -230,6 +230,10 @@ mod tests {
             .build()
             .unwrap();
         let state = rt.block_on(default_probe());
-        assert_ne!(state, ServiceState::Active, "test env must not have a real shannon-gateway.service running");
+        assert_ne!(
+            state,
+            ServiceState::Active,
+            "test env must not have a real shannon-gateway.service running"
+        );
     }
 }

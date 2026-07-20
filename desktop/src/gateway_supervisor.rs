@@ -187,7 +187,10 @@ impl GatewaySupervisor {
         // stop it. Treat stop() as a no-op (the UI button is also
         // disabled in ManagedExternally state, so this is a defensive
         // guard).
-        if matches!(self.status(), GatewaySupervisorStatus::ManagedExternally { .. }) {
+        if matches!(
+            self.status(),
+            GatewaySupervisorStatus::ManagedExternally { .. }
+        ) {
             return;
         }
         self.cancel.cancel();

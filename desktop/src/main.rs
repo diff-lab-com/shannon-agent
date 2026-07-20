@@ -27,9 +27,9 @@ fn main() {
     use shannon_desktop::commands_tasks;
     use shannon_desktop::commands_usage;
     use shannon_desktop::commands_voice;
-    use shannon_desktop::extensions_commands;
     use shannon_desktop::engine_discovery;
     use shannon_desktop::engine_discovery_commands as commands_engine_discovery;
+    use shannon_desktop::extensions_commands;
     use shannon_desktop::loopback_api;
     use shannon_desktop::skill_pattern_detection;
     use tauri::{Emitter, Listener, Manager};
