@@ -1402,18 +1402,39 @@ impl Repl {
         // Setup terminal
         enable_raw_mode()?;
 
+        // Shared flag: the manual teardown sets it after running ScrollUp so
+        // the guard's Drop doesn't double-scroll. Raw-mode disable is
+        // idempotent, so the guard always runs that regardless of the flag.
+        let cleanup_ran = std::cell::Cell::new(false);
         // Panic-safety guard: ensure terminal is restored even if we panic.
-        let _cleanup_guard = {
-            struct TerminalGuard;
-            impl Drop for TerminalGuard {
+        // viewport_h is set below once we know it; the guard scrolls the
+        // inline viewport frame into scrollback so it doesn't linger under
+        // the shell prompt.
+        let mut cleanup_guard = {
+            struct TerminalGuard<'a> {
+                viewport_h: u16,
+                ran: &'a std::cell::Cell<bool>,
+            }
+            impl Drop for TerminalGuard<'_> {
                 fn drop(&mut self) {
+                    use std::io::Write as _;
                     let mut stdout = io::stdout();
                     let _ = crossterm::execute!(stdout, crossterm::event::DisableBracketedPaste);
+                    if !self.ran.get() {
+                        let _ = crossterm::execute!(
+                            stdout,
+                            crossterm::terminal::ScrollUp(self.viewport_h)
+                        );
+                    }
                     let _ = crossterm::execute!(stdout, crossterm::cursor::Show);
                     let _ = disable_raw_mode();
+                    let _ = stdout.flush();
                 }
             }
-            TerminalGuard
+            TerminalGuard {
+                viewport_h: 0,
+                ran: &cleanup_ran,
+            }
         };
 
         let mut stdout = io::stdout();
@@ -1423,6 +1444,8 @@ impl Repl {
         let backend = CrosstermBackend::new(stdout);
         let term_size = crossterm::terminal::size().unwrap_or((80, 24));
         let viewport_h = term_size.1.saturating_sub(2).max(6);
+        // Arm the panic guard now that we know how tall the inline viewport is.
+        cleanup_guard.viewport_h = viewport_h;
         let mut terminal = Terminal::with_options(
             backend,
             TerminalOptions {
@@ -1791,6 +1814,14 @@ impl Repl {
             terminal.backend_mut(),
             crossterm::event::DisableBracketedPaste
         )?;
+        // Scroll the inline viewport frame into scrollback so the last
+        // frame (input box / status bar / help bar) doesn't linger under
+        // the shell prompt. ratatui's inline viewport Drop leaves the last
+        // frame visible by design; we explicitly clean it up here.
+        let h = viewport_h;
+        execute!(terminal.backend_mut(), crossterm::terminal::ScrollUp(h))?;
+        // Mark ScrollUp done so the panic guard doesn't double-scroll.
+        cleanup_ran.set(true);
         terminal.show_cursor()?;
         // Flush all escape sequences while still in raw mode, then disable.
         IoWrite::flush(terminal.backend_mut())?;
