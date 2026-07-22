@@ -6285,7 +6285,7 @@ dependencies = [
  "serde_json",
  "shannon-stability-attr",
  "thiserror 2.0.18",
- "toml",
+ "toml 0.8.23",
  "uuid",
 ]
 
