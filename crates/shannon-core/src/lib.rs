@@ -133,10 +133,7 @@ pub use bridge_service::{
 pub use checkpoint::{
     Checkpoint, CheckpointManager, FileChangePreview, RestoreMode, RevertPreview, TurnCheckpoint,
 };
-pub use config_migration::{
-    MigrationPlan, SecretBinding, default_secrets_path, persist_secrets, plan_migration,
-    to_legacy_v1_config,
-};
+pub use config_migration::{SecretBinding, default_secrets_path, persist_secrets};
 pub use diagnostics::{
     DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker,
     ErrorPattern,
