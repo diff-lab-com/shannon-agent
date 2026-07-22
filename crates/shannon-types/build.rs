@@ -3,12 +3,14 @@ use std::fs;
 use std::path::Path;
 
 // Type definitions with JsonSchema derives for build.rs
-// These must match the types in src/events.rs exactly
+// These must match the types in src/events.rs and src/provider_config.rs exactly
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/events.rs");
+    println!("cargo:rerun-if-changed=src/provider_config.rs");
 
     // Generate schemas for all 23 payload structs + EventEnvelope
     let mut schemas = schemars::Map::new();
@@ -139,6 +141,26 @@ fn main() {
     println!(
         "cargo:warning=Generated JSON Schema at: {}",
         src_path.display()
+    );
+
+    // ── ProviderModelConfig schema (Φ0.5: cross-end contract) ─────────
+    // Mirrors the events pattern: generate via schemars, write to OUT_DIR
+    // for build-time consumers, then copy to schema/ for committed-file
+    // consumers (desktop/gateway without a build step).
+    let pm_schema = schemars::schema_for!(ProviderModelConfig);
+    let pm_value: serde_json::Value =
+        serde_json::to_value(&pm_schema).expect("pm schema to_value failed");
+    let pm_json = serde_json::to_string_pretty(&pm_value).expect("pm schema serialization failed");
+
+    let pm_out_path = Path::new(&out_dir).join("provider-model-config.schema.json");
+    fs::write(&pm_out_path, &pm_json).expect("failed to write pm schema to OUT_DIR");
+
+    let pm_src_path = Path::new(&crate_dir).join("schema/provider-model-config.schema.json");
+    fs::write(&pm_src_path, &pm_json).expect("failed to write pm schema to source tree");
+
+    println!(
+        "cargo:warning=Generated ProviderModelConfig JSON Schema at: {}",
+        pm_src_path.display()
     );
 }
 
@@ -329,4 +351,153 @@ pub struct EventEnvelope<T> {
     pub schema_version: u32,
     pub event: String,
     pub payload: T,
+}
+
+// ── ProviderModelConfig redeclarations (Φ0.5) ───────────────────────
+// These MUST match src/provider_config.rs exactly. build.rs is a separate
+// translation unit, so types are duplicated here to drive schemars generation.
+// Drift between these and src/ is detected only at build time — if Cargo.toml
+// depends on this schema, keep both files in sync.
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderKind {
+    Anthropic,
+    OpenAi,
+    #[serde(rename = "openai-compatible")]
+    OpenAiCompatible,
+    Ollama,
+    Gemini,
+    Deepseek,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    Process,
+    Session,
+    Project,
+    Global,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSource {
+    Catalog,
+    Discovered,
+    #[default]
+    UserDeclared,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuxRole {
+    Vision,
+    WebExtract,
+    Compression,
+    TitleGeneration,
+    SessionSearch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[serde(tag = "backend", rename_all = "snake_case")]
+pub enum CredentialRef {
+    Env { var: String },
+    Keyring { service: String, account: String },
+    InlineLegacy { masked: String },
+    Ephemeral,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ActiveTarget {
+    pub provider_id: String,
+    pub model_id: String,
+    pub scope: Scope,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, JsonSchema, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TemperatureStrategy {
+    #[default]
+    Default,
+    Omit,
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ProviderQuirks {
+    pub temperature_strategy: TemperatureStrategy,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub max_tokens_override: Option<u32>,
+    #[serde(default = "build_default_true")]
+    pub send_temperature: bool,
+}
+
+impl Default for ProviderQuirks {
+    fn default() -> Self {
+        Self {
+            temperature_strategy: TemperatureStrategy::default(),
+            max_tokens_override: None,
+            send_temperature: build_default_true(),
+        }
+    }
+}
+
+fn build_default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderProfile {
+    pub id: String,
+    pub kind: ProviderKind,
+    pub display_name: String,
+    pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub models_url: Option<String>,
+    pub credential: CredentialRef,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra_headers: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default_max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_models: Vec<String>,
+    #[serde(default)]
+    pub quirks: ProviderQuirks,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ModelDescriptor {
+    pub id: String,
+    pub provider_id: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub context_limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_limit: Option<u32>,
+    #[serde(default)]
+    pub supports_tools: bool,
+    #[serde(default)]
+    pub supports_vision: bool,
+    #[serde(default)]
+    pub source: ModelSource,
+    #[serde(default)]
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ModelProfile {
+    #[serde(default)]
+    pub name: String,
+    pub active_target: ActiveTarget,
+    #[serde(default)]
+    pub providers: Vec<ProviderProfile>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub auxiliary: HashMap<AuxRole, ActiveTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ProviderModelConfig {
+    pub version: u32,
+    pub profiles: HashMap<String, ModelProfile>,
 }
