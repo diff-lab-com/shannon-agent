@@ -10,6 +10,7 @@
 //! Common types used across the Shannon project.
 
 pub mod events;
+pub mod migration;
 pub mod provider_config;
 
 use serde::{Deserialize, Serialize};
