@@ -110,6 +110,46 @@ credential = { backend = "env", var = "SHANNON_GLM_API_KEY" }
 }
 
 #[test]
+fn gateway_defaults_to_multiplex_off() {
+    // B3 分期：默认 off → 字节级等同单 profile（profile_routes 被完全忽略）
+    let toml = r#"version = 2
+[profiles.default]
+name = "default"
+active_target = { provider_id = "glm", model_id = "glm-4.6", scope = "global" }
+[[profiles.default.providers]]
+id = "glm"
+kind = "openai-compatible"
+display_name = "GLM"
+base_url = "https://x"
+credential = { backend = "env", var = "SHANNON_GLM_API_KEY" }
+"#;
+    let cfg: ProviderModelConfig = toml::from_str(toml).unwrap();
+    assert_eq!(cfg.gateway.multiplex_profiles, false); // 默认 off
+    assert!(cfg.gateway.profile_routes.is_empty());
+}
+
+#[test]
+fn route_specificity_session_beats_project_beats_tenant() {
+    // 加权：session(8) > project(4) > tenant(2)；最具体者赢
+    let r = ProfileRoute {
+        name: "s".into(),
+        tenant_id: Some("t".into()),
+        project_path: Some("/p".into()),
+        session_id: Some("s1".into()),
+        client_id: None,
+        profile: "most-specific".into(),
+        enabled: true,
+    };
+    assert!(specificity_weight(&r) > 4);
+}
+
+#[test]
+fn credential_scope_defaults_shared() {
+    // C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）
+    assert_eq!(CredentialScope::default(), CredentialScope::Shared);
+}
+
+#[test]
 fn plaintext_api_key_in_provider_is_rejected_by_schema() {
     // 明文 key 不允许落 v2 结构（A1）——credential 必须是 CredentialRef；ProviderProfile 配置 deny_unknown_fields，
     // 故 `api_key` 显式被拒（而非静默丢弃），保证 A1「永不存明文」由「显式拒绝」强制。

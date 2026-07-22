@@ -1,0 +1,64 @@
+# Φ0.6: B3 multiplex 契约演示样例
+# multiplex_profiles = true → 启用网关多 profile 路由；profile_routes 按 specificity 选路
+# (session(8) > project(4) > tenant(2))，client_id 仅作 audit 不参与评分
+version = 2
+
+[profiles.default]
+name = "default"
+active_target = { provider_id = "glm", model_id = "glm-4.6", scope = "global" }
+credential_scope = "shared"
+[[profiles.default.providers]]
+id = "glm"
+kind = "openai-compatible"
+display_name = "Z.AI GLM"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+credential = { backend = "env", var = "SHANNON_GLM_API_KEY" }
+
+[profiles.team-alpha]
+name = "team-alpha"
+active_target = { provider_id = "glm", model_id = "glm-4.6", scope = "global" }
+credential_scope = "isolated"
+[[profiles.team-alpha.providers]]
+id = "glm"
+kind = "openai-compatible"
+display_name = "Z.AI GLM"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+credential = { backend = "env", var = "SHANNON_GLM_ALPHA_API_KEY" }
+
+[profiles.team-beta]
+name = "team-beta"
+active_target = { provider_id = "glm", model_id = "glm-4.6", scope = "global" }
+credential_scope = "isolated"
+[[profiles.team-beta.providers]]
+id = "glm"
+kind = "openai-compatible"
+display_name = "Z.AI GLM"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+credential = { backend = "env", var = "SHANNON_GLM_BETA_API_KEY" }
+
+[gateway]
+multiplex_profiles = true
+
+# tenant-only 路由（specificity=2）
+[[gateway.profile_routes]]
+name = "tenant-alpha-default"
+tenant_id = "alpha"
+profile = "team-alpha"
+enabled = true
+
+# tenant+project 路由（specificity=6 → 胜 tenant-only）
+[[gateway.profile_routes]]
+name = "tenant-alpha-project-x"
+tenant_id = "alpha"
+project_path = "/work/project-x"
+profile = "team-alpha"
+enabled = true
+
+# tenant+project+session 路由（specificity=14 → 最具体）
+[[gateway.profile_routes]]
+name = "tenant-alpha-project-x-session-debug"
+tenant_id = "alpha"
+project_path = "/work/project-x"
+session_id = "debug-2026-07-22"
+profile = "team-beta"
+enabled = true
