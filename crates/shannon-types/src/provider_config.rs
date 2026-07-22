@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -54,4 +55,65 @@ pub enum CredentialRef {
     InlineLegacy { masked: String },
     /// 会话内临时注入，不落盘
     Ephemeral,
+}
+
+/// 原子切换单元：provider+model+scope 同组切换，杜绝半切换不一致（P3）。
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ActiveTarget {
+    pub provider_id: String,
+    pub model_id: String,
+    pub scope: Scope,
+}
+
+/// 温度发送策略：None=用调用方默认；Omit=完全不发（如 Kimi 服务端自管）
+#[derive(Debug, Clone, Copy, PartialEq, JsonSchema, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TemperatureStrategy {
+    #[default]
+    Default,
+    Omit,
+}
+
+/// 首期最小集（避免 Hermes 20+ 布尔标志反模式）
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ProviderQuirks {
+    pub temperature_strategy: TemperatureStrategy,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub max_tokens_override: Option<u32>,
+    #[serde(default = "default_true")]
+    pub send_temperature: bool,
+}
+
+impl Default for ProviderQuirks {
+    fn default() -> Self {
+        Self {
+            temperature_strategy: TemperatureStrategy::default(),
+            max_tokens_override: None,
+            send_temperature: default_true(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderProfile {
+    pub id: String,
+    pub kind: ProviderKind,
+    pub display_name: String,
+    pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub models_url: Option<String>, // None → {base_url}/models
+    pub credential: CredentialRef,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub extra_headers: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default_max_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_models: Vec<String>,
+    #[serde(default)]
+    pub quirks: ProviderQuirks,
 }

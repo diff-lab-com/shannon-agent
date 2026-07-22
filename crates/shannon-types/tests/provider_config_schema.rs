@@ -1,6 +1,46 @@
 use shannon_types::provider_config::*;
 
 #[test]
+fn active_target_is_atomic_unit() {
+    let t = ActiveTarget {
+        provider_id: "glm".into(),
+        model_id: "glm-4.6".into(),
+        scope: Scope::Global,
+    };
+    let json = serde_json::to_value(&t).unwrap();
+    assert_eq!(json["provider_id"], "glm");
+    assert_eq!(json["model_id"], "glm-4.6");
+    assert_eq!(json["scope"], "global");
+}
+
+#[test]
+fn provider_quirks_minimal_and_optional() {
+    let json = serde_json::to_string(&ProviderQuirks::default()).unwrap();
+    // 默认 quirk 必须能省略所有可选字段
+    assert!(json.contains("\"send_temperature\":true"));
+}
+
+#[test]
+fn provider_profile_credential_is_credential_ref() {
+    let p = ProviderProfile {
+        id: "glm".into(),
+        kind: ProviderKind::OpenAiCompatible,
+        display_name: "Z.AI GLM".into(),
+        base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
+        models_url: None,
+        credential: CredentialRef::Env {
+            var: "SHANNON_GLM_API_KEY".into(),
+        },
+        extra_headers: Default::default(),
+        default_max_tokens: None,
+        fallback_models: vec!["glm-4.6".into(), "glm-4.5-air".into()],
+        quirks: ProviderQuirks::default(),
+    };
+    let json = serde_json::to_string(&p).unwrap();
+    assert!(json.contains(r#""backend":"env""#));
+}
+
+#[test]
 fn provider_kind_serializes_to_lowercase_kebab() {
     let kind = ProviderKind::OpenAiCompatible;
     let json = serde_json::to_string(&kind).unwrap();
