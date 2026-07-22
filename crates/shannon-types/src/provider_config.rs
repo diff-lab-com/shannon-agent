@@ -117,3 +117,45 @@ pub struct ProviderProfile {
     #[serde(default)]
     pub quirks: ProviderQuirks,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ModelDescriptor {
+    pub id: String,
+    pub provider_id: String,
+    pub display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub context_limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub output_limit: Option<u32>,
+    #[serde(default)]
+    pub supports_tools: bool,
+    #[serde(default)]
+    pub supports_vision: bool,
+    #[serde(default)]
+    pub source: ModelSource,
+    #[serde(default)]
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ModelProfile {
+    #[serde(default)]
+    pub name: String,
+    pub active_target: ActiveTarget,
+    #[serde(default)]
+    pub providers: Vec<ProviderProfile>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub auxiliary: HashMap<AuxRole, ActiveTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
+pub struct ProviderModelConfig {
+    pub version: u32, // = 2
+    pub profiles: HashMap<String, ModelProfile>,
+}
+
+impl ProviderModelConfig {
+    pub fn version() -> u32 {
+        2
+    }
+}

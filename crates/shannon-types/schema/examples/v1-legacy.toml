@@ -1,0 +1,3 @@
+api_key = "sk-ant-OLD"
+provider = "anthropic"
+model = "claude-3-5-sonnet-20241022"
