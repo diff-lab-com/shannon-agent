@@ -124,7 +124,7 @@ base_url = "https://x"
 credential = { backend = "env", var = "SHANNON_GLM_API_KEY" }
 "#;
     let cfg: ProviderModelConfig = toml::from_str(toml).unwrap();
-    assert_eq!(cfg.gateway.multiplex_profiles, false); // 默认 off
+    assert!(!cfg.gateway.multiplex_profiles); // 默认 off
     assert!(cfg.gateway.profile_routes.is_empty());
 }
 
@@ -141,6 +141,41 @@ fn route_specificity_session_beats_project_beats_tenant() {
         enabled: true,
     };
     assert!(specificity_weight(&r) > 4);
+
+    // Pin each weight independently
+    let only_tenant = ProfileRoute {
+        name: "t".into(),
+        tenant_id: Some("t".into()),
+        project_path: None,
+        session_id: None,
+        client_id: None,
+        profile: "x".into(),
+        enabled: true,
+    };
+    let only_project = ProfileRoute {
+        name: "p".into(),
+        tenant_id: None,
+        project_path: Some("/p".into()),
+        session_id: None,
+        client_id: None,
+        profile: "x".into(),
+        enabled: true,
+    };
+    let only_session = ProfileRoute {
+        name: "s".into(),
+        tenant_id: None,
+        project_path: None,
+        session_id: Some("s1".into()),
+        client_id: None,
+        profile: "x".into(),
+        enabled: true,
+    };
+    assert_eq!(specificity_weight(&only_tenant), 2);
+    assert_eq!(specificity_weight(&only_project), 4);
+    assert_eq!(specificity_weight(&only_session), 8);
+    // And the comparative ordering the test name promises
+    assert!(specificity_weight(&only_session) > specificity_weight(&only_project));
+    assert!(specificity_weight(&only_project) > specificity_weight(&only_tenant));
 }
 
 #[test]
@@ -153,10 +188,11 @@ fn credential_scope_defaults_shared() {
 fn plaintext_api_key_in_provider_is_rejected_by_schema() {
     // 明文 key 不允许落 v2 结构（A1）——credential 必须是 CredentialRef；ProviderProfile 配置 deny_unknown_fields，
     // 故 `api_key` 显式被拒（而非静默丢弃），保证 A1「永不存明文」由「显式拒绝」强制。
-    let bad = r#"{"version":2,"profiles":{"default":{"name":"default","active_target":{"provider_id":"x","model_id":"x","scope":"global"},"providers":[{"id":"x","kind":"openai","display_name":"x","base_url":"x","api_key":"sk-leak"}]}}}"#;
+    let bad = r#"{"version":2,"profiles":{"default":{"name":"default","active_target":{"provider_id":"x","model_id":"x","scope":"global"},"providers":[{"id":"x","kind":"openai-compatible","display_name":"x","base_url":"x","api_key":"sk-leak"}]}}}"#;
     let res: Result<ProviderModelConfig, _> = serde_json::from_str(bad);
+    let err = res.unwrap_err().to_string();
     assert!(
-        res.is_err(),
-        "plaintext api_key must not deserialize into v2 (deny_unknown_fields)"
+        err.contains("api_key") || err.contains("unknown field"),
+        "expected unknown-field rejection mentioning api_key, got: {err}"
     );
 }
