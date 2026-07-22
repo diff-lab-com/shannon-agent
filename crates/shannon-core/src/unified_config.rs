@@ -71,6 +71,11 @@ pub struct ShannonConfig {
     /// `[notifications]` section for system-level notification behavior.
     #[serde(default)]
     pub notifications: Option<NotificationsConfig>,
+    /// N1: v2 multi-provider/model config. When its `"default"` profile resolves
+    /// an active target, it is preferred over the legacy flat fields above
+    /// (which are removed in commit C). Empty by default → legacy fallback.
+    #[serde(default)]
+    pub provider_model: shannon_types::provider_config::ProviderModelConfig,
 }
 
 impl ShannonConfig {
@@ -110,6 +115,14 @@ impl ShannonConfig {
             }
         };
 
+        // N1: merge v2 provider_model — other wins if it carries profiles,
+        // otherwise keep self (empty → legacy fallback / Ollama default).
+        let provider_model = if !other.provider_model.profiles.is_empty() {
+            other.provider_model.clone()
+        } else {
+            self.provider_model.clone()
+        };
+
         ShannonConfig {
             model: other.model.clone().or_else(|| self.model.clone()),
             provider: other.provider.clone().or_else(|| self.provider.clone()),
@@ -131,6 +144,7 @@ impl ShannonConfig {
                 .notifications
                 .clone()
                 .or_else(|| self.notifications.clone()),
+            provider_model,
         }
     }
 
@@ -368,6 +382,11 @@ impl shannon_engine::api::types::ApiKeyResolver for ShannonConfig {
 // dependency (`shannon-engine → shannon-core` for `ShannonConfig`).
 impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
     fn from(cfg: ShannonConfig) -> Self {
+        // N1: prefer the v2 provider_model when it resolves a default profile;
+        // otherwise fall back to the legacy flat fields below.
+        if let Some(rt) = crate::provider_resolver::resolve_active_target(&cfg.provider_model) {
+            return build_client_from_resolved(&cfg, rt);
+        }
         use shannon_engine::api::{LlmProvider, RetryConfig};
         use std::collections::HashMap;
 
@@ -508,10 +527,110 @@ impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
     }
 }
 
+/// N1: build a [`LlmClientConfig`] from a resolved v2 active target (the v2
+/// path). The active profile drives provider identity, base_url, model and
+/// credential; the flat v1 fields are consulted only for behavioural overrides
+/// (`max_tokens`, `timeout`). Credentials are resolved strictly per A1 — only
+/// the profile's own [`CredentialRef`] is consulted.
+fn build_client_from_resolved(
+    cfg: &ShannonConfig,
+    rt: crate::provider_resolver::ResolvedTarget<'_>,
+) -> shannon_engine::api::LlmClientConfig {
+    use shannon_engine::api::{LlmClientConfig, LlmProvider, RetryConfig};
+
+    let provider = rt.provider;
+    let base_url = rt.profile.base_url.clone();
+    let model = rt.model_id.to_string();
+    let api_key = crate::provider_resolver::resolve_credential(&rt.profile.credential);
+
+    // Decision: explicit config override > profile default > engine fallback.
+    let max_tokens = cfg
+        .max_tokens
+        .map(|v| v as u32)
+        .or(rt.profile.default_max_tokens)
+        .unwrap_or(4096);
+    let timeout_seconds = cfg.timeout.unwrap_or(if provider == LlmProvider::Ollama {
+        300
+    } else {
+        120
+    });
+    let api_version = match provider {
+        LlmProvider::Anthropic => {
+            std::env::var("ANTHROPIC_API_VERSION").unwrap_or_else(|_| "2023-06-01".to_string())
+        }
+        _ => String::new(),
+    };
+
+    LlmClientConfig {
+        api_key,
+        base_url,
+        model,
+        max_tokens,
+        timeout_seconds,
+        api_version,
+        provider,
+        extra_headers: rt.profile.extra_headers.clone(),
+        retry_config: RetryConfig::default(),
+        fallback_provider: None,
+        fallback_base_url: None,
+        max_stream_reconnects: 3,
+        budget_tokens: None,
+        reasoning_effort: None,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use shannon_engine::api::{LlmClientConfig, LlmProvider};
+    use shannon_types::provider_config::{
+        ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind,
+        ProviderModelConfig, ProviderProfile, Scope,
+    };
+    use std::collections::HashMap;
+
+    /// Build a v2 `ProviderModelConfig` with a single `"default"` profile whose
+    /// active target is the given provider profile + model.
+    fn v2_default_profile(provider: ProviderProfile, model: &str) -> ProviderModelConfig {
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: provider.id.clone(),
+                    model_id: model.to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![provider],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            profiles,
+            gateway: Default::default(),
+        }
+    }
+
+    fn anthropic_profile(cred_var: &str) -> ProviderProfile {
+        ProviderProfile {
+            id: "anthropic".to_string(),
+            kind: ProviderKind::Anthropic,
+            display_name: "Anthropic".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: cred_var.to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+        }
+    }
 
     #[test]
     fn test_empty_config() {
@@ -640,5 +759,91 @@ mod tests {
         let merged = a.merge(&b);
         // b.debug is false, but a.debug was true — since merge uses `other.debug || self.debug`
         assert!(merged.debug);
+    }
+
+    #[test]
+    fn test_v2_profile_preferred_over_legacy_fields() {
+        // Both legacy flat fields AND a v2 default profile are set — v2 wins.
+        let cfg = ShannonConfig {
+            model: Some("legacy-model".to_string()),
+            provider: Some("openai".to_string()),
+            api_key: Some("legacy-key".to_string()),
+            base_url: Some("https://legacy.example.com".to_string()),
+            provider_model: v2_default_profile(
+                anthropic_profile("SHANNON_ANTHROPIC_API_KEY"),
+                "claude-sonnet-4-20250514",
+            ),
+            ..Default::default()
+        };
+        let cc: LlmClientConfig = cfg.into();
+        assert_eq!(cc.provider, LlmProvider::Anthropic);
+        assert_eq!(cc.base_url, "https://api.anthropic.com");
+        assert_eq!(cc.model, "claude-sonnet-4-20250514");
+        // legacy flat fields are NOT consulted on the v2 path
+        assert_ne!(cc.model, "legacy-model");
+        assert_ne!(cc.base_url, "https://legacy.example.com");
+    }
+
+    #[test]
+    fn test_v2_credential_env_resolved() {
+        // SAFETY: unique key read only by this test thread; removed at the end.
+        unsafe { std::env::set_var("N1_V2_TEST_KEY", "v2-secret") };
+        let provider = ProviderProfile {
+            id: "zhipu".to_string(),
+            kind: ProviderKind::OpenAiCompatible,
+            display_name: "Zhipu".to_string(),
+            base_url: "https://open.bigmodel.cn".to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: "N1_V2_TEST_KEY".to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+        };
+        let cfg = ShannonConfig {
+            provider_model: v2_default_profile(provider, "glm-4"),
+            ..Default::default()
+        };
+        let cc: LlmClientConfig = cfg.into();
+        // base_url detection → Zhipu provider; credential from the env var.
+        assert_eq!(cc.provider, LlmProvider::Zhipu);
+        assert_eq!(cc.api_key, "v2-secret");
+        // SAFETY: see above.
+        unsafe { std::env::remove_var("N1_V2_TEST_KEY") };
+    }
+
+    #[test]
+    fn test_v2_max_tokens_priority() {
+        fn build(max_tokens: Option<usize>, profile_max: Option<u32>) -> LlmClientConfig {
+            let mut provider = anthropic_profile("N1_V2_UNUSED");
+            provider.default_max_tokens = profile_max;
+            let cfg = ShannonConfig {
+                max_tokens,
+                provider_model: v2_default_profile(provider, "claude"),
+                ..Default::default()
+            };
+            cfg.into()
+        }
+        // profile default wins when there is no config override
+        assert_eq!(build(None, Some(8000)).max_tokens, 8000);
+        // config override beats profile default
+        assert_eq!(build(Some(1000), Some(8000)).max_tokens, 1000);
+        // engine fallback when neither is set
+        assert_eq!(build(None, None).max_tokens, 4096);
+    }
+
+    #[test]
+    fn test_v2_empty_falls_back_to_legacy_path() {
+        // No v2 default profile → legacy v1 path runs. max_tokens is
+        // deterministic regardless of env (4096 fallback) and is set by the
+        // v1 branch, proving the v2 branch was skipped.
+        let cfg = ShannonConfig {
+            provider_model: ProviderModelConfig::default(),
+            ..Default::default()
+        };
+        let cc: LlmClientConfig = cfg.into();
+        assert_eq!(cc.max_tokens, 4096);
     }
 }
