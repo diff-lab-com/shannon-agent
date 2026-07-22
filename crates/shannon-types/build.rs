@@ -361,6 +361,7 @@ pub struct EventEnvelope<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ProviderKind {
     Anthropic,
     #[serde(rename = "openai")]
@@ -374,6 +375,7 @@ pub enum ProviderKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Scope {
     Process,
     Session,
@@ -383,6 +385,7 @@ pub enum Scope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ModelSource {
     Catalog,
     Discovered,
@@ -392,6 +395,7 @@ pub enum ModelSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AuxRole {
     Vision,
     WebExtract,
@@ -429,7 +433,7 @@ pub struct ProviderQuirks {
     pub temperature_strategy: TemperatureStrategy,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub max_tokens_override: Option<u32>,
-    #[serde(default = "build_default_true")]
+    #[serde(default = "default_true")]
     pub send_temperature: bool,
 }
 
@@ -438,12 +442,12 @@ impl Default for ProviderQuirks {
         Self {
             temperature_strategy: TemperatureStrategy::default(),
             max_tokens_override: None,
-            send_temperature: build_default_true(),
+            send_temperature: default_true(),
         }
     }
 }
 
-fn build_default_true() -> bool {
+fn default_true() -> bool {
     true
 }
 
@@ -531,28 +535,19 @@ pub struct ProfileRoute {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub client_id: Option<String>,
     pub profile: String,
-    #[serde(default = "build_default_route_enabled")]
+    #[serde(default = "default_route_enabled")]
     pub enabled: bool,
 }
 
-fn build_default_route_enabled() -> bool {
+fn default_route_enabled() -> bool {
     true
 }
 
 /// B3 契约：网关级 multiplex 路由配置
-#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 pub struct GatewayConfig {
     #[serde(default)]
     pub multiplex_profiles: bool,
     #[serde(default)]
     pub profile_routes: Vec<ProfileRoute>,
-}
-
-impl Default for GatewayConfig {
-    fn default() -> Self {
-        Self {
-            multiplex_profiles: false,
-            profile_routes: Vec::new(),
-        }
-    }
 }

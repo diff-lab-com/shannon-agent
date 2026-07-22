@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
 pub enum ProviderKind {
     Anthropic,
     #[serde(rename = "openai")]
@@ -29,6 +30,7 @@ pub enum ProviderKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Scope {
     Process,
     Session,
@@ -38,6 +40,7 @@ pub enum Scope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ModelSource {
     Catalog,
     Discovered,
@@ -47,6 +50,7 @@ pub enum ModelSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum AuxRole {
     Vision,
     WebExtract,
@@ -131,6 +135,8 @@ pub struct ProviderProfile {
     pub quirks: ProviderQuirks,
 }
 
+/// Provider 注册的模型目录条目（context 限制、工具支持、来源标签）。
+/// 写权限在 catalog；运行期只读。
 #[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 pub struct ModelDescriptor {
     pub id: String,
@@ -150,6 +156,10 @@ pub struct ModelDescriptor {
     pub available: bool,
 }
 
+/// 命名 profile（providers + active target + credential scope）。
+/// 同一 v2 config 可承载多个 profile（gateway multiplex 路由按
+/// `ProfileRoute.specificity_weight` 选路），单 profile 场景下
+/// gateway 默认 off，字节级等同 v1 行为。
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ModelProfile {
     #[serde(default)]
@@ -164,9 +174,14 @@ pub struct ModelProfile {
     pub credential_scope: CredentialScope,
 }
 
+/// v2 多 provider/model 协议 schema 顶层文档。
+///
+/// 承载 A1（env-default credentials, 永不存明文）/ B3（phased profile +
+/// multiplex routing, 默认 off）/ C1（v1→v2 one-shot 迁移前置 version
+/// 字段）。`version` 必须 = `VERSION`；迁移逻辑见 Φ1。
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ProviderModelConfig {
-    pub version: u32, // = 2
+    pub version: u32, // = VERSION
     pub profiles: HashMap<String, ModelProfile>,
     /// B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）
     #[serde(default)]
@@ -174,9 +189,8 @@ pub struct ProviderModelConfig {
 }
 
 impl ProviderModelConfig {
-    pub fn version() -> u32 {
-        2
-    }
+    /// 当前 schema version。`ProviderModelConfig::version` 字段必须等于此常量。
+    pub const VERSION: u32 = 2;
 }
 
 /// C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）；
@@ -213,21 +227,12 @@ fn default_route_enabled() -> bool {
 
 /// B3 契约：网关级 multiplex 路由配置。`multiplex_profiles=false`（默认）时
 /// `profile_routes` 完全被忽略，行为字节级等同单 profile。
-#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
 pub struct GatewayConfig {
     #[serde(default)]
     pub multiplex_profiles: bool,
     #[serde(default)]
     pub profile_routes: Vec<ProfileRoute>,
-}
-
-impl Default for GatewayConfig {
-    fn default() -> Self {
-        Self {
-            multiplex_profiles: false,
-            profile_routes: Vec::new(),
-        }
-    }
 }
 
 /// 计算路由条目的 specificity 加权值。
