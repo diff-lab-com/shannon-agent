@@ -61,6 +61,7 @@ pub mod prevent_sleep;
 pub mod progressive_loader;
 pub mod project_instructions;
 pub mod project_memory;
+pub mod provider_resolver;
 pub mod query_engine;
 pub mod rate_limit;
 pub mod rate_limit_messages;
