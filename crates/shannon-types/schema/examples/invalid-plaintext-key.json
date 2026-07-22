@@ -1,0 +1,22 @@
+{
+  "version": 2,
+  "profiles": {
+    "default": {
+      "name": "default",
+      "active_target": {
+        "provider_id": "x",
+        "model_id": "x",
+        "scope": "global"
+      },
+      "providers": [
+        {
+          "id": "x",
+          "kind": "openai",
+          "display_name": "x",
+          "base_url": "x",
+          "api_key": "sk-leak"
+        }
+      ]
+    }
+  }
+}
