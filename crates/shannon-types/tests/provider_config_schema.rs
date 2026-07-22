@@ -89,3 +89,34 @@ fn credential_ephemeral_has_no_secret_fields() {
     // Ephemeral 绝不可携带任何可序列化的密钥材料
     assert_eq!(json, r#"{"backend":"ephemeral"}"#);
 }
+
+#[test]
+fn v2_config_has_version_2_and_profiles() {
+    let toml = r#"
+version = 2
+[profiles.default]
+name = "default"
+active_target = { provider_id = "glm", model_id = "glm-4.6", scope = "global" }
+[[profiles.default.providers]]
+id = "glm"
+kind = "openai-compatible"
+display_name = "Z.AI GLM"
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+credential = { backend = "env", var = "SHANNON_GLM_API_KEY" }
+"#;
+    let cfg: ProviderModelConfig = toml::from_str(toml).unwrap();
+    assert_eq!(cfg.version, 2);
+    assert!(cfg.profiles.contains_key("default"));
+}
+
+#[test]
+fn plaintext_api_key_in_provider_is_rejected_by_schema() {
+    // 明文 key 不允许落 v2 结构（A1）——credential 必须是 CredentialRef；ProviderProfile 配置 deny_unknown_fields，
+    // 故 `api_key` 显式被拒（而非静默丢弃），保证 A1「永不存明文」由「显式拒绝」强制。
+    let bad = r#"{"version":2,"profiles":{"default":{"name":"default","active_target":{"provider_id":"x","model_id":"x","scope":"global"},"providers":[{"id":"x","kind":"openai","display_name":"x","base_url":"x","api_key":"sk-leak"}]}}}"#;
+    let res: Result<ProviderModelConfig, _> = serde_json::from_str(bad);
+    assert!(
+        res.is_err(),
+        "plaintext api_key must not deserialize into v2 (deny_unknown_fields)"
+    );
+}
