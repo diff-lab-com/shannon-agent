@@ -81,13 +81,11 @@ fn provider_kind_schema_emits_openai_not_open_ai() {
     let literals: Vec<&str> = kinds.iter().map(|v| v.as_str().unwrap()).collect();
     assert!(
         literals.contains(&"openai"),
-        "schema must contain 'openai', got: {:?}",
-        literals
+        "schema must contain 'openai', got: {literals:?}"
     );
     assert!(
         !literals.contains(&"open-ai"),
-        "schema must NOT contain old kebab form 'open-ai', got: {:?}",
-        literals
+        "schema must NOT contain old kebab form 'open-ai', got: {literals:?}"
     );
 }
 
