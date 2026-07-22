@@ -13,6 +13,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 shannon-stability-attr = { workspace = true }
+schemars = { version = "0.8", default-features = false, features = ["derive"] }
 
 [build-dependencies]
 serde = { workspace = true }
