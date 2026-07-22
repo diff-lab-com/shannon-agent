@@ -205,7 +205,7 @@
     "ProviderKind": {
       "enum": [
         "anthropic",
-        "open-ai",
+        "openai",
         "openai-compatible",
         "ollama",
         "gemini",

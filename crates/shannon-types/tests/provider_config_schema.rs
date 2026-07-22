@@ -48,6 +48,50 @@ fn provider_kind_serializes_to_lowercase_kebab() {
 }
 
 #[test]
+fn provider_kind_openai_serializes_to_bare_openai() {
+    // T3 lock-in: bare "openai" wire form (canonical, OpenCode-compatible).
+    // Distinct from "openai-compatible" (Z.AI GLM / similar OpenAI drop-ins).
+    let kind = ProviderKind::OpenAi;
+    let json = serde_json::to_string(&kind).unwrap();
+    assert_eq!(json, "\"openai\"");
+}
+
+#[test]
+fn provider_kind_openai_rejects_old_kebab_form() {
+    // Pre-T3 wire form was "open-ai" (kebab derive from `OpenAi`). After T3 the
+    // contract is bare "openai". The old form must NOT silently deserialize —
+    // that would mask a schema break for downstream consumers.
+    let result: Result<ProviderKind, _> = serde_json::from_str("\"open-ai\"");
+    assert!(result.is_err(), "old kebab form 'open-ai' must be rejected");
+}
+
+#[test]
+fn provider_kind_schema_emits_openai_not_open_ai() {
+    // Schema-integration lock: the regenerated ProviderKind enum literal list
+    // must contain "openai" and NOT the old kebab form "open-ai".
+    let schema_str = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/schema/provider-model-config.schema.json",
+    ))
+    .expect("schema file");
+    let schema: serde_json::Value = serde_json::from_str(&schema_str).unwrap();
+    let kinds = schema["definitions"]["ProviderKind"]["enum"]
+        .as_array()
+        .expect("ProviderKind.enum must be an array");
+    let literals: Vec<&str> = kinds.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(
+        literals.contains(&"openai"),
+        "schema must contain 'openai', got: {:?}",
+        literals
+    );
+    assert!(
+        !literals.contains(&"open-ai"),
+        "schema must NOT contain old kebab form 'open-ai', got: {:?}",
+        literals
+    );
+}
+
+#[test]
 fn scope_roundtrips() {
     let s = Scope::Project;
     let json = serde_json::to_string(&s).unwrap();
