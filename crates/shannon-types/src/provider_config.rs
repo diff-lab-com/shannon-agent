@@ -193,6 +193,20 @@ impl ProviderModelConfig {
     pub const VERSION: u32 = 2;
 }
 
+/// N1: a `Default` so `ShannonConfig` (which embeds this via `#[serde(default)]`)
+/// can keep its `#[derive(Default)]`. Empty profiles → no active target → the
+/// legacy v1 flat fields / Ollama default are used. `version` is pinned to
+/// `VERSION`; no schema impact (T5 stays green).
+impl Default for ProviderModelConfig {
+    fn default() -> Self {
+        Self {
+            version: Self::VERSION,
+            profiles: HashMap::new(),
+            gateway: Default::default(),
+        }
+    }
+}
+
 /// C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）；
 /// Isolated 表示该 profile 独立解析凭据，互不影响。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize, Default)]
