@@ -1,0 +1,262 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ActiveTarget": {
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "provider_id": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/definitions/Scope"
+        }
+      },
+      "required": [
+        "model_id",
+        "provider_id",
+        "scope"
+      ],
+      "type": "object"
+    },
+    "CredentialRef": {
+      "oneOf": [
+        {
+          "properties": {
+            "backend": {
+              "enum": [
+                "env"
+              ],
+              "type": "string"
+            },
+            "var": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend",
+            "var"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "account": {
+              "type": "string"
+            },
+            "backend": {
+              "enum": [
+                "keyring"
+              ],
+              "type": "string"
+            },
+            "service": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "account",
+            "backend",
+            "service"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "backend": {
+              "enum": [
+                "inline_legacy"
+              ],
+              "type": "string"
+            },
+            "masked": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend",
+            "masked"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "backend": {
+              "enum": [
+                "ephemeral"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ModelProfile": {
+      "properties": {
+        "active_target": {
+          "$ref": "#/definitions/ActiveTarget"
+        },
+        "auxiliary": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ActiveTarget"
+          },
+          "type": "object"
+        },
+        "name": {
+          "default": "",
+          "type": "string"
+        },
+        "providers": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ProviderProfile"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "active_target"
+      ],
+      "type": "object"
+    },
+    "ProviderKind": {
+      "enum": [
+        "anthropic",
+        "open-ai",
+        "openai-compatible",
+        "ollama",
+        "gemini",
+        "deepseek"
+      ],
+      "type": "string"
+    },
+    "ProviderProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "base_url": {
+          "type": "string"
+        },
+        "credential": {
+          "$ref": "#/definitions/CredentialRef"
+        },
+        "default_max_tokens": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "extra_headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "fallback_models": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/definitions/ProviderKind"
+        },
+        "models_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "quirks": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProviderQuirks"
+            }
+          ],
+          "default": {
+            "send_temperature": true,
+            "temperature_strategy": "default"
+          }
+        }
+      },
+      "required": [
+        "base_url",
+        "credential",
+        "display_name",
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ProviderQuirks": {
+      "properties": {
+        "max_tokens_override": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "send_temperature": {
+          "default": true,
+          "type": "boolean"
+        },
+        "temperature_strategy": {
+          "$ref": "#/definitions/TemperatureStrategy"
+        }
+      },
+      "required": [
+        "temperature_strategy"
+      ],
+      "type": "object"
+    },
+    "Scope": {
+      "enum": [
+        "process",
+        "session",
+        "project",
+        "global"
+      ],
+      "type": "string"
+    },
+    "TemperatureStrategy": {
+      "enum": [
+        "default",
+        "omit"
+      ],
+      "type": "string"
+    }
+  },
+  "properties": {
+    "profiles": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ModelProfile"
+      },
+      "type": "object"
+    },
+    "version": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "profiles",
+    "version"
+  ],
+  "title": "ProviderModelConfig",
+  "type": "object"
+}
