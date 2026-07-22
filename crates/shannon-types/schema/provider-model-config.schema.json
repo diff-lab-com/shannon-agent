@@ -96,6 +96,31 @@
         }
       ]
     },
+    "CredentialScope": {
+      "description": "C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）",
+      "enum": [
+        "shared",
+        "isolated"
+      ],
+      "type": "string"
+    },
+    "GatewayConfig": {
+      "description": "B3 契约：网关级 multiplex 路由配置",
+      "properties": {
+        "multiplex_profiles": {
+          "default": false,
+          "type": "boolean"
+        },
+        "profile_routes": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ProfileRoute"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ModelProfile": {
       "properties": {
         "active_target": {
@@ -106,6 +131,15 @@
             "$ref": "#/definitions/ActiveTarget"
           },
           "type": "object"
+        },
+        "credential_scope": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/CredentialScope"
+            }
+          ],
+          "default": "shared",
+          "description": "C1 两层凭据解析（默认 Shared；isolated 时独立解析，互不影响）"
         },
         "name": {
           "default": "",
@@ -121,6 +155,50 @@
       },
       "required": [
         "active_target"
+      ],
+      "type": "object"
+    },
+    "ProfileRoute": {
+      "description": "B3 契约：profile 路由条目",
+      "properties": {
+        "client_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "project_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tenant_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "profile"
       ],
       "type": "object"
     },
@@ -241,6 +319,18 @@
     }
   },
   "properties": {
+    "gateway": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/GatewayConfig"
+        }
+      ],
+      "default": {
+        "multiplex_profiles": false,
+        "profile_routes": []
+      },
+      "description": "B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）"
+    },
     "profiles": {
       "additionalProperties": {
         "$ref": "#/definitions/ModelProfile"

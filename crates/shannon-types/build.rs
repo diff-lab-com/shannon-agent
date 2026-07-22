@@ -494,10 +494,64 @@ pub struct ModelProfile {
     pub providers: Vec<ProviderProfile>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub auxiliary: HashMap<AuxRole, ActiveTarget>,
+    /// C1 两层凭据解析（默认 Shared；isolated 时独立解析，互不影响）
+    #[serde(default)]
+    pub credential_scope: CredentialScope,
 }
 
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ProviderModelConfig {
     pub version: u32,
     pub profiles: HashMap<String, ModelProfile>,
+    /// B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）
+    #[serde(default)]
+    pub gateway: GatewayConfig,
+}
+
+/// C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialScope {
+    #[default]
+    Shared,
+    Isolated,
+}
+
+/// B3 契约：profile 路由条目
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ProfileRoute {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tenant_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub project_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub client_id: Option<String>,
+    pub profile: String,
+    #[serde(default = "build_default_route_enabled")]
+    pub enabled: bool,
+}
+
+fn build_default_route_enabled() -> bool {
+    true
+}
+
+/// B3 契约：网关级 multiplex 路由配置
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    #[serde(default)]
+    pub multiplex_profiles: bool,
+    #[serde(default)]
+    pub profile_routes: Vec<ProfileRoute>,
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            multiplex_profiles: false,
+            profile_routes: Vec::new(),
+        }
+    }
 }

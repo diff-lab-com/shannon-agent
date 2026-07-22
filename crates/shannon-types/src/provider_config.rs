@@ -146,16 +146,90 @@ pub struct ModelProfile {
     pub providers: Vec<ProviderProfile>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub auxiliary: HashMap<AuxRole, ActiveTarget>,
+    /// C1 两层凭据解析（默认 Shared；isolated 时独立解析，互不影响）
+    #[serde(default)]
+    pub credential_scope: CredentialScope,
 }
 
 #[derive(Debug, Clone, PartialEq, JsonSchema, Serialize, Deserialize)]
 pub struct ProviderModelConfig {
     pub version: u32, // = 2
     pub profiles: HashMap<String, ModelProfile>,
+    /// B3 契约：网关多 profile 路由（默认 off，字节级等同单 profile）
+    #[serde(default)]
+    pub gateway: GatewayConfig,
 }
 
 impl ProviderModelConfig {
     pub fn version() -> u32 {
         2
     }
+}
+
+/// C1 两层凭据解析：默认 Shared（沿用旧单 profile 语义）；
+/// Isolated 表示该 profile 独立解析凭据，互不影响。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialScope {
+    #[default]
+    Shared,
+    Isolated,
+}
+
+/// B3 契约：profile 路由条目。specificity 由 `specificity_weight` 计算：
+/// session(8) > project(4) > tenant(2)，client_id 不参与评分。
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct ProfileRoute {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tenant_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub project_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub client_id: Option<String>,
+    pub profile: String,
+    #[serde(default = "default_route_enabled")]
+    pub enabled: bool,
+}
+
+fn default_route_enabled() -> bool {
+    true
+}
+
+/// B3 契约：网关级 multiplex 路由配置。`multiplex_profiles=false`（默认）时
+/// `profile_routes` 完全被忽略，行为字节级等同单 profile。
+#[derive(Debug, Clone, PartialEq, Eq, JsonSchema, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    #[serde(default)]
+    pub multiplex_profiles: bool,
+    #[serde(default)]
+    pub profile_routes: Vec<ProfileRoute>,
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            multiplex_profiles: false,
+            profile_routes: Vec::new(),
+        }
+    }
+}
+
+/// 计算路由条目的 specificity 加权值。
+/// 规则：session=8 / project=4 / tenant=2，按字段是否设置累加；未设置=0。
+/// client_id 不参与评分（仅用于 audit / 标识，不影响选路）。
+pub fn specificity_weight(r: &ProfileRoute) -> u32 {
+    let mut w: u32 = 0;
+    if r.session_id.is_some() {
+        w += 8;
+    }
+    if r.project_path.is_some() {
+        w += 4;
+    }
+    if r.tenant_id.is_some() {
+        w += 2;
+    }
+    w
 }
