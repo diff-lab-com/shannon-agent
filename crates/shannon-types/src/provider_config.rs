@@ -1,3 +1,15 @@
+//! v2 multi-provider/model protocol-schema vocabulary for shannon-agent.
+//!
+//! Defines the cross-sibling protocol contract (Rust → JSON Schema → consumed by
+//! shannon-desktop + shannon-gateway). Encodes decisions A1 (env-default credentials,
+//! no plaintext in v2), B3 (phased: profile + multiplex routing, default off), and C1
+//! (one-shot v1→v2 migration). The emitted schema lives at
+//! `crates/shannon-types/schema/provider-model-config.schema.json`.
+//!
+//! ⚠ If you change types in this file, you MUST also update the redeclaration block
+//! in `build.rs` (`build.rs:~356–557`) — `schemars::schema_for!` only sees the build.rs
+//! stubs. Drift = schema silently diverges from Rust types. See ledger note.
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
