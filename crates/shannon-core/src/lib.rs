@@ -43,6 +43,7 @@ pub mod api_services;
 pub mod away_summary;
 pub mod bridge_service;
 pub mod checkpoint;
+pub mod config_migration;
 pub mod diagnostics;
 pub mod extract_memories;
 pub mod git_operation_tracking;
@@ -130,6 +131,10 @@ pub use bridge_service::{
 };
 pub use checkpoint::{
     Checkpoint, CheckpointManager, FileChangePreview, RestoreMode, RevertPreview, TurnCheckpoint,
+};
+pub use config_migration::{
+    MigrationPlan, SecretBinding, default_secrets_path, persist_secrets, plan_migration,
+    to_legacy_v1_config,
 };
 pub use diagnostics::{
     DiagnosticCategory, DiagnosticEvent, DiagnosticLevel, DiagnosticSummary, DiagnosticTracker,
