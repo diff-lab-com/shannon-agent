@@ -18,6 +18,7 @@ use std::collections::HashMap;
 #[serde(rename_all = "kebab-case")]
 pub enum ProviderKind {
     Anthropic,
+    #[serde(rename = "openai")]
     OpenAi,
     #[serde(rename = "openai-compatible")]
     OpenAiCompatible,
