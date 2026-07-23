@@ -140,15 +140,17 @@ impl FromStr for TriggeredCommand {
         let verb = parts
             .next()
             .ok_or_else(|| anyhow::anyhow!("missing verb (list|enable|disable|show)"))?;
-        let mut arg = || parts.next().ok_or_else(|| anyhow::anyhow!("missing routine name"));
+        let mut arg = || {
+            parts
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing routine name"))
+        };
         match verb {
             "list" | "ls" => Ok(TriggeredCommand::List),
             "enable" | "on" => Ok(TriggeredCommand::Enable(arg()?.to_string())),
             "disable" | "off" => Ok(TriggeredCommand::Disable(arg()?.to_string())),
             "show" => Ok(TriggeredCommand::Show(arg()?.to_string())),
-            other => anyhow::bail!(
-                "unknown verb '{other}' (expected list|enable|disable|show)"
-            ),
+            other => anyhow::bail!("unknown verb '{other}' (expected list|enable|disable|show)"),
         }
     }
 }
@@ -210,10 +212,15 @@ pub fn format_output(out: &TriggeredOutput) -> String {
             if rs.is_empty() {
                 return "no triggered routines".into();
             }
-            let mut s = String::from("name                          enabled  trigger          matcher\n");
+            let mut s =
+                String::from("name                          enabled  trigger          matcher\n");
             for r in rs {
                 let en = if r.effective_enabled { "yes" } else { "no" };
-                let en: String = if r.override_active { format!("{en}*") } else { en.to_string() };
+                let en: String = if r.override_active {
+                    format!("{en}*")
+                } else {
+                    en.to_string()
+                };
                 let matcher = r.def.matcher.as_deref().unwrap_or("-");
                 s.push_str(&format!(
                     "{name:<28} {en:<8}  {trigger:<15} {matcher}\n",
@@ -229,11 +236,7 @@ pub fn format_output(out: &TriggeredOutput) -> String {
             s.push_str(&format!(
                 "enabled: {}{}\n",
                 r.effective_enabled,
-                if r.override_active {
-                    " (override)"
-                } else {
-                    ""
-                }
+                if r.override_active { " (override)" } else { "" }
             ));
             s.push_str(&format!("trigger: {}\n", r.def.trigger));
             if let Some(m) = &r.def.matcher {
@@ -246,7 +249,10 @@ pub fn format_output(out: &TriggeredOutput) -> String {
             s
         }
         TriggeredOutput::Toggled { name, enabled } => {
-            format!("routine {name} {}", if *enabled { "enabled" } else { "disabled" })
+            format!(
+                "routine {name} {}",
+                if *enabled { "enabled" } else { "disabled" }
+            )
         }
     }
 }
@@ -318,7 +324,10 @@ enabled = false
         assert!(!r.effective_enabled);
         assert!(r.override_active);
 
-        let r = resolved.iter().find(|r| r.def.name == "session-pull").unwrap();
+        let r = resolved
+            .iter()
+            .find(|r| r.def.name == "session-pull")
+            .unwrap();
         assert!(!r.effective_enabled);
         assert!(!r.override_active);
     }
@@ -389,12 +398,7 @@ enabled = false
     fn apply_unknown_routine_errors() {
         let reg = build_registry();
         let mut store = OverrideStore::default();
-        assert!(apply(
-            &reg,
-            &mut store,
-            &TriggeredCommand::Enable("nope".into())
-        )
-        .is_err());
+        assert!(apply(&reg, &mut store, &TriggeredCommand::Enable("nope".into())).is_err());
     }
 
     #[test]
