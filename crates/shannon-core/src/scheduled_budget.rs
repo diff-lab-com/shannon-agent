@@ -184,18 +184,10 @@ impl BudgetEnforcer {
     /// Check whether `task_id` may fire right now.
     pub fn check(&mut self, task_id: &str) -> BudgetVerdict {
         self.roll_if_new_month(task_id);
-        let Some(cap) = self
-            .states
-            .get(task_id)
-            .and_then(|s| s.cap_usd)
-        else {
+        let Some(cap) = self.states.get(task_id).and_then(|s| s.cap_usd) else {
             return BudgetVerdict::NoBudget;
         };
-        let spent = self
-            .states
-            .get(task_id)
-            .map(|s| s.spent_usd)
-            .unwrap_or(0.0);
+        let spent = self.states.get(task_id).map(|s| s.spent_usd).unwrap_or(0.0);
         if spent >= cap {
             BudgetVerdict::Deny {
                 spent_usd: spent,
@@ -235,8 +227,7 @@ impl BudgetEnforcer {
     fn roll_if_new_month(&mut self, task_id: &str) {
         let now = first_of_this_month_utc();
         if let Some(state) = self.states.get_mut(task_id) {
-            if state.month_start.month() != now.month() || state.month_start.year() != now.year()
-            {
+            if state.month_start.month() != now.month() || state.month_start.year() != now.year() {
                 state.roll_over(now);
             }
         }
@@ -252,10 +243,7 @@ fn first_of_this_month_utc() -> DateTime<Utc> {
     // build from `(year, month, 1, 0, 0, 0)`.
     use chrono::NaiveDate;
     let date = NaiveDate::from_ymd_opt(year, month, 1).expect("valid ymd");
-    let dt = date
-        .and_hms_opt(0, 0, 0)
-        .expect("valid hms")
-        .and_utc();
+    let dt = date.and_hms_opt(0, 0, 0).expect("valid hms").and_utc();
     dt
 }
 
@@ -301,9 +289,7 @@ mod tests {
         enforcer.record_spend("t1", 5.0);
         match enforcer.check("t1") {
             BudgetVerdict::Deny {
-                spent_usd,
-                cap_usd,
-                ..
+                spent_usd, cap_usd, ..
             } => {
                 assert_eq!(spent_usd, 5.0);
                 assert_eq!(cap_usd, 5.0);
