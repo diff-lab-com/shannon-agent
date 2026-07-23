@@ -192,9 +192,7 @@ impl BudgetEnforcer {
             BudgetVerdict::Deny {
                 spent_usd: spent,
                 cap_usd: cap,
-                reason: format!(
-                    "monthly budget exhausted: spent ${spent:.4} >= cap ${cap:.4}"
-                ),
+                reason: format!("monthly budget exhausted: spent ${spent:.4} >= cap ${cap:.4}"),
             }
         } else {
             BudgetVerdict::Allow {
