@@ -1,3 +1,9 @@
+// J1-J4 Sprint 4 module: the public surface is wired into the CLI binary
+// in a follow-up PR (clap subcommand plumbing). Until that lands, suppress
+// the dead-code warnings that clippy::workspace fires for fully-typed
+// helper modules that aren't yet reached from `main.rs`.
+#![allow(dead_code)]
+
 //! CLI surface for `/triggered` — inspect and toggle hook-triggered routines.
 //!
 //! These routines (loaded from `.shannon/routines.toml` and
