@@ -1,5 +1,7 @@
 # Shannon Code
 
+> **Active workspace note**: This repository (`/home/ed/workspace/app/work/shannon/shannon-mono`) is the **canonical active workspace** for the Shannon monorepo (`diff-lab-com/shannon-agent`). The older `shannon-agent/` parent directory (with its `shannon-code` / `shannon-desktop` / `shannon-gateway` sub-repos) is **obsolete** — do not open or work from it. The `shannon-agent-build/shannon-agent` mirror is **archived** (see its `ARCHIVED-NOTICE.md`). Historical notes from those repos live under `docs/archive/legacy-archives/` and `claudedocs/archive/legacy-archives/` (gitignored, see INDEX.md).
+
 > **Note:** The unified `shannon` CLI replaces the former `shannon-code` product. Internal `shannon-code` references in CHANGELOG / release notes / migration docs are historical and intentionally retained.
 
 Rust-based AI code assistant (like Claude Code) with multi-provider LLM support, MCP-based extensions, and terminal UI.
