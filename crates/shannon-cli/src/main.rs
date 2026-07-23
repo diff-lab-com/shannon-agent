@@ -9,6 +9,7 @@ use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
     i18n,
     model_registry::resolve_model,
+    provider_resolver::synthesize_default_profile,
     query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
@@ -248,8 +249,12 @@ struct ShannonTomlConfig {
     temperature: Option<f32>,
     timeout: Option<u64>,
     debug: Option<bool>,
-    api_key: Option<String>,
-    base_url: Option<String>,
+    /// N1/C-fields: legacy `api_key`/`base_url` removed under no-compat. TOML
+    /// `api_key` is **silently ignored** (would conflict with A1 — plaintext
+    /// never enters the config; use `~/.shannon/secrets.env` instead).
+    /// `base_url` is no longer recognised here either; put it on the
+    /// `provider_model` profile in TOML (full TOML config support is in
+    /// `shannon-cli` via `ConfigBuilder`'s JSON parse path).
     enable_tools: Option<bool>,
     /// User-defined conversation presets.
     presets: HashMap<String, ConversationPreset>,
@@ -293,12 +298,6 @@ fn load_toml_config() -> ShannonTomlConfig {
                 }
                 if cfg.debug.is_some() {
                     merged.debug = cfg.debug;
-                }
-                if cfg.api_key.is_some() {
-                    merged.api_key = cfg.api_key;
-                }
-                if cfg.base_url.is_some() {
-                    merged.base_url = cfg.base_url;
                 }
                 if cfg.enable_tools.is_some() {
                     merged.enable_tools = cfg.enable_tools;
@@ -702,28 +701,74 @@ fn should_enable_tools(provider: shannon_engine::api::LlmProvider) -> bool {
 
 /// Priority (highest → lowest):
 ///   CLI overrides > env vars (`SHANNON_*`) > local `.shannon.toml` > global `~/.shannon/config.toml`
+///
+/// N1/C-fields: the legacy `ShannonConfig { model, provider, api_key,
+/// base_url, … }` literal is gone. CLI options feed
+/// [`shannon_core::provider_resolver::synthesize_default_profile`] (with
+/// `explicit_cred_var = Some("SHANNON_API_KEY")` so the credential routing is
+/// deterministic) to build the default v2 profile (provider/base_url/model +
+/// a `CredentialRef::Env` pointing at `SHANNON_API_KEY`). The plaintext
+/// api-key value never enters the config (A1-strict); at `From`-time the
+/// value is sourced from the process environment via `resolve_credential`.
+///
+/// The CLI temporarily injects the resolved api-key value into the
+/// `SHANNON_API_KEY` env var so `resolve_credential` can pick it up. This is
+/// restored before returning. **N2 will replace this with proper secrets.env
+/// plumbing** via [`crate::config_migration::persist_secrets`] —
+/// pre-N1 the same `unsafe std::env` pattern was used by
+/// `apply_env_overrides`, so this preserves A1 and the same overall behaviour.
 fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
-    // 1. Convert the already-parsed CLI options into a ShannonConfig for the
-    //    highest-priority layer. Use the accessor methods which include env var
-    //    fallback (e.g. cli_config.provider() checks SHANNON_PROVIDER).
+    // 1. Resolve the canonical api-key value: SHANNON_API_KEY (or
+    //    cli-injected override) → ANTHROPIC_API_KEY → OPENAI_API_KEY.
+    let api_key_resolved = cli_config
+        .get_env("SHANNON_API_KEY")
+        .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+        .or_else(|| std::env::var("OPENAI_API_KEY").ok());
+
+    // 2. Inject into env so synthesize (which may run multiple times across
+    //    layers) always picks `SHANNON_API_KEY` via the explicit override
+    //    path. Save any prior value so we can restore.
+    let saved_shannon_api_key = std::env::var("SHANNON_API_KEY").ok();
+    let saved_anthropic_api_key = std::env::var("ANTHROPIC_API_KEY").ok();
+    let saved_openai_api_key = std::env::var("OPENAI_API_KEY").ok();
+    if let Some(ref v) = api_key_resolved {
+        // SAFETY: single-threaded CLI startup — no concurrent env readers
+        // observe an inconsistent state. N2 will move this into a
+        // shannon-core-scoped resolver. Last `unsafe std::env::set_var`
+        // wins.
+        unsafe { std::env::set_var("SHANNON_API_KEY", v) };
+    }
+    // SAFETY: see above; clear ANTHROPIC/OPENAI so the canonical chain
+    // (and our explicit-cred_var override) deterministically picks
+    // SHANNON_API_KEY.
+    unsafe { std::env::remove_var("ANTHROPIC_API_KEY") };
+    unsafe { std::env::remove_var("OPENAI_API_KEY") };
+
+    // 3. Synthesize the v2 default profile now that SHANNON_API_KEY is the
+    //    chosen cred var.
+    let provider_model = synthesize_default_profile(
+        cli_config.model().as_deref(),
+        cli_config.provider().as_deref(),
+        cli_config.get_env("SHANNON_BASE_URL").as_deref(),
+        Some("SHANNON_API_KEY"),
+    )
+    .unwrap_or_default();
+
     let cli_overrides = ShannonConfig {
-        model: cli_config.model(),
-        provider: cli_config.provider(),
-        api_key: cli_config
-            .get_env("SHANNON_API_KEY")
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
-            .or_else(|| std::env::var("OPENAI_API_KEY").ok()),
-        base_url: cli_config.get_env("SHANNON_BASE_URL"),
         max_tokens: cli_config.max_tokens(),
         temperature: cli_config.temperature(),
         timeout: cli_config.timeout(),
         debug: cli_config.debug(),
         enable_tools: None,
         max_context_tokens: None,
-        ..Default::default()
+        presets: None,
+        permission_profile: None,
+        notifications: None,
+        provider_model,
     };
 
-    // 2. Build the merged ShannonConfig via ConfigBuilder.
+    // 4. Build merged config + convert. (load_env_vars will see
+    //    SHANNON_API_KEY still set and synthesise with the same cred var.)
     let merged = ConfigBuilder::new()
         .load_global_toml()
         .load_local_toml()
@@ -731,8 +776,25 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
         .set_cli_overrides(cli_overrides)
         .build();
 
-    // 3. Convert to LlmClientConfig (uses the `From<ShannonConfig>` impl).
-    LlmClientConfig::from(merged)
+    let out = LlmClientConfig::from(merged);
+
+    // 5. Restore env (in reverse order; failures don't propagate to avoid
+    //    masking the actual LlmClientConfig result).
+    // SAFETY: see step 2.
+    let restore = |name: &str, prior: Option<String>| {
+        if let Some(v) = prior {
+            // SAFETY: see step 2.
+            unsafe { std::env::set_var(name, v) };
+        } else {
+            // SAFETY: see step 2.
+            unsafe { std::env::remove_var(name) };
+        }
+    };
+    restore("OPENAI_API_KEY", saved_openai_api_key);
+    restore("ANTHROPIC_API_KEY", saved_anthropic_api_key);
+    restore("SHANNON_API_KEY", saved_shannon_api_key);
+
+    out
 }
 
 /// Load a session for resumption.
@@ -4305,8 +4367,6 @@ mod tests {
             temperature = 0.7
             timeout = 120
             debug = true
-            api_key = "sk-test"
-            base_url = "https://api.openai.com/v1"
         "#;
         let config: ShannonTomlConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.model.as_deref(), Some("gpt-4o"));
@@ -4315,11 +4375,10 @@ mod tests {
         assert_eq!(config.temperature, Some(0.7));
         assert_eq!(config.timeout, Some(120));
         assert!(config.debug.unwrap());
-        assert_eq!(config.api_key.as_deref(), Some("sk-test"));
-        assert_eq!(
-            config.base_url.as_deref(),
-            Some("https://api.openai.com/v1")
-        );
+        // N1/C-fields: legacy `api_key` / `base_url` are no longer recognised
+        // in ShannonTomlConfig (A1-strict: plaintext never enters the config;
+        // use `~/.shannon/secrets.env` instead for keys, and `provider_model`
+        // for base_url).
     }
 
     #[test]
