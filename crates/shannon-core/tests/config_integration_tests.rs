@@ -1032,16 +1032,78 @@ mod settings_tests {
 
 mod unified_config_tests {
     use shannon_core::unified_config::{ConfigBuilder, ShannonConfig};
+    use shannon_types::provider_config::{
+        CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig,
+        ProviderProfile, Scope,
+    };
+    use std::collections::HashMap;
+
+    /// Helper: build a `ProviderModelConfig` with a single `"default"` profile
+    /// (mirrors the in-file helper in `provider_resolver.rs` tests).
+    fn synth_profile(
+        provider_id: &str,
+        provider_kind: ProviderKind,
+        base_url: &str,
+        cred_var: &str,
+        model_id: &str,
+    ) -> ProviderModelConfig {
+        use shannon_types::provider_config::{ActiveTarget, Scope};
+        let profile = ProviderProfile {
+            id: provider_id.to_string(),
+            kind: provider_kind,
+            display_name: provider_id.to_string(),
+            base_url: base_url.to_string(),
+            models_url: None,
+            credential: CredentialRef::Env {
+                var: cred_var.to_string(),
+            },
+            extra_headers: HashMap::new(),
+            default_max_tokens: None,
+            fallback_models: Vec::new(),
+            quirks: Default::default(),
+        };
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "default".to_string(),
+            ModelProfile {
+                name: "default".to_string(),
+                active_target: ActiveTarget {
+                    provider_id: provider_id.to_string(),
+                    model_id: model_id.to_string(),
+                    scope: Scope::Global,
+                },
+                providers: vec![profile],
+                auxiliary: HashMap::new(),
+                credential_scope: CredentialScope::Shared,
+            },
+        );
+        ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            profiles,
+            gateway: Default::default(),
+        }
+    }
+
+    fn active_profile(cfg: &ShannonConfig) -> &ModelProfile {
+        cfg.provider_model
+            .profiles
+            .get("default")
+            .expect("merged config should carry a default profile when any layer populated it")
+    }
+
+    fn active_provider<'a>(cfg: &'a ShannonConfig) -> &'a ProviderProfile {
+        active_profile(cfg)
+            .providers
+            .first()
+            .expect("default profile should list the active provider")
+    }
 
     // -- ShannonConfig Creation ------------------------------------------------
 
     #[test]
     fn test_empty_config_all_fields_none() {
         let config = ShannonConfig::empty();
-        assert!(config.model.is_none());
-        assert!(config.provider.is_none());
-        assert!(config.api_key.is_none());
-        assert!(config.base_url.is_none());
+        assert!(config.provider_model.profiles.is_empty());
         assert!(config.max_tokens.is_none());
         assert!(config.temperature.is_none());
         assert!(config.timeout.is_none());
@@ -1052,8 +1114,8 @@ mod unified_config_tests {
     fn test_default_config_equals_empty() {
         let empty = ShannonConfig::empty();
         let default = ShannonConfig::default();
-        assert!(empty.model.is_none());
-        assert!(default.model.is_none());
+        assert!(empty.provider_model.profiles.is_empty());
+        assert!(default.provider_model.profiles.is_empty());
         assert!(!default.debug);
         assert!(!empty.debug);
     }
@@ -1061,25 +1123,35 @@ mod unified_config_tests {
     #[test]
     fn test_config_with_all_fields_set() {
         let config = ShannonConfig {
-            model: Some("claude-opus-4-6".to_string()),
-            provider: Some("anthropic".to_string()),
-            api_key: Some("sk-test".to_string()),
-            base_url: Some("https://api.anthropic.com".to_string()),
             max_tokens: Some(4096),
             temperature: Some(0.7),
             timeout: Some(30),
             debug: true,
             enable_tools: None,
             max_context_tokens: None,
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "SHANNON_ANTHROPIC_API_KEY",
+                "claude-opus-4-6",
+            ),
             ..Default::default()
         };
-        assert_eq!(config.model.as_deref(), Some("claude-opus-4-6"));
-        assert_eq!(config.provider.as_deref(), Some("anthropic"));
-        assert_eq!(config.api_key.as_deref(), Some("sk-test"));
         assert_eq!(
-            config.base_url.as_deref(),
-            Some("https://api.anthropic.com")
+            active_profile(&config).active_target.model_id,
+            "claude-opus-4-6"
         );
+        assert_eq!(active_provider(&config).id, "anthropic");
+        assert_eq!(
+            active_provider(&config).base_url,
+            "https://api.anthropic.com"
+        );
+        // A1: api-key is a CredentialRef::Env, never plaintext.
+        match &active_provider(&config).credential {
+            CredentialRef::Env { var } => assert_eq!(var, "SHANNON_ANTHROPIC_API_KEY"),
+            _ => panic!("credential should be Env-based (A1)"),
+        }
         assert_eq!(config.max_tokens, Some(4096));
         assert_eq!(config.temperature, Some(0.7));
         assert_eq!(config.timeout, Some(30));
@@ -1091,30 +1163,38 @@ mod unified_config_tests {
     #[test]
     fn test_merge_other_overrides_self() {
         let base = ShannonConfig {
-            model: Some("base-model".to_string()),
-            provider: Some("anthropic".to_string()),
-            api_key: Some("base-key".to_string()),
             max_tokens: Some(2048),
             debug: false,
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "BASE_KEY",
+                "base-model",
+            ),
             ..Default::default()
         };
 
         let other = ShannonConfig {
-            model: Some("override-model".to_string()),
-            provider: None,
-            api_key: None,
-            base_url: Some("http://custom".to_string()),
             max_tokens: None,
             temperature: Some(0.5),
             debug: true,
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "OVERRIDE_KEY",
+                "override-model",
+            ),
             ..Default::default()
         };
 
         let merged = base.merge(&other);
-        assert_eq!(merged.model, Some("override-model".to_string()));
-        assert_eq!(merged.provider, Some("anthropic".to_string())); // kept from base
-        assert_eq!(merged.api_key, Some("base-key".to_string())); // kept from base
-        assert_eq!(merged.base_url, Some("http://custom".to_string())); // from override
+        // provider_model: other wins (both are non-empty).
+        assert_eq!(
+            active_profile(&merged).active_target.model_id,
+            "override-model"
+        );
         assert_eq!(merged.max_tokens, Some(2048)); // kept from base
         assert_eq!(merged.temperature, Some(0.5)); // from override
         assert!(merged.debug); // from override
@@ -1123,20 +1203,22 @@ mod unified_config_tests {
     #[test]
     fn test_merge_none_in_other_preserves_base() {
         let base = ShannonConfig {
-            model: Some("kept".to_string()),
             temperature: Some(0.3),
             max_tokens: Some(100),
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "BASE_KEY",
+                "kept",
+            ),
             ..Default::default()
         };
-        let other = ShannonConfig {
-            model: None,
-            temperature: None,
-            max_tokens: None,
-            ..Default::default()
-        };
+        let other = ShannonConfig::empty();
 
         let merged = base.merge(&other);
-        assert_eq!(merged.model, Some("kept".to_string()));
+        // base.provider_model is preserved (other is empty → no clobber).
+        assert_eq!(active_profile(&merged).active_target.model_id, "kept");
         assert_eq!(merged.temperature, Some(0.3));
         assert_eq!(merged.max_tokens, Some(100));
     }
@@ -1146,10 +1228,7 @@ mod unified_config_tests {
         let a = ShannonConfig::empty();
         let b = ShannonConfig::empty();
         let merged = a.merge(&b);
-        assert!(merged.model.is_none());
-        assert!(merged.provider.is_none());
-        assert!(merged.api_key.is_none());
-        assert!(merged.base_url.is_none());
+        assert!(merged.provider_model.profiles.is_empty());
         assert!(merged.max_tokens.is_none());
         assert!(merged.temperature.is_none());
         assert!(merged.timeout.is_none());
@@ -1195,27 +1274,44 @@ mod unified_config_tests {
     #[test]
     fn test_merge_chains_correctly() {
         let global = ShannonConfig {
-            model: Some("global".to_string()),
-            provider: Some("anthropic".to_string()),
             max_tokens: Some(1024),
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "GLOBAL_KEY",
+                "global",
+            ),
             ..Default::default()
         };
         let local = ShannonConfig {
-            model: Some("local".to_string()),
             temperature: Some(0.7),
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "LOCAL_KEY",
+                "local",
+            ),
             ..Default::default()
         };
         let env = ShannonConfig {
-            api_key: Some("env-key".to_string()),
             max_tokens: Some(2048),
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "ENV_KEY",
+                "env",
+            ),
             ..Default::default()
         };
 
         // global -> local -> env
         let merged = global.merge(&local).merge(&env);
-        assert_eq!(merged.model, Some("local".to_string())); // local overrides global
-        assert_eq!(merged.provider, Some("anthropic".to_string())); // from global
-        assert_eq!(merged.api_key, Some("env-key".to_string())); // from env
+        // provider_model: env wins (last non-empty layer).
+        assert_eq!(active_profile(&merged).active_target.model_id, "env");
+        assert_eq!(active_provider(&merged).id, "anthropic");
         assert_eq!(merged.max_tokens, Some(2048)); // env overrides global
         assert_eq!(merged.temperature, Some(0.7)); // from local
     }
@@ -1227,35 +1323,43 @@ mod unified_config_tests {
         let config = ShannonConfig::empty();
         let json = serde_json::to_string(&config).unwrap();
         let parsed: ShannonConfig = serde_json::from_str(&json).unwrap();
-        assert!(parsed.model.is_none());
+        assert!(parsed.provider_model.profiles.is_empty());
         assert!(!parsed.debug);
     }
 
     #[test]
     fn test_config_json_roundtrip_full() {
         let config = ShannonConfig {
-            model: Some("test-model".to_string()),
-            provider: Some("test-provider".to_string()),
-            api_key: Some("test-key".to_string()),
-            base_url: Some("http://test".to_string()),
             max_tokens: Some(8192),
             temperature: Some(0.9),
             timeout: Some(60),
             debug: true,
             enable_tools: None,
             max_context_tokens: None,
+            provider_model: synth_profile(
+                "test-provider",
+                ProviderKind::Anthropic,
+                "http://test",
+                "TEST_KEY",
+                "test-model",
+            ),
             ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: ShannonConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.model, config.model);
-        assert_eq!(parsed.provider, config.provider);
-        assert_eq!(parsed.api_key, config.api_key);
-        assert_eq!(parsed.base_url, config.base_url);
         assert_eq!(parsed.max_tokens, config.max_tokens);
         assert_eq!(parsed.temperature, config.temperature);
         assert_eq!(parsed.timeout, config.timeout);
         assert_eq!(parsed.debug, config.debug);
+        assert_eq!(
+            active_profile(&parsed).active_target.model_id,
+            active_profile(&config).active_target.model_id
+        );
+        assert_eq!(active_provider(&parsed).id, active_provider(&config).id);
+        assert_eq!(
+            active_provider(&parsed).base_url,
+            active_provider(&config).base_url
+        );
     }
 
     // -- ConfigBuilder ---------------------------------------------------------
@@ -1264,8 +1368,7 @@ mod unified_config_tests {
     fn test_builder_new_starts_empty() {
         let builder = ConfigBuilder::new();
         let config = builder.build();
-        assert!(config.model.is_none());
-        assert!(config.provider.is_none());
+        assert!(config.provider_model.profiles.is_empty());
         assert!(!config.debug);
     }
 
@@ -1273,29 +1376,32 @@ mod unified_config_tests {
     fn test_builder_default_trait() {
         let builder = ConfigBuilder::default();
         let config = builder.build();
-        assert!(config.model.is_none());
+        assert!(config.provider_model.profiles.is_empty());
     }
 
     #[test]
     fn test_builder_with_cli_overrides() {
         let mut builder = ConfigBuilder::new();
         builder.set_cli_overrides(ShannonConfig {
-            model: Some("cli-model".to_string()),
             debug: true,
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "CLI_KEY",
+                "cli-model",
+            ),
             ..Default::default()
         });
         let config = builder.build();
-        assert_eq!(config.model, Some("cli-model".to_string()));
+        assert_eq!(active_profile(&config).active_target.model_id, "cli-model");
         assert!(config.debug);
     }
 
     #[test]
     fn test_builder_empty_sources_produces_empty_config() {
         let config = ConfigBuilder::new().build();
-        assert!(config.model.is_none());
-        assert!(config.provider.is_none());
-        assert!(config.api_key.is_none());
-        assert!(config.base_url.is_none());
+        assert!(config.provider_model.profiles.is_empty());
         assert!(config.max_tokens.is_none());
         assert!(config.temperature.is_none());
         assert!(config.timeout.is_none());
@@ -1308,7 +1414,9 @@ mod unified_config_tests {
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 
-        // Write a simple key=value config
+        // Write a simple key=value config. N1: `model`/`provider` flow into
+        // the synthesized default profile; `api_key`/`base_url` are no longer
+        // recognised by `ShannonTomlConfig`.
         std::fs::write(
             &toml_path,
             r#"model = "file-model"
@@ -1320,7 +1428,7 @@ temperature = 0.3
         .unwrap();
 
         // ConfigBuilder::load_local_toml reads from ".shannon.toml" in CWD,
-        // so we need to change directory temporarily
+        // so we need to change directory temporarily.
         let original_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
@@ -1330,8 +1438,8 @@ temperature = 0.3
 
         std::env::set_current_dir(&original_dir).unwrap();
 
-        assert_eq!(config.model, Some("file-model".to_string()));
-        assert_eq!(config.provider, Some("openai".to_string()));
+        assert_eq!(active_profile(&config).active_target.model_id, "file-model");
+        assert_eq!(active_provider(&config).id, "openai");
         assert_eq!(config.max_tokens, Some(4096));
         assert_eq!(config.temperature, Some(0.3));
     }
@@ -1348,7 +1456,7 @@ temperature = 0.3
 
         std::env::set_current_dir(&original_dir).unwrap();
 
-        assert!(config.model.is_none());
+        assert!(config.provider_model.profiles.is_empty());
     }
 
     #[test]
@@ -1356,10 +1464,16 @@ temperature = 0.3
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 
-        // Write JSON format (the loader tries JSON first)
+        // Write JSON format (the loader tries JSON first). N1: model/provider
+        //   live on `provider_model`.
         let json_content = serde_json::to_string(&ShannonConfig {
-            model: Some("json-model".to_string()),
-            provider: Some("anthropic".to_string()),
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "JSON_KEY",
+                "json-model",
+            ),
             ..Default::default()
         })
         .unwrap();
@@ -1374,8 +1488,8 @@ temperature = 0.3
 
         std::env::set_current_dir(&original_dir).unwrap();
 
-        assert_eq!(config.model, Some("json-model".to_string()));
-        assert_eq!(config.provider, Some("anthropic".to_string()));
+        assert_eq!(active_profile(&config).active_target.model_id, "json-model");
+        assert_eq!(active_provider(&config).id, "anthropic");
     }
 
     #[test]
@@ -1403,8 +1517,11 @@ provider = "ollama"
 
         std::env::set_current_dir(&original_dir).unwrap();
 
-        assert_eq!(config.model, Some("commented-model".to_string()));
-        assert_eq!(config.provider, Some("ollama".to_string()));
+        assert_eq!(
+            active_profile(&config).active_target.model_id,
+            "commented-model"
+        );
+        assert_eq!(active_provider(&config).id, "ollama");
     }
 
     #[test]
@@ -1429,7 +1546,10 @@ debug = true
 
         std::env::set_current_dir(&original_dir).unwrap();
 
-        assert_eq!(config.model, Some("quoted-model".to_string()));
+        assert_eq!(
+            active_profile(&config).active_target.model_id,
+            "quoted-model"
+        );
         assert!(config.debug);
     }
 
@@ -1438,16 +1558,24 @@ debug = true
     #[test]
     fn test_builder_load_env_vars_reads_shannon_vars() {
         // Set env vars
-        let cleanup = vec!["SHANNON_MODEL", "SHANNON_PROVIDER", "SHANNON_MAX_TOKENS"];
+        let cleanup = vec![
+            "SHANNON_MODEL",
+            "SHANNON_PROVIDER",
+            "SHANNON_BASE_URL",
+            "SHANNON_MAX_TOKENS",
+        ];
         for var in &cleanup {
+            // SAFETY: tests in this module serialize on SHANNON_* keys.
             unsafe {
                 std::env::remove_var(var);
             }
         }
 
+        // SAFETY: see above.
         unsafe {
             std::env::set_var("SHANNON_MODEL", "env-model");
             std::env::set_var("SHANNON_PROVIDER", "env-provider");
+            std::env::set_var("SHANNON_BASE_URL", "https://env.example.com");
             std::env::set_var("SHANNON_MAX_TOKENS", "9999");
         }
 
@@ -1457,22 +1585,25 @@ debug = true
 
         // Clean up before assertions so they don't leak
         for var in &cleanup {
+            // SAFETY: see above.
             unsafe {
                 std::env::remove_var(var);
             }
         }
 
-        assert_eq!(config.model, Some("env-model".to_string()));
-        assert_eq!(config.provider, Some("env-provider".to_string()));
+        assert_eq!(active_profile(&config).active_target.model_id, "env-model");
+        // "env-provider" is not a known LlmProvider variant, so synthesize
+        // falls back to `LlmProvider::Custom` and the profile id is "custom".
+        assert_eq!(active_provider(&config).id, "custom");
+        assert_eq!(active_provider(&config).base_url, "https://env.example.com");
         assert_eq!(config.max_tokens, Some(9999));
     }
 
     #[test]
     fn test_builder_env_vars_with_debug() {
+        // SAFETY: tests in this module serialize on SHANNON_DEBUG.
         unsafe {
             std::env::remove_var("SHANNON_DEBUG");
-        }
-        unsafe {
             std::env::set_var("SHANNON_DEBUG", "true");
         }
 
@@ -1480,6 +1611,7 @@ debug = true
         builder.load_env_vars();
         let config = builder.build();
 
+        // SAFETY: see above.
         unsafe {
             std::env::remove_var("SHANNON_DEBUG");
         }
@@ -1489,7 +1621,7 @@ debug = true
 
     #[test]
     fn test_builder_env_vars_missing_vars_produce_none() {
-        // Remove all SHANNON_ vars
+        // Remove all SHANNON_ vars.
         let vars = [
             "SHANNON_MODEL",
             "SHANNON_PROVIDER",
@@ -1501,6 +1633,7 @@ debug = true
             "SHANNON_DEBUG",
         ];
         for var in &vars {
+            // SAFETY: tests in this module serialize on SHANNON_* keys.
             unsafe {
                 std::env::remove_var(var);
             }
@@ -1510,10 +1643,11 @@ debug = true
         builder.load_env_vars();
         let config = builder.build();
 
-        assert!(config.model.is_none());
-        assert!(config.provider.is_none());
-        assert!(config.api_key.is_none());
-        assert!(config.base_url.is_none());
+        // With none of the SHANNON_* routing vars set AND no cred var set,
+        // synthesize_default_profile still returns the Ollama auto-default,
+        // so provider_model.profiles is non-empty. The scalar fields stay
+        // None.
+        assert!(!config.provider_model.profiles.is_empty());
         assert!(config.max_tokens.is_none());
         assert!(config.temperature.is_none());
         assert!(config.timeout.is_none());
@@ -1527,7 +1661,7 @@ debug = true
         let dir = tempfile::tempdir().unwrap();
         let toml_path = dir.path().join(".shannon.toml");
 
-        // Write TOML
+        // Write TOML.
         std::fs::write(
             &toml_path,
             r#"model = "toml-model"
@@ -1537,9 +1671,10 @@ max_tokens = 1024
         )
         .unwrap();
 
-        // Set env
+        // Set env. SAFETY: tests serialize on SHANNON_* keys.
         unsafe {
             std::env::remove_var("SHANNON_MODEL");
+            std::env::remove_var("SHANNON_BASE_URL");
             std::env::remove_var("SHANNON_MAX_TOKENS");
             std::env::set_var("SHANNON_MODEL", "env-model");
             std::env::set_var("SHANNON_MAX_TOKENS", "2048");
@@ -1552,21 +1687,31 @@ max_tokens = 1024
         builder.load_local_toml();
         builder.load_env_vars();
         builder.set_cli_overrides(ShannonConfig {
-            model: Some("cli-model".to_string()),
             debug: true,
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "CLI_KEY",
+                "cli-model",
+            ),
             ..Default::default()
         });
         let config = builder.build();
 
         std::env::set_current_dir(&original_dir).unwrap();
+        // SAFETY: see above.
         unsafe {
             std::env::remove_var("SHANNON_MODEL");
+            std::env::remove_var("SHANNON_BASE_URL");
             std::env::remove_var("SHANNON_MAX_TOKENS");
         }
 
-        // CLI wins model, TOML provides provider, env wins max_tokens
-        assert_eq!(config.model, Some("cli-model".to_string()));
-        assert_eq!(config.provider, Some("toml-provider".to_string()));
+        // CLI profile has model "cli-model", wins.
+        assert_eq!(active_profile(&config).active_target.model_id, "cli-model");
+        // env has SHANNON_MODEL=env-model but CLI's profile is non-empty so it
+        // takes the precedence. Provider in CLI's profile is "anthropic",
+        // not TOML's "toml-provider". The scalar max_tokens comes from env.
         assert_eq!(config.max_tokens, Some(2048));
         assert!(config.debug);
     }
@@ -1576,17 +1721,32 @@ max_tokens = 1024
     #[test]
     fn test_config_is_cloneable() {
         let config = ShannonConfig {
-            model: Some("clone-test".to_string()),
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "CLONE_KEY",
+                "clone-test",
+            ),
             ..Default::default()
         };
         let cloned = config.clone();
-        assert_eq!(cloned.model, config.model);
+        assert_eq!(
+            active_profile(&cloned).active_target.model_id,
+            active_profile(&config).active_target.model_id
+        );
     }
 
     #[test]
     fn test_config_debug_format() {
         let config = ShannonConfig {
-            model: Some("debug-test".to_string()),
+            provider_model: synth_profile(
+                "anthropic",
+                ProviderKind::Anthropic,
+                "https://api.anthropic.com",
+                "DEBUG_KEY",
+                "debug-test",
+            ),
             ..Default::default()
         };
         let debug_str = format!("{config:?}");
