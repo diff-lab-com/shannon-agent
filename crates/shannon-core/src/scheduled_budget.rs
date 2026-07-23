@@ -193,8 +193,7 @@ impl BudgetEnforcer {
                 spent_usd: spent,
                 cap_usd: cap,
                 reason: format!(
-                    "monthly budget exhausted: spent ${:.4} >= cap ${:.4}",
-                    spent, cap
+                    "monthly budget exhausted: spent ${spent:.4} >= cap ${cap:.4}"
                 ),
             }
         } else {
@@ -243,8 +242,7 @@ fn first_of_this_month_utc() -> DateTime<Utc> {
     // build from `(year, month, 1, 0, 0, 0)`.
     use chrono::NaiveDate;
     let date = NaiveDate::from_ymd_opt(year, month, 1).expect("valid ymd");
-    let dt = date.and_hms_opt(0, 0, 0).expect("valid hms").and_utc();
-    dt
+    date.and_hms_opt(0, 0, 0).expect("valid hms").and_utc()
 }
 
 #[cfg(test)]
