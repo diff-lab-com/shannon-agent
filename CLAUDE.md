@@ -1,6 +1,13 @@
 # Shannon Code
 
-> **Active workspace note**: This repository (`/home/ed/workspace/app/work/shannon/shannon-mono`) is the **canonical active workspace** for the Shannon monorepo (`diff-lab-com/shannon-agent`). The older `shannon-agent/` parent directory (with its `shannon-code` / `shannon-desktop` / `shannon-gateway` sub-repos) is **obsolete** — do not open or work from it. The `shannon-agent-build/shannon-agent` mirror is **archived** (see its `ARCHIVED-NOTICE.md`). Historical notes from those repos live under `docs/archive/legacy-archives/` and `claudedocs/archive/legacy-archives/` (gitignored, see INDEX.md).
+> **Active workspace note**: This repository (`/home/ed/workspace/app/work/shannon/shannon-mono`) is the **canonical active workspace** for the Shannon monorepo (`diff-lab-com/shannon-agent`). The older `shannon-agent/` parent directory (with its `shannon-code` / `shannon-desktop` / `shannon-gateway` sub-repos) is **obsolete** — do not open or work from it. The `shannon-agent-build/shannon-agent` mirror is **archived** (see its `ARCHIVED-NOTICE.md`).
+>
+> Historical artifacts from the consolidated repos are parked in two paired, gitignored top-level directories (both excluded from any commit):
+>
+> - `docs/archive/legacy-archives/` — **markdown documentation** (CHANGELOGs, READMEs, ADRs, design specs, audits, research)
+> - `legacy-archives/` — **non-markdown code + config** (build configs, scripts, package metadata, TypeScript source for the VS Code extension)
+>
+> See `docs/archive/legacy-archives/INDEX.md` and `legacy-archives/INDEX.md` for the contents, layout, and editing policy. The `docs/` directory is reserved for documentation in this monorepo, so non-markdown artifacts live at the repo root.
 
 > **Note:** The unified `shannon` CLI replaces the former `shannon-code` product. Internal `shannon-code` references in CHANGELOG / release notes / migration docs are historical and intentionally retained.
 
