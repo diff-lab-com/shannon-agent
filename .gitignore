@@ -123,6 +123,10 @@ lcov.info
 vendor/
 .serena/
 claudedocs/
+# Legacy archives from the consolidation of shannon-code, shannon-desktop,
+# shannon-gateway (2026-07). See docs/archive/legacy-archives/INDEX.md.
+# Not part of any commit.
+docs/archive/legacy-archives/
 docs-mdbook/book/
 
 .astro/
