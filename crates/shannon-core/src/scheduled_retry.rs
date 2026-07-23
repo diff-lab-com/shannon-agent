@@ -169,11 +169,7 @@ pub enum GiveUpReason {
 ///
 /// The decision is deterministic given `current_attempt` + `policy` + `now`,
 /// except for the jitter term which uses [`rand::random`].
-pub fn decide_retry(
-    policy: &RetryPolicy,
-    current_attempt: u32,
-    error_msg: &str,
-) -> RetryOutcome {
+pub fn decide_retry(policy: &RetryPolicy, current_attempt: u32, error_msg: &str) -> RetryOutcome {
     if !policy.allows_retry() {
         return RetryOutcome {
             decision: RetryDecision::GiveUp {
@@ -348,8 +344,7 @@ mod tests {
                 let delta = run_at - now;
                 // Allow a small skew for clock advance during the test.
                 assert!(
-                    delta >= ChronoDuration::seconds(9)
-                        && delta <= ChronoDuration::seconds(11),
+                    delta >= ChronoDuration::seconds(9) && delta <= ChronoDuration::seconds(11),
                     "expected ~10s delay, got {}s",
                     delta.num_seconds()
                 );

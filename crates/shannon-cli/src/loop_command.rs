@@ -29,9 +29,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result};
 use chrono::{Duration as ChronoDuration, Utc};
 
-use shannon_core::scheduled_routines::{
-    RoutineManager, ScheduledRoutine, TriggerType,
-};
+use shannon_core::scheduled_routines::{RoutineManager, ScheduledRoutine, TriggerType};
 
 /// Canonical interval parser. Accepts:
 ///
@@ -101,10 +99,7 @@ pub enum LoopCommand {
         max_fires: Option<u32>,
     },
     /// Schedule a one-shot (`/loop once <interval> <prompt>`).
-    Once {
-        interval: String,
-        prompt: String,
-    },
+    Once { interval: String, prompt: String },
     /// Print every scheduled routine.
     List,
     /// Cancel a routine by id (8-char prefix) or name.
@@ -156,9 +151,9 @@ impl FromStr for LoopCommand {
                 Ok(LoopCommand::Remove(id))
             }
             "status" => Ok(LoopCommand::Status),
-            other => anyhow::bail!(
-                "unknown verb '{other}' (expected start|once|list|remove|status)"
-            ),
+            other => {
+                anyhow::bail!("unknown verb '{other}' (expected start|once|list|remove|status)")
+            }
         }
     }
 }
@@ -297,10 +292,7 @@ pub fn format_output(out: &CliOutput) -> String {
                 .as_ref()
                 .map(|(id, t)| format!("{id} at {}", t.format("%Y-%m-%dT%H:%M:%SZ")))
                 .unwrap_or_else(|| "-".into());
-            format!(
-                "total={} enabled={} next_fire={}",
-                s.total, s.enabled, nf
-            )
+            format!("total={} enabled={} next_fire={}", s.total, s.enabled, nf)
         }
     }
 }
@@ -353,7 +345,9 @@ mod tests {
     fn from_str_parses_verbs() {
         let cmd = LoopCommand::from_str("start 5m echo hi").unwrap();
         match cmd {
-            LoopCommand::Start { interval, prompt, .. } => {
+            LoopCommand::Start {
+                interval, prompt, ..
+            } => {
                 assert_eq!(interval, "5m");
                 assert_eq!(prompt, "echo hi");
             }
