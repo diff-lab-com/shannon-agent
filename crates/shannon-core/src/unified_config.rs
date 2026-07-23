@@ -6,6 +6,20 @@
 //! 3. Project-local config (`.shannon.toml`)
 //! 4. Global config (`~/.shannon/config.toml`)
 //! 5. Default values
+//!
+//! ## v2-native (N1 / C-fields)
+//! As of N1, [`ShannonConfig`] carries only the multi-provider/model
+//! [`ProviderModelConfig`](shannon_types::provider_config::ProviderModelConfig)
+//! in its `provider_model` field. The pre-N1 flat fields
+//! (`model`/`provider`/`api_key`/`base_url`/`[providers.*]`) have been
+//! removed under the no-compat policy (shannon-code/desktop were unreleased —
+//! see [[no-public-release-no-compat]]). Configuration previously set on the
+//! flat fields is now expressed as a default [`ProviderProfile`] inside
+//! `provider_model`, synthesized from CLI/TOML/env inputs by
+//! [`crate::provider_resolver::synthesize_default_profile`]. Credentials are
+//! A1-strict: only [`CredentialRef::Env`](shannon_types::provider_config::CredentialRef::Env)
+//! references, never plaintext in the config (plaintext values live in
+//! `~/.shannon/secrets.env` via [`crate::config_migration::persist_secrets`]).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -33,22 +47,12 @@ pub struct PresetEntry {
     pub description: Option<String>,
 }
 
-/// Per-provider configuration entry for `[providers.<name>]` sections.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ProviderEntry {
-    pub api_key: Option<String>,
-    pub api_key_env: Option<String>,
-    pub base_url: Option<String>,
-    pub model: Option<String>,
-}
-
 /// Unified Shannon configuration.
+///
+/// Carries multi-provider/model v2 config in [`Self::provider_model`] — see
+/// the module docs for the flat→profile mapping.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ShannonConfig {
-    pub model: Option<String>,
-    pub provider: Option<String>,
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
     pub max_tokens: Option<usize>,
     pub temperature: Option<f32>,
     pub timeout: Option<u64>,
@@ -59,9 +63,6 @@ pub struct ShannonConfig {
     /// Maximum context tokens before compression. Overrides model registry defaults.
     /// Priority: user config > Ollama num_ctx > model registry > fallback (128K).
     pub max_context_tokens: Option<usize>,
-    /// Per-provider configuration: `[providers.deepseek]`, `[providers.zhipu]`, etc.
-    #[serde(default)]
-    pub providers: Option<HashMap<String, ProviderEntry>>,
     /// User-defined conversation presets from config files.
     #[serde(default)]
     pub presets: Option<HashMap<String, PresetEntry>>,
@@ -71,9 +72,10 @@ pub struct ShannonConfig {
     /// `[notifications]` section for system-level notification behavior.
     #[serde(default)]
     pub notifications: Option<NotificationsConfig>,
-    /// N1: v2 multi-provider/model config. When its `"default"` profile resolves
-    /// an active target, it is preferred over the legacy flat fields above
-    /// (which are removed in commit C). Empty by default → legacy fallback.
+    /// v2 multi-provider/model config. The `"default"` profile's active
+    /// target, when present, drives the engine `LlmClientConfig`. CLI / TOML
+    /// / env inputs feed this through
+    /// [`crate::provider_resolver::synthesize_default_profile`].
     #[serde(default)]
     pub provider_model: shannon_types::provider_config::ProviderModelConfig,
 }
@@ -87,20 +89,6 @@ impl ShannonConfig {
     /// Merge another config on top of this one.
     /// Values from `other` take precedence if they are `Some`.
     pub fn merge(&self, other: &ShannonConfig) -> ShannonConfig {
-        // Merge providers: other's entries overlay on top of self's.
-        let providers = match (&self.providers, &other.providers) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(b)) => Some(b.clone()),
-            (Some(a), Some(b)) => {
-                let mut merged = a.clone();
-                for (k, v) in b {
-                    merged.insert(k.clone(), v.clone());
-                }
-                Some(merged)
-            }
-        };
-
         // Merge presets: other's entries overlay on top of self's.
         let presets = match (&self.presets, &other.presets) {
             (None, None) => None,
@@ -115,8 +103,7 @@ impl ShannonConfig {
             }
         };
 
-        // N1: merge v2 provider_model — other wins if it carries profiles,
-        // otherwise keep self (empty → legacy fallback / Ollama default).
+        // v2 provider_model — first-non-empty wins (CLI > env > TOML > global).
         let provider_model = if !other.provider_model.profiles.is_empty() {
             other.provider_model.clone()
         } else {
@@ -124,17 +111,12 @@ impl ShannonConfig {
         };
 
         ShannonConfig {
-            model: other.model.clone().or_else(|| self.model.clone()),
-            provider: other.provider.clone().or_else(|| self.provider.clone()),
-            api_key: other.api_key.clone().or_else(|| self.api_key.clone()),
-            base_url: other.base_url.clone().or_else(|| self.base_url.clone()),
             max_tokens: other.max_tokens.or(self.max_tokens),
             temperature: other.temperature.or(self.temperature),
             timeout: other.timeout.or(self.timeout),
             debug: other.debug || self.debug,
             enable_tools: other.enable_tools.or(self.enable_tools),
             max_context_tokens: other.max_context_tokens.or(self.max_context_tokens),
-            providers,
             presets,
             permission_profile: other
                 .permission_profile
@@ -159,33 +141,22 @@ impl ShannonConfig {
             .and_then(shannon_engine::permission_profile::PermissionProfile::from_str_lossy)
     }
 
-    /// Resolve the API key for a given provider from config + env.
+    /// Resolve an API key for the given provider against the v2 active target.
+    ///
+    /// N1/C-fields: the v1 flat `api_key`/`[providers.*]` fields are gone.
+    /// If the v2 active target resolves to the same provider, its
+    /// [`CredentialRef`](shannon_types::provider_config::CredentialRef) is
+    /// consulted (decision A1: env-only for now). Otherwise the provider's
+    /// own env chain is consulted.
     pub fn resolve_api_key_for_provider(&self, provider: &LlmProvider) -> String {
-        let display = provider.to_string();
-
-        // 1. Top-level api_key in config (if provider matches)
-        if let Some(ref key) = self.api_key {
-            // If config has a top-level api_key and no provider filter, use it
-            if self.provider.is_none() || self.provider.as_deref() == Some(&display) {
-                return key.clone();
-            }
-        }
-
-        // 2. Check [providers.<name>] section in config
-        if let Some(ref providers) = self.providers {
-            if let Some(entry) = providers.get(&display) {
-                if let Some(ref key) = entry.api_key {
-                    return key.clone();
-                }
-                if let Some(ref env_name) = entry.api_key_env {
-                    if let Ok(key) = std::env::var(env_name) {
-                        return key;
-                    }
+        if let Some(rt) = crate::provider_resolver::resolve_active_target(&self.provider_model) {
+            if rt.provider == *provider {
+                let resolved = crate::provider_resolver::resolve_credential(&rt.profile.credential);
+                if !resolved.is_empty() {
+                    return resolved;
                 }
             }
         }
-
-        // 3. Provider's own env resolution chain
         provider.resolve_api_key_from_env()
     }
 }
@@ -227,12 +198,21 @@ impl ConfigBuilder {
     }
 
     /// Load configuration from environment variables (`SHANNON_*`).
+    ///
+    /// N1/C-fields: `SHANNON_MODEL` / `SHANNON_PROVIDER` / `SHANNON_BASE_URL`
+    /// (plus the env-fallback chain inside
+    /// [`crate::provider_resolver::synthesize_default_profile`]) populate
+    /// a default v2 profile inside `provider_model`. The pre-N1 flat fields
+    /// are gone.
     pub fn load_env_vars(&mut self) -> &mut Self {
+        let provider_model = crate::provider_resolver::synthesize_default_profile(
+            std::env::var("SHANNON_MODEL").ok().as_deref(),
+            std::env::var("SHANNON_PROVIDER").ok().as_deref(),
+            std::env::var("SHANNON_BASE_URL").ok().as_deref(),
+            None,
+        )
+        .unwrap_or_default();
         self.env_vars = ShannonConfig {
-            model: std::env::var("SHANNON_MODEL").ok(),
-            provider: std::env::var("SHANNON_PROVIDER").ok(),
-            api_key: std::env::var("SHANNON_API_KEY").ok(),
-            base_url: std::env::var("SHANNON_BASE_URL").ok(),
             max_tokens: std::env::var("SHANNON_MAX_TOKENS")
                 .ok()
                 .and_then(|v| v.parse().ok()),
@@ -250,7 +230,9 @@ impl ConfigBuilder {
                 .ok()
                 .and_then(|v| v.parse().ok()),
             permission_profile: std::env::var("SHANNON_PERMISSION_PROFILE").ok(),
-            ..Default::default()
+            presets: None,
+            notifications: None,
+            provider_model,
         };
         self
     }
@@ -311,8 +293,18 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
     }
 
     // If it's a TOML file, try simple key=value parsing for common fields
-    // (Full TOML support requires the `toml` crate, available in shannon-cli)
-    let mut config = ShannonConfig::empty();
+    // (Full TOML support requires the `toml` crate, available in shannon-cli).
+    // N1/C-fields: `model`/`provider`/`base_url` populate
+    // `provider_model` via [`crate::provider_resolver::synthesize_default_profile`].
+    let mut model: Option<String> = None;
+    let mut provider: Option<String> = None;
+    let mut base_url: Option<String> = None;
+    let mut max_tokens: Option<usize> = None;
+    let mut temperature: Option<f32> = None;
+    let mut timeout: Option<u64> = None;
+    let mut max_context_tokens: Option<usize> = None;
+    let mut debug: bool = false;
+    let mut permission_profile: Option<String> = None;
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -322,47 +314,64 @@ fn load_config_file(path: &std::path::Path) -> ShannonConfig {
             let key = key.trim();
             let value = value.trim().trim_matches('"');
             match key {
-                "model" => config.model = Some(value.to_string()),
-                "provider" => config.provider = Some(value.to_string()),
-                "api_key" => config.api_key = Some(value.to_string()),
-                "base_url" => config.base_url = Some(value.to_string()),
+                "model" => model = Some(value.to_string()),
+                "provider" => provider = Some(value.to_string()),
+                "base_url" => base_url = Some(value.to_string()),
                 "max_tokens" => {
                     if let Ok(v) = value.parse() {
-                        config.max_tokens = Some(v);
+                        max_tokens = Some(v);
                     } else {
                         tracing::warn!("Invalid max_tokens value in config: {value}");
                     }
                 }
                 "temperature" => {
                     if let Ok(v) = value.parse() {
-                        config.temperature = Some(v);
+                        temperature = Some(v);
                     } else {
                         tracing::warn!("Invalid temperature value in config: {value}");
                     }
                 }
                 "timeout" => {
                     if let Ok(v) = value.parse() {
-                        config.timeout = Some(v);
+                        timeout = Some(v);
                     } else {
                         tracing::warn!("Invalid timeout value in config: {value}");
                     }
                 }
-                "debug" => config.debug = value.parse().unwrap_or(false),
+                "debug" => debug = value.parse().unwrap_or(false),
                 "max_context_tokens" => {
                     if let Ok(v) = value.parse() {
-                        config.max_context_tokens = Some(v);
+                        max_context_tokens = Some(v);
                     } else {
                         tracing::warn!("Invalid max_context_tokens value in config: {value}");
                     }
                 }
                 "permission_profile" => {
-                    config.permission_profile = Some(value.to_string());
+                    permission_profile = Some(value.to_string());
                 }
                 _ => {}
             }
         }
     }
-    config
+    let provider_model = crate::provider_resolver::synthesize_default_profile(
+        model.as_deref(),
+        provider.as_deref(),
+        base_url.as_deref(),
+        None,
+    )
+    .unwrap_or_default();
+    ShannonConfig {
+        max_tokens,
+        temperature,
+        timeout,
+        debug,
+        enable_tools: None,
+        max_context_tokens,
+        presets: None,
+        permission_profile,
+        notifications: None,
+        provider_model,
+    }
 }
 
 // Implement `ApiKeyResolver` (defined in `shannon-engine::api::types`) for
@@ -380,142 +389,42 @@ impl shannon_engine::api::types::ApiKeyResolver for ShannonConfig {
 // now lives in `shannon-engine`. Rust permits a `From` impl in either the
 // type's crate or the trait's crate. Keeping it here avoids a cyclic
 // dependency (`shannon-engine → shannon-core` for `ShannonConfig`).
+//
+// N1/C-fields: the v2 path (default profile resolves an active target) is
+// preferred. When `provider_model` is empty (e.g. a direct
+// `ShannonConfig::default()` for a test, or no CLI/TOML/env config at all),
+// [`crate::provider_resolver::synthesize_default_profile`] is invoked with
+// no CLI/TOML inputs — its Ollama auto-default kicks in when no credential
+// and no base_url are configured, preserving the pre-N1 "no key → Ollama
+// localhost" behaviour. The original 80-line env-pile / string→provider /
+// Ollama-branch body was relocated into `synthesize_default_profile`.
 impl From<ShannonConfig> for shannon_engine::api::LlmClientConfig {
     fn from(cfg: ShannonConfig) -> Self {
-        // N1: prefer the v2 provider_model when it resolves a default profile;
-        // otherwise fall back to the legacy flat fields below.
-        if let Some(rt) = crate::provider_resolver::resolve_active_target(&cfg.provider_model) {
+        // v2 path: synthesize (or use existing) default profile, then build.
+        let pm = if crate::provider_resolver::resolve_active_target(&cfg.provider_model).is_some() {
+            cfg.provider_model.clone()
+        } else {
+            crate::provider_resolver::synthesize_default_profile(None, None, None, None)
+                .unwrap_or_default()
+        };
+        // synthesize_default_profile always returns Some (Ollama branch on
+        // empty inputs), so resolve_active_target should succeed here. If
+        // it doesn't, fall back to a hardcoded Ollama localhost config so
+        // we never panic.
+        if let Some(rt) = crate::provider_resolver::resolve_active_target(&pm) {
             return build_client_from_resolved(&cfg, rt);
         }
         use shannon_engine::api::{LlmProvider, RetryConfig};
         use std::collections::HashMap;
-
-        let has_explicit_base_url = cfg.base_url.is_some();
-        let has_explicit_model = cfg.model.is_some();
-
-        let shannon_base_url = std::env::var("SHANNON_BASE_URL").ok();
-        let anthropic_base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
-        let openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
-        let has_explicit_base_url_env = shannon_base_url.is_some();
-
-        let base_url = cfg
-            .base_url
-            .clone()
-            .or(shannon_base_url)
-            .or(anthropic_base_url.clone())
-            .or(openai_base_url.clone())
-            .unwrap_or_else(|| "https://api.anthropic.com".to_string());
-
-        let model = cfg
-            .model
-            .clone()
-            .or_else(|| std::env::var("SHANNON_MODEL").ok())
-            .or_else(|| std::env::var("ANTHROPIC_MODEL").ok())
-            .or_else(|| std::env::var("OPENAI_MODEL").ok())
-            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string());
-
-        let provider = if let Some(ref p) = cfg.provider {
-            match p.to_lowercase().as_str() {
-                "anthropic" => LlmProvider::Anthropic,
-                "openai" => LlmProvider::OpenAI,
-                "ollama" => LlmProvider::Ollama,
-                "gemini" | "google" => LlmProvider::Gemini,
-                "azure" | "azure-openai" => LlmProvider::Azure,
-                "bedrock" | "aws" => LlmProvider::Bedrock,
-                "mistral" | "mistral-ai" => LlmProvider::Mistral,
-                "deepseek" => LlmProvider::DeepSeek,
-                "groq" => LlmProvider::Groq,
-                "together" | "together-ai" => LlmProvider::Together,
-                "openrouter" => LlmProvider::OpenRouter,
-                "cohere" => LlmProvider::Cohere,
-                "fireworks" => LlmProvider::Fireworks,
-                "perplexity" => LlmProvider::Perplexity,
-                "xai" => LlmProvider::Xai,
-                "ai21" => LlmProvider::Ai21,
-                "siliconflow" => LlmProvider::SiliconFlow,
-                "zhipu" | "zhipu-cn" => LlmProvider::Zhipu,
-                "zhipu-international" | "zhipu-intl" => LlmProvider::ZhipuInternational,
-                "zhipu-coding" | "zhipu-anthropic" => LlmProvider::ZhipuCoding,
-                "moonshot" | "kimi" => LlmProvider::Moonshot,
-                "minimax" => LlmProvider::Minimax,
-                "dashscope" | "qwen" => LlmProvider::DashScope,
-                "cloudflare" => LlmProvider::Cloudflare,
-                "replicate" => LlmProvider::Replicate,
-                _ => LlmProvider::from_base_url(&base_url),
-            }
-        } else {
-            LlmProvider::from_base_url(&base_url)
-        };
-
-        let base_url = if !has_explicit_base_url && !has_explicit_base_url_env {
-            let provider_default = provider.default_base_url().to_string();
-            let came_from_anthropic = anthropic_base_url.as_deref() == Some(&base_url);
-            let came_from_openai = openai_base_url.as_deref() == Some(&base_url);
-            let is_anthropic_provider = matches!(provider, LlmProvider::Anthropic);
-            let is_openai_provider = matches!(provider, LlmProvider::OpenAI);
-            let no_env_base_url = anthropic_base_url.is_none() && openai_base_url.is_none();
-            if (came_from_anthropic && !is_anthropic_provider)
-                || (came_from_openai && !is_openai_provider)
-                || (no_env_base_url && base_url != provider_default)
-            {
-                provider_default
-            } else {
-                base_url
-            }
-        } else {
-            base_url
-        };
-
-        let api_key = cfg
-            .api_key
-            .clone()
-            .unwrap_or_else(|| cfg.resolve_api_key_for_provider(&provider));
-
-        let has_explicit_provider = cfg.provider.is_some();
-        let (api_key, base_url, model, provider) = if api_key.is_empty()
-            && provider.requires_auth()
-            && !has_explicit_base_url
-            && std::env::var("SHANNON_BASE_URL").is_err()
-            && !has_explicit_provider
-        {
-            tracing::info!("No API key configured, defaulting to Ollama (localhost:11434)");
-            let ollama_model = if has_explicit_model {
-                model
-            } else {
-                std::env::var("SHANNON_MODEL").unwrap_or_else(|_| "llama3".to_string())
-            };
-            (
-                String::new(),
-                "http://localhost:11434".to_string(),
-                ollama_model,
-                LlmProvider::Ollama,
-            )
-        } else {
-            (api_key, base_url, model, provider)
-        };
-
-        let api_version = match provider {
-            LlmProvider::Anthropic => {
-                std::env::var("ANTHROPIC_API_VERSION").unwrap_or_else(|_| "2023-06-01".to_string())
-            }
-            _ => String::new(),
-        };
-
-        let max_tokens = cfg.max_tokens.unwrap_or(4096) as u32;
-        let timeout_seconds = cfg.timeout.unwrap_or(if provider == LlmProvider::Ollama {
-            300
-        } else {
-            120
-        });
-
+        tracing::warn!("No v2 provider resolved — defaulting to Ollama localhost:11434");
         Self {
-            api_key,
-            base_url,
-            model,
-            max_tokens,
-            timeout_seconds,
-            api_version,
-            provider,
+            api_key: String::new(),
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama3".to_string(),
+            max_tokens: cfg.max_tokens.map(|v| v as u32).unwrap_or(4096),
+            timeout_seconds: cfg.timeout.unwrap_or(300),
+            api_version: String::new(),
+            provider: LlmProvider::Ollama,
             extra_headers: HashMap::new(),
             retry_config: RetryConfig::default(),
             fallback_provider: None,
@@ -635,105 +544,128 @@ mod tests {
     #[test]
     fn test_empty_config() {
         let config = ShannonConfig::empty();
-        assert!(config.model.is_none());
-        assert!(config.provider.is_none());
-        assert!(config.api_key.is_none());
+        assert!(config.provider_model.profiles.is_empty());
         assert!(!config.debug);
+        assert!(config.max_tokens.is_none());
+        assert!(config.temperature.is_none());
     }
 
     #[test]
     fn test_merge_other_overrides_self() {
         let base = ShannonConfig {
-            model: Some("base-model".to_string()),
-            provider: Some("anthropic".to_string()),
-            api_key: Some("base-key".to_string()),
-            base_url: None,
             max_tokens: Some(4096),
             temperature: None,
             timeout: None,
             debug: false,
             enable_tools: None,
             max_context_tokens: None,
+            provider_model: v2_default_profile(anthropic_profile("BASE_KEY"), "base-model"),
             ..Default::default()
         };
         let override_config = ShannonConfig {
-            model: Some("override-model".to_string()),
-            provider: None, // Don't override
-            api_key: None,
-            base_url: Some("http://custom".to_string()),
             max_tokens: None,
             temperature: Some(0.5),
             timeout: None,
             debug: true,
             enable_tools: None,
             max_context_tokens: None,
+            provider_model: v2_default_profile(anthropic_profile("OVERRIDE_KEY"), "over-model"),
             ..Default::default()
         };
 
         let merged = base.merge(&override_config);
-        assert_eq!(merged.model, Some("override-model".to_string()));
-        assert_eq!(merged.provider, Some("anthropic".to_string())); // kept from base
-        assert_eq!(merged.api_key, Some("base-key".to_string())); // kept from base
-        assert_eq!(merged.base_url, Some("http://custom".to_string())); // from override
+        // v2 provider_model: other wins (first-non-empty).
+        assert_eq!(
+            merged.provider_model.profiles["default"]
+                .active_target
+                .model_id,
+            "over-model"
+        );
         assert_eq!(merged.max_tokens, Some(4096)); // kept from base
         assert_eq!(merged.temperature, Some(0.5)); // from override
         assert!(merged.debug); // from override
     }
 
     #[test]
+    fn test_merge_other_overrides_self_empty_other_keeps_self() {
+        // N1: when `other.provider_model` is empty, `self.provider_model` is
+        // preserved (CLI/empty TOML doesn't clobber the user's profile).
+        let base = ShannonConfig {
+            provider_model: v2_default_profile(anthropic_profile("K"), "a-model"),
+            ..Default::default()
+        };
+        let override_config = ShannonConfig::empty();
+        let merged = base.merge(&override_config);
+        assert_eq!(
+            merged.provider_model.profiles["default"]
+                .active_target
+                .model_id,
+            "a-model"
+        );
+    }
+
+    #[test]
     fn test_builder_priority_chain() {
+        // 4-layer merge: global < local < env < cli (when each carries
+        // provider_model). The scalar fields (max_tokens/temperature/debug)
+        // merge independently: highest-priority Some wins.
         let mut builder = ConfigBuilder::new();
 
-        // Simulate global TOML
+        // Global TOML: profile + max_tokens
         builder.global_toml = ShannonConfig {
-            model: Some("global-model".to_string()),
-            provider: Some("anthropic".to_string()),
             max_tokens: Some(2048),
+            provider_model: v2_default_profile(anthropic_profile("G"), "global-model"),
             ..Default::default()
         };
 
-        // Simulate local TOML (overrides global)
+        // Local TOML overrides global: profile + temperature
         builder.local_toml = ShannonConfig {
-            model: Some("local-model".to_string()),
             temperature: Some(0.7),
+            provider_model: v2_default_profile(anthropic_profile("L"), "local-model"),
             ..Default::default()
         };
 
-        // Simulate env vars (overrides TOML)
+        // Env layer: empty provider_model (no SHANNON_* in tests by default) +
+        // max_tokens override.
         builder.env_vars = ShannonConfig {
-            api_key: Some("env-key".to_string()),
             max_tokens: Some(8192),
+            provider_model: Default::default(),
             ..Default::default()
         };
 
-        // Simulate CLI overrides (highest priority)
+        // CLI overrides highest priority: provider_model + debug.
         builder.cli_overrides = ShannonConfig {
-            model: Some("cli-model".to_string()),
             debug: true,
+            provider_model: v2_default_profile(anthropic_profile("C"), "cli-model"),
             ..Default::default()
         };
 
         let config = builder.build();
 
-        // CLI wins for model
-        assert_eq!(config.model, Some("cli-model".to_string()));
-        // Local TOML provides provider (not overridden by env or CLI)
-        assert_eq!(config.provider, Some("anthropic".to_string()));
-        // Env provides api_key
-        assert_eq!(config.api_key, Some("env-key".to_string()));
-        // Env overrides global max_tokens
+        // CLI's provider_model is the only non-empty one in the merge chain
+        // (local/global have profiles but env is empty → CLI wins on
+        // first-non-empty-wins). Re-derive: cli_overrides has profiles;
+        // it merges on top of global/local; its non-empty wins. env is empty
+        // so does NOT clobber. The merged result's profile has cli-model.
+        assert_eq!(
+            config.provider_model.profiles["default"]
+                .active_target
+                .model_id,
+            "cli-model"
+        );
+        // env's max_tokens: max(2048, 8192) — env wins over global.
         assert_eq!(config.max_tokens, Some(8192));
-        // Local TOML provides temperature
+        // local's temperature survives (none of env/cli override it).
         assert_eq!(config.temperature, Some(0.7));
-        // CLI sets debug
+        // CLI's debug is true.
         assert!(config.debug);
     }
 
     #[test]
     fn test_builder_empty_sources() {
         let config = ConfigBuilder::new().build();
-        assert!(config.model.is_none());
-        assert!(config.provider.is_none());
+        assert!(config.provider_model.profiles.is_empty());
+        assert!(config.max_tokens.is_none());
     }
 
     #[test]
@@ -741,8 +673,8 @@ mod tests {
         let a = ShannonConfig::empty();
         let b = ShannonConfig::empty();
         let merged = a.merge(&b);
-        assert!(merged.model.is_none());
         assert!(merged.max_tokens.is_none());
+        assert!(merged.provider_model.profiles.is_empty());
     }
 
     #[test]
@@ -762,13 +694,12 @@ mod tests {
     }
 
     #[test]
-    fn test_v2_profile_preferred_over_legacy_fields() {
-        // Both legacy flat fields AND a v2 default profile are set — v2 wins.
+    fn test_v2_profile_in_config_drives_client() {
+        // N1/C-fields: the v1 flat fields are gone. The `default` profile in
+        // `provider_model` is now the *only* way to express provider/base_url/
+        // model/api_key. A ShannonConfig with a populated `provider_model`
+        // produces an `LlmClientConfig` from that profile.
         let cfg = ShannonConfig {
-            model: Some("legacy-model".to_string()),
-            provider: Some("openai".to_string()),
-            api_key: Some("legacy-key".to_string()),
-            base_url: Some("https://legacy.example.com".to_string()),
             provider_model: v2_default_profile(
                 anthropic_profile("SHANNON_ANTHROPIC_API_KEY"),
                 "claude-sonnet-4-20250514",
@@ -779,9 +710,6 @@ mod tests {
         assert_eq!(cc.provider, LlmProvider::Anthropic);
         assert_eq!(cc.base_url, "https://api.anthropic.com");
         assert_eq!(cc.model, "claude-sonnet-4-20250514");
-        // legacy flat fields are NOT consulted on the v2 path
-        assert_ne!(cc.model, "legacy-model");
-        assert_ne!(cc.base_url, "https://legacy.example.com");
     }
 
     #[test]
