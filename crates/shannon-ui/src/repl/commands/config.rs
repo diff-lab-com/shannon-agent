@@ -181,6 +181,129 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// `/connect` help text (ADR-0005 Phase 4).
+const CONNECT_HELP: &str = "\
+/connect <provider> [api-key] — Connect a provider end-to-end (no env var needed)
+
+Stores the API key in the credential store and persists a provider profile to
+~/.shannon/providers.toml, then switches the active provider/model. The
+connected provider loads automatically on the next launch.
+
+Examples:
+  /connect anthropic sk-ant-...     Connect Anthropic and store the key
+  /connect openai sk-...            Connect OpenAI
+  /connect deepseek sk-...          Connect DeepSeek
+  /connect zhipu <glm-key>          Connect Zhipu
+  /connect ollama                   Connect local Ollama (no key needed)
+
+The key is stored on disk (0600), never in a config file (decision A1). Omit
+the key to re-use one already stored via /credentials. Use /model to change the
+model after connecting.";
+
+/// `/connect <provider> [api-key]` — connect a provider with no environment
+/// variable (ADR-0005 Phase 4).
+///
+/// Stores the API key (when given) in the credential Store under the
+/// provider's slug, persists a v2 provider profile (`CredentialRef::Store`)
+/// to `~/.shannon/providers.toml`, and switches the running engine + REPL
+/// state to the provider's default model. The connected provider activates on
+/// the next launch via the `ConfigBuilder` connected layer (which wins over
+/// ambient `SHANNON_*` env vars), so the connection is durable with zero env
+/// vars. Decision A1: the plaintext key lives only in
+/// `~/.shannon/credentials/<service>.json` (0600), never in a config file.
+pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
+    use shannon_core::credential_manager::{
+        Credential, CredentialManager, read_credential_value_default,
+    };
+    use shannon_core::provider_config_store;
+    use shannon_core::provider_resolver::build_connect_profile;
+
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        repl.chat.add_message(ChatRole::System, CONNECT_HELP.to_string());
+        return Ok(());
+    }
+
+    // `<provider> [api-key]` — the key is the remainder (may contain no
+    // spaces). Provider is resolved with the alias-aware parser for friendly
+    // errors (claude→Anthropic, glm→Zhipu, …).
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let provider_arg = parts.next().unwrap_or("");
+    let key_arg = parts.next().map(str::trim).filter(|s| !s.is_empty());
+
+    let provider = match parse_provider_name(provider_arg) {
+        Ok(p) => p,
+        Err(e) => {
+            super::set_error(repl, &e.to_string());
+            return Ok(());
+        }
+    };
+
+    let cp = build_connect_profile(provider.clone(), None, None);
+    let mut lines: Vec<String> = Vec::new();
+
+    // 1. API key → credential Store (idempotent; plaintext lands only on disk
+    //    at ~/.shannon/credentials/<service>.json, 0600 — never in a config).
+    if let Some(key) = key_arg {
+        match CredentialManager::new()
+            .and_then(|mut m| m.store_or_update(Credential::new(&cp.service, &cp.service, key)))
+        {
+            Ok(_) => lines.push(format!(
+                "✓ API key stored for '{provider_arg}' (service: {})",
+                cp.service
+            )),
+            Err(e) => {
+                super::set_error(repl, &format!("storing credential: {e}"));
+                return Ok(());
+            }
+        }
+    } else if read_credential_value_default(&cp.service).is_some() {
+        lines.push(format!(
+            "• Reusing stored key for '{provider_arg}' (service: {})",
+            cp.service
+        ));
+    } else if provider.requires_auth() {
+        lines.push(format!(
+            "⚠ No key for '{provider_arg}'. Run: /connect {provider_arg} <your-api-key>",
+        ));
+    }
+
+    // 2. Persist the v2 profile (CredentialRef::Store) so the engine loads it
+    //    on next launch — the durable, env-var-free contract.
+    match provider_config_store::save(&cp.config, None) {
+        Ok(path) => lines.push(format!("✓ Profile saved: {}", path.display())),
+        Err(e) => {
+            super::set_error(repl, &format!("saving providers.toml: {e}"));
+            return Ok(());
+        }
+    }
+
+    // 3. Switch the running engine + REPL state to the provider's default
+    //    model (mirrors /provider). The stored key activates on next launch;
+    //    the current client keeps its startup credential.
+    repl.state.model = Some(cp.model_id.clone());
+    repl.state.selected_provider = Some(cp.provider.clone());
+    if let Some(ref mut engine) = repl.query_engine {
+        engine.set_model_for_provider(cp.model_id.clone(), cp.provider.clone());
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            repl.runtime.block_on(engine.pre_resolve_context());
+        }));
+        repl.state.context_window = engine.resolved_context_window();
+    }
+    crate::repl::preferences::save_preferences(&crate::repl::preferences::Preferences {
+        model: repl.state.model.clone(),
+        provider: repl.state.selected_provider.clone(),
+        theme: Some(repl.state.theme.name.to_string()),
+    });
+
+    lines.push(format!(
+        "✓ Switched to {} — model: {} (restart shannon to apply the new credential)",
+        cp.provider, cp.model_id
+    ));
+    repl.chat.add_message(ChatRole::System, lines.join("\n"));
+    Ok(())
+}
+
 pub(crate) fn handle_init(repl: &mut Repl) -> Result<()> {
     let mut init_info = String::new();
     let cwd = &repl.state.working_directory;

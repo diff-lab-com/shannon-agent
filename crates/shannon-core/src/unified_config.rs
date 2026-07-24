@@ -166,6 +166,12 @@ pub struct ConfigBuilder {
     global_toml: ShannonConfig,
     local_toml: ShannonConfig,
     env_vars: ShannonConfig,
+    /// The connected provider profile (`~/.shannon/providers.toml`, written by
+    /// `/connect`). Merged between env vars and CLI overrides so a connected
+    /// provider wins over ambient `SHANNON_*` env vars (the `/connect`
+    /// "works without env vars" contract) while `--provider`/`--model` still
+    /// override a single invocation. See ADR-0005 Phase 4.
+    connected: ShannonConfig,
     cli_overrides: ShannonConfig,
 }
 
@@ -176,6 +182,7 @@ impl ConfigBuilder {
             global_toml: ShannonConfig::empty(),
             local_toml: ShannonConfig::empty(),
             env_vars: ShannonConfig::empty(),
+            connected: ShannonConfig::empty(),
             cli_overrides: ShannonConfig::empty(),
         }
     }
@@ -194,6 +201,29 @@ impl ConfigBuilder {
         let path = std::path::Path::new(".shannon.toml");
         let local = load_config_file(path);
         self.local_toml = local;
+        self
+    }
+
+    /// Load the connected provider profile from `~/.shannon/providers.toml`
+    /// (ADR-0005 Phase 4). The file is written by `/connect` and carries a
+    /// `CredentialRef::Store` credential, so a connected provider activates on
+    /// the next launch with no environment variable. A missing or unparseable
+    /// file leaves the layer empty (synthesis takes over) — launch never fails.
+    pub fn load_connected_profile(&mut self) -> &mut Self {
+        if let Some(pm) = crate::provider_config_store::load(None) {
+            self.connected = ShannonConfig {
+                max_tokens: None,
+                temperature: None,
+                timeout: None,
+                debug: false,
+                enable_tools: None,
+                max_context_tokens: None,
+                presets: None,
+                permission_profile: None,
+                notifications: None,
+                provider_model: pm,
+            };
+        }
         self
     }
 
@@ -246,12 +276,18 @@ impl ConfigBuilder {
     /// Build the final merged configuration.
     ///
     /// Priority (highest to lowest):
-    /// CLI overrides > env vars > local TOML > global TOML
+    /// CLI overrides > connected profile (`providers.toml`) > env vars >
+    /// local TOML > global TOML
+    ///
+    /// The connected layer (ADR-0005 Phase 4) lets `/connect` win over ambient
+    /// `SHANNON_*` env vars, while a per-invocation `--provider`/`--model`
+    /// still overrides it.
     pub fn build(&self) -> ShannonConfig {
         let mut config = self
             .global_toml
             .merge(&self.local_toml)
             .merge(&self.env_vars)
+            .merge(&self.connected)
             .merge(&self.cli_overrides);
 
         // Clamp temperature to valid range for all LLM providers.

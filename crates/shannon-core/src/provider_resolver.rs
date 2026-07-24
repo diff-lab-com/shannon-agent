@@ -352,6 +352,84 @@ pub fn synthesize_default_profile(
     })
 }
 
+/// A connected provider profile ready to persist (ADR-0005 Phase 4 `/connect`).
+///
+/// [`build_connect_profile`] produces this; the REPL handler writes the API key
+/// under [`service`] via [`crate::credential_manager`], saves [`config`] via
+/// [`crate::provider_config_store`], then applies [`provider`] + [`model_id`]
+/// to the running engine.
+///
+/// [`service`]: ConnectProfile::service
+/// [`config`]: ConnectProfile::config
+/// [`provider`]: ConnectProfile::provider
+/// [`model_id`]: ConnectProfile::model_id
+#[derive(Debug, Clone)]
+pub struct ConnectProfile {
+    /// The v2 config: a single-provider `"default"` profile whose credential
+    /// is [`CredentialRef::Store`] keyed at the provider id slug.
+    pub config: ProviderModelConfig,
+    /// Credential-store service name the profile's credential references
+    /// (== provider id slug). `/connect` writes the API key under this service.
+    pub service: String,
+    /// Concrete engine provider — for the live in-session switch.
+    pub provider: LlmProvider,
+    /// Active model id (catalog default when none was requested).
+    pub model_id: String,
+}
+
+/// Build a [`ConnectProfile`] for `/connect <provider>` (ADR-0005 Phase 4).
+///
+/// `provider` is the resolved engine provider (callers should use the REPL's
+/// alias-aware parser, e.g. `parse_provider_name`, before this). `model`
+/// defaults to the provider's first catalog model; `base_url_override`
+/// defaults to the provider's canonical base URL. The credential is
+/// [`CredentialRef::Store`] keyed at the provider id slug, so the connected
+/// provider survives restart with no environment variable — plaintext lives
+/// only in the credential store (decision A1).
+pub fn build_connect_profile(
+    provider: LlmProvider,
+    model: Option<&str>,
+    base_url_override: Option<&str>,
+) -> ConnectProfile {
+    let kind = llm_provider_to_kind(&provider);
+    let provider_id = llm_provider_id(&provider);
+    let base_url = base_url_override
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| provider.default_base_url().to_string());
+    let model_id = model
+        .map(|s| s.to_string())
+        .or_else(|| {
+            crate::model_registry::models_for_provider(provider.clone())
+                .first()
+                .map(|m| m.id.to_string())
+        })
+        .unwrap_or_else(|| "default".to_string());
+    let profile = ProviderProfile {
+        id: provider_id.clone(),
+        kind,
+        display_name: provider_id.clone(),
+        base_url,
+        models_url: None,
+        credential: CredentialRef::Store {
+            service: provider_id.clone(),
+        },
+        extra_headers: std::collections::HashMap::new(),
+        default_max_tokens: None,
+        fallback_models: Vec::new(),
+        quirks: Default::default(),
+    };
+    ConnectProfile {
+        config: ProviderModelConfig {
+            version: ProviderModelConfig::VERSION,
+            profiles: build_default_profiles_map(profile, &model_id),
+            gateway: Default::default(),
+        },
+        service: provider_id,
+        provider,
+        model_id,
+    }
+}
+
 /// Construct a single-provider Ollama profile at `http://localhost:11434`.
 fn ollama_default_profile(model_id: &str) -> ProviderModelConfig {
     use std::collections::HashMap;
@@ -742,5 +820,72 @@ mod tests {
         assert_ne!(r.model_id, "opus");
         assert!(r.model_id.starts_with("claude-"));
         assert!(r.known);
+    }
+
+    // ── build_connect_profile (ADR-0005 Phase 4, /connect) ─────────────
+
+    fn store_service_of(cp: &ConnectProfile) -> Option<&str> {
+        let p = cp.config.profiles.get("default")?;
+        match &p.providers[0].credential {
+            CredentialRef::Store { service } => Some(service.as_str()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn build_connect_profile_anthropic_uses_store_and_catalog_default_model() {
+        let cp = build_connect_profile(LlmProvider::Anthropic, None, None);
+        assert_eq!(cp.provider, LlmProvider::Anthropic);
+        assert_eq!(cp.service, "anthropic");
+        // No model requested → the provider's first catalog model.
+        assert!(
+            cp.model_id.starts_with("claude-"),
+            "got {}",
+            cp.model_id
+        );
+        // Credential is a Store reference (A1: no plaintext in the profile),
+        // keyed at the provider id slug — and it matches `service`.
+        assert_eq!(store_service_of(&cp), Some("anthropic"));
+        // Active target points at the anthropic provider + chosen model.
+        let active = &cp
+            .config
+            .profiles
+            .get("default")
+            .unwrap()
+            .active_target;
+        assert_eq!(active.provider_id, "anthropic");
+        assert_eq!(active.model_id, cp.model_id);
+    }
+
+    #[test]
+    fn build_connect_profile_respects_explicit_model() {
+        let cp = build_connect_profile(LlmProvider::OpenAI, Some("gpt-4o"), None);
+        assert_eq!(cp.provider, LlmProvider::OpenAI);
+        assert_eq!(cp.service, "openai");
+        assert_eq!(cp.model_id, "gpt-4o");
+        assert_eq!(store_service_of(&cp), Some("openai"));
+    }
+
+    #[test]
+    fn build_connect_profile_base_url_override_wins_over_default() {
+        let cp = build_connect_profile(
+            LlmProvider::Anthropic,
+            None,
+            Some("https://proxy.example.com"),
+        );
+        let profile = &cp.config.profiles["default"].providers[0];
+        assert_eq!(profile.base_url, "https://proxy.example.com");
+    }
+
+    #[test]
+    fn build_connect_profile_ollama_store_credential_and_default_url() {
+        // Ollama needs no auth, but the profile still carries a Store ref so
+        // the shape is uniform (the stored value is simply empty/unused).
+        let cp = build_connect_profile(LlmProvider::Ollama, Some("llama3"), None);
+        assert_eq!(cp.service, "ollama");
+        assert_eq!(cp.model_id, "llama3");
+        let profile = &cp.config.profiles["default"].providers[0];
+        assert_eq!(profile.base_url, "http://localhost:11434");
+        assert_eq!(store_service_of(&cp), Some("ollama"));
     }
 }

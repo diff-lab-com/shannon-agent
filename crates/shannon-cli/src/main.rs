@@ -797,6 +797,7 @@ fn build_llm_config_from_builder(cli_config: &CliConfig) -> LlmClientConfig {
         .load_global_toml()
         .load_local_toml()
         .load_env_vars()
+        .load_connected_profile()
         .set_cli_overrides(cli_overrides)
         .build();
 
