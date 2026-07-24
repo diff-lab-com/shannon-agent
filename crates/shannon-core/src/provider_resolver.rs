@@ -14,6 +14,7 @@
 //! an unknown OpenAI-compatible endpoint still gets the correct wire format.
 
 use shannon_engine::api::LlmProvider;
+use shannon_types::model_ref::ModelRef;
 use shannon_types::provider_config::{
     ActiveTarget, CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig,
     ProviderProfile, Scope,
@@ -138,6 +139,54 @@ pub fn resolve_credential(cred: &CredentialRef) -> String {
         CredentialRef::Env { var } => std::env::var(var).unwrap_or_default(),
         CredentialRef::InlineLegacy { masked } => masked.clone(),
         CredentialRef::Keyring { .. } | CredentialRef::Ephemeral => String::new(),
+    }
+}
+
+/// A resolved [`ModelRef`]: the concrete engine provider plus the (possibly
+/// alias-expanded) model id, with catalog metadata for display/UI.
+///
+/// Produced by [`resolve_model_ref`]. This is the Phase 0 (ADR-0005) bridge
+/// from the user-facing `provider/model` spelling to the engine's runtime
+/// types — used by `/model`, `--model`, and the desktop provider switcher.
+#[derive(Debug, Clone)]
+pub struct ResolvedModelRef {
+    /// Concrete engine provider (drives wire format + endpoint path).
+    pub provider: LlmProvider,
+    /// Model id after alias resolution (e.g. `sonnet` → `claude-sonnet-4-…`).
+    /// For custom/unknown models this is the ref's model verbatim.
+    pub model_id: String,
+    /// True when `model_id` (post-resolution) is in the built-in catalog.
+    pub known: bool,
+    /// Context window from the catalog, or the `200_000` default for unknowns.
+    pub context_window: usize,
+}
+
+/// Resolve a `provider/model` [`ModelRef`] into a concrete provider + model id,
+/// applying alias resolution against the built-in catalog.
+///
+/// **Provider slug** resolution reuses the same identity bridge as
+/// [`resolve_active_target`]: a recognised slug (`anthropic`, `ollama`,
+/// `zhipu`, `moonshot`, `dashscope`, …) maps directly to its [`LlmProvider`],
+/// preserving every known provider. An unrecognised slug is treated as an
+/// OpenAI-compatible endpoint and falls back to the OpenAI wire format —
+/// consistent with [`resolve_provider`].
+///
+/// **Model** resolution is intentionally lenient: a model absent from the
+/// catalog (an Ollama model, a proxy's custom id, a newly-released model) is
+/// returned verbatim with `known = false`. Tier aliases (`sonnet`, `opus`,
+/// `haiku`) are expanded against the resolved provider when applicable.
+pub fn resolve_model_ref(mref: &ModelRef) -> ResolvedModelRef {
+    let provider = llm_provider_from_id(&mref.provider)
+        .unwrap_or_else(|| resolve_provider(&ProviderKind::OpenAiCompatible, ""));
+    // Alias-expand against the resolved provider first; unknowns pass through.
+    let model_id = crate::model_registry::resolve_model(&mref.model, Some(&provider));
+    let known = crate::model_registry::model_info_for(&model_id).is_some();
+    let context_window = crate::model_registry::context_window_for(&model_id);
+    ResolvedModelRef {
+        provider,
+        model_id,
+        known,
+        context_window,
     }
 }
 
@@ -607,5 +656,74 @@ mod tests {
             ""
         );
         assert_eq!(resolve_credential(&CredentialRef::Ephemeral), "");
+    }
+
+    // ── resolve_model_ref (Phase 0, ADR-0005) ──────────────────────────
+
+    #[test]
+    fn resolve_model_ref_known_anthropic_full_id() {
+        let m = ModelRef::new("anthropic", "claude-sonnet-4-20250514");
+        let r = resolve_model_ref(&m);
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+        assert_eq!(r.model_id, "claude-sonnet-4-20250514");
+        assert!(r.known);
+        assert_eq!(r.context_window, 200_000);
+    }
+
+    #[test]
+    fn resolve_model_ref_expands_sonnet_alias_against_provider() {
+        let m = ModelRef::new("anthropic", "sonnet");
+        let r = resolve_model_ref(&m);
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+        // The alias must be expanded to a concrete catalog id (not left as
+        // "sonnet"); the exact pick is the registry's tier heuristic.
+        assert_ne!(r.model_id, "sonnet");
+        assert!(r.model_id.starts_with("claude-"));
+        assert!(r.known);
+    }
+
+    #[test]
+    fn resolve_model_ref_preserves_zhipu_slug() {
+        let m = ModelRef::new("zhipu", "glm-4.6");
+        let r = resolve_model_ref(&m);
+        // recognised slug → Zhipu (not the OpenAI fallback)
+        assert_eq!(r.provider, LlmProvider::Zhipu);
+        assert_eq!(r.model_id, "glm-4.6");
+        // glm-4.6 may or may not be in the catalog; both are acceptable, just
+        // assert context window is sane.
+        assert!(r.context_window > 0);
+    }
+
+    #[test]
+    fn resolve_model_ref_ollama_custom_model_is_unknown_but_kept() {
+        let m = ModelRef::new("ollama", "llama3");
+        let r = resolve_model_ref(&m);
+        assert_eq!(r.provider, LlmProvider::Ollama);
+        assert_eq!(r.model_id, "llama3");
+        // Runtime-detected models aren't in the static catalog.
+        assert!(!r.known);
+        assert_eq!(r.context_window, 200_000);
+    }
+
+    #[test]
+    fn resolve_model_ref_unknown_provider_slug_falls_back_to_openai_wire() {
+        let m = ModelRef::new("my-custom-proxy", "some-model");
+        let r = resolve_model_ref(&m);
+        // Unknown slug → OpenAI-compatible wire format.
+        assert!(r.provider.is_openai_compatible());
+        assert_eq!(r.model_id, "some-model");
+        assert!(!r.known);
+    }
+
+    #[test]
+    fn resolve_model_ref_from_input_bare_uses_fallback_provider() {
+        // Simulates `--model opus` with the active provider being Anthropic.
+        let m = ModelRef::from_input("opus", Some("anthropic")).unwrap();
+        let r = resolve_model_ref(&m);
+        assert_eq!(r.provider, LlmProvider::Anthropic);
+        // Alias expanded to a known catalog id for Anthropic.
+        assert_ne!(r.model_id, "opus");
+        assert!(r.model_id.starts_with("claude-"));
+        assert!(r.known);
     }
 }

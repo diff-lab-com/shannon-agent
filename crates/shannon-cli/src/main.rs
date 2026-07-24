@@ -11,11 +11,12 @@ use shannon_commands::preset_utils::ConversationPreset;
 use shannon_core::{
     i18n,
     model_registry::resolve_model,
-    provider_resolver::synthesize_default_profile,
+    provider_resolver::{resolve_model_ref, synthesize_default_profile},
     query_engine::{QueryContext, QueryEngine, QueryEvent, QueryMetadata},
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
 };
+use shannon_types::model_ref::ModelRef;
 use shannon_engine::{api::LlmClientConfig, state::StateManager};
 use shannon_tools::register_default_tools_with_project_dir_ex;
 use shannon_ui::Repl;
@@ -172,18 +173,39 @@ struct CliConfig {
 
 impl CliConfig {
     /// Get the model, with fallback to environment variable and alias resolution.
+    ///
+    /// Accepts the ADR-0005 `provider/model` qualified form: when the value
+    /// (or `SHANNON_MODEL`) is qualified, the provider prefix is consumed here
+    /// (and surfaced via [`Self::provider`]) and the model is alias-expanded
+    /// **within the named provider** (so `anthropic/sonnet` stays Anthropic).
     fn model(&self) -> Option<String> {
         self.model
             .clone()
             .or_else(|| std::env::var("SHANNON_MODEL").ok())
-            .map(|m| resolve_model(&m, None))
+            .map(|raw| {
+                if let Some(mref) = ModelRef::parse(&raw) {
+                    resolve_model_ref(&mref).model_id
+                } else {
+                    resolve_model(&raw, None)
+                }
+            })
     }
 
-    /// Get the provider, with fallback to environment variable.
+    /// Get the provider, with fallback to environment variable and the
+    /// `provider/model` qualifier embedded in `--model` / `SHANNON_MODEL`.
+    /// An explicit `--provider` / `SHANNON_PROVIDER` always wins.
     fn provider(&self) -> Option<String> {
-        self.provider
+        if let Some(p) = self
+            .provider
             .clone()
             .or_else(|| std::env::var("SHANNON_PROVIDER").ok())
+        {
+            return Some(p);
+        }
+        self.model
+            .clone()
+            .or_else(|| std::env::var("SHANNON_MODEL").ok())
+            .and_then(|raw| ModelRef::parse(&raw).map(|m| m.provider))
     }
 
     /// Get max_tokens, with fallback to environment variable.
@@ -3419,6 +3441,75 @@ mod tests {
         assert_eq!(config.temperature(), Some(0.5));
         assert_eq!(config.timeout(), Some(60));
         assert!(config.debug());
+    }
+
+    #[test]
+    fn test_cli_config_qualified_model_routes_provider() {
+        // `--model anthropic/claude-sonnet-4-20250514` (no --provider):
+        // model() returns the bare id, provider() is recovered from the ref.
+        let config = CliConfig {
+            model: Some("anthropic/claude-sonnet-4-20250514".to_string()),
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        assert_eq!(
+            config.model().as_deref(),
+            Some("claude-sonnet-4-20250514")
+        );
+        assert_eq!(config.provider().as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn test_cli_config_qualified_model_alias_expands_within_provider() {
+        // `anthropic/sonnet` must expand within Anthropic, not across providers.
+        let config = CliConfig {
+            model: Some("anthropic/sonnet".to_string()),
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        let model = config.model().expect("model resolved");
+        assert_ne!(model, "sonnet");
+        assert!(model.starts_with("claude-"), "got {model}");
+        assert_eq!(config.provider().as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn test_cli_config_explicit_provider_overrides_qualified_model() {
+        // `--provider openai --model anthropic/sonnet`: explicit provider wins.
+        let config = CliConfig {
+            model: Some("anthropic/sonnet".to_string()),
+            provider: Some("openai".to_string()),
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        assert_eq!(config.provider().as_deref(), Some("openai"));
+    }
+
+    #[test]
+    fn test_cli_config_bare_model_unaffected() {
+        // Legacy bare `--model gpt-4o` still works; provider() stays None.
+        let config = CliConfig {
+            model: Some("gpt-4o".to_string()),
+            provider: None,
+            max_tokens: None,
+            temperature: None,
+            timeout: None,
+            debug: false,
+            env_overrides: HashMap::new(),
+        };
+        assert_eq!(config.model().as_deref(), Some("gpt-4o"));
+        assert!(config.provider().is_none());
     }
 
     #[test]

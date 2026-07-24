@@ -5964,6 +5964,7 @@ dependencies = [
  "shannon-engine",
  "shannon-skills",
  "shannon-tools",
+ "shannon-types",
  "shannon-ui",
  "similar",
  "tempfile",
