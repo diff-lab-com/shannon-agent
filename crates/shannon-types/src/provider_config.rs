@@ -66,6 +66,11 @@ pub enum AuxRole {
 pub enum CredentialRef {
     /// 默认后端：环境变量（CI / ~/.shannon/secrets.env chmod 0600）
     Env { var: String },
+    /// Shannon 凭据存储后端：值落在 `~/.shannon/credentials/<service>.json`
+    /// （0600）。这是 `/connect`、`/credentials` 写入、请求路径读取的统一
+    /// 后端（ADR-0005 Phase 1）。读取由 provider_resolver 完成；缺失时返回
+    /// 空，调用方自然回退到 provider 的 env 链。
+    Store { service: String },
     /// 机会性可选：仅探测到 D-Bus secret-service 可用时启用
     Keyring { service: String, account: String },
     /// 迁移过渡期：已 mask 的旧明文，迁移完成后清除

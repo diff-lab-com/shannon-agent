@@ -480,8 +480,7 @@ impl CredentialManager {
         for credential in self.store.credentials.values() {
             let path = self.credential_file_path(&credential.service);
             let content = serde_json::to_string_pretty(credential)?;
-            fs::write(&path, content)?;
-            self.set_secure_permissions(&path)?;
+            atomic_write_secure(&path, &content)?;
         }
 
         debug!(
@@ -491,6 +490,27 @@ impl CredentialManager {
         );
         Ok(())
     }
+}
+
+/// Atomically write `content` to `path` via a temp file + rename (ADR-0005
+/// Phase 1, P3-2).
+///
+/// Owner-only permissions (0600 on Unix) are set on the **temp** file before
+/// the rename, so the final path is never observable in a world-readable
+/// state and a crash mid-write cannot leave a partial credential file. The
+/// rename is atomic on the same filesystem; the temp file is cleaned up by
+/// the rename itself on success (a crash before rename may leave a stale
+/// `<service>.json.tmp`, which is harmless and ignored by readers).
+fn atomic_write_secure(path: &Path, content: &str) -> Result<(), CredentialError> {
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+    }
+    fs::rename(&tmp, path)?;
+    Ok(())
 }
 
 impl Default for CredentialManager {
@@ -553,6 +573,32 @@ fn default_credentials_dir() -> Result<PathBuf, CredentialError> {
         ))
     })?;
     Ok(home.join(".shannon").join("credentials"))
+}
+
+/// Read a single credential's value directly from its on-disk file in `dir`,
+/// bypassing the in-memory cache.
+///
+/// This is the hot-path read used by the provider resolver (ADR-0005 Phase 1)
+/// so the request path can honor [`CredentialRef::Store { service }`] without
+/// constructing a full [`CredentialManager`] and running a `load()` cycle.
+/// Returns `None` when the file is missing, unreadable, or not a valid
+/// credential document.
+///
+/// [`CredentialRef::Store { service }`]: shannon_types::provider_config::CredentialRef::Store
+pub fn read_credential_value(dir: &Path, service: &str) -> Option<String> {
+    let safe_name = service.replace(['/', '\\', '\0'], "_");
+    let path = dir.join(format!("{safe_name}.json"));
+    let content = fs::read_to_string(&path).ok()?;
+    let credential: Credential = serde_json::from_str(&content).ok()?;
+    Some(credential.value)
+}
+
+/// Read a credential value from the default store directory
+/// (`~/.shannon/credentials/`). Returns `None` when the home directory cannot
+/// be determined or the credential is absent/unreadable.
+pub fn read_credential_value_default(service: &str) -> Option<String> {
+    let dir = default_credentials_dir().ok()?;
+    read_credential_value(&dir, service)
 }
 
 /// Get the current machine hostname.
@@ -874,5 +920,110 @@ mod tests {
         let content = fs::read_to_string(&file_path).unwrap();
         assert!(content.contains("anthropic"));
         assert!(content.contains("key"));
+    }
+
+    // ── read_credential_value (ADR-0005 Phase 1 hot path) ──────────────
+
+    #[test]
+    fn test_read_credential_value_present() {
+        let td = TestDir::new();
+        let mut mgr = CredentialManager::with_dir(td.path().to_path_buf()).unwrap();
+        mgr.store_or_update(Credential::new("Anthropic", "anthropic", "sk-from-store"))
+            .unwrap();
+
+        // Direct disk read — no load() needed.
+        assert_eq!(
+            read_credential_value(td.path(), "anthropic"),
+            Some("sk-from-store".to_string())
+        );
+    }
+
+    #[test]
+    fn test_read_credential_value_missing_is_none() {
+        let td = TestDir::new();
+        assert!(read_credential_value(td.path(), "ghost").is_none());
+    }
+
+    #[test]
+    fn test_read_credential_value_corrupt_is_none() {
+        let td = TestDir::new();
+        // Write a malformed JSON file where a credential is expected.
+        fs::write(td.path().join("anthropic.json"), "{ not json").unwrap();
+        assert!(read_credential_value(td.path(), "anthropic").is_none());
+    }
+
+    #[test]
+    fn test_read_credential_value_sanitizes_service_name() {
+        let td = TestDir::new();
+        let mut mgr = CredentialManager::with_dir(td.path().to_path_buf()).unwrap();
+        // A service with path separators is stored on disk under a sanitized
+        // name; the reader must apply the same sanitization to find it.
+        mgr.store_or_update(Credential::new("Zhipu", "zhipu/coding", "glm-key"))
+            .unwrap();
+        assert_eq!(
+            read_credential_value(td.path(), "zhipu/coding"),
+            Some("glm-key".to_string())
+        );
+    }
+
+    #[test]
+    fn test_read_credential_value_picks_up_external_write() {
+        // Simulates `/connect` writing a credential file after the process
+        // started: the direct read must see it without any in-memory cache.
+        let td = TestDir::new();
+        let cred = Credential::new("Anthropic", "anthropic", "freshly-written");
+        fs::write(
+            td.path().join("anthropic.json"),
+            serde_json::to_string(&cred).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_credential_value(td.path(), "anthropic"),
+            Some("freshly-written".to_string())
+        );
+    }
+
+    // ── atomic_write_secure (ADR-0005 Phase 1, P3-2) ───────────────────
+
+    #[test]
+    fn test_atomic_write_leaves_no_tmp_and_correct_content() {
+        let td = TestDir::new();
+        let path = td.path().join("anthropic.json");
+        atomic_write_secure(&path, "{\"service\":\"anthropic\"}").unwrap();
+
+        // Final file exists with the content…
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"service\":\"anthropic\"}");
+        // …and no temp file is left behind.
+        assert!(!td.path().join("anthropic.json.tmp").exists());
+    }
+
+    #[test]
+    fn test_atomic_write_sets_owner_only_permissions_on_unix() {
+        let td = TestDir::new();
+        let path = td.path().join("deepseek.json");
+        atomic_write_secure(&path, "x").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "credential file must be owner-only (0600)");
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+        }
+    }
+
+    #[test]
+    fn test_store_persist_is_atomic_via_manager() {
+        // End-to-end: storing through the manager must land a complete file
+        // with no leftover .tmp (regression guard for the atomic persist).
+        let td = TestDir::new();
+        let mut mgr = CredentialManager::with_dir(td.path().to_path_buf()).unwrap();
+        mgr.store(Credential::new("Anthropic", "anthropic", "k")).unwrap();
+        assert!(td.path().join("anthropic.json").exists());
+        assert!(!td.path().join("anthropic.json.tmp").exists());
     }
 }

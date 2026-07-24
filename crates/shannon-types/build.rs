@@ -408,6 +408,7 @@ pub enum AuxRole {
 #[serde(tag = "backend", rename_all = "snake_case")]
 pub enum CredentialRef {
     Env { var: String },
+    Store { service: String },
     Keyring { service: String, account: String },
     InlineLegacy { masked: String },
     Ephemeral,

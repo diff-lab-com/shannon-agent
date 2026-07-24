@@ -20,6 +20,14 @@
 //! writes to `~/.shannon/secrets.env` (chmod 0600). Secret-bearing types
 //! implement `Debug` manually with values redacted, so accidental `{:?}`
 //! logging cannot leak them.
+//!
+//! # Superseded by the `Store` backend (ADR-0005 Phase 1)
+//! `secrets.env` is a **write-only** artifact: nothing in the runtime loads it,
+//! and it is retained only as a v1→v2 migration affordance. The canonical
+//! plaintext-on-disk backend is now `CredentialRef::Store { service }`, which
+//! writes per-service files under `~/.shannon/credentials/` and is read by the
+//! provider resolver on the request path. New credential flows (`/connect`,
+//! `/credentials`) should target `Store`, not `persist_secrets`.
 
 use std::collections::HashMap;
 use std::fs;
