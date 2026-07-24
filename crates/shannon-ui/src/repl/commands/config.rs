@@ -2,23 +2,47 @@ use super::super::Repl;
 use crate::{Result, widgets::ChatRole};
 use rust_i18n::t;
 use shannon_core::model_registry;
+use shannon_core::provider_resolver::resolve_model_ref;
 use shannon_engine::api::LlmProvider;
+use shannon_types::model_ref::ModelRef;
 use shannon_types::recover_lock;
+
+/// Resolve a `/model` argument into `(model_id, optional provider)` (ADR-0005
+/// Phase 3).
+///
+/// Accepts both spellings:
+/// - **Qualified** `provider/model` (e.g. `anthropic/claude-sonnet-4-…`,
+///   `ollama/llama3`): the provider comes from the ref, and the model is
+///   alias-expanded *within* that provider.
+/// - **Bare** (legacy): an alias (`sonnet`) or literal id; the provider is set
+///   only when the model is known to the catalog.
+pub(crate) fn resolve_model_arg(args: &str) -> (String, Option<LlmProvider>) {
+    match ModelRef::parse(args.trim()) {
+        Some(mref) => {
+            let r = resolve_model_ref(&mref);
+            (r.model_id, Some(r.provider))
+        }
+        None => {
+            let info = model_registry::model_info_for_alias(args.trim());
+            let model_id = info
+                .map(|m| m.id.to_string())
+                .unwrap_or_else(|| args.trim().to_string());
+            (model_id, info.map(|m| m.provider.clone()))
+        }
+    }
+}
 
 pub(crate) fn handle_model(repl: &mut Repl, args: &str) -> Result<()> {
     if args.is_empty() {
         let picker = crate::widgets::select::ModelPickerWidget::new(repl.state.model.as_deref());
         repl.state.model_picker = Some(picker);
     } else {
-        // Resolve aliases (e.g. "sonnet" → "claude-sonnet-4-20250514")
-        let resolved_id = model_registry::model_info_for_alias(args)
-            .map(|m| m.id.to_string())
-            .unwrap_or_else(|| args.to_string());
+        let (resolved_id, resolved_provider) = resolve_model_arg(args);
 
-        // If alias resolved to a different provider, switch provider too
-        if let Some(info) = model_registry::model_info_for_alias(args) {
-            if repl.state.selected_provider.as_ref() != Some(&info.provider) {
-                repl.state.selected_provider = Some(info.provider.clone());
+        // If a provider was resolved and differs from the current one, switch.
+        if let Some(provider) = resolved_provider {
+            if repl.state.selected_provider.as_ref() != Some(&provider) {
+                repl.state.selected_provider = Some(provider);
             }
         }
 
@@ -1036,5 +1060,58 @@ mod tests {
     fn parse_color_string_invalid() {
         assert_eq!(parse_color_string("notacolor"), None);
         assert_eq!(parse_color_string("#xyz"), None);
+    }
+
+    // ── resolve_model_arg (ADR-0005 Phase 3) ───────────────────────────
+
+    #[test]
+    fn resolve_model_arg_qualified_full_id() {
+        let (id, provider) = resolve_model_arg("anthropic/claude-sonnet-4-20250514");
+        assert_eq!(id, "claude-sonnet-4-20250514");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
+    }
+
+    #[test]
+    fn resolve_model_arg_qualified_alias_expands_within_provider() {
+        let (id, provider) = resolve_model_arg("anthropic/sonnet");
+        assert_ne!(id, "sonnet");
+        assert!(id.starts_with("claude-"), "got {id}");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
+    }
+
+    #[test]
+    fn resolve_model_arg_qualified_unknown_model_kept_and_provider_set() {
+        let (id, provider) = resolve_model_arg("ollama/llama3");
+        assert_eq!(id, "llama3");
+        assert_eq!(provider, Some(LlmProvider::Ollama));
+    }
+
+    #[test]
+    fn resolve_model_arg_bare_alias_resolves() {
+        let (id, provider) = resolve_model_arg("sonnet");
+        assert!(id.starts_with("claude-sonnet"), "got {id}");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
+    }
+
+    #[test]
+    fn resolve_model_arg_bare_full_id() {
+        let (id, provider) = resolve_model_arg("claude-sonnet-4-20250514");
+        assert_eq!(id, "claude-sonnet-4-20250514");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
+    }
+
+    #[test]
+    fn resolve_model_arg_bare_unknown_no_provider() {
+        // A bare id not in the catalog: kept as-is, no provider inferred.
+        let (id, provider) = resolve_model_arg("llama3");
+        assert_eq!(id, "llama3");
+        assert!(provider.is_none());
+    }
+
+    #[test]
+    fn resolve_model_arg_trims_whitespace() {
+        let (id, provider) = resolve_model_arg("  anthropic/claude-sonnet-4-20250514  ");
+        assert_eq!(id, "claude-sonnet-4-20250514");
+        assert_eq!(provider, Some(LlmProvider::Anthropic));
     }
 }
