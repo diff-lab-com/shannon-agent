@@ -42,6 +42,24 @@
         },
         {
           "properties": {
+            "backend": {
+              "enum": [
+                "store"
+              ],
+              "type": "string"
+            },
+            "service": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "backend",
+            "service"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
             "account": {
               "type": "string"
             },

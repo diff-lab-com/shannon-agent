@@ -128,15 +128,19 @@ pub fn resolve_provider(kind: &ProviderKind, base_url: &str) -> LlmProvider {
 /// Resolve a credential value from a [`CredentialRef`] (decision A1: env is the
 /// default availability floor).
 ///
-/// N1 resolves env vars only. N2 will additionally load `~/.shannon/secrets.env`
-/// (chmod 0600) before consulting the process env.
-///
 /// - `Env { var }` → `std::env::var(var)`, empty string on unset.
+/// - `Store { service }` → reads `~/.shannon/credentials/<service>.json`
+///   (ADR-0005 Phase 1). Empty when absent — callers like
+///   [`resolve_api_key_for_provider`] then fall back to the provider's env
+///   chain, so a missing store entry degrades gracefully to env.
 /// - `InlineLegacy { masked }` → the transition-only value, as-is.
 /// - `Keyring` / `Ephemeral` → empty here (opportunistic / session-injected; #9).
 pub fn resolve_credential(cred: &CredentialRef) -> String {
     match cred {
         CredentialRef::Env { var } => std::env::var(var).unwrap_or_default(),
+        CredentialRef::Store { service } => {
+            crate::credential_manager::read_credential_value_default(service).unwrap_or_default()
+        }
         CredentialRef::InlineLegacy { masked } => masked.clone(),
         CredentialRef::Keyring { .. } | CredentialRef::Ephemeral => String::new(),
     }
@@ -656,6 +660,19 @@ mod tests {
             ""
         );
         assert_eq!(resolve_credential(&CredentialRef::Ephemeral), "");
+    }
+
+    #[test]
+    fn resolve_credential_store_missing_service_is_empty() {
+        // A store entry that definitely does not exist resolves to empty —
+        // this read-only check never writes to the home credentials dir. The
+        // store-read primitive itself is covered by credential_manager tests.
+        assert_eq!(
+            resolve_credential(&CredentialRef::Store {
+                service: "shannon-definitely-not-a-real-service-9f3a".to_string()
+            }),
+            ""
+        );
     }
 
     // ── resolve_model_ref (Phase 0, ADR-0005) ──────────────────────────
