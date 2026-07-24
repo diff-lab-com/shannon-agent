@@ -279,10 +279,23 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
                     serde_json::json!(value_str)
                 };
                 manager.set(key.to_string(), value.clone());
-                match manager.save() {
+                let mut msg = match manager.save() {
                     Ok(_) => config_utils::format_config_set(key, &value.to_string()),
                     Err(e) => format!("Error: saving config: {e}"),
+                };
+                // ADR-0005 Phase 4: mirror engine-read flat keys into
+                // ~/.shannon/config.toml (the file the engine loads on next
+                // launch), so `/config set model X` actually takes effect.
+                // Secrets are refused by the allowlist — they belong in
+                // /credentials, never in a config file (decision A1).
+                if shannon_core::config_persist::is_writable_key(key) {
+                    match shannon_core::config_persist::set_global_config_key(None, key, value_str)
+                    {
+                        Ok(path) => msg.push_str(&format!("\n  engine config: {}", path.display())),
+                        Err(e) => msg.push_str(&format!("\n  warning: config.toml: {e}")),
+                    }
                 }
+                msg
             }
         }
         config_utils::ConfigAction::Reset => {
@@ -291,7 +304,7 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
                 "Usage: /config reset <key>".to_string()
             } else {
                 let existed = manager.reset(key);
-                if existed {
+                let mut msg = if existed {
                     let _val = manager.get(key).unwrap_or(serde_json::Value::Null);
                     match manager.save() {
                         Ok(_) => config_utils::format_config_reset(key),
@@ -299,7 +312,15 @@ pub(crate) fn handle_config(repl: &mut Repl, args: &str) -> Result<()> {
                     }
                 } else {
                     config_utils::format_config_reset(key)
+                };
+                // ADR-0005 Phase 4: also drop the key from the engine-read
+                // config.toml. Reset only deletes, so it is safe for any key.
+                match shannon_core::config_persist::reset_global_config_key(None, key) {
+                    Ok(true) => msg.push_str("\n  removed from config.toml."),
+                    Ok(false) => {}
+                    Err(e) => msg.push_str(&format!("\n  warning: config.toml: {e}")),
                 }
+                msg
             }
         }
         config_utils::ConfigAction::Help => config_utils::format_config_list(),
