@@ -1,6 +1,7 @@
 # ADR 0005 — Unified Provider/Model/Credential Management
 
-**Status**: Proposed
+**Status**: Proposed — **partially implemented** on `feat/unified-provider-model-mgmt`
+(Phase 0 ✅, Phase 1 ✅, Phase 3 `/model` ✅; Phase 2 / Phase 4 / `/connect` pending)
 **Date**: 2026-07-24
 **Theme**: 统一 Provider/Model/密钥管理 (shannon-code + shannon-desktop)
 **Supersedes**: —
@@ -194,6 +195,11 @@ both front-ends become thin consumers. Each phase is independently shippable.
 
 ### Phase 0 — Shared `ModelRef` (`provider/model`)  *(prerequisite, ~2 days)*
 
+> **Status: ✅ Implemented** (commit `feat(model): add provider/model identifier`).
+> `shannon-types::ModelRef` + `resolve_model_ref()` in shannon-core + CLI
+> `--model provider/model` acceptance (bare-id compat preserved). Desktop
+> `configure`/`switch_provider` acceptance still pending (Phase 2). 29 tests.
+
 **Why**: P2-1; foundational primitive for every later phase.
 
 **Scope**:
@@ -210,6 +216,15 @@ both front-ends become thin consumers. Each phase is independently shippable.
 existing env-only configs are unaffected.
 
 ### Phase 1 — Unified credential resolution (fix the disconnect)  *(core, ~3 days)*
+
+> **Status: ✅ Implemented** (commit `feat(credentials): wire Store backend into
+> request path`). `CredentialRef::Store { service }` added (provider_config.rs
+> + build.rs schema redeclaration in sync); `resolve_credential()` reads
+> `~/.shannon/credentials/<service>.json` via a new hot-path
+> `read_credential_value()` (missing → empty → caller falls back to env, so
+> **P0-1 fixed**); `persist()` is now atomic (temp+rename, chmod-before-rename)
+> → **P3-2 fixed**; `secrets.env` documented as superseded by `Store`. Keyring
+> opportunistic-selection still pending (no blocking impl work). 11 tests.
 
 **Why**: P0-1 / P0-2 / P1-3 — the only actually-"broken" items.
 
@@ -231,6 +246,10 @@ paths unchanged.
 
 ### Phase 2 — Unified provider model + config convergence  *(architecture, ~4-5 days)*
 
+> **Status: ⏳ Pending.** Largest remaining piece — Tauri (Rust) + React/TS
+> refactor of the Desktop shell onto the engine `ProviderProfile`/`Store`
+> backend. Not started.
+
 **Why**: P1-1 / P1-2 / P1-4 / P1-5 / P3-1 / P4-1 / P4-2 / P4-3.
 
 **Scope**:
@@ -250,6 +269,14 @@ paths unchanged.
 **same** active provider. Only one connection-test implementation exists.
 
 ### Phase 3 — `/connect` + `/model` in code; Desktop re-platformed  *(~2-3 days)*
+
+> **Status: 🔄 Partial.** `/model provider/model` support ✅ (commit
+> `feat(repl): /model accepts provider/model form`) — `handle_model` switched,
+> alias-expanded within the named provider, via a tested `resolve_model_arg()`
+> helper (7 tests). **`/connect` wizard pending** — it depends on Phase 4 config
+> persistence so the connected profile survives restart; a session-only
+> `/connect` is possible but would be non-durable without it. Desktop
+> re-platforming pending (Phase 2).
 
 **Why**: P0-3 / P2-2.
 
@@ -271,6 +298,13 @@ works end-to-end without env vars; Desktop flow unchanged to the user but
 unified underneath.
 
 ### Phase 4 — Config persistence + variable substitution  *(~1-2 days)*
+
+> **Status: ⏳ Pending.** Note discovered during implementation: config is
+> currently **read-only** (no TOML write path exists); `/config` and
+> `/credentials` are `PromptCommand` metadata whose real execution is in the
+> shannon-ui REPL handlers (`handle_config`/`handle_credentials`). Phase 4
+> needs a TOML write-back for `ProviderModelConfig` (A1-respecting) wired into
+> `handle_config`. This is also the prerequisite for a durable `/connect`.
 
 **Why**: P2-3 / P2-4 (partial).
 
