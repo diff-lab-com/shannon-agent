@@ -36,6 +36,34 @@ pub(crate) fn set_error(repl: &mut Repl, msg: &str) {
         .add_message(ChatRole::System, format!("Error: {msg}"));
 }
 
+/// `/connect` wizard submit: finish the connection using the key typed in the
+/// masked dialog. Consumes the provider stashed in `state.pending_connect`
+/// (set by `config::prompt_for_connect_key`). Called from `input.rs` on the
+/// `connect_provider` dialog action. A blank value cancels the connect.
+pub(crate) fn finish_connect_with_key(repl: &mut Repl, value: &str) -> Result<()> {
+    let provider = match repl.state.pending_connect.take() {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        repl.chat.add_message(
+            ChatRole::System,
+            "Connect cancelled — no key entered.".to_string(),
+        );
+        return Ok(());
+    }
+    config::apply_connect(repl, provider, Some(trimmed))
+}
+
+/// `/connect` wizard cancel (Esc). Clears the stashed provider so a stale
+/// `pending_connect` can never be submitted later. Called from `input.rs`.
+pub(crate) fn cancel_connect_wizard(repl: &mut Repl) {
+    repl.state.pending_connect = None;
+    repl.chat
+        .add_message(ChatRole::System, "Connect cancelled.".to_string());
+}
+
 /// Expand `[Pasted Text #N X lines]` markers with the actual stored content.
 /// Removes expanded entries from the map.
 fn expand_pasted_texts(
@@ -671,6 +699,23 @@ impl Repl {
     pub(crate) fn show_input_dialog(&mut self, title: &str, placeholder: &str, action: &str) {
         use crate::widgets::dialog::InputDialog;
         let dialog = InputDialog::new(title.to_string()).with_placeholder(placeholder.to_string());
+        self.state.input_dialog = Some(Box::new(dialog));
+        self.state.input_dialog_action = Some(action.to_string());
+    }
+
+    /// Like [`show_input_dialog`](Self::show_input_dialog) but masks the typed
+    /// value (`•`). Used for secret input such as the `/connect` API-key wizard
+    /// — `value()` still returns the real text, masking is display-only.
+    pub(crate) fn show_secret_input_dialog(
+        &mut self,
+        title: &str,
+        placeholder: &str,
+        action: &str,
+    ) {
+        use crate::widgets::dialog::InputDialog;
+        let dialog = InputDialog::new(title.to_string())
+            .with_placeholder(placeholder.to_string())
+            .with_secret();
         self.state.input_dialog = Some(Box::new(dialog));
         self.state.input_dialog_action = Some(action.to_string());
     }
