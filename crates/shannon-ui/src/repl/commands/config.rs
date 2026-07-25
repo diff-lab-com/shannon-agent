@@ -208,24 +208,68 @@ pub(crate) fn parse_connect_args(args: &str) -> Option<ConnectArgs<'_>> {
     })
 }
 
-/// `/connect` help text (ADR-0005 Phase 4).
-const CONNECT_HELP: &str = "\
-/connect <provider> [api-key] — Connect a provider end-to-end (no env var needed)
+/// Connection status label for a provider in the `/connect` dashboard
+/// (ADR-0005 Phase 2). Pure — unit-tested below.
+///
+/// - `no auth`     provider needs no key (e.g. Ollama)
+/// - `✓ connected` profile persisted AND a key is stored → works on next launch
+/// - `key stored`  a key exists but `/connect` hasn't persisted a profile yet
+/// - `no key`      auth required, nothing stored
+fn connect_status(requires_auth: bool, connected: bool, has_key: bool) -> &'static str {
+    if !requires_auth {
+        "no auth"
+    } else if connected && has_key {
+        "✓ connected"
+    } else if has_key {
+        "key stored"
+    } else {
+        "no key"
+    }
+}
 
-Stores the API key in the credential store and persists a provider profile to
-~/.shannon/providers.toml, then switches the active provider/model. The
-connected provider loads automatically on the next launch.
+/// Slugs of providers that have a persisted profile in
+/// `~/.shannon/providers.toml` (i.e. `/connect` was run for them).
+fn connected_provider_slugs() -> std::collections::HashSet<String> {
+    shannon_core::provider_config_store::load(None)
+        .map(|pm| {
+            pm.profiles
+                .values()
+                .flat_map(|p| p.providers.iter().map(|pp| pp.id.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
-Examples:
-  /connect anthropic sk-ant-...     Connect Anthropic and store the key
-  /connect openai sk-...            Connect OpenAI
-  /connect deepseek sk-...          Connect DeepSeek
-  /connect zhipu <glm-key>          Connect Zhipu
-  /connect ollama                   Connect local Ollama (no key needed)
+/// No-arg `/connect` dashboard: list every provider with its connection status
+/// plus a one-line syntax hint. Replaces the old wall-of-text help — detailed
+/// docs live at `/help connect`. Short lines so the chat panel never wraps it
+/// into the jagged layout the long help string produced.
+fn show_connect_dashboard(repl: &mut Repl) {
+    use shannon_core::credential_manager::read_credential_value_default;
+    use shannon_core::model_registry;
+    use shannon_core::provider_resolver::llm_provider_id;
 
-The key is stored on disk (0600), never in a config file (decision A1). Omit
-the key to re-use one already stored via /credentials. Use /model to change the
-model after connecting.";
+    let connected = connected_provider_slugs();
+    let mut lines = vec![
+        "Connect a provider — no env var needed.".to_string(),
+        String::new(),
+        "Providers:".to_string(),
+    ];
+    for p in model_registry::all_providers() {
+        let slug = llm_provider_id(&p);
+        let has_key = read_credential_value_default(&slug).is_some();
+        let status = connect_status(p.requires_auth(), connected.contains(&slug), has_key);
+        let current = if repl.state.selected_provider.as_ref() == Some(&p) {
+            " *"
+        } else {
+            ""
+        };
+        lines.push(format!("  {p}{current} — {status}"));
+    }
+    lines.push(String::new());
+    lines.push("Usage: /connect <provider> [api-key]   (detail: /help connect)".to_string());
+    repl.chat.add_message(ChatRole::System, lines.join("\n"));
+}
 
 /// `/connect <provider> [api-key]` — connect a provider with no environment
 /// variable (ADR-0005 Phase 4).
@@ -248,7 +292,7 @@ pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
     let parsed = match parse_connect_args(args) {
         Some(p) => p,
         None => {
-            repl.chat.add_message(ChatRole::System, CONNECT_HELP.to_string());
+            show_connect_dashboard(repl);
             return Ok(());
         }
     };
@@ -1246,6 +1290,38 @@ mod tests {
         let p = parse_connect_args("ollama   ").expect("some");
         assert_eq!(p.provider_arg, "ollama");
         assert!(p.key_arg.is_none());
+    }
+
+    // ── connect_status (ADR-0005 Phase 2, /connect dashboard) ───────────
+
+    #[test]
+    fn connect_status_no_auth_provider() {
+        // Ollama-style: never needs a key, regardless of connection/key state.
+        assert_eq!(connect_status(false, false, false), "no auth");
+        assert_eq!(connect_status(false, true, true), "no auth");
+    }
+
+    #[test]
+    fn connect_status_authed_fully_connected() {
+        // Profile persisted + key stored → fully wired.
+        assert_eq!(connect_status(true, true, true), "✓ connected");
+    }
+
+    #[test]
+    fn connect_status_key_but_no_profile() {
+        // Key exists in the store but /connect hasn't persisted a profile.
+        assert_eq!(connect_status(true, false, true), "key stored");
+    }
+
+    #[test]
+    fn connect_status_profile_but_no_key() {
+        // Stale profile with no key → treat as "no key" (not functional).
+        assert_eq!(connect_status(true, true, false), "no key");
+    }
+
+    #[test]
+    fn connect_status_nothing_stored() {
+        assert_eq!(connect_status(true, false, false), "no key");
     }
 
     #[test]
