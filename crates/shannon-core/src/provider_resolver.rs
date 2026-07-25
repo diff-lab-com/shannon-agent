@@ -888,4 +888,59 @@ mod tests {
         assert_eq!(profile.base_url, "http://localhost:11434");
         assert_eq!(store_service_of(&cp), Some("ollama"));
     }
+
+    #[test]
+    fn build_connect_profile_persists_store_credential_round_trip() {
+        // The config /connect actually writes must round-trip through
+        // provider_config_store with the Store credential intact.
+        let cp = build_connect_profile(LlmProvider::Anthropic, None, None);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("providers.toml");
+        crate::provider_config_store::save(&cp.config, Some(&path))
+            .expect("save should succeed");
+        let loaded = crate::provider_config_store::load(Some(&path))
+            .expect("saved config should load back");
+        assert_eq!(loaded.version, cp.config.version);
+        let loaded_profile = loaded.profiles.get("default").expect("default profile");
+        // Decision A1: still a Store *reference* after a disk round trip — no
+        // plaintext leaked into the config file.
+        match &loaded_profile.providers[0].credential {
+            CredentialRef::Store { service } => assert_eq!(service, "anthropic"),
+            other => panic!("expected Store credential, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connect_profile_providers_toml_trips_no_secret_scanner_matches() {
+        // A1 regression: the on-disk providers.toml carries only
+        // CredentialRef::Store references (service slugs), never plaintext
+        // keys. Confirm the gitleaks-derived SecretScanner finds nothing in
+        // the serialized artifact for every provider with a key-shaped rule.
+        use crate::team_memory_sync::SecretScanner;
+        let scanner = SecretScanner::new();
+        assert!(
+            !scanner.rule_ids().is_empty(),
+            "scanner must have default rules"
+        );
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        for provider in [
+            LlmProvider::Anthropic,
+            LlmProvider::OpenAI,
+            LlmProvider::DeepSeek,
+            LlmProvider::Zhipu,
+        ] {
+            let cp = build_connect_profile(provider.clone(), None, None);
+            let path = dir.path().join(format!("{}.toml", cp.service));
+            crate::provider_config_store::save(&cp.config, Some(&path))
+                .expect("save should succeed");
+            let matches = scanner
+                .scan_file(&path)
+                .expect("scan should read the saved file");
+            assert!(
+                matches.is_empty(),
+                "providers.toml for {provider:?} tripped the secret scanner: {matches:?}"
+            );
+        }
+    }
 }
