@@ -181,6 +181,33 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     Ok(())
 }
 
+/// Parsed `/connect` arguments (ADR-0005 Phase 4). Pure — no side effects, so
+/// it is unit-testable without a `Repl`.
+pub(crate) struct ConnectArgs<'a> {
+    /// First token (provider name or alias), e.g. `anthropic` / `glm`.
+    pub provider_arg: &'a str,
+    /// Remainder after the provider token, trimmed — the API key if given.
+    pub key_arg: Option<&'a str>,
+}
+
+/// Split `/connect` args into `(provider, optional key)`. Returns `None` for
+/// empty/whitespace-only input so the caller can show help. The key is the
+/// full remainder after the first whitespace run (API keys contain no
+/// spaces), with surrounding whitespace trimmed.
+pub(crate) fn parse_connect_args(args: &str) -> Option<ConnectArgs<'_>> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let provider_arg = parts.next().unwrap_or("");
+    let key_arg = parts.next().map(str::trim).filter(|s| !s.is_empty());
+    Some(ConnectArgs {
+        provider_arg,
+        key_arg,
+    })
+}
+
 /// `/connect` help text (ADR-0005 Phase 4).
 const CONNECT_HELP: &str = "\
 /connect <provider> [api-key] — Connect a provider end-to-end (no env var needed)
@@ -218,18 +245,17 @@ pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
     use shannon_core::provider_config_store;
     use shannon_core::provider_resolver::build_connect_profile;
 
-    let trimmed = args.trim();
-    if trimmed.is_empty() {
-        repl.chat.add_message(ChatRole::System, CONNECT_HELP.to_string());
-        return Ok(());
-    }
-
-    // `<provider> [api-key]` — the key is the remainder (may contain no
-    // spaces). Provider is resolved with the alias-aware parser for friendly
-    // errors (claude→Anthropic, glm→Zhipu, …).
-    let mut parts = trimmed.splitn(2, char::is_whitespace);
-    let provider_arg = parts.next().unwrap_or("");
-    let key_arg = parts.next().map(str::trim).filter(|s| !s.is_empty());
+    let parsed = match parse_connect_args(args) {
+        Some(p) => p,
+        None => {
+            repl.chat.add_message(ChatRole::System, CONNECT_HELP.to_string());
+            return Ok(());
+        }
+    };
+    let ConnectArgs {
+        provider_arg,
+        key_arg,
+    } = parsed;
 
     let provider = match parse_provider_name(provider_arg) {
         Ok(p) => p,
@@ -1182,6 +1208,44 @@ mod tests {
     #[test]
     fn parse_provider_name_unknown() {
         assert!(parse_provider_name("unknown_provider").is_err());
+    }
+
+    // ── parse_connect_args (ADR-0005 Phase 4, /connect) ─────────────────
+
+    #[test]
+    fn parse_connect_args_empty_is_none() {
+        assert!(parse_connect_args("").is_none());
+        assert!(parse_connect_args("   ").is_none());
+        assert!(parse_connect_args("\t\n").is_none());
+    }
+
+    #[test]
+    fn parse_connect_args_provider_only() {
+        let p = parse_connect_args("anthropic").expect("some");
+        assert_eq!(p.provider_arg, "anthropic");
+        assert!(p.key_arg.is_none());
+    }
+
+    #[test]
+    fn parse_connect_args_provider_and_key() {
+        let p = parse_connect_args("anthropic sk-ant-api03-xxx").expect("some");
+        assert_eq!(p.provider_arg, "anthropic");
+        assert_eq!(p.key_arg, Some("sk-ant-api03-xxx"));
+    }
+
+    #[test]
+    fn parse_connect_args_trims_surrounding_whitespace() {
+        let p = parse_connect_args("   openai   sk-test123   ").expect("some");
+        assert_eq!(p.provider_arg, "openai");
+        assert_eq!(p.key_arg, Some("sk-test123"));
+    }
+
+    #[test]
+    fn parse_connect_args_blank_key_is_none() {
+        // Trailing whitespace but no key → no key.
+        let p = parse_connect_args("ollama   ").expect("some");
+        assert_eq!(p.provider_arg, "ollama");
+        assert!(p.key_arg.is_none());
     }
 
     #[test]

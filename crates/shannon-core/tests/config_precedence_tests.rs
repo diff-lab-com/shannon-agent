@@ -13,7 +13,7 @@ mod config_precedence_tests {
     use shannon_core::unified_config::{ConfigBuilder, ShannonConfig};
     use shannon_types::provider_config::{
         CredentialRef, CredentialScope, ModelProfile, ProviderKind, ProviderModelConfig,
-        ProviderProfile, Scope,
+        ProviderProfile,
     };
     use std::collections::HashMap;
 
@@ -109,7 +109,7 @@ mod config_precedence_tests {
             .expect("merged config should carry a default profile when any layer populated it")
     }
 
-    fn active_provider<'a>(cfg: &'a ShannonConfig) -> &'a ProviderProfile {
+    fn active_provider(cfg: &ShannonConfig) -> &ProviderProfile {
         active_profile(cfg)
             .providers
             .first()
