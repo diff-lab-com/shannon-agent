@@ -1572,6 +1572,10 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                                 .add_message(ChatRole::System, format!("Model set to: {value}"));
                         }
                     }
+                    "connect_provider" => {
+                        // `/connect` wizard submit: apply with the masked key.
+                        super::commands::finish_connect_with_key(repl, &value)?;
+                    }
                     _ => {
                         repl.chat
                             .add_message(ChatRole::System, format!("Input received: {value}"));
@@ -1590,6 +1594,8 @@ fn handle_input_dialog_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                     };
                     let _ = pending.responder.send(result);
                 }
+            } else if action.as_deref() == Some("connect_provider") {
+                super::commands::cancel_connect_wizard(repl);
             }
         }
         _ => {}

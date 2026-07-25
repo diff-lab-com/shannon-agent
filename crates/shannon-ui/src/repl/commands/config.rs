@@ -272,23 +272,23 @@ fn show_connect_dashboard(repl: &mut Repl) {
 }
 
 /// `/connect <provider> [api-key]` — connect a provider with no environment
-/// variable (ADR-0005 Phase 4).
+/// variable (ADR-0005 Phase 4, interactive wizard).
 ///
-/// Stores the API key (when given) in the credential Store under the
-/// provider's slug, persists a v2 provider profile (`CredentialRef::Store`)
-/// to `~/.shannon/providers.toml`, and switches the running engine + REPL
-/// state to the provider's default model. The connected provider activates on
-/// the next launch via the `ConfigBuilder` connected layer (which wins over
-/// ambient `SHANNON_*` env vars), so the connection is durable with zero env
-/// vars. Decision A1: the plaintext key lives only in
-/// `~/.shannon/credentials/<service>.json` (0600), never in a config file.
+/// - `/connect` (no args)        → dashboard listing every provider + status.
+/// - `/connect <provider>`       → if the provider needs a key and none is
+///   stored, opens a **masked** API-key input dialog (the wizard); on submit
+///   the key is written to the credential Store and a v2 profile is persisted.
+///   If a key is already stored (or the provider needs no auth), connects
+///   immediately.
+/// - `/connect <provider> <key>` → same as above but the key is taken from the
+///   argument (no dialog).
+///
+/// The stored key lives only in `~/.shannon/credentials/<service>.json` (0600)
+/// — never in a config file (decision A1). The persisted v2 profile
+/// (`CredentialRef::Store`) activates on the next launch via the `ConfigBuilder`
+/// connected layer (which wins over ambient `SHANNON_*` env vars), so the
+/// connection is durable with zero env vars.
 pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
-    use shannon_core::credential_manager::{
-        Credential, CredentialManager, read_credential_value_default,
-    };
-    use shannon_core::provider_config_store;
-    use shannon_core::provider_resolver::build_connect_profile;
-
     let parsed = match parse_connect_args(args) {
         Some(p) => p,
         None => {
@@ -309,17 +309,64 @@ pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
         }
     };
 
+    // Wizard trigger: auth required, no inline key, nothing stored → ask.
+    let has_stored_key = has_connect_key(&provider);
+    if should_prompt_for_key(provider.requires_auth(), key_arg, has_stored_key) {
+        prompt_for_connect_key(repl, provider);
+        return Ok(());
+    }
+
+    apply_connect(repl, provider, key_arg)
+}
+
+/// Whether `/connect` should open the API-key wizard instead of connecting
+/// immediately. Pure — unit-tested below.
+///
+/// True only when the provider needs a key, none was passed inline, and none is
+/// already stored. In every other case (no-auth provider, inline key, or an
+/// existing stored key) we connect right away.
+fn should_prompt_for_key(requires_auth: bool, key_arg: Option<&str>, has_stored_key: bool) -> bool {
+    requires_auth && key_arg.is_none() && !has_stored_key
+}
+
+/// Whether a key is already stored for `provider`'s credential service.
+fn has_connect_key(provider: &LlmProvider) -> bool {
+    use shannon_core::provider_resolver::build_connect_profile;
     let cp = build_connect_profile(provider.clone(), None, None);
+    shannon_core::credential_manager::read_credential_value_default(&cp.service).is_some()
+}
+
+/// Persist the key (if any) + v2 profile and switch the running engine + REPL
+/// state to the provider's default model. Shared by the inline-key path and the
+/// wizard's submit handler.
+///
+/// `key == None` means "no new key supplied" — the caller has already verified
+/// a key is stored (or the provider needs no auth), so we just reuse what's on
+/// disk. Decision A1: a plaintext key is written only to
+/// `~/.shannon/credentials/<service>.json` (0600), never to a config file.
+pub(crate) fn apply_connect(
+    repl: &mut Repl,
+    provider: LlmProvider,
+    key: Option<&str>,
+) -> Result<()> {
+    use shannon_core::credential_manager::{
+        Credential, CredentialManager, read_credential_value_default,
+    };
+    use shannon_core::provider_config_store;
+    use shannon_core::provider_resolver::build_connect_profile;
+
+    let cp = build_connect_profile(provider, None, None);
+    let display = format!("{}", cp.provider);
     let mut lines: Vec<String> = Vec::new();
 
     // 1. API key → credential Store (idempotent; plaintext lands only on disk
     //    at ~/.shannon/credentials/<service>.json, 0600 — never in a config).
-    if let Some(key) = key_arg {
-        match CredentialManager::new()
-            .and_then(|mut m| m.store_or_update(Credential::new(&cp.service, &cp.service, key)))
-        {
+    if let Some(new_key) = key.filter(|k| !k.is_empty()) {
+        match CredentialManager::new().and_then(|mut m| {
+            m.store_or_update(Credential::new(&cp.service, &cp.service, new_key))
+        }) {
             Ok(_) => lines.push(format!(
-                "✓ API key stored for '{provider_arg}' (service: {})",
+                "✓ API key stored for '{display}' (service: {})",
                 cp.service
             )),
             Err(e) => {
@@ -329,14 +376,12 @@ pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
         }
     } else if read_credential_value_default(&cp.service).is_some() {
         lines.push(format!(
-            "• Reusing stored key for '{provider_arg}' (service: {})",
+            "• Reusing stored key for '{display}' (service: {})",
             cp.service
         ));
-    } else if provider.requires_auth() {
-        lines.push(format!(
-            "⚠ No key for '{provider_arg}'. Run: /connect {provider_arg} <your-api-key>",
-        ));
     }
+    // No "no key" warning branch here: the wizard intercepts that case before
+    // we reach apply_connect, and no-auth providers intentionally print nothing.
 
     // 2. Persist the v2 profile (CredentialRef::Store) so the engine loads it
     //    on next launch — the durable, env-var-free contract.
@@ -372,6 +417,25 @@ pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
     ));
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
     Ok(())
+}
+
+/// Open the `/connect` wizard's masked API-key dialog for `provider`.
+///
+/// Stashes the provider in `state.pending_connect` so the dialog submit handler
+/// can finish the connection (see `commands::finish_connect_with_key`). The
+/// dialog masks input so the key is never shown in the clear.
+fn prompt_for_connect_key(repl: &mut Repl, provider: LlmProvider) {
+    let display = format!("{provider}");
+    repl.state.pending_connect = Some(provider);
+    repl.chat.add_message(
+        ChatRole::System,
+        format!("Connecting '{display}' — paste your API key in the dialog (Esc to cancel)."),
+    );
+    repl.show_secret_input_dialog(
+        &format!("API key for {display}"),
+        &format!("paste your {display} API key"),
+        "connect_provider",
+    );
 }
 
 pub(crate) fn handle_init(repl: &mut Repl) -> Result<()> {
@@ -1322,6 +1386,32 @@ mod tests {
     #[test]
     fn connect_status_nothing_stored() {
         assert_eq!(connect_status(true, false, false), "no key");
+    }
+
+    // ── should_prompt_for_key (ADR-0005 Phase 4, /connect wizard) ─────────
+
+    #[test]
+    fn should_prompt_for_key_when_auth_no_key_nothing_stored() {
+        // The one case the wizard exists for: needs a key, none given, none stored.
+        assert!(should_prompt_for_key(true, None, false));
+    }
+
+    #[test]
+    fn should_prompt_for_key_not_when_inline_key_given() {
+        assert!(!should_prompt_for_key(true, Some("sk-x"), false));
+    }
+
+    #[test]
+    fn should_prompt_for_key_not_when_key_already_stored() {
+        // Reconnect flow: key on disk → no need to ask again.
+        assert!(!should_prompt_for_key(true, None, true));
+    }
+
+    #[test]
+    fn should_prompt_for_key_not_for_no_auth_provider() {
+        // Ollama-style providers never prompt, regardless of stored state.
+        assert!(!should_prompt_for_key(false, None, false));
+        assert!(!should_prompt_for_key(false, None, true));
     }
 
     #[test]
