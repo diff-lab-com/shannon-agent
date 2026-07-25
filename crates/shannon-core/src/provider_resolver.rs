@@ -534,7 +534,10 @@ fn llm_provider_to_kind(p: &LlmProvider) -> ProviderKind {
 
 /// Profile-id slug for a provider (matches the provider's `Debug` name
 /// lower-cased so `ProviderProfile.id` and `ActiveTarget.provider_id` line up).
-fn llm_provider_id(p: &LlmProvider) -> String {
+///
+/// Public so the REPL (`/connect`, `/provider`) can compute the same service
+/// slug a connected profile / credential-store entry is keyed under.
+pub fn llm_provider_id(p: &LlmProvider) -> String {
     format!("{p:?}").to_lowercase()
 }
 

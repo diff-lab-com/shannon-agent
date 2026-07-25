@@ -370,6 +370,25 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
             .with_when_to_use("To restore a previously exported conversation into the current session")
             .with_related(vec!["export", "history"])
         ),
+        "connect" => Some(
+            CommandHelpEntry::new(
+                "connect".to_string(),
+                "Connect a provider end-to-end with no environment variable".to_string(),
+                HelpCategory::System,
+            )
+            .with_arg_hint("<provider> [api-key]")
+            .with_examples(vec![
+                "/connect anthropic sk-ant-api03-...",
+                "/connect openai sk-...",
+                "/connect ollama",
+            ])
+            .with_when_to_use(
+                "To set up a provider without exporting an env var. The API key is stored \
+                 on disk (0600) and a profile is persisted to ~/.shannon/providers.toml, so \
+                 the connection survives restart. The connected provider loads on next launch.",
+            )
+            .with_related(vec!["provider", "model", "credentials"]),
+        ),
         "config" => Some(
             CommandHelpEntry::new(
                 "config".to_string(),
@@ -1074,6 +1093,7 @@ pub fn all_help_entries() -> Vec<CommandHelpEntry> {
         "search",
         "export",
         "config",
+        "connect",
         "debug",
         "clear",
         "quit",
