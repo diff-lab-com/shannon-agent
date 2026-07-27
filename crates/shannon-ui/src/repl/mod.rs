@@ -1795,6 +1795,7 @@ impl Repl {
                     title: self.state.session_title.clone(),
                     parent_session_id: None,
                     branch_point_message_index: None,
+                    project_path: Some(self.state.working_directory.clone()),
                 };
                 if let Err(e) =
                     self.state_manager

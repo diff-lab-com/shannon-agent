@@ -1426,6 +1426,7 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     title: repl.state.session_title.clone(),
                     parent_session_id: None,
                     branch_point_message_index: None,
+                    project_path: Some(repl.state.working_directory.clone()),
                 };
                 if let Err(e) =
                     repl.state_manager
