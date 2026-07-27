@@ -267,21 +267,25 @@ fn show_connect_dashboard(repl: &mut Repl) {
         lines.push(format!("  {p}{current} — {status}"));
     }
     lines.push(String::new());
-    lines.push("Usage: /connect <provider> [api-key]   (detail: /help connect)".to_string());
+    lines.push("Usage: /connect <provider> <api-key>   (detail: /help connect)".to_string());
     repl.chat.add_message(ChatRole::System, lines.join("\n"));
 }
 
 /// `/connect <provider> [api-key]` — connect a provider with no environment
-/// variable (ADR-0005 Phase 4, interactive wizard).
+/// variable (ADR-0005 Phase 4).
 ///
 /// - `/connect` (no args)        → dashboard listing every provider + status.
 /// - `/connect <provider>`       → if the provider needs a key and none is
-///   stored, opens a **masked** API-key input dialog (the wizard); on submit
-///   the key is written to the credential Store and a v2 profile is persisted.
-///   If a key is already stored (or the provider needs no auth), connects
-///   immediately.
-/// - `/connect <provider> <key>` → same as above but the key is taken from the
-///   argument (no dialog).
+///   stored, prints a guidance message pointing the user to the inline form
+///   `/connect <provider> <your-api-key>`. If a key is already stored (or the
+///   provider needs no auth), connects immediately.
+/// - `/connect <provider> <key>` → the key is taken from the argument and the
+///   connection is applied directly. This is the recommended path.
+///
+/// Security: when a key is passed inline, `redact_secret_command` (see
+/// `commands/mod.rs`) replaces it with `***` before the user's message is added
+/// to the chat widget or command history, so the plaintext key never lands in
+/// the session JSON. The real key still reaches `apply_connect` for execution.
 ///
 /// The stored key lives only in `~/.shannon/credentials/<service>.json` (0600)
 /// — never in a config file (decision A1). The persisted v2 profile
@@ -309,17 +313,20 @@ pub(crate) fn handle_connect(repl: &mut Repl, args: &str) -> Result<()> {
         }
     };
 
-    // Wizard trigger: auth required, no inline key, nothing stored → ask.
+    // Auth required, no inline key, nothing stored → guide the user to the
+    // inline form instead of opening a dialog. The inline path is the
+    // recommended one because `redact_secret_command` keeps the typed key out
+    // of the conversation/session JSON.
     let has_stored_key = has_connect_key(&provider);
     if should_prompt_for_key(provider.requires_auth(), key_arg, has_stored_key) {
-        prompt_for_connect_key(repl, provider);
+        guide_to_inline_connect(repl, provider_arg);
         return Ok(());
     }
 
     apply_connect(repl, provider, key_arg)
 }
 
-/// Whether `/connect` should open the API-key wizard instead of connecting
+/// Whether `/connect` should show the no-key guidance instead of connecting
 /// immediately. Pure — unit-tested below.
 ///
 /// True only when the provider needs a key, none was passed inline, and none is
@@ -380,8 +387,9 @@ pub(crate) fn apply_connect(
             cp.service
         ));
     }
-    // No "no key" warning branch here: the wizard intercepts that case before
-    // we reach apply_connect, and no-auth providers intentionally print nothing.
+    // No "no key" warning branch here: the no-key case is intercepted upstream
+    // (guide_to_inline_connect) before apply_connect runs; no-auth providers
+    // intentionally print nothing.
 
     // 2. Persist the v2 profile (CredentialRef::Store) so the engine loads it
     //    on next launch — the durable, env-var-free contract.
@@ -419,22 +427,19 @@ pub(crate) fn apply_connect(
     Ok(())
 }
 
-/// Open the `/connect` wizard's masked API-key dialog for `provider`.
+/// Print a guidance message pointing the user to the inline connect form.
 ///
-/// Stashes the provider in `state.pending_connect` so the dialog submit handler
-/// can finish the connection (see `commands::finish_connect_with_key`). The
-/// dialog masks input so the key is never shown in the clear.
-fn prompt_for_connect_key(repl: &mut Repl, provider: LlmProvider) {
-    let display = format!("{provider}");
-    repl.state.pending_connect = Some(provider);
+/// We deliberately do NOT open an API-key input dialog: the inline form
+/// `/connect <provider> <your-api-key>` is the recommended path, and
+/// `redact_secret_command` (in `commands/mod.rs`) ensures the typed key is
+/// never persisted into the conversation or command history. `provider_arg` is
+/// the user's own input so the example matches what they typed.
+fn guide_to_inline_connect(repl: &mut Repl, provider_arg: &str) {
     repl.chat.add_message(
         ChatRole::System,
-        format!("Connecting '{display}' — paste your API key in the dialog (Esc to cancel)."),
-    );
-    repl.show_secret_input_dialog(
-        &format!("API key for {display}"),
-        &format!("paste your {display} API key"),
-        "connect_provider",
+        format!(
+            "This provider needs an API key. Connect it with:\n\n    /connect {provider_arg} <your-api-key>\n\nThe key is stored on disk (0600) and is never recorded in the conversation."
+        ),
     );
 }
 
