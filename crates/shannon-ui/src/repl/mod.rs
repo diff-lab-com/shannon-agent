@@ -175,8 +175,6 @@ pub struct Repl {
     pub(crate) diagnostic_rx: Option<diagnostic_watcher::DiagnosticReceiver>,
     /// Background update check result (deferred to avoid blocking startup)
     pub(crate) update_check_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<String>>>,
-    /// Crash-safe JSONL session recovery log (appends each turn with fsync)
-    pub(crate) session_recovery: shannon_core::SessionRecovery,
     /// Shared plan-mode flag (clone of the one in QueryEngine)
     pub(crate) plan_mode_flag: std::sync::Arc<std::sync::RwLock<bool>>,
     /// Session recorder for deterministic replay testing
@@ -378,7 +376,6 @@ impl Repl {
             diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
             diagnostic_rx: None,
             update_check_rx: None,
-            session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: std::sync::Arc::new(std::sync::RwLock::new(false)),
             session_recorder: None,
         };
@@ -1368,7 +1365,6 @@ impl Repl {
             diagnostic_pending: std::sync::Arc::new(tokio::sync::Mutex::new(false)),
             diagnostic_rx: None,
             update_check_rx: None,
-            session_recovery: shannon_core::SessionRecovery::new().unwrap_or_default(),
             plan_mode_flag: plan_mode_flag.clone(),
             session_recorder: None,
         };

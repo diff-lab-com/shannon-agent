@@ -68,7 +68,6 @@ pub mod query_engine;
 pub mod rate_limit;
 pub mod rate_limit_messages;
 pub mod remote_settings;
-pub mod session_history;
 pub mod settings;
 pub mod settings_sync;
 pub mod smart_context;
@@ -106,8 +105,6 @@ pub mod scheduled_routines;
 pub mod scheduled_runs;
 pub mod scheduled_task_store;
 pub mod scheduled_worktree;
-pub mod session_persist;
-pub mod session_recovery;
 pub mod session_transcript;
 pub mod skill_loop;
 pub mod team_memory_sync;
@@ -182,13 +179,6 @@ pub use rate_limit_messages::RateLimitMessageBuilder;
 pub use remote_settings::{
     RemoteManagedSettings, RemoteSettingsError, RemoteSettingsProvider, SettingOverride,
     SettingSource,
-};
-pub use session_history::{
-    ResumeInfo, SessionFilter, SessionHistoryEntry, SessionHistoryError, SessionHistoryManager,
-    SessionMetadata, SessionSortField, SortOrder,
-};
-pub use session_recovery::{
-    RecoveryMetadata, SessionLogEntry, SessionRecovery, SessionRecoveryError,
 };
 pub use settings::{Settings, SettingsError, SettingsManager};
 pub use settings_sync::{
@@ -335,8 +325,6 @@ pub mod error {
     pub use crate::policy_limits::PolicyError;
     pub use crate::project_memory::ProjectMemoryError;
     pub use crate::remote_settings::RemoteSettingsError;
-    pub use crate::session_history::SessionHistoryError;
-    pub use crate::session_recovery::SessionRecoveryError;
     pub use crate::session_transcript::TranscriptError;
     pub use crate::settings::SettingsError;
     pub use crate::settings_sync::SyncError;
