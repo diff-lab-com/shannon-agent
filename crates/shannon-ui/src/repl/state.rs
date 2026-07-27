@@ -47,9 +47,6 @@ pub struct ReplState {
     pub model: Option<String>,
     /// Provider associated with the selected model (synced to QueryEngine)
     pub selected_provider: Option<shannon_engine::api::LlmProvider>,
-    /// Provider awaiting an API key from the `/connect` wizard's input dialog.
-    /// Set when the wizard opens, consumed on submit, cleared on cancel.
-    pub pending_connect: Option<shannon_engine::api::LlmProvider>,
     /// Resolved context window size (from engine: Ollama num_ctx > model registry)
     pub context_window: usize,
     /// Total tokens used
@@ -458,7 +455,6 @@ impl Default for ReplState {
             status: "Ready".to_string(),
             model: None,
             selected_provider: None,
-            pending_connect: None,
             context_window: 200_000,
             tokens_used: 0,
             input_tokens: 0,
