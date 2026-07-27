@@ -172,6 +172,35 @@ impl SessionData {
                 }
             })
     }
+
+    /// Convenience: return the last user message text as a "current state" preview.
+    ///
+    /// Used by the session picker to show "first prompt → last prompt" so the
+    /// user can identify a session by intent + most recent activity.
+    pub fn last_user_message_preview(&self, max_len: usize) -> Option<String> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .and_then(|m| match &m.content {
+                crate::api::MessageContent::Text(t) => Some(t.clone()),
+                crate::api::MessageContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                    crate::api::ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                }),
+            })
+            .map(|t| {
+                if t.len() > max_len {
+                    let mut end = max_len.saturating_sub(3);
+                    while !t.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}...", &t[..end])
+                } else {
+                    t
+                }
+            })
+    }
 }
 
 /// Lightweight summary used when listing sessions.
@@ -181,6 +210,11 @@ pub struct SessionInfo {
     pub title: Option<String>,
     /// Preview of the first user message (fallback when no title is set).
     pub preview: Option<String>,
+    /// Preview of the last user message — the session's "current state".
+    ///
+    /// Paired with `preview` (first user message) to identify a session by
+    /// "intent → most recent activity" in the picker.
+    pub last_user_preview: Option<String>,
     pub model: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -453,6 +487,7 @@ impl StateManager {
                 session_id: data.session_id,
                 title: data.metadata.title.clone(),
                 preview: data.first_user_message_preview(80),
+                last_user_preview: data.last_user_message_preview(80),
                 model: data.metadata.model,
                 created_at: data.metadata.created_at,
                 updated_at: data.metadata.updated_at,
@@ -911,6 +946,45 @@ mod tests {
         assert!(truncated.ends_with("..."));
         assert!(truncated.len() <= 20);
     }
+
+    #[test]
+    fn test_session_info_preview_from_last_user_message() {
+        // No messages → no last-user preview.
+        let session_data = SessionData::new(Uuid::new_v4(), "model".into());
+        assert!(session_data.last_user_message_preview(80).is_none());
+
+        // With messages: last user message wins (not the first).
+        let data = SessionData {
+            messages: make_messages(),
+            ..SessionData::new(Uuid::new_v4(), "model".into())
+        };
+        let preview = data.last_user_message_preview(80).unwrap();
+        assert_eq!(preview, "Tell me about Rust.");
+
+        // Only an assistant message → no user preview.
+        let data_assistant_only = SessionData {
+            messages: vec![Message {
+                role: "assistant".into(),
+                content: MessageContent::Text("hi".into()),
+            }],
+            ..SessionData::new(Uuid::new_v4(), "model".into())
+        };
+        assert!(data_assistant_only.last_user_message_preview(80).is_none());
+
+        // Truncation
+        let long = Message {
+            role: "user".into(),
+            content: MessageContent::Text("B".repeat(200)),
+        };
+        let data2 = SessionData {
+            messages: vec![long],
+            ..SessionData::new(Uuid::new_v4(), "model".into())
+        };
+        let truncated = data2.last_user_message_preview(20).unwrap();
+        assert!(truncated.ends_with("..."));
+        assert!(truncated.len() <= 20);
+    }
+
 
     #[test]
     fn test_with_sessions_dir_creates_directory() {

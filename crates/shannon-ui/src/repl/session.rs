@@ -16,7 +16,8 @@ impl super::Repl {
             return 0;
         }
 
-        // Populate chat widget with restored messages so the user can see them
+        // Populate chat widget with restored messages so the user can see them.
+        // Tool-use / tool-result blocks are rendered (not dropped) so history is legible.
         for msg in &session_data.messages {
             let role = match msg.role.as_str() {
                 "user" => ChatRole::User,
@@ -24,18 +25,10 @@ impl super::Repl {
                 "system" => ChatRole::System,
                 _ => ChatRole::Tool, // "tool" and any unknown roles
             };
-            let text = match &msg.content {
-                MessageContent::Text(t) => t.clone(),
-                MessageContent::Blocks(blocks) => blocks
-                    .iter()
-                    .filter_map(|b| match b {
-                        ContentBlock::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            };
-            self.chat.add_message(role, text);
+            let text = render_message_content(&msg.content);
+            if !text.trim().is_empty() {
+                self.chat.add_message(role, text);
+            }
         }
 
         if let Some(ref mut engine) = self.query_engine {
@@ -51,6 +44,50 @@ impl super::Repl {
         msg_count
     }
 
+    /// Open the interactive session picker.
+    ///
+    /// Used by `/resume` (no-arg) in the REPL and by bare `shannon --resume` in
+    /// interactive mode. Rows show "first prompt → last prompt · recency · turns"
+    /// so sessions are identifiable without AI-generated titles.
+    pub fn open_session_picker(&mut self) -> crate::Result<()> {
+        let sessions = match self.state_manager.list_persisted_sessions() {
+            Ok(s) => s,
+            Err(e) => {
+                self.chat.add_message(
+                    ChatRole::System,
+                    format!("Error listing sessions: {e}"),
+                );
+                return Ok(());
+            }
+        };
+
+        if sessions.is_empty() {
+            self.chat
+                .add_message(ChatRole::System, "No saved sessions found.".to_string());
+            return Ok(());
+        }
+
+        // Stash the full recent list so `/resume <number>` can index into it
+        // after the picker is dismissed.
+        self.last_session_list = sessions.clone();
+
+        let items: Vec<crate::widgets::select::SelectItem<String>> = sessions
+            .iter()
+            .map(|s| {
+                let label = format_session_picker_row(s);
+                crate::widgets::select::SelectItem::new(label, s.session_id.to_string())
+            })
+            .collect();
+
+        let mut picker =
+            crate::widgets::select::FuzzyPickerWidget::new("Resume session...".to_string())
+                .with_items(items);
+        picker.start_search();
+        self.state.fuzzy_picker = Some(picker);
+        self.state.session_picker_active = true;
+        Ok(())
+    }
+
     /// Auto-restore is disabled by default. Users expect a fresh session on startup.
     /// Use `/resume` or `--resume` to explicitly continue a previous session.
     pub(crate) fn auto_restore_last_session(&mut self) {
@@ -58,3 +95,284 @@ impl super::Repl {
         // Use /resume or --resume to continue a previous session.
     }
 }
+
+/// Render message content to display text, preserving tool-use / tool-result
+/// structure instead of dropping non-text blocks.
+///
+/// Used when replaying a resumed session into the chat widget so the user can
+/// see what tools were invoked and what they returned.
+pub(crate) fn render_message_content(content: &MessageContent) -> String {
+    match content {
+        MessageContent::Text(t) => t.clone(),
+        MessageContent::Blocks(blocks) => {
+            let mut parts: Vec<String> = Vec::new();
+            for b in blocks {
+                match b {
+                    ContentBlock::Text { text } => parts.push(text.clone()),
+                    ContentBlock::ToolUse { name, input, .. } => {
+                        let input_str = input
+                            .as_str()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| input.to_string());
+                        parts.push(format!(
+                            "⚙ {name}: {}",
+                            truncate_for_display(&input_str, 200)
+                        ));
+                    }
+                    ContentBlock::ToolResult {
+                        content,
+                        is_error,
+                        ..
+                    } => {
+                        let body = match content {
+                            Some(shannon_engine::api::ToolResultContent::Single(s)) => s.clone(),
+                            Some(shannon_engine::api::ToolResultContent::Multiple(_)) => {
+                                "<multi-block result>".to_string()
+                            }
+                            None => String::new(),
+                        };
+                        let prefix = if is_error.unwrap_or(false) {
+                            "✗ "
+                        } else {
+                            "↳ "
+                        };
+                        parts.push(format!(
+                            "{prefix}{}",
+                            truncate_for_display(&body, 300)
+                        ));
+                    }
+                    ContentBlock::Thinking { thinking } => {
+                        parts.push(format!("💭 {}", truncate_for_display(thinking, 160)));
+                    }
+                    ContentBlock::Image { .. } => parts.push("[image]".to_string()),
+                }
+            }
+            parts.join("\n")
+        }
+    }
+}
+
+/// Char-boundary-safe truncation with ellipsis; collapses newlines for single-line display.
+fn truncate_for_display(s: &str, max_len: usize) -> String {
+    let truncated = if s.len() <= max_len {
+        s.to_string()
+    } else {
+        let mut end = max_len.saturating_sub(3);
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
+    };
+    truncated.replace('\n', " ⏎ ")
+}
+
+/// Format a session as a picker row:
+/// `first-prompt → last-prompt · recency · N turns`
+fn format_session_picker_row(s: &shannon_engine::state::SessionInfo) -> String {
+    let first = s
+        .title
+        .clone()
+        .or_else(|| s.preview.clone())
+        .unwrap_or_else(|| "(no prompt)".to_string());
+    let last = s
+        .last_user_preview
+        .clone()
+        .unwrap_or_else(|| "—".to_string());
+    let rel = format_relative_time(s.updated_at);
+    format!(
+        "{} → {} · {} · {} turns",
+        truncate_for_display(&first, 48),
+        truncate_for_display(&last, 48),
+        rel,
+        s.turn_count
+    )
+}
+
+/// Format a timestamp as a short relative duration for the picker.
+fn format_relative_time(ts: chrono::DateTime<chrono::Utc>) -> String {
+    let now = chrono::Utc::now();
+    let delta = now.signed_duration_since(ts);
+    if delta.num_seconds() < 60 {
+        "just now".to_string()
+    } else if delta.num_minutes() < 60 {
+        format!("{}m ago", delta.num_minutes())
+    } else if delta.num_hours() < 24 {
+        format!("{}h ago", delta.num_hours())
+    } else if delta.num_days() < 7 {
+        format!("{}d ago", delta.num_days())
+    } else {
+        ts.format("%Y-%m-%d").to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use shannon_core::{ContentBlock, MessageContent};
+    use shannon_engine::api::ToolResultContent;
+    use shannon_engine::state::SessionInfo;
+
+    #[test]
+    fn test_render_message_content_text() {
+        let c = MessageContent::Text("hello world".to_string());
+        assert_eq!(render_message_content(&c), "hello world");
+    }
+
+    #[test]
+    fn test_render_message_content_text_block() {
+        let c = MessageContent::Blocks(vec![ContentBlock::Text {
+            text: "plain".to_string(),
+        }]);
+        assert_eq!(render_message_content(&c), "plain");
+    }
+
+    #[test]
+    fn test_render_message_content_tool_use() {
+        let c = MessageContent::Blocks(vec![
+            ContentBlock::Text {
+                text: "running".to_string(),
+            },
+            ContentBlock::ToolUse {
+                id: "tu_1".to_string(),
+                name: "bash".to_string(),
+                input: json!({"command": "ls -la"}),
+            },
+        ]);
+        let out = render_message_content(&c);
+        assert!(out.contains("running"));
+        assert!(out.contains("⚙ bash:"));
+        assert!(out.contains("ls -la"));
+    }
+
+    #[test]
+    fn test_render_message_content_tool_result_ok_and_error() {
+        let ok = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tu_1".to_string(),
+            content: Some(ToolResultContent::Single("ok-output".to_string())),
+            is_error: Some(false),
+        }]);
+        let rendered_ok = render_message_content(&ok);
+        assert!(rendered_ok.contains("↳ ok-output"));
+        assert!(!rendered_ok.contains("✗"));
+
+        let err = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tu_2".to_string(),
+            content: Some(ToolResultContent::Single("boom".to_string())),
+            is_error: Some(true),
+        }]);
+        assert!(render_message_content(&err).contains("✗ boom"));
+    }
+
+    #[test]
+    fn test_render_message_content_tool_result_multi_and_none() {
+        let multi = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tu_3".to_string(),
+            content: Some(ToolResultContent::Multiple(vec![])),
+            is_error: None,
+        }]);
+        assert!(render_message_content(&multi).contains("<multi-block result>"));
+
+        let none = MessageContent::Blocks(vec![ContentBlock::ToolResult {
+            tool_use_id: "tu_4".to_string(),
+            content: None,
+            is_error: None,
+        }]);
+        // Empty body, non-error prefix.
+        assert_eq!(render_message_content(&none), "↳ ");
+    }
+
+    #[test]
+    fn test_render_message_content_thinking() {
+        let c = MessageContent::Blocks(vec![ContentBlock::Thinking {
+            thinking: "let me consider".to_string(),
+        }]);
+        let out = render_message_content(&c);
+        assert!(out.contains("💭"));
+        assert!(out.contains("let me consider"));
+    }
+
+    #[test]
+    fn test_truncate_for_display_short_unchanged() {
+        assert_eq!(truncate_for_display("hi", 10), "hi");
+    }
+
+    #[test]
+    fn test_truncate_for_display_long_truncates_with_ellipsis() {
+        let out = truncate_for_display("abcdefghij", 5);
+        assert!(out.ends_with("..."));
+        assert!(out.starts_with("ab"));
+    }
+
+    #[test]
+    fn test_truncate_for_display_collapses_newlines() {
+        assert_eq!(truncate_for_display("a\nb\nc", 100), "a ⏎ b ⏎ c");
+    }
+
+    #[test]
+    fn test_format_relative_time_buckets() {
+        let now = chrono::Utc::now();
+        // "just now" — the function's internal `now` is captured within microseconds.
+        assert_eq!(format_relative_time(now), "just now");
+        assert_eq!(
+            format_relative_time(now - chrono::Duration::minutes(5)),
+            "5m ago"
+        );
+        assert_eq!(
+            format_relative_time(now - chrono::Duration::hours(3)),
+            "3h ago"
+        );
+        assert_eq!(
+            format_relative_time(now - chrono::Duration::days(2)),
+            "2d ago"
+        );
+        let old = now - chrono::Duration::days(30);
+        assert_eq!(format_relative_time(old), old.format("%Y-%m-%d").to_string());
+    }
+
+    #[test]
+    fn test_format_session_picker_row_shape() {
+        let info = SessionInfo {
+            session_id: uuid::Uuid::new_v4(),
+            title: None,
+            preview: Some("How do I parse JSON?".to_string()),
+            last_user_preview: Some("Thanks, that worked".to_string()),
+            model: "test-model".to_string(),
+            created_at: chrono::Utc::now() - chrono::Duration::days(1),
+            updated_at: chrono::Utc::now() - chrono::Duration::minutes(10),
+            turn_count: 4,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            parent_session_id: None,
+            branch_point_message_index: None,
+        };
+        let row = format_session_picker_row(&info);
+        assert!(row.contains("How do I parse JSON?"), "row = {row}");
+        assert!(row.contains("Thanks, that worked"), "row = {row}");
+        assert!(row.contains('→'), "row = {row}");
+        assert!(row.contains("10m ago"), "row = {row}");
+        assert!(row.contains("4 turns"), "row = {row}");
+    }
+
+    #[test]
+    fn test_format_session_picker_row_falls_back_when_empty() {
+        let info = SessionInfo {
+            session_id: uuid::Uuid::new_v4(),
+            title: None,
+            preview: None,
+            last_user_preview: None,
+            model: String::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            turn_count: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            parent_session_id: None,
+            branch_point_message_index: None,
+        };
+        let row = format_session_picker_row(&info);
+        assert!(row.contains("(no prompt)"), "row = {row}");
+        assert!(row.contains("—"), "row = {row}"); // last-prompt fallback dash
+    }
+}
+

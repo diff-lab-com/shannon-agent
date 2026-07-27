@@ -3069,7 +3069,13 @@ fn run_with_cli(cli: Cli) -> Result<()> {
     match cli.command {
         None => {
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            if should_resume {
+            let open_picker = cli.resume.is_some() && resume_session_id.is_none();
+            if open_picker {
+                // Bare `--resume` (no id) in interactive mode opens the picker.
+                if let Err(e) = repl.open_session_picker() {
+                    eprintln!("Warning: could not open session picker: {e}");
+                }
+            } else if should_resume {
                 match load_resume_session(resume_session_id) {
                     Ok(session_data) => {
                         let count = repl.restore_session(session_data);
@@ -3089,7 +3095,13 @@ fn run_with_cli(cli: Cli) -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("Failed to set working directory: {e}"))?;
             }
             let mut repl = Repl::new().map_err(|e| anyhow::anyhow!("{e:?}"))?;
-            if should_resume {
+            let open_picker = cli.resume.is_some() && resume_session_id.is_none();
+            if open_picker {
+                // Bare `--resume` (no id) in interactive mode opens the picker.
+                if let Err(e) = repl.open_session_picker() {
+                    eprintln!("Warning: could not open session picker: {e}");
+                }
+            } else if should_resume {
                 match load_resume_session(resume_session_id) {
                     Ok(session_data) => {
                         let count = repl.restore_session(session_data);
