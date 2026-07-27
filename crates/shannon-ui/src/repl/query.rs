@@ -1420,7 +1420,10 @@ pub fn handle_query(repl: &mut Repl, input: &str, terminal: &mut Option<&mut Ter
                     total_input_tokens: repl.state.tokens_used,
                     total_output_tokens: 0,
                     turn_count: repl.current_turn,
-                    title: None,
+                    // Persist any /rename title; save_session also merges with
+                    // existing on-disk metadata so this won't clobber branch
+                    // lineage or creation time.
+                    title: repl.state.session_title.clone(),
                     parent_session_id: None,
                     branch_point_message_index: None,
                 };

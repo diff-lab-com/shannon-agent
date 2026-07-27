@@ -413,6 +413,25 @@ impl StateManager {
         let visible_count = messages.iter().filter(|m| m.role == "user").count();
         metadata.turn_count = metadata.turn_count.max(visible_count);
 
+        // Merge with existing on-disk metadata. The REPL auto-save path
+        // rebuilds metadata from live state and passes `None` for fields it
+        // doesn't track — a title set via `/rename`, branch lineage from
+        // `/branch`, or the original creation timestamp. Without this merge,
+        // every auto-save would clobber that durable metadata. Caller-provided
+        // `Some` values always win; we only backfill from disk when the caller
+        // passes `None`.
+        if let Ok(Some(existing)) = self.load_session(session_id) {
+            let em = existing.metadata;
+            metadata.title = metadata.title.or(em.title);
+            metadata.parent_session_id = metadata.parent_session_id.or(em.parent_session_id);
+            metadata.branch_point_message_index =
+                metadata.branch_point_message_index.or(em.branch_point_message_index);
+            // `created_at` is the session's origin and must not drift on each
+            // save (the auto-save seeds it from `session_started_at`, which is
+            // only correct for a fresh session).
+            metadata.created_at = em.created_at;
+        }
+
         let session_data = SessionData {
             session_id: *session_id,
             metadata,
@@ -423,10 +442,23 @@ impl StateManager {
         let json = serde_json::to_string_pretty(&session_data)
             .map_err(|e| StateError::SerializationError(e.to_string()))?;
 
-        // Atomic-ish write: write to temp file then rename.
+        // Atomic + durable write: buffer the temp file, fsync its contents,
+        // rename, then fsync the parent directory so the rename itself
+        // survives a crash (required for true atomic-rename durability on
+        // Linux/ext4). The directory fsync is best-effort.
         let tmp_path = path.with_extension("json.tmp");
-        fs::write(&tmp_path, json)?;
+        {
+            use std::io::Write;
+            let mut file = fs::File::create(&tmp_path)?;
+            file.write_all(json.as_bytes())?;
+            file.sync_all()?;
+        }
         fs::rename(&tmp_path, &path)?;
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
 
         Ok(())
     }
@@ -745,6 +777,82 @@ mod tests {
         assert_eq!(loaded.metadata.model, "claude-3-5-sonnet-20241022");
         assert_eq!(loaded.metadata.turn_count, 2); // two user messages
     }
+
+    #[test]
+    fn test_save_session_preserves_existing_title_when_caller_passes_none() {
+        // Regression: the REPL auto-save builds metadata with title: None, so
+        // without the merge a second save would wipe a title set by /rename.
+        let manager = test_manager();
+        let session_id = Uuid::new_v4();
+        let messages = make_messages();
+
+        // First save carries an explicit title.
+        let mut titled = make_metadata("m");
+        titled.title = Some("Renamed by user".into());
+        manager.save_session(&session_id, &messages, &titled).unwrap();
+
+        // Second save passes title: None (as the auto-save path does).
+        let mut untitled = make_metadata("m");
+        untitled.title = None;
+        manager.save_session(&session_id, &messages, &untitled).unwrap();
+
+        let loaded = manager.load_session(&session_id).unwrap().unwrap();
+        assert_eq!(
+            loaded.metadata.title,
+            Some("Renamed by user".to_string()),
+            "title must survive a None auto-save"
+        );
+    }
+
+    #[test]
+    fn test_save_session_preserves_branch_lineage_and_creation_time() {
+        let manager = test_manager();
+        let session_id = Uuid::new_v4();
+        let parent = Uuid::new_v4();
+        let messages = make_messages();
+
+        let mut first = make_metadata("m");
+        first.parent_session_id = Some(parent);
+        first.branch_point_message_index = Some(2);
+        manager.save_session(&session_id, &messages, &first).unwrap();
+        let created_first = manager
+            .load_session(&session_id)
+            .unwrap()
+            .unwrap()
+            .metadata
+            .created_at;
+
+        // Auto-save-style follow-up with all lineage fields None.
+        let mut second = make_metadata("m");
+        manager.save_session(&session_id, &messages, &second).unwrap();
+
+        let loaded = manager.load_session(&session_id).unwrap().unwrap();
+        assert_eq!(loaded.metadata.parent_session_id, Some(parent));
+        assert_eq!(loaded.metadata.branch_point_message_index, Some(2));
+        assert_eq!(
+            loaded.metadata.created_at, created_first,
+            "created_at must not drift on subsequent saves"
+        );
+    }
+
+    #[test]
+    fn test_save_session_caller_some_overrides_existing() {
+        let manager = test_manager();
+        let session_id = Uuid::new_v4();
+        let messages = make_messages();
+
+        let mut first = make_metadata("m");
+        first.title = Some("Old".into());
+        manager.save_session(&session_id, &messages, &first).unwrap();
+
+        let mut second = make_metadata("m");
+        second.title = Some("New".into());
+        manager.save_session(&session_id, &messages, &second).unwrap();
+
+        let loaded = manager.load_session(&session_id).unwrap().unwrap();
+        assert_eq!(loaded.metadata.title.as_deref(), Some("New"));
+    }
+
 
     #[test]
     fn test_load_nonexistent_session_returns_none() {

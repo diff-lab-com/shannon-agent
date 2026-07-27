@@ -1789,7 +1789,10 @@ impl Repl {
                     total_input_tokens: self.state.tokens_used,
                     total_output_tokens: 0,
                     turn_count: messages.iter().filter(|m| m.role == "user").count(),
-                    title: None,
+                    // Persist any /rename title; save_session merges with the
+                    // existing on-disk metadata so this won't clobber branch
+                    // lineage or the original creation time.
+                    title: self.state.session_title.clone(),
                     parent_session_id: None,
                     branch_point_message_index: None,
                 };
