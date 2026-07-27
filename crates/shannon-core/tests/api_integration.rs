@@ -2100,6 +2100,7 @@ mod conversation_export_tests {
             title: Some(title.to_string()),
             parent_session_id: None,
             branch_point_message_index: None,
+            project_path: None,
         }
     }
 
@@ -2176,6 +2177,7 @@ mod conversation_export_tests {
             title: Some("Metadata Test".to_string()),
             parent_session_id: None,
             branch_point_message_index: None,
+            project_path: None,
         };
 
         // Build metadata summary
@@ -2229,6 +2231,7 @@ mod conversation_export_tests {
             title: Some("Round-trip test".to_string()),
             parent_session_id: None,
             branch_point_message_index: None,
+            project_path: None,
         };
 
         // Save
@@ -2277,6 +2280,7 @@ mod conversation_export_tests {
                 title: Some(format!("Session {i}")),
                 parent_session_id: None,
                 branch_point_message_index: None,
+                project_path: None,
             };
             state_manager.save_session(&sid, &[], &metadata).unwrap();
             saved_ids.push(sid);
