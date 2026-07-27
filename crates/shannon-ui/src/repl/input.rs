@@ -1153,8 +1153,8 @@ pub(crate) fn complete_command_args(cmd_name: &str, prefix: &str) -> Vec<String>
         "terminal-setup" => &[],
         "help" => &[],
         "init" => &[],
-        "sessions" => &["list", "delete", "export"],
-        "resume" => &["--last", "--list"],
+        "sessions" => &[],
+        "resume" => &[],
         _ => &[],
     };
 
@@ -3370,9 +3370,12 @@ mod tests {
 
     #[test]
     fn test_complete_command_args_resume_completions() {
+        // /resume takes a positional UUID or picker number — no flag completions.
+        // (No-arg opens the picker.) Confirm the stale --last/--list flags are gone.
         let resume = complete_command_args("resume", "");
-        assert!(resume.contains(&"--last".to_string()));
-        assert!(resume.contains(&"--list".to_string()));
+        assert!(!resume.contains(&"--last".to_string()));
+        assert!(!resume.contains(&"--list".to_string()));
+        assert!(resume.is_empty());
     }
 
     #[test]

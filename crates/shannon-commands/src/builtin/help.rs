@@ -475,26 +475,26 @@ pub fn get_command_help(command_name: &str) -> Option<CommandHelpEntry> {
         "sessions" => Some(
             CommandHelpEntry::new(
                 "sessions".to_string(),
-                "List saved sessions".to_string(),
+                "Removed — use /resume to open the session picker".to_string(),
                 HelpCategory::Ui,
             )
             .with_aliases(vec!["list-sessions"])
-            .with_arg_hint("[--all] [--search <query>]")
-            .with_examples(vec!["/sessions", "/sessions --all", "/sessions --search bugfix"])
-            .with_when_to_use("Use to see previously saved sessions that can be resumed")
+            .with_arg_hint("")
+            .with_examples(vec!["/resume"])
+            .with_when_to_use("Use /resume instead")
             .with_related(vec!["resume", "history"])
         ),
         "resume" => Some(
             CommandHelpEntry::new(
                 "resume".to_string(),
-                "Resume a saved session by UUID or number".to_string(),
+                "Open the session picker, or resume a specific session by UUID/number".to_string(),
                 HelpCategory::Ui,
             )
             .with_aliases(vec!["restore"])
-            .with_arg_hint("<number-or-uuid>")
-            .with_examples(vec!["/resume 1", "/resume <uuid>"])
+            .with_arg_hint("[<number-or-uuid>]")
+            .with_examples(vec!["/resume", "/resume <uuid>"])
             .with_when_to_use("Use to continue a previous session")
-            .with_related(vec!["sessions", "history"])
+            .with_related(vec!["history"])
         ),
         "history" => Some(
             CommandHelpEntry::new(

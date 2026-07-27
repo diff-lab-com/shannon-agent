@@ -4,129 +4,21 @@ use crate::{Result, widgets::ChatRole};
 
 use super::super::Repl;
 
-pub(crate) fn handle_sessions(repl: &mut Repl, args: &str) -> Result<()> {
-    // When called with no args, open interactive session picker
-    if args.trim().is_empty() {
-        let sessions = match repl.state_manager.list_persisted_sessions() {
-            Ok(s) => s,
-            Err(e) => {
-                super::set_error(repl, &format!("listing sessions: {e}"));
-                return Ok(());
-            }
-        };
-
-        if sessions.is_empty() {
-            repl.chat
-                .add_message(ChatRole::System, "No saved sessions found.".to_string());
-            return Ok(());
-        }
-
-        let items: Vec<crate::widgets::select::SelectItem<String>> = sessions
-            .iter()
-            .map(|s| {
-                let title = s.title.as_deref().unwrap_or("Untitled");
-                let date = s.updated_at.format("%Y-%m-%d %H:%M");
-                let label = format!(
-                    "{}  \"{}\"  {} turns  [{}]",
-                    date, title, s.turn_count, s.model
-                );
-                crate::widgets::select::SelectItem::new(label, s.session_id.to_string())
-            })
-            .collect();
-
-        let mut picker =
-            crate::widgets::select::FuzzyPickerWidget::new("Resume session...".to_string())
-                .with_items(items);
-        picker.start_search();
-        repl.state.fuzzy_picker = Some(picker);
-        repl.state.session_picker_active = true;
-        return Ok(());
-    }
-
-    let sessions = match repl.state_manager.list_persisted_sessions() {
-        Ok(s) => s,
-        Err(e) => {
-            super::set_error(repl, &format!("listing sessions: {e}"));
-            return Ok(());
-        }
-    };
-
-    if sessions.is_empty() {
-        repl.chat
-            .add_message(ChatRole::System, "No saved sessions found.".to_string());
-        repl.last_session_list.clear();
-        return Ok(());
-    }
-
-    let show_all = args.contains("--all");
-    let search_query = if let Some(idx) = args.find("--search") {
-        let after = &args[idx + "--search".len()..].trim();
-        if after.is_empty() {
-            None
-        } else {
-            Some(after.to_lowercase())
-        }
-    } else if !args.is_empty() && !args.starts_with("--") {
-        Some(args.to_lowercase())
-    } else {
-        None
-    };
-
-    let mut filtered: Vec<_> = sessions
-        .into_iter()
-        .filter(|s| {
-            if let Some(ref q) = search_query {
-                let title = s.title.as_deref().unwrap_or("").to_lowercase();
-                let preview = s.preview.as_deref().unwrap_or("").to_lowercase();
-                title.contains(q) || preview.contains(q) || s.model.to_lowercase().contains(q)
-            } else {
-                true
-            }
-        })
-        .collect();
-
-    let limit = if show_all {
-        filtered.len()
-    } else {
-        10.min(filtered.len())
-    };
-    filtered.truncate(limit);
-
-    repl.last_session_list = filtered.clone();
-
-    let mut output = String::from("Saved sessions:\n");
-    for (i, session) in filtered.iter().enumerate() {
-        let title = session.title.as_deref().unwrap_or("Untitled");
-        let date = session.updated_at.format("%Y-%m-%d %H:%M");
-        let tokens = (session.total_input_tokens + session.total_output_tokens) as f64 / 1000.0;
-        output.push_str(&format!(
-            "  #{}  {}  \"{}\"  {} turns  {:.1}k tokens  [{}]\n",
-            i + 1,
-            date,
-            title,
-            session.turn_count,
-            tokens,
-            session.model,
-        ));
-    }
-
-    if !show_all {
-        output.push_str("\nUse /sessions --all to see all, /sessions --search <query> to filter");
-    }
-    output.push_str("\nUse /resume <number-or-uuid> to continue a session");
-
-    repl.chat.add_message(ChatRole::System, output);
+pub(crate) fn handle_sessions(repl: &mut Repl, _args: &str) -> Result<()> {
+    // /sessions has been removed in favour of /resume (the picker).
+    // Stub retained temporarily so existing muscle memory gets a clear pointer.
+    repl.chat.add_message(
+        ChatRole::System,
+        "/sessions has been removed. Use /resume to open the picker, or /resume <uuid> for a specific session.".to_string(),
+    );
     Ok(())
 }
 
 pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
     let arg = args.trim();
     if arg.is_empty() {
-        repl.chat.add_message(
-            ChatRole::System,
-            "Usage: /resume <number-or-uuid>\nUse /sessions to see available sessions.".to_string(),
-        );
-        return Ok(());
+        // /resume with no args → open the interactive session picker.
+        return repl.open_session_picker();
     }
 
     let session_id = if let Ok(uuid) = uuid::Uuid::parse_str(arg) {
@@ -135,7 +27,7 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
         if num == 0 || num > repl.last_session_list.len() {
             repl.chat.add_message(
                 ChatRole::System,
-                format!("Invalid session number: {num}. Use /sessions to see available sessions."),
+                format!("Invalid session number: {num}. Open /resume to see available sessions."),
             );
             return Ok(());
         }
@@ -143,7 +35,7 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
     } else {
         repl.chat.add_message(
             ChatRole::System,
-            format!("Invalid session identifier: {arg}. Use a number from /sessions or a UUID."),
+            format!("Invalid session identifier: {arg}. Open /resume to pick, or use /resume <uuid>."),
         );
         return Ok(());
     };
@@ -172,18 +64,8 @@ pub(crate) fn handle_resume(repl: &mut Repl, args: &str) -> Result<()> {
                     "assistant" => ChatRole::Assistant,
                     _ => ChatRole::System,
                 };
-                let content = match &msg.content {
-                    shannon_engine::api::MessageContent::Text(t) => t.clone(),
-                    shannon_engine::api::MessageContent::Blocks(blocks) => blocks
-                        .iter()
-                        .filter_map(|b| match b {
-                            shannon_engine::api::ContentBlock::Text { text } => Some(text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                };
-                if !content.is_empty() {
+                let content = super::super::session::render_message_content(&msg.content);
+                if !content.trim().is_empty() {
                     repl.chat.add_message(role, content);
                 }
             }
@@ -225,7 +107,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
     if parts.is_empty() {
         repl.chat.add_message(
             ChatRole::System,
-            "Usage: /branch <session-id-or-number> [message-index]\nUse /sessions to see available sessions.".to_string(),
+            "Usage: /branch <session-id-or-number> [message-index]\nOpen /resume to see available sessions.".to_string(),
         );
         return Ok(());
     }
@@ -237,7 +119,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
         if num == 0 || num > repl.last_session_list.len() {
             repl.chat.add_message(
                 ChatRole::System,
-                format!("Invalid session number: {num}. Use /sessions to see available sessions."),
+                format!("Invalid session number: {num}. Open /resume to see available sessions."),
             );
             return Ok(());
         }
@@ -246,7 +128,7 @@ pub(crate) fn handle_branch(repl: &mut Repl, args: &str) -> Result<()> {
         repl.chat.add_message(
             ChatRole::System,
             format!(
-                "Invalid session identifier: {}. Use a number from /sessions or a UUID.",
+                "Invalid session identifier: {}. Open /resume to pick, or use a UUID.",
                 parts[0]
             ),
         );
