@@ -44,33 +44,66 @@ impl super::Repl {
         msg_count
     }
 
-    /// Open the interactive session picker.
+    /// Open the interactive session picker, scoped to the current project.
     ///
-    /// Used by `/resume` (no-arg) in the REPL and by bare `shannon --resume` in
-    /// interactive mode. Rows show "first prompt → last prompt · recency · turns"
-    /// so sessions are identifiable without AI-generated titles.
+    /// Used by `/resume` (no-arg) in the REPL and by bare `shannon --resume`
+    /// in interactive mode. Rows show "first prompt → last prompt · recency ·
+    /// turns" (with a `⤵` prefix for branches) so sessions are identifiable
+    /// without AI-generated titles. Press Tab inside the picker to toggle
+    /// between the current project and all projects.
     pub fn open_session_picker(&mut self) -> crate::Result<()> {
-        let sessions = match self.state_manager.list_persisted_sessions() {
+        // Always start scoped to the current project; Tab toggles to all.
+        self.state.session_picker_show_all = false;
+        self.refresh_session_picker_scope()
+    }
+
+    /// Rebuild the session picker's items and title from the current scope
+    /// (`session_picker_show_all`). Called on open and on Tab toggle. Keeps
+    /// `last_session_list` in sync with whatever scope is visible so
+    /// `/resume <number>` resolves against the list the user actually saw.
+    pub fn refresh_session_picker_scope(&mut self) -> crate::Result<()> {
+        let project = self.state.working_directory.clone();
+        let show_all = self.state.session_picker_show_all;
+
+        let sessions = if show_all {
+            self.state_manager.list_persisted_sessions()
+        } else {
+            self.state_manager.list_sessions_for_project(&project)
+        };
+        let sessions = match sessions {
             Ok(s) => s,
             Err(e) => {
-                self.chat.add_message(
-                    ChatRole::System,
-                    format!("Error listing sessions: {e}"),
-                );
+                self.chat
+                    .add_message(ChatRole::System, format!("Error listing sessions: {e}"));
+                self.state.fuzzy_picker = None;
+                self.state.session_picker_active = false;
                 return Ok(());
             }
         };
 
         if sessions.is_empty() {
-            self.chat
-                .add_message(ChatRole::System, "No saved sessions found.".to_string());
+            let msg = if show_all {
+                "No saved sessions found.".to_string()
+            } else {
+                format!(
+                    "No sessions found for this project ({project}). Press Tab to browse all sessions, or use /resume <uuid>."
+                )
+            };
+            self.chat.add_message(ChatRole::System, msg);
+            self.last_session_list.clear();
+            // If the picker is already on screen (toggled into an empty
+            // scope), keep it open but empty so the user can Tab back.
+            let title = self.session_picker_title();
+            if let Some(ref mut picker) = self.state.fuzzy_picker {
+                picker.set_items(Vec::new());
+                picker.set_title(title);
+            } else {
+                self.state.session_picker_active = false;
+            }
             return Ok(());
         }
 
-        // Stash the full recent list so `/resume <number>` can index into it
-        // after the picker is dismissed.
         self.last_session_list = sessions.clone();
-
         let items: Vec<crate::widgets::select::SelectItem<String>> = sessions
             .iter()
             .map(|s| {
@@ -79,13 +112,33 @@ impl super::Repl {
             })
             .collect();
 
-        let mut picker =
-            crate::widgets::select::FuzzyPickerWidget::new("Resume session...".to_string())
-                .with_items(items);
-        picker.start_search();
-        self.state.fuzzy_picker = Some(picker);
-        self.state.session_picker_active = true;
+        let title = self.session_picker_title();
+        if let Some(ref mut picker) = self.state.fuzzy_picker {
+            picker.set_items(items);
+            picker.set_title(title);
+        } else {
+            let mut picker =
+                crate::widgets::select::FuzzyPickerWidget::new(title);
+            picker.set_items(items);
+            picker.start_search();
+            self.state.fuzzy_picker = Some(picker);
+            self.state.session_picker_active = true;
+        }
         Ok(())
+    }
+
+    /// Border title for the session picker, reflecting the active scope so the
+    /// user always knows whether they are browsing the current project or all.
+    fn session_picker_title(&self) -> String {
+        if self.state.session_picker_show_all {
+            "Resume session · all projects (Tab: current)".to_string()
+        } else {
+            let basename = std::path::Path::new(&self.state.working_directory)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("current");
+            format!("Resume session · {basename} (Tab: all)")
+        }
     }
 
     /// Auto-restore is disabled by default. Users expect a fresh session on startup.
@@ -167,7 +220,10 @@ fn truncate_for_display(s: &str, max_len: usize) -> String {
 }
 
 /// Format a session as a picker row:
-/// `first-prompt → last-prompt · recency · N turns`
+/// `[⤵] first-prompt → last-prompt · recency · N turns`
+///
+/// The `⤵ ` prefix marks a branch (session with a parent) so branches are
+/// visually distinguishable from roots.
 fn format_session_picker_row(s: &shannon_engine::state::SessionInfo) -> String {
     let first = s
         .title
@@ -179,8 +235,13 @@ fn format_session_picker_row(s: &shannon_engine::state::SessionInfo) -> String {
         .clone()
         .unwrap_or_else(|| "—".to_string());
     let rel = format_relative_time(s.updated_at);
+    let branch = if s.parent_session_id.is_some() {
+        "⤵ "
+    } else {
+        ""
+    };
     format!(
-        "{} → {} · {} · {} turns",
+        "{branch}{} → {} · {} · {} turns",
         truncate_for_display(&first, 48),
         truncate_for_display(&last, 48),
         rel,
@@ -353,6 +414,31 @@ mod tests {
         assert!(row.contains('→'), "row = {row}");
         assert!(row.contains("10m ago"), "row = {row}");
         assert!(row.contains("4 turns"), "row = {row}");
+        // Root session → no branch marker.
+        assert!(!row.contains("⤵"), "row = {row}");
+    }
+
+    #[test]
+    fn test_format_session_picker_row_branch_marker() {
+        // A branch session (parent_session_id set) is prefixed with ⤵.
+        let info = SessionInfo {
+            session_id: uuid::Uuid::new_v4(),
+            title: None,
+            preview: Some("Root idea".to_string()),
+            last_user_preview: Some("Branch exploration".to_string()),
+            model: "test-model".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            turn_count: 1,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
+            parent_session_id: Some(uuid::Uuid::new_v4()),
+            branch_point_message_index: Some(3),
+            project_path: None,
+        };
+        let row = format_session_picker_row(&info);
+        assert!(row.starts_with("⤵ "), "row = {row}");
+        assert!(row.contains("Root idea"), "row = {row}");
     }
 
     #[test]

@@ -176,6 +176,9 @@ pub struct ReplState {
     pub last_esc_time: Option<std::time::Instant>,
     /// Whether the fuzzy picker is in session-resume mode
     pub session_picker_active: bool,
+    /// Session-picker scope: false = current project only (default), true =
+    /// all projects. Toggled with Tab inside the picker.
+    pub session_picker_show_all: bool,
     /// Custom prompt bar color (set via /color, e.g. "red", "#ff0000", "default")
     pub prompt_bar_color: Option<String>,
     /// Active tab in the sidebar panel
@@ -526,6 +529,7 @@ impl Default for ReplState {
             leader_active: false,
             last_esc_time: None,
             session_picker_active: false,
+            session_picker_show_all: false,
             prompt_bar_color: None,
             sidebar_tab: SidebarTab::default(),
             approval_mode_label: "EDIT".to_string(),

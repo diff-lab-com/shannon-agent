@@ -1776,9 +1776,18 @@ fn handle_fuzzy_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 }
             }
         }
+        KeyCode::Tab => {
+            // Session-picker only: toggle between current-project and
+            // all-projects scope and refresh the visible list.
+            if repl.state.session_picker_active {
+                repl.state.session_picker_show_all = !repl.state.session_picker_show_all;
+                repl.refresh_session_picker_scope()?;
+            }
+        }
         KeyCode::Esc => {
             repl.state.fuzzy_picker = None;
             repl.state.file_selector_for_at = false;
+            repl.state.session_picker_active = false;
         }
         _ => {}
     }
