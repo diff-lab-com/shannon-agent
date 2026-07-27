@@ -804,6 +804,7 @@ fn test_session_persistence_round_trip() {
         title: Some("Rust hello world".to_string()),
         parent_session_id: None,
         branch_point_message_index: None,
+        project_path: None,
     };
 
     // Save
