@@ -209,12 +209,12 @@ fn test_resume_command_no_args() {
     let mut repl = Repl::new().unwrap();
     repl.prompt.set_input("/resume".to_string());
     super::commands::submit_input(&mut repl, None).unwrap();
-    // /resume with no args opens the picker (if sessions exist) or shows a
-    // "No saved sessions" message.
+    // /resume with no args opens the picker (if sessions exist for the current
+    // project) or shows a "No sessions" message (project-scoped or all).
     let has_chat_msg = repl
         .chat
         .last_message()
-        .map(|m| m.content.contains("No saved sessions"))
+        .map(|m| m.content.contains("No sessions"))
         .unwrap_or(false);
     let picker_open = repl.state.fuzzy_picker.is_some() && repl.state.session_picker_active;
     assert!(has_chat_msg || picker_open);

@@ -530,6 +530,20 @@ impl FuzzyPickerWidget {
         self
     }
 
+    /// Replace the item set in place (used to swap scopes without rebuilding
+    /// the picker). Re-applies the current search query so an active filter is
+    /// preserved across the swap.
+    pub fn set_items(&mut self, items: Vec<SelectItem<String>>) {
+        self.items = items;
+        self.selected_index = 0;
+        self.update_filtered();
+    }
+
+    /// Update the border title (used to reflect the active scope).
+    pub fn set_title(&mut self, title: String) {
+        self.title = title;
+    }
+
     /// Enter search mode
     pub fn start_search(&mut self) {
         self.state = PickerState::Searching;
