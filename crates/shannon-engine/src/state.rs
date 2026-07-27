@@ -102,6 +102,13 @@ pub struct SessionPersistMetadata {
     /// Index in the parent session's message list where this branch diverged.
     /// Only meaningful when `parent_session_id` is `Some`.
     pub branch_point_message_index: Option<usize>,
+    /// Absolute path of the project working directory the session was started
+    /// in. Used by the `/resume` picker to scope sessions to the current
+    /// project (and to distinguish worktrees, which have distinct paths).
+    /// `#[serde(default)]` so session files written before this field existed
+    /// still load (as `None`).
+    #[serde(default)]
+    pub project_path: Option<String>,
 }
 
 impl Default for SessionPersistMetadata {
@@ -117,6 +124,7 @@ impl Default for SessionPersistMetadata {
             title: None,
             parent_session_id: None,
             branch_point_message_index: None,
+            project_path: None,
         }
     }
 }
@@ -225,6 +233,9 @@ pub struct SessionInfo {
     pub parent_session_id: Option<Uuid>,
     /// Message index where this branch diverged from the parent.
     pub branch_point_message_index: Option<usize>,
+    /// Absolute path of the project working directory the session belongs to.
+    /// Used by the `/resume` picker to scope sessions to the current project.
+    pub project_path: Option<String>,
 }
 
 // ============================================================================
@@ -528,6 +539,7 @@ impl StateManager {
                 total_output_tokens: data.metadata.total_output_tokens,
                 parent_session_id: data.metadata.parent_session_id,
                 branch_point_message_index: data.metadata.branch_point_message_index,
+                project_path: data.metadata.project_path,
             });
         }
 
@@ -535,6 +547,23 @@ impl StateManager {
         infos.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
 
         Ok(infos)
+    }
+
+    /// List persisted sessions scoped to a project working directory.
+    ///
+    /// Sessions whose `project_path` equals `project_dir` (or predates the
+    /// `project_path` field and so is `None`) are included. The `/resume`
+    /// picker uses this for project-scoped listing; pass the REPL's
+    /// `working_directory`.
+    pub fn list_sessions_for_project(
+        &self,
+        project_dir: &str,
+    ) -> Result<Vec<SessionInfo>, StateError> {
+        Ok(self
+            .list_persisted_sessions()?
+            .into_iter()
+            .filter(|s| s.project_path.as_deref() == Some(project_dir))
+            .collect())
     }
 
     /// Delete a persisted session from disk.
@@ -594,6 +623,8 @@ impl StateManager {
             title,
             parent_session_id: Some(*parent_session_id),
             branch_point_message_index: Some(branch_point),
+            // A branch belongs to the same project as its parent.
+            project_path: parent.metadata.project_path.clone(),
         };
 
         let session_data = SessionData {
@@ -823,7 +854,7 @@ mod tests {
             .created_at;
 
         // Auto-save-style follow-up with all lineage fields None.
-        let mut second = make_metadata("m");
+        let second = make_metadata("m");
         manager.save_session(&session_id, &messages, &second).unwrap();
 
         let loaded = manager.load_session(&session_id).unwrap().unwrap();
@@ -851,6 +882,58 @@ mod tests {
 
         let loaded = manager.load_session(&session_id).unwrap().unwrap();
         assert_eq!(loaded.metadata.title.as_deref(), Some("New"));
+    }
+
+    #[test]
+    fn test_save_session_persists_project_path_and_filters() {
+        let manager = test_manager();
+        let messages = make_messages();
+
+        // Session A belongs to /home/me/proj.
+        let mut a = make_metadata("m");
+        a.project_path = Some("/home/me/proj".into());
+        let id_a = Uuid::new_v4();
+        manager.save_session(&id_a, &messages, &a).unwrap();
+
+        // Session B belongs to /home/me/other.
+        let mut b = make_metadata("m");
+        b.project_path = Some("/home/me/other".into());
+        let id_b = Uuid::new_v4();
+        manager.save_session(&id_b, &messages, &b).unwrap();
+
+        // list_sessions_for_project returns only matching sessions.
+        let proj = manager.list_sessions_for_project("/home/me/proj").unwrap();
+        assert_eq!(proj.len(), 1);
+        assert_eq!(proj[0].session_id, id_a);
+        assert_eq!(proj[0].project_path.as_deref(), Some("/home/me/proj"));
+
+        let other = manager.list_sessions_for_project("/home/me/other").unwrap();
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].session_id, id_b);
+
+        // Unknown project → empty.
+        assert!(manager
+            .list_sessions_for_project("/nowhere")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_old_session_file_without_project_path_still_loads() {
+        // Backward compat: a session JSON written before project_path existed
+        // must still deserialize (serde default → None), not error out.
+        let manager = test_manager();
+        let session_id = Uuid::new_v4();
+        // Hand-write a file with no project_path field.
+        let old_json = format!(
+            r#"{{"session_id":"{session_id}","metadata":{{"model":"m","created_at":"2024-01-01T00:00:00Z","updated_at":"2024-01-01T00:00:00Z","total_input_tokens":0,"total_output_tokens":0,"turn_count":0,"title":null,"parent_session_id":null,"branch_point_message_index":null}},"messages":[]}}"#
+        );
+        let path = manager.session_file_path(&session_id);
+        std::fs::write(&path, old_json).unwrap();
+
+        let loaded = manager.load_session(&session_id).unwrap().unwrap();
+        assert_eq!(loaded.metadata.project_path, None);
+        assert_eq!(loaded.metadata.model, "m");
     }
 
 

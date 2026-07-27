@@ -345,6 +345,7 @@ mod tests {
             total_output_tokens: 0,
             parent_session_id: None,
             branch_point_message_index: None,
+            project_path: None,
         };
         let row = format_session_picker_row(&info);
         assert!(row.contains("How do I parse JSON?"), "row = {row}");
@@ -369,6 +370,7 @@ mod tests {
             total_output_tokens: 0,
             parent_session_id: None,
             branch_point_message_index: None,
+            project_path: None,
         };
         let row = format_session_picker_row(&info);
         assert!(row.contains("(no prompt)"), "row = {row}");
