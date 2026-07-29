@@ -11,6 +11,29 @@ use super::streaming::MessageStream;
 use super::types::*;
 use crate::testing::record_replay::{RecordedExchange, RecordedRequest, RecordedResponse};
 
+/// Anthropic model IDs that require an `anthropic-beta` header to unlock their
+/// full context window. Claude 4.6 is 1M-GA (header not strictly required), but
+/// we send `context-1m-2025-08-07` defensively to guard against silent 200K
+/// fallback on non-Tier-4 accounts (see OpenCode issue #12452). Remove an entry
+/// if Anthropic ever rejects its header as an unknown beta.
+const ANTHROPIC_BETA_HEADERS: &[(&str, &[&str])] = &[
+    ("claude-sonnet-4-6", &["context-1m-2025-08-07"]),
+    ("claude-opus-4-6", &["context-1m-2025-08-07"]),
+];
+
+/// Return the beta headers required by `model_id` (empty slice if none).
+///
+/// Lives in `shannon-engine` rather than `shannon-core::model_registry` to
+/// avoid an upward dependency from the adapter layer (shannon-core depends on
+/// shannon-engine, not vice-versa).
+pub fn beta_headers_for(model_id: &str) -> &'static [&'static str] {
+    ANTHROPIC_BETA_HEADERS
+        .iter()
+        .find(|(id, _)| *id == model_id)
+        .map(|(_, h)| *h)
+        .unwrap_or(&[])
+}
+
 /// Generate a JWT token for Zhipu API authentication.
 ///
 /// Zhipu API keys have the format `{id}.{secret}`. The v4 API accepts either
@@ -138,6 +161,11 @@ impl LlmClient {
                         "anthropic-version".to_string(),
                         self.config.api_version.clone(),
                     ));
+                }
+                // Inject model-declared beta headers (e.g. 1M context unlock).
+                let betas = beta_headers_for(&self.config.model);
+                if !betas.is_empty() {
+                    headers.push(("anthropic-beta".to_string(), betas.join(",")));
                 }
             }
             LlmProvider::OpenAI
@@ -1256,6 +1284,44 @@ mod tests {
             .find(|(k, _)| k == "anthropic-version")
             .unwrap();
         assert_eq!(version.1, "2023-06-01");
+    }
+
+    #[test]
+    fn test_auth_headers_anthropic_1m_beta_header() {
+        // Phase B: 1M-capable Anthropic models send anthropic-beta defensively
+        // to guard against silent 200K fallback (OpenCode issue #12452).
+        let mut cfg = test_config();
+        cfg.model = "claude-sonnet-4-6".to_string();
+        let client = LlmClient::new(cfg);
+        let headers = client.auth_headers();
+        let beta = headers.iter().find(|(k, _)| k == "anthropic-beta");
+        assert!(beta.is_some(), "expected anthropic-beta for 1M model");
+        assert_eq!(beta.unwrap().1, "context-1m-2025-08-07");
+    }
+
+    #[test]
+    fn test_auth_headers_anthropic_no_beta_for_200k_model() {
+        // Non-1M Anthropic models must not send a beta header.
+        let client = LlmClient::new(test_config()); // model = claude-3-5-sonnet-20241022
+        let headers = client.auth_headers();
+        assert!(
+            !headers.iter().any(|(k, _)| k == "anthropic-beta"),
+            "200K model should not send anthropic-beta"
+        );
+    }
+
+    #[test]
+    fn test_beta_headers_for_lookup() {
+        assert_eq!(
+            beta_headers_for("claude-sonnet-4-6"),
+            &["context-1m-2025-08-07"]
+        );
+        assert_eq!(
+            beta_headers_for("claude-opus-4-6"),
+            &["context-1m-2025-08-07"]
+        );
+        assert!(beta_headers_for("claude-3-5-sonnet-20241022").is_empty());
+        assert!(beta_headers_for("gpt-5").is_empty());
     }
 
     #[test]
