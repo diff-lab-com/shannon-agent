@@ -5,6 +5,7 @@
 mod browser_control_prompt;
 mod context_injector;
 mod engine;
+pub mod litellm;
 mod streaming;
 mod team_prompt;
 mod types;
