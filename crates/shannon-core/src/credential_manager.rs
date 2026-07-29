@@ -993,7 +993,10 @@ mod tests {
         atomic_write_secure(&path, "{\"service\":\"anthropic\"}").unwrap();
 
         // Final file exists with the content…
-        assert_eq!(fs::read_to_string(&path).unwrap(), "{\"service\":\"anthropic\"}");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{\"service\":\"anthropic\"}"
+        );
         // …and no temp file is left behind.
         assert!(!td.path().join("anthropic.json.tmp").exists());
     }
@@ -1022,7 +1025,8 @@ mod tests {
         // with no leftover .tmp (regression guard for the atomic persist).
         let td = TestDir::new();
         let mut mgr = CredentialManager::with_dir(td.path().to_path_buf()).unwrap();
-        mgr.store(Credential::new("Anthropic", "anthropic", "k")).unwrap();
+        mgr.store(Credential::new("Anthropic", "anthropic", "k"))
+            .unwrap();
         assert!(td.path().join("anthropic.json").exists());
         assert!(!td.path().join("anthropic.json.tmp").exists());
     }

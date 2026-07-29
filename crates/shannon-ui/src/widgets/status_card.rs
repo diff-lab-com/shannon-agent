@@ -1,10 +1,10 @@
 //! First-screen status snapshot card: provider/model/tier + available providers/models.
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
-use ratatui::Frame;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardStatus {
@@ -30,7 +30,15 @@ pub fn render_status_card(
     if is_narrow {
         render_pill(f, area, status, active_provider, active_model, active_tier);
     } else {
-        render_full(f, area, status, active_provider, active_model, active_tier, available);
+        render_full(
+            f,
+            area,
+            status,
+            active_provider,
+            active_model,
+            active_tier,
+            available,
+        );
     }
 }
 
@@ -54,12 +62,16 @@ fn render_pill(
             Span::styled(" Active: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("[{}]", provider.unwrap_or("?")),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
                 format!("[{}]", model.unwrap_or("?")),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
@@ -90,10 +102,10 @@ fn render_full(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // active line
-            Constraint::Length(1),  // available header
-            Constraint::Min(0),     // available list
-            Constraint::Length(1),  // commands footer
+            Constraint::Length(1), // active line
+            Constraint::Length(1), // available header
+            Constraint::Min(0),    // available list
+            Constraint::Length(1), // commands footer
         ])
         .split(inner);
 
@@ -103,19 +115,25 @@ fn render_full(
             Span::styled(" ⚠ ", Style::default().fg(Color::Yellow)),
             Span::styled(
                 "No provider connected. Run /connect to get started.",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         CardStatus::Configured => Line::from(vec![
             Span::styled("Active: ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("[{}]", provider.unwrap_or("?")),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
                 format!("[{}]", model.unwrap_or("?")),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
             Span::styled(
@@ -127,14 +145,18 @@ fn render_full(
     f.render_widget(Paragraph::new(active_line), chunks[0]);
 
     // Row 2: available providers header
-    let connected_count = available.iter().filter(|(id, _)| id_is_connected(id)).count();
-    let header = Line::from(vec![
-        Span::styled(
-            format!("Available providers ({} connected / {} supported):",
-                    connected_count, available.len()),
-            Style::default().fg(Color::DarkGray),
+    let connected_count = available
+        .iter()
+        .filter(|(id, _)| id_is_connected(id))
+        .count();
+    let header = Line::from(vec![Span::styled(
+        format!(
+            "Available providers ({} connected / {} supported):",
+            connected_count,
+            available.len()
         ),
-    ]);
+        Style::default().fg(Color::DarkGray),
+    )]);
     f.render_widget(Paragraph::new(header), chunks[1]);
 
     // Row 3: provider list
@@ -144,12 +166,24 @@ fn render_full(
             let marker = if id_is_connected(id) { "●" } else { "○" };
             let model_list = models.join(" · ");
             ListItem::new(Line::from(vec![
-                Span::styled(format!("  {} ", marker),
-                             Style::default().fg(if id_is_connected(id) { Color::Green } else { Color::DarkGray })),
-                Span::styled(id.to_string(),
-                             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("  {}", model_list),
-                             Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("  {marker} "),
+                    Style::default().fg(if id_is_connected(id) {
+                        Color::Green
+                    } else {
+                        Color::DarkGray
+                    }),
+                ),
+                Span::styled(
+                    id.to_string(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("  {model_list}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]))
         })
         .collect();
@@ -179,9 +213,9 @@ fn id_is_connected(id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
-    use ratatui::Terminal;
 
     fn buffer_text(buf: &Buffer) -> String {
         (0..buf.area.height)
@@ -197,19 +231,15 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
-                render_status_card(
-                    f,
-                    f.area(),
-                    CardStatus::Unconfigured,
-                    None,
-                    None,
-                    None,
-                    &[],
-                );
+                render_status_card(f, f.area(), CardStatus::Unconfigured, None, None, None, &[]);
             })
             .unwrap();
         let text = buffer_text(&terminal.backend().buffer().clone());
-        assert!(text.contains("No provider connected"), "got: {}", &text[..text.len().min(200)]);
+        assert!(
+            text.contains("No provider connected"),
+            "got: {}",
+            &text[..text.len().min(200)]
+        );
     }
 
     #[test]
@@ -225,7 +255,10 @@ mod tests {
                     Some("anthropic"),
                     Some("claude-sonnet-4-20250514"),
                     Some("Standard"),
-                    &[("anthropic", &["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"])],
+                    &[(
+                        "anthropic",
+                        &["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"],
+                    )],
                 );
             })
             .unwrap();
@@ -254,6 +287,9 @@ mod tests {
             .unwrap();
         let text = buffer_text(&terminal.backend().buffer().clone());
         assert!(text.contains("anthropic"), "narrow pill missing provider");
-        assert!(!text.contains("Available providers"), "narrow should not show full block");
+        assert!(
+            !text.contains("Available providers"),
+            "narrow should not show full block"
+        );
     }
 }

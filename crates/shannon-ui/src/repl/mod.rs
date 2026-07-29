@@ -386,7 +386,7 @@ impl Repl {
             repl.state
                 .selected_provider
                 .as_ref()
-                .map(|p| format!("{:?}", p).to_lowercase()),
+                .map(|p| format!("{p:?}").to_lowercase()),
             repl.state.model.clone(),
             None, // tier label resolved in Task 14
         );
@@ -1385,7 +1385,7 @@ impl Repl {
             repl.state
                 .selected_provider
                 .as_ref()
-                .map(|p| format!("{:?}", p).to_lowercase()),
+                .map(|p| format!("{p:?}").to_lowercase()),
             repl.state.model.clone(),
             None, // tier label resolved in Task 14
         );

@@ -117,8 +117,7 @@ impl super::Repl {
             picker.set_items(items);
             picker.set_title(title);
         } else {
-            let mut picker =
-                crate::widgets::select::FuzzyPickerWidget::new(title);
+            let mut picker = crate::widgets::select::FuzzyPickerWidget::new(title);
             picker.set_items(items);
             picker.start_search();
             self.state.fuzzy_picker = Some(picker);
@@ -173,9 +172,7 @@ pub(crate) fn render_message_content(content: &MessageContent) -> String {
                         ));
                     }
                     ContentBlock::ToolResult {
-                        content,
-                        is_error,
-                        ..
+                        content, is_error, ..
                     } => {
                         let body = match content {
                             Some(shannon_engine::api::ToolResultContent::Single(s)) => s.clone(),
@@ -189,10 +186,7 @@ pub(crate) fn render_message_content(content: &MessageContent) -> String {
                         } else {
                             "↳ "
                         };
-                        parts.push(format!(
-                            "{prefix}{}",
-                            truncate_for_display(&body, 300)
-                        ));
+                        parts.push(format!("{prefix}{}", truncate_for_display(&body, 300)));
                     }
                     ContentBlock::Thinking { thinking } => {
                         parts.push(format!("💭 {}", truncate_for_display(thinking, 160)));
@@ -388,7 +382,10 @@ mod tests {
             "2d ago"
         );
         let old = now - chrono::Duration::days(30);
-        assert_eq!(format_relative_time(old), old.format("%Y-%m-%d").to_string());
+        assert_eq!(
+            format_relative_time(old),
+            old.format("%Y-%m-%d").to_string()
+        );
     }
 
     #[test]
@@ -463,4 +460,3 @@ mod tests {
         assert!(row.contains("—"), "row = {row}"); // last-prompt fallback dash
     }
 }
-

@@ -719,10 +719,7 @@ impl ChatWidget {
             let (status_card_area, welcome_area) = if inner.height > 10 {
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Length(8),
-                        Constraint::Min(0),
-                    ])
+                    .constraints([Constraint::Length(8), Constraint::Min(0)])
                     .split(inner);
                 (Some(chunks[0]), chunks[1])
             } else {
@@ -730,10 +727,13 @@ impl ChatWidget {
             };
 
             if let Some(card_area) = status_card_area {
-                use crate::widgets::status_card::{render_status_card, CardStatus};
+                use crate::widgets::status_card::{CardStatus, render_status_card};
                 // Static catalog of supported providers/models for the welcome screen.
                 let available: &[(&str, &[&str])] = &[
-                    ("anthropic", &["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"][..]),
+                    (
+                        "anthropic",
+                        &["claude-opus-4", "claude-sonnet-4", "claude-haiku-4-5"][..],
+                    ),
                     ("openai", &["gpt-4o", "gpt-4o-mini"][..]),
                 ];
                 let status = if self.active_provider.is_some() {

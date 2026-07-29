@@ -16,9 +16,9 @@ use shannon_core::{
     tools::ToolRegistry,
     unified_config::{ConfigBuilder, ShannonConfig},
 };
-use shannon_types::model_ref::ModelRef;
 use shannon_engine::{api::LlmClientConfig, state::StateManager};
 use shannon_tools::register_default_tools_with_project_dir_ex;
+use shannon_types::model_ref::ModelRef;
 use shannon_ui::Repl;
 use similar::{ChangeTag, TextDiff};
 use std::collections::HashMap;
@@ -3469,10 +3469,7 @@ mod tests {
             debug: false,
             env_overrides: HashMap::new(),
         };
-        assert_eq!(
-            config.model().as_deref(),
-            Some("claude-sonnet-4-20250514")
-        );
+        assert_eq!(config.model().as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(config.provider().as_deref(), Some("anthropic"));
     }
 

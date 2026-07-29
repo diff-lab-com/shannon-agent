@@ -72,17 +72,20 @@ pub fn load(path: Option<&Path>) -> Option<ProviderModelConfig> {
 /// leave a partial profile (a stale `<name>.toml.tmp` is harmless and ignored
 /// by [`load`]).
 pub fn save(cfg: &ProviderModelConfig, path: Option<&Path>) -> io::Result<PathBuf> {
-    let path = path.map(Path::to_path_buf).or_else(default_path).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "cannot determine home directory for providers.toml",
-        )
-    })?;
+    let path = path
+        .map(Path::to_path_buf)
+        .or_else(default_path)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "cannot determine home directory for providers.toml",
+            )
+        })?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let content = toml::to_string_pretty(cfg)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let content =
+        toml::to_string_pretty(cfg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     atomic_write_secure(&path, &content)?;
     debug!(path = %path.display(), "saved v2 provider config");
     Ok(path)
@@ -167,7 +170,7 @@ impl ProviderConfigStore {
         profile.providers.push(synthesize_provider_profile(
             provider,
             &id,
-            &provider.default_base_url().to_string(),
+            provider.default_base_url(),
         ));
         profile.providers.last_mut().expect("just pushed")
     }
@@ -294,11 +297,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "shannon_pcs_{}_{}.toml",
-            std::process::id(),
-            nanos
-        ))
+        std::env::temp_dir().join(format!("shannon_pcs_{}_{}.toml", std::process::id(), nanos))
     }
 
     fn anthropic_connect_config() -> ProviderModelConfig {
@@ -439,7 +438,11 @@ mod tests {
         // "haiku" / "sonnet" / "opus" are user-input aliases — the
         // persistence layer must only ever see the canonical names
         // `fast` / `standard` / `pro`.
-        store.set_tier(&LlmProvider::Anthropic, ProviderTier::Fast, "claude-haiku-4-5");
+        store.set_tier(
+            &LlmProvider::Anthropic,
+            ProviderTier::Fast,
+            "claude-haiku-4-5",
+        );
         store.set_tier(
             &LlmProvider::Anthropic,
             ProviderTier::Standard,
@@ -449,10 +452,7 @@ mod tests {
 
         let profile = store.ensure_provider(&LlmProvider::Anthropic);
         assert_eq!(profile.tiers.fast.as_deref(), Some("claude-haiku-4-5"));
-        assert_eq!(
-            profile.tiers.standard.as_deref(),
-            Some("claude-sonnet-4")
-        );
+        assert_eq!(profile.tiers.standard.as_deref(), Some("claude-sonnet-4"));
         assert_eq!(profile.tiers.pro.as_deref(), Some("claude-opus-4"));
     }
 
@@ -460,11 +460,7 @@ mod tests {
     fn store_ensure_provider_is_idempotent() {
         use shannon_types::provider_config::TierName as ProviderTier;
         let mut store = ProviderConfigStore::load_or_default();
-        store.set_tier(
-            &LlmProvider::Anthropic,
-            ProviderTier::Fast,
-            "haiku-A",
-        );
+        store.set_tier(&LlmProvider::Anthropic, ProviderTier::Fast, "haiku-A");
         // Calling ensure_provider twice must NOT create a duplicate slot —
         // the second call should return the same profile we just populated.
         let p1 = store.ensure_provider(&LlmProvider::Anthropic).id.clone();

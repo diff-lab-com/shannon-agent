@@ -265,7 +265,10 @@ mod tests {
             parsed.get("temperature").and_then(|v| v.as_float()),
             Some(0.7)
         );
-        assert_eq!(parsed.get("timeout").and_then(|v| v.as_integer()), Some(120));
+        assert_eq!(
+            parsed.get("timeout").and_then(|v| v.as_integer()),
+            Some(120)
+        );
         assert_eq!(parsed.get("debug").and_then(|v| v.as_bool()), Some(true));
         let _ = fs::remove_file(&path);
     }
@@ -391,7 +394,10 @@ mod tests {
         // just the new key.
         set_global_config_key(Some(&path), "model", "rebuilt").unwrap();
         let parsed: toml::Table = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(parsed.get("model").and_then(|v| v.as_str()), Some("rebuilt"));
+        assert_eq!(
+            parsed.get("model").and_then(|v| v.as_str()),
+            Some("rebuilt")
+        );
         let _ = fs::remove_file(&path);
     }
 

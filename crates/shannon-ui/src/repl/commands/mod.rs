@@ -777,10 +777,16 @@ mod tests {
     #[test]
     fn redact_connect_without_key_is_unchanged() {
         // No inline key → nothing to redact. Must not fabricate a `***`.
-        assert_eq!(redact_secret_command("/connect minimax"), "/connect minimax");
+        assert_eq!(
+            redact_secret_command("/connect minimax"),
+            "/connect minimax"
+        );
         assert_eq!(redact_secret_command("/connect"), "/connect");
         // A blank key argument is treated as "no key".
-        assert_eq!(redact_secret_command("/connect minimax "), "/connect minimax ");
+        assert_eq!(
+            redact_secret_command("/connect minimax "),
+            "/connect minimax "
+        );
     }
 
     #[test]
@@ -794,4 +800,3 @@ mod tests {
         assert_eq!(redact_secret_command("!echo $HOME"), "!echo $HOME");
     }
 }
-
