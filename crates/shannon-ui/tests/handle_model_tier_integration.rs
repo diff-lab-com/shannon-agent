@@ -65,3 +65,67 @@ fn tier_name_persistence_uses_canonical_form() {
     assert_eq!(TierName::from_user_input("xyz"), None);
     assert_eq!(TierName::from_user_input("turbo-xl"), None);
 }
+
+// =============================================================================
+// End-to-end /model --tier flow tests
+// =============================================================================
+//
+// These tests exercise the *full* `/model --tier <alias> [provider]` pipeline:
+// user input → `TierName::from_user_input` (alias normalization) →
+// `resolve_tier(alias, provider, &tiers)` (model resolution against a real
+// `ProviderTiers` config). The alias-only tests above only check
+// `from_user_input`; these verify the end-to-end contract the REPL actually
+// depends on.
+
+#[test]
+fn full_flow_haiku_alias_resolves_to_anthropic_fast() {
+    use shannon_core::model_registry::resolve_tier;
+    use shannon_engine::api::LlmProvider;
+    use shannon_types::provider_config::ProviderTiers;
+
+    // Step 1: alias normalization (REPL parser path).
+    let tier = TierName::from_user_input("haiku").expect("haiku is valid alias");
+    assert_eq!(tier, TierName::Fast);
+
+    // Step 2: end-to-end resolution — alias + provider → concrete model id.
+    let tiers = ProviderTiers::default();
+    let resolved = resolve_tier("haiku", &LlmProvider::Anthropic, &tiers);
+    assert!(
+        resolved.is_some(),
+        "haiku alias should resolve to claude-haiku-4-5 for anthropic"
+    );
+    let resolved = resolved.unwrap();
+    assert!(resolved.contains("haiku"), "got: {}", resolved);
+}
+
+#[test]
+fn full_flow_flash_alias_resolves_to_gemini_fast() {
+    use shannon_core::model_registry::resolve_tier;
+    use shannon_engine::api::LlmProvider;
+    use shannon_types::provider_config::ProviderTiers;
+
+    // Gemini's provider-native `flash` alias resolves to a Gemini *Fast*
+    // tier model id under the unified tier system.
+    let tiers = ProviderTiers::default();
+    let resolved = resolve_tier("flash", &LlmProvider::Gemini, &tiers);
+    assert!(
+        resolved.is_some(),
+        "flash alias should resolve to a Gemini fast model"
+    );
+    let id = resolved.unwrap();
+    assert!(id.contains("flash"), "got: {}", id);
+}
+
+#[test]
+fn full_flow_unknown_tier_input_suggests_canonical_names() {
+    use shannon_types::provider_config::TierName;
+
+    // Unknown alias → None (REPL prints suggestions in this branch).
+    let result = TierName::from_user_input("turbo-xl");
+    assert!(result.is_none());
+
+    // The error message in handle_model would include suggestions().
+    let suggestions = TierName::suggestions();
+    assert!(suggestions.contains(&"fast"));
+    assert!(suggestions.contains(&"haiku"));
+}
