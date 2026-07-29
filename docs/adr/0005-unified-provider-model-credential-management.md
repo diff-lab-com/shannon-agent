@@ -270,13 +270,15 @@ paths unchanged.
 
 ### Phase 3 — `/connect` + `/model` in code; Desktop re-platformed  *(~2-3 days)*
 
-> **Status: 🔄 Partial.** `/model provider/model` support ✅ (commit
+> **Status: ✅ Complete (2026-07-29).** `/model provider/model` support ✅ (commit
 > `feat(repl): /model accepts provider/model form`) — `handle_model` switched,
 > alias-expanded within the named provider, via a tested `resolve_model_arg()`
-> helper (7 tests). **`/connect` wizard pending** — it depends on Phase 4 config
-> persistence so the connected profile survives restart; a session-only
-> `/connect` is possible but would be non-durable without it. Desktop
-> re-platforming pending (Phase 2).
+> helper (7 tests). `/connect` wizard ✅ (commit `feat(provider): recommend
+> inline /connect key, never persist it`). `/model --tier <name>` ✅ (2026-07-29)
+> — switches between canonical tiers (`fast`/`standard`/`pro`) with Anthropic
+> aliases (`haiku`/`sonnet`/`opus`) and other provider aliases (`flash`/`mini`/
+> `plus`/`ultra`/`max`); `--save` flag persists to `~/.shannon/providers.toml`
+> via canonical names only. Desktop re-platforming still pending (Phase 2).
 
 **Why**: P0-3 / P2-2.
 
@@ -299,12 +301,11 @@ unified underneath.
 
 ### Phase 4 — Config persistence + variable substitution  *(~1-2 days)*
 
-> **Status: ⏳ Pending.** Note discovered during implementation: config is
-> currently **read-only** (no TOML write path exists); `/config` and
-> `/credentials` are `PromptCommand` metadata whose real execution is in the
-> shannon-ui REPL handlers (`handle_config`/`handle_credentials`). Phase 4
-> needs a TOML write-back for `ProviderModelConfig` (A1-respecting) wired into
-> `handle_config`. This is also the prerequisite for a durable `/connect`.
+> **Status: 🟡 In Progress (2026-07-29).** Tier persistence to
+> `~/.shannon/providers.toml` ✅ via `/model --tier --save` (Phase 3 work).
+> Remaining: TOML write-back for `ProviderModelConfig` (A1-respecting) wired
+> into `/config`; `{env:VAR}` and `{file:path}` substitution in the
+> `unified_config` loader (parity with OpenCode).
 
 **Why**: P2-3 / P2-4 (partial).
 
