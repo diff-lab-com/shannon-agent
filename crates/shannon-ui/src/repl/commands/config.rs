@@ -177,6 +177,9 @@ fn parse_provider_name(name: &str) -> Result<LlmProvider> {
 }
 
 pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
+    if args.trim() == "health" {
+        return handle_provider_health(repl);
+    }
     if args.is_empty() {
         // List all providers with key status (honours SHANNON_*_PROVIDERS filter)
         let providers = model_registry::available_providers();
@@ -252,6 +255,94 @@ pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+/// `/provider health` — live-probe the active provider and inventory every
+/// provider's credential status (ADR-0005 Phase 6).
+///
+/// The **active** provider gets a real 1-token network probe
+/// (`engine.probe_active_health()` — uses the running client's existing key,
+/// no key swap, 15s timeout). Other providers are inventoried by their
+/// stored-credential status only: a per-provider network round-trip would be
+/// slow and surprising for a status command. The probe is fail-soft — a
+/// transport error reports "unreachable" but never crashes the REPL.
+///
+/// **Non-goal — automatic failover.** Shannon deliberately ships no model
+/// router (spec §11), so this command is informational only. If the active
+/// provider is down, switch manually with `/provider <name>` or `/connect`.
+/// Automatic failover and per-provider multi-probing are documented as future
+/// work rather than implemented here.
+fn handle_provider_health(repl: &mut Repl) -> Result<()> {
+    use shannon_core::credential_manager::read_credential_value_default;
+    use shannon_core::provider_resolver::llm_provider_id;
+
+    let connected = connected_provider_slugs();
+    let providers = model_registry::available_providers();
+
+    let mut lines = vec!["Provider health:".to_string(), String::new()];
+
+    // 1. Live-probe the active provider (1-token round-trip, 15s timeout).
+    //    `probe_active_health` reuses the running client's key; if the engine
+    //    was started without connecting, the probe reports that honestly.
+    let active = repl.state.selected_provider.clone();
+    let active_model = repl.state.model.clone().unwrap_or_else(|| "—".to_string());
+    match (active.as_ref(), repl.query_engine.as_ref()) {
+        (Some(provider), Some(engine)) => {
+            let probed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                repl.runtime.block_on(engine.probe_active_health())
+            }));
+            let verdict = match probed {
+                Ok(Ok(())) => {
+                    format!("● reachable — provider: {provider}, model: {active_model}")
+                }
+                Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
+                    format!("○ auth rejected — provider: {provider} (key not accepted)")
+                }
+                Ok(Err(e)) => {
+                    format!("○ unreachable — provider: {provider} ({e})")
+                }
+                Err(_) => {
+                    format!("○ probe failed — provider: {provider} (health check itself errored)")
+                }
+            };
+            lines.push(verdict);
+            lines.push(String::new());
+        }
+        (Some(provider), None) => {
+            lines.push(format!(
+                "● {provider} active — query engine not initialized; skipping live probe."
+            ));
+            lines.push(String::new());
+        }
+        (None, _) => {
+            lines.push(
+                "No active provider selected. Use /provider <name> to choose one.".to_string(),
+            );
+            lines.push(String::new());
+        }
+    }
+
+    // 2. Inventory every allowed provider by stored-credential status (no
+    //    per-provider network probe — see the non-goal note in the doc comment).
+    lines.push("Configured providers:".to_string());
+    for p in &providers {
+        let slug = llm_provider_id(p);
+        let has_key = read_credential_value_default(&slug).is_some();
+        let status = connect_status(p.requires_auth(), connected.contains(&slug), has_key);
+        let current = if repl.state.selected_provider.as_ref() == Some(p) {
+            " *"
+        } else {
+            ""
+        };
+        lines.push(format!("  {p}{current} — {status}"));
+    }
+    lines.push(String::new());
+    lines.push(
+        "Health probes the active provider only. Switch with /provider <name> or /connect."
+            .to_string(),
+    );
+    repl.chat.add_message(ChatRole::System, lines.join("\n"));
     Ok(())
 }
 

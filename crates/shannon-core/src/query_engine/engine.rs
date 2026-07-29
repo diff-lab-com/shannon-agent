@@ -868,6 +868,21 @@ impl QueryEngine {
         probe.validate_connection().await
     }
 
+    /// Health-check the currently-active provider + model by sending a 1-token
+    /// probe with the client's **existing** credentials (no key swap). Returns
+    /// `Ok(())` if the endpoint is reachable and the credential/model work.
+    ///
+    /// Does not mutate the running client. Used by `/provider health`. For
+    /// probing an *alternate* key (e.g. during `/connect`), use
+    /// [`validate_credential`] instead.
+    pub async fn probe_active_health(&self) -> Result<(), shannon_engine::api::ApiError> {
+        let mut cfg = self.client.config().clone();
+        cfg.max_tokens = 1;
+        cfg.timeout_seconds = 15;
+        let probe = shannon_engine::api::LlmClient::new(cfg);
+        probe.validate_connection().await
+    }
+
     /// Update the model used for API calls.
     pub fn set_model(&mut self, model: String) {
         self.effective_max_context_tokens = crate::model_registry::context_window_for(&model);
@@ -3718,6 +3733,37 @@ mod tests {
             ..Default::default()
         };
         LlmClient::new(config)
+    }
+
+    #[tokio::test]
+    async fn probe_active_health_errors_on_unreachable_endpoint_without_swapping_key() {
+        // `/provider health` reuses the running client's existing key (no swap,
+        // unlike validate_credential) and must surface an Err — never panic or
+        // hang — when the endpoint is down. Port 1 cannot be bound without root,
+        // so connecting is refused near-instantly; this exercises the full
+        // validate_connection() → send_message() → HTTP path deterministically,
+        // without fragile mockito path-matching. send_message (not the _with_retry
+        // variant) is single-attempt, so there is no retry backoff to wait out.
+        let config = LlmClientConfig {
+            api_key: "running-client-key".to_string(),
+            base_url: "http://127.0.0.1:1".to_string(),
+            model: "test-model".to_string(),
+            provider: LlmProvider::Ollama,
+            ..Default::default()
+        };
+        let client = LlmClient::new(config);
+        let engine = QueryEngine::new(
+            client,
+            ToolRegistry::new(),
+            PermissionManager::new(),
+            StateManager::new(),
+            QueryEngineConfig::default(),
+        );
+        let result = engine.probe_active_health().await;
+        assert!(
+            result.is_err(),
+            "an unreachable endpoint must surface an error, not Ok or a panic"
+        );
     }
 
     #[test]

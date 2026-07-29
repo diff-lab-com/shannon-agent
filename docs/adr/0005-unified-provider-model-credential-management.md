@@ -1,8 +1,9 @@
 # ADR 0005 — Unified Provider/Model/Credential Management
 
 **Status**: Proposed → **largely implemented** on `feat/unified-provider-model-mgmt`
-(Phase 0 ✅, Phase 1 ✅, Phase 3 ✅ incl. `/connect` credential probe, Phase 5 ✅;
-Phase 4 🟡 in progress; Phase 2 (Desktop re-platforming) ⏳ deferred)
+(Phase 0 ✅, Phase 1 ✅, Phase 3 ✅ incl. `/connect` credential probe, Phase 5 ✅,
+Phase 6 ✅ `/provider health` (no auto-failover); Phase 4 🟡 in progress;
+Phase 2 (Desktop re-platforming) ⏳ deferred)
 **Date**: 2026-07-24
 **Theme**: 统一 Provider/Model/密钥管理 (shannon-code + shannon-desktop)
 **Supersedes**: —
@@ -338,6 +339,23 @@ unified underneath.
 **Scope**: models.dev fetch (cached, static-catalog offline fallback — must not
 break headless/CI), `enabled_providers` / `disabled_providers` allowlists,
 `small_model` field.
+
+### Phase 6 — Provider health check (informational; no auto-failover)
+
+> **Status: ✅ Complete (2026-07-30).** `/provider health` live-probes the
+> **active** provider with a 1-token round-trip
+> (`QueryEngine::probe_active_health` — reuses the running client's existing
+> key, no swap, 15s timeout) and inventories every allowed provider's
+> stored-credential status. The probe is fail-soft: a transport error reports
+> `○ unreachable` but never crashes the REPL
+> (`probe_active_health_errors_on_unreachable_endpoint_without_swapping_key`).
+>
+> **Non-goal — automatic failover.** Shannon deliberately ships no model router
+> (spec §11). This command is informational only; if the active provider is
+> down the user switches manually with `/provider <name>` or `/connect`.
+> Automatic failover and per-provider multi-probing are documented here as
+> future work rather than implemented, to avoid invasive routing logic that
+> conflicts with the explicit no-auto-routing philosophy.
 
 ## Open decisions (need sign-off before Phase 1+)
 
