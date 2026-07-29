@@ -480,6 +480,42 @@ pub(crate) fn apply_connect(
         theme: Some(repl.state.theme.name.to_string()),
     });
 
+    // 4. Validate the credential with a 1-token probe so a bad key/region/model
+    //    fails at connect time, not mid-query. Fail-soft: a non-auth error warns
+    //    but keeps the connection (it may work on restart or be transient). A
+    //    hard auth failure stops here so we don't print a misleading "✓ Switched".
+    let probe_key = key
+        .filter(|k| !k.is_empty())
+        .map(str::to_string)
+        .or_else(|| read_credential_value_default(&cp.service));
+    if cp.provider.requires_auth() {
+        if let (Some(api_key), Some(engine)) = (probe_key.as_deref(), repl.query_engine.as_ref()) {
+            let probed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                repl.runtime.block_on(engine.validate_credential(api_key))
+            }));
+            match probed {
+                Ok(Ok(())) => lines.push(format!(
+                    "✓ Credential verified — '{}' is reachable with this key.",
+                    cp.model_id
+                )),
+                Ok(Err(shannon_engine::api::ApiError::AuthenticationFailed)) => {
+                    lines.push(format!(
+                        "✗ Authentication failed for '{display}'. The key was stored but the provider rejected it — check the key and run /connect again."
+                    ));
+                    repl.chat.add_message(ChatRole::System, lines.join("\n"));
+                    super::set_error(repl, &format!("credential rejected by '{display}'"));
+                    return Ok(());
+                }
+                Ok(Err(e)) => lines.push(format!(
+                    "⚠ Could not fully verify the credential for '{display}' ({e}). The key is stored; it may still work — try sending a message."
+                )),
+                Err(_) => lines.push(format!(
+                    "⚠ Credential probe failed for '{display}'. The key is stored; it may still work."
+                )),
+            }
+        }
+    }
+
     lines.push(format!(
         "✓ Switched to {} — model: {} (restart shannon to apply the new credential)",
         cp.provider, cp.model_id

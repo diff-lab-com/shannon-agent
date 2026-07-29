@@ -891,6 +891,21 @@ impl LlmClient {
         &self.config
     }
 
+    /// Lightweight connectivity + credential probe.
+    ///
+    /// Sends a minimal user message to verify the API key, model, and endpoint
+    /// work before the user relies on them. Callers building a dedicated probe
+    /// client should set `config.max_tokens` to 1 to minimize cost. Returns the
+    /// underlying [`ApiError`] (e.g. [`ApiError::AuthenticationFailed`]) so the
+    /// caller can surface a specific, actionable message.
+    pub async fn validate_connection(&self) -> Result<(), ApiError> {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text("ping".to_string()),
+        }];
+        self.send_message(messages, None, None).await.map(|_| ())
+    }
+
     /// Send a message with retry logic and optional provider fallback.
     pub async fn send_message_with_retry(
         &self,
