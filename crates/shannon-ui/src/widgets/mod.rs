@@ -18,6 +18,7 @@ pub mod select;
 pub mod session_tab;
 pub mod sidebar;
 pub mod status_bar;
+pub mod status_card;
 pub mod tool_approval;
 
 // Re-exports for convenient access
@@ -35,6 +36,7 @@ pub use session_tab::{SessionInfo, SessionTabWidget};
 #[allow(unused_imports)]
 pub use sidebar::{SidebarInfo, SidebarSection, SidebarWidget};
 pub use status_bar::StatusBarWidget;
+pub use status_card::{render_status_card, CardStatus};
 #[allow(unused_imports)]
 pub use tool_approval::{ApprovalDecision, RiskLevel, ToolApprovalRequest, ToolApprovalWidget};
 
