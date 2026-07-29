@@ -165,8 +165,8 @@ fn parse_provider_name(name: &str) -> Result<LlmProvider> {
 
 pub(crate) fn handle_provider(repl: &mut Repl, args: &str) -> Result<()> {
     if args.is_empty() {
-        // List all providers with key status
-        let providers = model_registry::all_providers();
+        // List all providers with key status (honours SHANNON_*_PROVIDERS filter)
+        let providers = model_registry::available_providers();
         let mut lines = vec!["Available providers:".to_string()];
         for p in &providers {
             let has_key = !p.resolve_api_key_from_env().is_empty();
@@ -316,7 +316,7 @@ fn show_connect_dashboard(repl: &mut Repl) {
         String::new(),
         "Providers:".to_string(),
     ];
-    for p in model_registry::all_providers() {
+    for p in model_registry::available_providers() {
         let slug = llm_provider_id(&p);
         let has_key = read_credential_value_default(&slug).is_some();
         let status = connect_status(p.requires_auth(), connected.contains(&slug), has_key);
