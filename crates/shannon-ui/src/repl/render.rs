@@ -238,6 +238,20 @@ pub fn draw_frame(
         };
         crate::widgets::MainLayoutWidget::render_with_ctx(f, &render_ctx);
 
+        // Render /help overlay if active
+        if let Some(ref overlay_state) = state.help_overlay {
+            let categories: Vec<(&str, Vec<(String, String)>)> = vec![
+                ("NAVIGATION", vec![("help".to_string(), "Show help".to_string())]),
+                ("EDITING", vec![("edit".to_string(), "Edit a file".to_string())]),
+            ];
+            let _ = crate::widgets::help_overlay::render_help_overlay(
+                f,
+                f.area(),
+                overlay_state,
+                &categories,
+            );
+        }
+
         // Overlay dialogs on top of base layout
         if let Some(ref dialog) = state.permission_dialog {
             render_permission_dialog(f, f.area(), dialog, &state.theme);
