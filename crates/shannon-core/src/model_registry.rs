@@ -904,7 +904,7 @@ impl ModelTier {
 
 /// Return all recognized alias names (for tab completion).
 pub fn model_aliases() -> &'static [&'static str] {
-    &["opus", "sonnet", "haiku"]
+    TierName::suggestions()
 }
 
 /// Check if a string is a recognized model alias.
