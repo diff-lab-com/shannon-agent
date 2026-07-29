@@ -45,6 +45,8 @@ commands:
     prompt: "输入模型名称（例如 claude-3.5-sonnet、gpt-4o）..."
     set: "模型已设置为: %{name}"
     context_unknown: "未知 (按 provider)"
+    cost_unknown: "估算不可用"
+    cost_free_local: "免费 (本地)"
   config:
     warning_load: "警告: 无法加载配置: %{error}"
     key_not_found: "未找到配置项: %{key}"

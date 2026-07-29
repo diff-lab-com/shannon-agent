@@ -10,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
+use rust_i18n::t;
 
 /// Selection item for lists
 #[derive(Debug, Clone)]
@@ -806,6 +807,76 @@ mod tests {
     }
 
     #[test]
+    fn model_cost_label_honest_about_unknown() {
+        use shannon_core::model_registry::{ModelCapabilities, ModelInfo};
+        use shannon_engine::api::LlmProvider;
+
+        fn leaked(s: &str) -> &'static str {
+            Box::leak(s.to_string().into_boxed_str())
+        }
+
+        // Curated paid model → per-million rate.
+        let paid = ModelInfo {
+            id: leaked("some-paid-model"),
+            display_name: leaked("Paid"),
+            aliases: &[],
+            provider: LlmProvider::Anthropic,
+            context_window: 200_000,
+            max_output: 8192,
+            cost_per_m_input: 3.0,
+            cost_per_m_output: 15.0,
+            capabilities: ModelCapabilities::empty(),
+        };
+        let label = model_cost_label(&paid);
+        assert!(label.contains("$3.00"), "paid model shows rate: {label}");
+        assert!(
+            label.contains("$15.00"),
+            "paid model shows output rate: {label}"
+        );
+
+        // Dynamic/custom model with zero pricing (non-Ollama) → estimate
+        // unavailable, never a misleading $0.00.
+        let dynamic = ModelInfo {
+            id: leaked("dynamic-future-model"),
+            display_name: leaked("Dynamic"),
+            aliases: &[],
+            provider: LlmProvider::OpenAI,
+            context_window: 1_000_000,
+            max_output: 8192,
+            cost_per_m_input: 0.0,
+            cost_per_m_output: 0.0,
+            capabilities: ModelCapabilities::empty(),
+        };
+        let label = model_cost_label(&dynamic);
+        assert!(
+            !label.contains('$'),
+            "dynamic model must not show $0: {label}"
+        );
+        assert!(
+            label.contains("estimate") || label.contains("估算"),
+            "dynamic model shows unknown: {label}"
+        );
+
+        // Local Ollama model → free.
+        let local = ModelInfo {
+            id: leaked("llama3"),
+            display_name: leaked("Llama"),
+            aliases: &[],
+            provider: LlmProvider::Ollama,
+            context_window: 8192,
+            max_output: 4096,
+            cost_per_m_input: 0.0,
+            cost_per_m_output: 0.0,
+            capabilities: ModelCapabilities::empty(),
+        };
+        let label = model_cost_label(&local);
+        assert!(
+            label.contains("free") || label.contains("免费"),
+            "local model shows free: {label}"
+        );
+    }
+
+    #[test]
     fn test_multi_select_with_items() {
         let items = vec![
             SelectItem::new("Option 1", "val1".to_string()),
@@ -883,6 +954,25 @@ pub struct ModelPickerWidget {
     manual_mode: bool,
     /// Typed model id while in manual entry mode.
     manual_input: String,
+}
+
+/// Honest cost label for a model shown in the picker detail line.
+///
+/// - Local Ollama models are free.
+/// - Curated catalog models with non-zero pricing show their per-million rate.
+/// - Dynamic/custom models with no pricing (`cost_per_m_* == 0.0`) show
+///   "estimate unavailable" instead of a misleading `$0.00`.
+fn model_cost_label(model: &ModelInfo) -> String {
+    if model.provider == LlmProvider::Ollama {
+        t!("commands.model.cost_free_local").to_string()
+    } else if model.cost_per_m_input > 0.0 || model.cost_per_m_output > 0.0 {
+        format!(
+            "${:.2}/M in · ${:.2}/M out",
+            model.cost_per_m_input, model.cost_per_m_output
+        )
+    } else {
+        t!("commands.model.cost_unknown").to_string()
+    }
 }
 
 /// Number of tier tabs (Fast, Standard, Pro).
@@ -1264,8 +1354,13 @@ impl ModelPickerWidget {
             } else {
                 model.max_output.to_string()
             };
+            let cost_label = model_cost_label(model);
             lines.push(Line::from(Span::styled(
                 format!("  ctx: {ctx} tokens  |  max output: {out} tokens"),
+                Style::default().fg(theme.warning),
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("  cost: {cost_label}"),
                 Style::default().fg(theme.warning),
             )));
         }
