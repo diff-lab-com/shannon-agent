@@ -1949,6 +1949,16 @@ fn handle_model_picker_input(repl: &mut Repl, key: KeyEvent) -> Result<()> {
                 mp.next_provider();
             }
         }
+        KeyCode::Tab => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.next_tier();
+            }
+        }
+        KeyCode::BackTab => {
+            if let Some(ref mut mp) = repl.state.model_picker {
+                mp.prev_tier();
+            }
+        }
         KeyCode::Enter => {
             let model_id = repl
                 .state
